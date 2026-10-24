@@ -1,0 +1,5 @@
+# fetched by fetch-deps.sh (binary WASM, pinned by sha256)
+/vendor/
+# converted models: data, not source
+/models/
+*.cadmesh
