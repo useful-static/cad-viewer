@@ -1,6 +1,8 @@
 // Orbit-camera math, pure (no DOM) so tests/test-camera.mjs can check it in Node.
 // cam: { target:[x,y,z], dist, yaw, pitch, fov, up:'y'|'z' }
 
+import { lookAt } from './mat4.js';
+
 // Unit vector from the orbit target to the eye.
 export function camDir(cam) {
   const cp = Math.cos(cam.pitch);
@@ -68,6 +70,54 @@ export function nearFar(cam, sphere) {
   const near = Math.max(depth - sphere.radius * 1.01, floor);
   const far = Math.max(depth + sphere.radius * 1.01, near * 2);
   return [near, far];
+}
+
+// ---- gestures (pointer deltas in CSS px; heightPx = the view's CSS height) ----
+
+// Move the orbit target so the picture follows a drag of (dx, dy) px: the
+// screen axes are the view matrix's (poles included), and one px is one px of
+// the image at the target's depth.
+export function panBy(cam, dx, dy, heightPx) {
+  const view = lookAt([0, 0, 0], camDir(cam).map((v) => -v), camUp(cam));
+  const s = (2 * cam.dist * Math.tan(cam.fov / 2)) / Math.max(1, heightPx);
+  for (let k = 0; k < 3; k++) cam.target[k] += (-dx * view[k * 4] + dy * view[k * 4 + 1]) * s;
+}
+
+// Scale the orbit distance by f (< 1 zooms in). The range follows what is
+// framed (a small part can be approached) and the model (never further out
+// than 50 model radii) -- both scaled with the view's aspect exactly as
+// fitDistance is, so a resize refit (which scales dist by that same ratio)
+// never meets a limit it did not meet before, and an aspect round trip
+// (drawer open/close, rotate and back) returns dist exactly.
+export function zoomBy(cam, f, modelRadius, aspect = 1) {
+  const k = aspectScale(cam.fov, aspect);
+  cam.dist = Math.max(cam.viewRadius * 0.05 * k, Math.min(modelRadius * 50 * k, cam.dist * f));
+}
+
+// fitDistance's dependence on aspect alone: 1 for aspect >= 1, larger on a
+// narrow view (it is width-limited there).
+export function aspectScale(fov, aspect) {
+  return fitDistance(1, fov, aspect > 0 ? aspect : 1) / fitDistance(1, fov, 1);
+}
+
+// Two-finger step from points (a0, b0) to (a1, b1): the zoom factor (fingers
+// spreading apart give < 1, i.e. zoom in) and the midpoint's move in px.
+export function pinchStep(a0, b0, a1, b1) {
+  const d0 = Math.hypot(b0[0] - a0[0], b0[1] - a0[1]);
+  const d1 = Math.hypot(b1[0] - a1[0], b1[1] - a1[1]);
+  return {
+    scale: d0 > 0 && d1 > 0 ? d0 / d1 : 1,
+    dx: (a1[0] + b1[0] - a0[0] - b0[0]) / 2,
+    dy: (a1[1] + b1[1] - a0[1] - b0[1]) / 2,
+  };
+}
+
+// Orbit distance that keeps the same part of the scene framed when the view's
+// aspect changes from a0 to a1 (a phone rotating, the parts drawer opening):
+// fitDistance is aspect-limited on narrow views, so scale by its ratio.
+export function refitForAspect(dist, viewRadius, fov, a0, a1) {
+  if (!(a0 > 0) || !(a1 > 0)) return dist;
+  return dist * (fitDistance(viewRadius, fov, a1) / fitDistance(viewRadius, fov, a0));
 }
 
 export function sphereOf(bbox) {

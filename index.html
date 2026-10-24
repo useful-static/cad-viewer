@@ -5,11 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CAD viewer</title>
 <style>
-  :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; }
+  :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr auto; height:100vh; }
-  header { grid-column: 1 / 3; display:flex; gap:6px; align-items:center; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  /* header = the non-scrolling frame (background, border, the narrow layout's
+     fade overlay); #tb = the row of controls inside it (wraps on desktop,
+     scrolls sideways when narrow) */
+  header { grid-column: 1 / 3; position:relative; min-width:0; background:var(--panel); border-bottom:1px solid var(--line); }
+  #tb { display:flex; gap:6px; align-items:center; padding:6px 10px; flex-wrap:wrap; }
   header .title { font-weight:600; margin-right:8px; }
   button, select, label.btn { background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
   button:hover, label.btn:hover { border-color:#566173; }
@@ -17,7 +21,8 @@
   .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
   #backend { margin-left:auto; padding:2px 7px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:11px; cursor:help; }
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
-  #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; }
+  #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
+  #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
   #tree ul { list-style:none; margin:0; padding:0; }
@@ -28,6 +33,7 @@
   #tree .label { cursor:pointer; overflow:hidden; text-overflow:ellipsis; flex:1; }
   #tree .cnt { color:var(--dim); font-size:11px; }
   #tree input { margin:0; }
+  #tree .cbwrap { display:inline-flex; align-items:center; } /* the box centred on the row, as before it was wrapped */
   #stage { position:relative; min-width:0; min-height:0; overflow:hidden; touch-action:none; }
   #stage.drop { outline:2px dashed var(--acc); outline-offset:-6px; }
   #view { width:100%; height:100%; display:block; }
@@ -36,34 +42,120 @@
   #status[data-state=error] { color:#ff7b7b; }
   #status[data-state=ready] { color:#9fd8a6; }
   #model { margin-left:auto; }
-  .help { color:var(--dim); font-size:11px; }
+  /* The status keeps its natural width (never shrunk: shrinking split "ready"
+     mid-word whenever the model name next to it was truncated), capped at the
+     footer's width, where a long filename or URL wraps instead of widening
+     the page. The model name absorbs all the shrinking. */
+  #status { flex-shrink:0; max-width:100%; overflow-wrap:anywhere; }
+  /* On desktop the footer wraps: a long status takes the line and the model
+     name moves to the next (squeezed beside it instead, it wrapped one
+     character per line -- measured, a 763 px footer). min-width:0 and
+     overflow-wrap keep a model name longer than the footer from widening it. */
+  footer { flex-wrap:wrap; }
+  #model { min-width:0; overflow-wrap:anywhere; }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
+  label.btn:focus-visible, #tree .label:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
+  .help-touch, .narrow-only, #panelbtn { display:none; }
+  .wide-only { display:contents; } /* its buttons stay toolbar flex items (gap) */
+  label.btn { display:inline-flex; align-items:center; }
+  body { height:100dvh; } /* the visible height on mobile, address bar excluded */
+  /* Touch screens: finger-sized targets and the touch help wherever ANY
+     pointer is a finger (a touchscreen laptop's primary pointer is its
+     trackpad); the mouse help wherever ANY pointer is fine (an iPad with a
+     trackpad is touch-primary). A hybrid shows both. */
+  /* (hidden only on touch-ONLY devices: "no fine pointer" alone also matches
+     a browser that reports no pointer at all, measured in headless Chromium) */
+  @media (any-pointer: coarse) and (not (any-pointer: fine)) { .help-mouse { display:none; } }
+  /* (the HTML puts a space between the two spans, so even a browser that
+     shows both by not parsing the rule above -- MQ4 `not` -- reads them apart) */
+  @media (any-pointer: coarse) and (any-pointer: fine) { .help-touch::before { content:'· '; } }
+  @media (any-pointer: coarse) {
+    button, select, label.btn { min-height:40px; padding:6px 12px; }
+    select { font-size:16px; } /* iOS Safari zooms the page into a focused control under 16 px */
+    #tree .row { min-height:34px; }
+    #tree input { width:20px; height:20px; }
+    /* the checkbox's label wrapper fills the row height: a tap anywhere in
+       that column toggles visibility (a label click toggles its checkbox) */
+    #tree .cbwrap { align-self:stretch; display:flex; align-items:center; padding:0 4px; }
+    #tree .tw { width:24px; align-self:stretch; display:flex; align-items:center; justify-content:center; }
+    /* the drag hit area is the input's box; margin 0 drops the UA's 2 px, which
+       made it the toolbar's tallest item (a 4 px taller phone header) */
+    input[type=range] { height:40px; margin:0; }
+    /* the name fills the 34 px row, so a tap above or below its text still
+       selects (the line box, not the glyphs, is the hit area) */
+    #tree .label { line-height:34px; }
+    .help-touch { display:inline; }
+  }
+  /* Narrow, portrait or short screens (a landscape phone is ~390 px tall):
+     the 3D view gets the width, the parts panel folds into a drawer below it
+     (closed by default), and the toolbar is one scrolling row with the view
+     presets in a dropdown; its right edge fades while more lies past it. */
+  @media (max-width: 700px), (max-aspect-ratio: 4/5) and (max-width: 900px), (max-height: 500px) and (pointer: coarse) {
+    /* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a long nowrap model name
+       in the footer would otherwise widen the column past the screen */
+    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto auto; }
+    header { grid-column:1; }
+    /* a control reached by Tab stops short of the right-edge fade */
+    #tb { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; scroll-padding-inline-end:40px; }
+    /* The fade is an overlay on the NON-scrolling header, outside the
+       scroller: a 40 px gradient to the panel colour at the right edge,
+       stopping --sbh px above the bottom (main.js measures #tb's classic
+       scrollbar; 0 where scrollbars overlay), so the scrollbar and its arrow
+       are never faded. Clicks pass through. (A two-layer mask on the scroller
+       rendered no fade in Chromium with a classic scrollbar; a sticky
+       pseudo-element inside it cannot leave its containing block, so never
+       showed either -- both measured.) */
+    header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
+      background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
+    #tb > * { flex:none; }
+    header .title, .wide-only, #export:disabled { display:none; }
+    .narrow-only { display:inline-block; }
+    #stage { grid-row:2; }
+    aside { grid-row:3; border-right:0; border-top:1px solid var(--line); max-height:45vh; max-height:45dvh; }
+    #panelbtn { display:block; width:100%; text-align:left; border:0; border-radius:0; background:var(--panel);
+      position:sticky; top:0; z-index:1; }
+    /* the open drawer scrolls as a whole: on a short landscape phone its info
+       and help alone fill the 45% cap, and a tree that shrank alone got 0 px */
+    body.panel-open aside { overflow-y:auto; scroll-padding-top:44px; } /* focus scrolls below the sticky Parts button */
+    aside #tree { flex:none; overflow:visible; }
+    body:not(.panel-open) aside > :not(#panelbtn) { display:none; }
+    /* narrow: one line; the model name truncates (wrapping it to a second
+       line would cost the 3D view a row on every phone) */
+    footer { grid-column:1; grid-row:4; flex-wrap:nowrap; }
+    /* the status (errors included) wraps; the model name gives way */
+    #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header><div id="tb">
   <span class="title">CAD viewer</span>
-  <label class="btn">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh" hidden></label>
+  <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh" hidden></label>
   <button id="export" autocomplete="off" disabled title="Save the tessellated mesh so the next load skips OpenCascade">Save .cadmesh</button>
   <span class="sep"></span>
-  <button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button>
-  <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button>
+  <span class="wide-only"><button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button>
+  <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button></span>
+  <select id="viewsel" class="narrow-only" autocomplete="off" title="View preset"><option value="">View</option><option value="iso">Iso</option><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select>
   <button id="fit" title="f">Fit</button><button id="proj">persp</button><button id="up" title="Which model axis points up">Y-up</button>
   <span class="sep"></span>
   <button id="isolate" title="i">Isolate</button><button id="hide" title="h">Hide</button><button id="showall" title="a">Show all</button>
   <span class="sep"></span>
-  <span>Section</span>
-  <select id="secaxis" autocomplete="off"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
-  <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off">
-  <button id="secflip">flip</button>
+  <span class="group"><span>Section</span>
+  <select id="secaxis" autocomplete="off" aria-label="Section plane axis"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+  <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position">
+  <button id="secflip">flip</button></span>
   <span id="backend">…</span>
-</header>
-<aside>
+</div></header>
+<aside id="parts">
+  <button id="panelbtn" aria-expanded="false" aria-controls="parts">Parts <span id="panelglyph" aria-hidden="true">▴</span></button>
   <div id="info"></div>
   <ul id="tree"></ul>
-  <div class="help" style="padding:6px 10px;border-top:1px solid var(--line)">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</div>
+  <div class="help"><span class="help-mouse">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span></div>
 </aside>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div></div>
-<footer><span id="status">loading</span><span id="model"></span></footer>
+<footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span></footer>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
 import { decodeCadmesh } from './cadmesh.js';
-import { camDir, camUp, eyeOf, fitDistance, nearFar, sphereOf } from './camera.js';
+import { camDir, camUp, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -38,9 +38,37 @@ const app = {
 };
 window.__cadv = app;
 
+// The ONE writer of the #announce live region. Every write takes a sequence
+// number; a write deferred to the next frame (to repeat the last text, which a
+// screen reader only hears again after the region was emptied) lands only if
+// nothing newer was said meanwhile -- else a queued "loading x" could land
+// after "ready" or an error (a fast failure, or a background tab, where frames
+// do not run), and be the last thing said.
+let saySeq = 0;
+function announce(text) {
+  const el = $('announce');
+  const seq = ++saySeq;
+  if (el.textContent !== text) { el.textContent = text; return; }
+  el.textContent = '';
+  requestAnimationFrame(() => { if (seq === saySeq) el.textContent = text; });
+}
+
+// States whose status text is progress, rewritten per fetch chunk or per
+// tessellation tick: never announced by setStatus (the start of a load or a
+// tessellation is announced once, explicitly, where it starts).
+const PROGRESS_STATES = new Set(['loading', 'tessellating']);
+
 function setStatus(s, msg) {
+  // Screen readers hear an EVENT through the polite live region: a state
+  // change into ready / idle / error / recovering / init, and a new error
+  // after an error (the shown model dropped after a failed load; "GPU lost
+  // repeatedly; reload"). #status itself is rewritten on every progress tick.
+  if (!PROGRESS_STATES.has(s) && (s !== app.status || (s === 'error' && (msg || s) !== $('announce').textContent))) {
+    announce(msg || s);
+  }
   app.status = s;
   $('status').textContent = msg || s;
+  $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
 }
 
@@ -101,6 +129,10 @@ function adoptRenderer(r) {
   $('backend').textContent = app.backend.toUpperCase();
   $('backend').title = `${r.adapterInfo || ''}\n${r.detail || ''}\n` +
     app.attempts.map((a) => `${a.backend}: ${a.ok ? 'ok' : a.error}`).join('\n');
+  // the attempts behind THIS renderer (makeRenderer empties app.attempts when
+  // a recovery starts), and the info panel's renderer line follows the swap
+  app.adoptedAttempts = app.attempts.slice();
+  showInfo();
 }
 
 // ---------- GPU model sync ----------
@@ -192,6 +224,7 @@ function giveUp(msg) {
   beginLoad(); // a load still fetching or tessellating goes stale and stops painting progress
   setStatus('error', msg);
   failRendererWaiters(msg);
+  showInfo(); // its renderer line must stop naming the dead renderer
 }
 async function recoverRenderer(why) {
   if (recovering) { lossPending = why; return; }
@@ -202,6 +235,7 @@ async function recoverRenderer(why) {
   recovering = true;
   recoveries++;
   setStatus('recovering', `GPU context lost (${why}); recovering`);
+  showInfo(); // the renderer line says it is lost until a new one is adopted
   let adopted = false;
   try {
     await new Promise((r) => setTimeout(r, 250));
@@ -314,7 +348,12 @@ function fitTo(bbox) {
   c.target = s.center;
   c.viewRadius = s.radius;
   const box = $('stage');
-  c.dist = fitDistance(s.radius, c.fov, box.clientWidth / Math.max(1, box.clientHeight));
+  const aspect = box.clientWidth / Math.max(1, box.clientHeight);
+  c.dist = fitDistance(s.radius, c.fov, aspect);
+  // this fit is for the stage as it is NOW: the resize refit must measure
+  // later aspect changes from here, or a layout change in the same task
+  // (the parts drawer growing as a load fills the tree) is applied twice
+  app.stageAspect = aspect;
   viewChanged();
 }
 
@@ -432,6 +471,7 @@ function dropModel(msg) {
   $('tree').textContent = '';
   $('hover').textContent = '';
   $('model').textContent = '';
+  $('model').title = '';
   showInfo();
   gpuSync().catch(() => {});
   app.error = msg;
@@ -491,6 +531,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   const tris = mesh.header.indexCount / 3;
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount, uploadMs: Math.round(performance.now() - t0) };
   $('model').textContent = `${name} · ${mesh.header.meshes.length} bodies · ${fmtInt(tris)} triangles`;
+  $('model').title = $('model').textContent; // the narrow footer truncates it
   showInfo();
   setStatus('ready', 'ready');
 }
@@ -522,6 +563,7 @@ function tessellate(buf, format, seq) {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
     const t0 = performance.now();
     let stage = 'starting OpenCascade worker';
+    if (!stale(seq)) announce('tessellating with OpenCascade'); // its ticks are progress, not news
     const show = () => { if (!stale(seq)) setStatus('tessellating', `${stage} · ${Math.round((performance.now() - t0) / 1000)} s`); };
     const tick = setInterval(show, 1000);
     let settled = false;
@@ -547,9 +589,29 @@ function tessellate(buf, format, seq) {
   });
 }
 
+// The file name a URL names -- what is shown, announced, offered by Save and
+// read by extOf:
+//   rack.cadmesh?v=2                        -> rack.cadmesh   (path part, query dropped)
+//   /api/download?file=part.step&token=abc  -> part.step      (a query value naming a model file)
+//   /api/download?id=7                      -> download       (no extension anywhere)
+const MODEL_EXT = /\.(?:stp|step|igs|iges|brep|cadmesh)$/i;
+const fileName = (url) => {
+  const [path, query = ''] = url.split('#')[0].split('?');
+  const tail = path.split('/').pop();
+  if (/\.[a-z0-9]+$/i.test(tail)) return tail;
+  for (const kv of query.split('&')) {
+    let v = kv.slice(kv.indexOf('=') + 1);
+    try { v = decodeURIComponent(v); } catch { /* keep it raw */ }
+    v = v.split('/').pop();
+    if (MODEL_EXT.test(v)) return v;
+  }
+  return tail;
+};
+
 async function loadUrl(url) {
   const seq = beginLoad();
   setStatus('loading', `fetching ${url}`);
+  announce(`loading ${fileName(url)}`); // a new load is news even mid-load
   const res = await fetch(url);
   if (stale(seq)) return;
   if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
@@ -582,12 +644,13 @@ async function loadUrl(url) {
   } else {
     buf = await res.arrayBuffer();
   }
-  return loadAny(buf, url.split('/').pop(), seq);
+  return loadAny(buf, fileName(url), seq);
 }
 
 async function loadFile(file) {
   const seq = beginLoad();
   setStatus('loading', `reading ${file.name}`);
+  announce(`loading ${file.name}`); // a new load is news even mid-load
   const buf = await file.arrayBuffer();
   if (stale(seq)) return;
   return loadAny(buf, file.name, seq);
@@ -608,7 +671,7 @@ function guard(p, seq = null) {
 function startLoad(fn) {
   // with no GPU left there is nothing to load onto: refuse before a fetch or a
   // long tessellation, and keep the give-up message on the status line
-  if (gaveUp) { setStatus('error', gaveUp); return Promise.resolve(); }
+  if (gaveUp) { setStatus('error', gaveUp); announce(`not loaded: ${gaveUp}`); return Promise.resolve(); }
   const p = fn();
   return guard(p, app.loadSeq);
 }
@@ -661,11 +724,18 @@ function buildTree() {
     label.className = 'label';
     const meshName = !node.name && node.meshes.length === 1 ? app.header.meshes[node.meshes[0]].name : '';
     label.textContent = node.name || meshName || '(unnamed)';
-    label.title = `${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
+    // the full name (the row truncates it) and the body count
+    label.title = `${label.textContent} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
+    cb.setAttribute('aria-label', `Show ${label.textContent}`); // a screen reader names the part
     const cnt = document.createElement('span');
     cnt.className = 'cnt';
     cnt.textContent = ids.length > 1 ? ids.length : '';
-    row.append(tw, cb, label, cnt);
+    // the checkbox sits in a <label>, which on touch fills the row height, so a
+    // tap anywhere in that column toggles it (a label click toggles its box)
+    const cbw = document.createElement('label');
+    cbw.className = 'cbwrap';
+    cbw.append(cb);
+    row.append(tw, cbw, label, cnt);
     li.append(row);
     li._ids = ids;
     li._cb = cb;
@@ -674,17 +744,46 @@ function buildTree() {
       // one at a time: spreading a huge flat assembly into one call passes the
       // engine's argument limit (RangeError) after the UI has switched models
       for (const k of kids) ul.append(k);
-      ul.hidden = depth >= 2;
       li.append(ul);
-      tw.onclick = () => { ul.hidden = !ul.hidden; tw.textContent = ul.hidden ? '▸' : '▾'; };
+      // The twisty is the expand control for assistive tech (a button with
+      // aria-expanded, out of the tab order); the name is the select button,
+      // with → / ← as its keyboard shortcuts for the same expand/collapse.
+      tw.setAttribute('role', 'button');
+      tw.tabIndex = -1;
+      const setOpen = (open) => {
+        ul.hidden = !open;
+        tw.textContent = open ? '▾' : '▸';
+        tw.setAttribute('aria-expanded', String(open));
+        tw.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label.textContent}`);
+      };
+      setOpen(depth < 2);
+      tw.onclick = () => setOpen(ul.hidden);
+      label._setOpen = setOpen;
+      label.setAttribute('aria-keyshortcuts', 'ArrowRight ArrowLeft');
+    } else {
+      tw.setAttribute('aria-hidden', 'true'); // a leaf's empty twisty
     }
+    // Keyboard: the name is one tab stop per row (the checkbox is the other).
+    // Enter / Space selects (ctrl/shift adds), → / ← expand / collapse.
+    label.tabIndex = 0;
+    label.setAttribute('role', 'button');
+    label.setAttribute('aria-pressed', 'false'); // syncTreeChecks keeps it current
+    label.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
+      } else if (label._setOpen && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+        e.preventDefault();
+        label._setOpen(e.key === 'ArrowRight');
+      }
+    };
     cb.onchange = () => {
       for (const id of ids) (cb.checked ? app.hidden.delete(id) : app.hidden.add(id));
       syncTreeChecks();
       pushState();
       viewChanged();
     };
-    label.onclick = (e) => select(ids, e.shiftKey || e.ctrlKey || e.metaKey);
+    label.onclick = (e) => select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
     label.ondblclick = () => fitTo(bboxOf(ids));
     return li;
   };
@@ -700,7 +799,10 @@ function syncTreeChecks() {
   });
   document.querySelectorAll('#tree .row').forEach((row) => {
     const li = row.parentElement;
-    row.classList.toggle('sel', li._ids.length > 0 && li._ids.every((id) => app.selected.has(id)));
+    const sel = li._ids.length > 0 && li._ids.every((id) => app.selected.has(id));
+    row.classList.toggle('sel', sel);
+    // the name is a toggle-like button: a screen reader says whether it is selected
+    row.querySelector('.label').setAttribute('aria-pressed', String(sel));
   });
 }
 
@@ -716,9 +818,16 @@ function bboxOf(ids) {
   return min[0] === Infinity ? null : { min, max };
 }
 
-function select(ids, additive) {
+// name: the tree node's name when a tree row was chosen on its own, so the
+// info panel can show it in full (the row truncates it); any other selection
+// change forgets it.
+function select(ids, additive, name = null) {
+  const before = app.selected.size;
   if (!additive) app.selected.clear();
   for (const id of ids) app.selected.add(id);
+  // an additive pick that added nothing leaves the selection, and its name, as they were
+  if (!additive) app.selName = name;
+  else if (app.selected.size !== before) app.selName = null;
   pushState();
   syncTreeChecks();
   showInfo();
@@ -726,14 +835,6 @@ function select(ids, additive) {
 
 function showInfo() {
   const el = $('info');
-  if (!app.header) { el.textContent = ''; return; }
-  const ids = [...app.selected];
-  const b = ids.length ? bboxOf(ids) : app.header.bbox;
-  const dims = b ? [0, 1, 2].map((k) => (b.max[k] - b.min[k]).toFixed(1)).join(' × ') : '-';
-  let title = 'whole model';
-  if (ids.length === 1) title = meshLabel(ids[0]);
-  else if (ids.length > 1) title = `${ids.length} bodies`;
-  const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
   el.innerHTML = '';
   const add = (k, v) => {
     const d = document.createElement('div');
@@ -742,6 +843,29 @@ function showInfo() {
     d.append(a, ` ${v}`);
     el.append(d);
   };
+  // the file, in full: the narrow footer truncates it, and its title tooltip
+  // never shows on a touch screen
+  if (app.header) add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} bodies`);
+  // the backend, and why any faster one was skipped -- with or without a model
+  // (it explains a slow first load too): the badge's tooltip says so as well,
+  // but a tooltip never shows on a touch screen or to the keyboard
+  if (gaveUp) {
+    add('renderer', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
+  } else if (app.backend) {
+    const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok).map((a) => `${a.backend}: ${a.error}`);
+    const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
+    add('renderer', `${app.backend.toUpperCase()}${lost}${skipped.length ? ` (skipped ${skipped.join('; ')})` : ''}`);
+  }
+  if (!app.header) return;
+  const ids = [...app.selected];
+  const b = ids.length ? bboxOf(ids) : app.header.bbox;
+  const dims = b ? [0, 1, 2].map((k) => (b.max[k] - b.min[k]).toFixed(1)).join(' × ') : '-';
+  let title = 'whole model';
+  // a tree row chosen on its own: its full name (the row truncates it)
+  if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} bodies` : app.selName;
+  else if (ids.length === 1) title = meshLabel(ids[0]);
+  else if (ids.length > 1) title = `${ids.length} bodies`;
+  const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
   add('selection', title);
   add(`extent X × Y × Z (${app.header.units === 'millimeter' ? 'mm' : app.header.units})`, dims);
   add('triangles', fmtInt(tris));
@@ -786,18 +910,56 @@ app.pickAt = async (x, y) => {
 function wireInput() {
   const stage = $('stage');
   // One gesture at a time: only the pointer that started it moves, ends or
-  // clicks it. A second finger is ignored instead of hijacking the first.
+  // clicks it. A second MOUSE/PEN pointer is ignored instead of hijacking the
+  // first. A second FINGER turns a one-finger orbit into a pinch (zoom) +
+  // two-finger pan; the orbit it interrupts is dropped (no click). A finger
+  // left alone after a pinch does nothing until it is lifted (it has no
+  // drag), so lifting one finger does not jerk the view into an orbit. Fingers
+  // never take over a mouse or pen drag.
   let drag = null;
-  const endDrag = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+  const touches = new Map(); // pointerId -> [clientX, clientY], fingers on the stage
+  let pinch = null; // { ids: [a, b] } while two fingers are down
+  const startPinch = () => {
+    pinch = touches.size >= 2 ? { ids: [...touches.keys()].slice(0, 2) } : null;
+  };
+  // A lifted finger leaves the pinch on pointerup itself, and again (a no-op)
+  // on lostpointercapture / pointercancel, so the release never depends on
+  // capture events alone. A pinch finger lifting with two others still down
+  // (a third was resting): the remaining two pinch on, from their current
+  // positions.
+  const releaseTouch = (id) => {
+    if (touches.delete(id) && pinch && pinch.ids.includes(id)) startPinch();
+  };
+  const endPointer = (e) => {
+    if (drag && e.pointerId === drag.id) drag = null;
+    releaseTouch(e.pointerId);
+  };
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
   stage.addEventListener('pointerdown', (e) => {
-    if (drag) return;
+    if (e.pointerType === 'touch') {
+      touches.set(e.pointerId, [e.clientX, e.clientY]);
+      stage.setPointerCapture(e.pointerId);
+      if (touches.size >= 2 && !pinch && (!drag || drag.type === 'touch')) {
+        drag = null; // the orbit becomes a pinch
+        startPinch();
+        app.hoverSeq++;
+        return;
+      }
+      if (touches.size > 1) return;
+    }
+    if (drag || pinch) {
+      // a mouse or pen does not start a gesture mid-gesture; and the dblclick
+      // the browser still fires for two such ignored clicks must not fit an
+      // OLDER click's selection
+      lastClick = Promise.resolve(false);
+      return;
+    }
     stage.setPointerCapture(e.pointerId);
     const pan = e.button === 1 || e.button === 2 || e.shiftKey;
-    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId };
+    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId, type: e.pointerType };
   });
-  stage.addEventListener('pointercancel', endDrag);
-  stage.addEventListener('lostpointercapture', endDrag);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('lostpointercapture', endPointer);
 
   // Hover: at most one pick per 60 ms AND one in flight at a time (a WebGPU
   // pick slower than 60 ms would otherwise pile up in the renderer's queue
@@ -836,8 +998,23 @@ function wireInput() {
     if (app.mesh) setHover(0);
   });
   stage.addEventListener('pointermove', (e) => {
+    if (touches.has(e.pointerId)) {
+      const prev = touches.get(e.pointerId);
+      touches.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pinch && pinch.ids.includes(e.pointerId)) {
+        const [ia, ib] = pinch.ids;
+        const a0 = ia === e.pointerId ? prev : touches.get(ia);
+        const b0 = ib === e.pointerId ? prev : touches.get(ib);
+        const st = pinchStep(a0, b0, touches.get(ia), touches.get(ib));
+        zoomBy(app.cam, st.scale, app.sphere.radius, app.stageAspect);
+        panBy(app.cam, st.dx, st.dy, stage.clientHeight);
+        viewChanged();
+        return;
+      }
+      if (!drag) return; // a finger left over after a pinch, or a third one
+    }
     if (!drag) {
-      if (!app.mesh) return;
+      if (!app.mesh || e.pointerType === 'touch') return;
       hoverXY = devicePx(e);
       const wait = 60 - (performance.now() - hoverT);
       if (wait <= 0) hoverPick();
@@ -845,16 +1022,17 @@ function wireInput() {
       return;
     }
     if (e.pointerId !== drag.id) return;
+    // A fingertip tap drifts 3-8 px: touch gets a 10 px slop, and until it is
+    // passed the finger neither orbits nor stops being a tap.
+    const slop = drag.type === 'touch' ? 10 : 3;
+    if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > slop) drag.moved = true;
+    if (!drag.moved) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX;
     drag.y = e.clientY;
-    if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > 3) drag.moved = true;
     const c = app.cam;
     if (drag.pan) {
-      // same screen axes as the view matrix, poles included
-      const view = lookAt([0, 0, 0], camDir(c).map((v) => -v), camUp(c));
-      const s = (2 * c.dist * Math.tan(c.fov / 2)) / stage.clientHeight;
-      for (let k = 0; k < 3; k++) c.target[k] += (-dx * view[k * 4] + dy * view[k * 4 + 1]) * s;
+      panBy(c, dx, dy, stage.clientHeight);
     } else {
       c.yaw -= dx * 0.008;
       c.pitch = Math.max(-Math.PI / 2 + 1e-4, Math.min(Math.PI / 2 - 1e-4, c.pitch + dy * 0.008));
@@ -862,6 +1040,7 @@ function wireInput() {
     viewChanged();
   });
   stage.addEventListener('pointerup', (e) => {
+    releaseTouch(e.pointerId);
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag;
     drag = null;
@@ -878,27 +1057,98 @@ function wireInput() {
         return true;
       });
     }
+    lastType = d.type;
+    // Double-tap is detected here, not left to dblclick, which touch browsers
+    // fire inconsistently (and not at all on some): two taps within 350 ms
+    // and 30 px. It fits exactly like a double-click.
+    if (d.type === 'touch' && !d.moved) {
+      const now = performance.now();
+      if (lastTap && now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+        lastTap = null;
+        fitAfterClick();
+      } else {
+        lastTap = { t: now, x: e.clientX, y: e.clientY };
+      }
+    }
   });
   // Fit only after this gesture's click pick has selected: a WebGPU pick is a
   // GPU round trip still in flight when dblclick fires, and fitting first
   // zoomed to the OLD selection (and its viewGen bump dropped both picks).
   let lastClick = Promise.resolve(false);
+  let lastType = '';
+  let lastTap = null;
+  const fitAfterClick = () => lastClick.catch(() => false).then((clicked) => {
+    if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
+  });
   stage.addEventListener('dblclick', () => {
-    lastClick.catch(() => false).then((clicked) => {
-      if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
-    });
+    if (lastType === 'touch') return; // handled as a double-tap
+    fitAfterClick();
   });
   stage.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const c = app.cam;
     // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch)
-    c.dist *= Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015));
-    // zoom range follows what is framed (a small part can be approached) and the
-    // model (never further out than 50 model radii)
-    c.dist = Math.max(c.viewRadius * 0.05, Math.min(app.sphere.radius * 50, c.dist));
+    zoomBy(app.cam, Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015)), app.sphere.radius, app.stageAspect);
     viewChanged();
   }, { passive: false });
-  window.addEventListener('resize', queueFrame);
+  // The stage changes size with the window, a phone rotating, or the parts
+  // drawer opening: redraw, and keep the same part of the scene framed when
+  // the aspect changes (a narrow view is width-limited).
+  app.stageAspect = stage.clientWidth / Math.max(1, stage.clientHeight);
+  new ResizeObserver(() => {
+    const a = stage.clientWidth / Math.max(1, stage.clientHeight);
+    if (a > 0 && a !== app.stageAspect) {
+      app.cam.dist = refitForAspect(app.cam.dist, app.cam.viewRadius, app.cam.fov, app.stageAspect, a);
+      // the zoom limits scale with aspect by the same ratio as the refit, so
+      // this clamp only catches float rounding: a dist inside the limits stays
+      // inside them, and an aspect round trip returns it exactly
+      zoomBy(app.cam, 1, app.sphere.radius, a);
+      app.stageAspect = a;
+      viewChanged();
+    }
+    queueFrame();
+  }).observe(stage);
+  window.addEventListener('resize', queueFrame); // devicePixelRatio changes (browser zoom) keep the CSS size
+  $('panelbtn').onclick = () => {
+    const open = document.body.classList.toggle('panel-open');
+    $('panelbtn').setAttribute('aria-expanded', String(open));
+    $('panelglyph').textContent = open ? '▾' : '▴';
+  };
+  // the Open… label is the file picker's only visible control: make it
+  // reachable and operable from the keyboard
+  const openLbl = $('open').parentElement;
+  openLbl.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('open').click(); }
+  };
+  // A preset is an action, not a state: the dropdown goes back to "View" as
+  // it is opened by mouse or touch (pointerdown) and when it loses focus, so
+  // the same preset can be chosen again even though orbiting, pinching or the
+  // wheel never take focus from it. It is NOT reset on change: arrow keys
+  // fire change per press, and a reset there snapped every press back.
+  $('viewsel').onchange = (e) => { if (e.target.value) setView(e.target.value); };
+  $('viewsel').onblur = (e) => { e.target.value = ''; };
+  $('viewsel').addEventListener('pointerdown', (e) => { e.target.value = ''; });
+  // The narrow toolbar is one scrolling row: let a plain mouse wheel scroll it
+  // sideways, and fade its right edge while more controls lie past it.
+  // #tb is the scrolling row; the fade is an overlay on the header around it.
+  const header = document.querySelector('header');
+  const tb = $('tb');
+  const moreHint = () => {
+    header.classList.toggle('more-right', tb.scrollLeft + tb.clientWidth < tb.scrollWidth - 1);
+    // the overlay stops above #tb's classic scrollbar (0 for overlay
+    // scrollbars); a style on the HEADER, which the observer below (on #tb)
+    // does not watch, so writing it cannot re-trigger moreHint
+    header.style.setProperty('--sbh', `${Math.max(0, tb.offsetHeight - tb.clientHeight)}px`);
+  };
+  tb.addEventListener('wheel', (e) => {
+    if (tb.scrollWidth <= tb.clientWidth || e.deltaX || !e.deltaY) return;
+    e.preventDefault();
+    tb.scrollLeft += e.deltaY * ([1, 16, tb.clientWidth][e.deltaMode] ?? 1);
+  }, { passive: false });
+  tb.addEventListener('scroll', moreHint);
+  new ResizeObserver(moreHint).observe(tb);
+  // contents can widen without the row resizing (Save appears once a STEP
+  // import enables it, and hides again for a .cadmesh)
+  new MutationObserver(moreHint).observe(tb, { attributes: true, subtree: true, childList: true, characterData: true });
   // A drop anywhere on the page loads the file: left to the browser, a drop on
   // the sidebar or header would open or download it and lose the view.
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -953,14 +1203,17 @@ function wireInput() {
     // only fields that take typed text swallow the letters; a focused tree
     // checkbox or button must not disable the shortcuts
     const t = e.target;
+    // The View preset dropdown keeps focus after a pick (it is an action
+    // menu, not a field): the shortcuts stay live there, and preventDefault
+    // stops its type-ahead from turning f into Front and i into Iso.
     const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
-      || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
+      || (t.tagName === 'SELECT' && t.id !== 'viewsel') || t.tagName === 'TEXTAREA' || t.isContentEditable;
     if (typed) return;
-    if (e.key === 'f') $('fit').click();
-    if (e.key === 'Escape') select([], false);
-    if (e.key === 'h') $('hide').click();
-    if (e.key === 'i') $('isolate').click();
-    if (e.key === 'a') $('showall').click();
+    const act = { f: () => $('fit').click(), Escape: () => select([], false), h: () => $('hide').click(),
+      i: () => $('isolate').click(), a: () => $('showall').click() }[e.key];
+    if (!act) return;
+    if (t.id === 'viewsel') e.preventDefault();
+    act();
   });
 }
 
@@ -995,7 +1248,7 @@ async function selftest() {
       await gpuSync().catch(() => {});
       out.race = {
         shown: app.sourceName,
-        wanted: want.split('/').pop(),
+        wanted: fileName(want),
         gpuMatchesUi: app.renderer.drawn === app.mesh,
         status: app.status,
       };

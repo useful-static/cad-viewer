@@ -3,7 +3,7 @@
 // Each test names the review finding it guards (2026-10-24 review round 1).
 
 import assert from 'node:assert/strict';
-import { camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, sphereOf } from '../js/camera.js';
+import { camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 
 let passed = 0;
@@ -15,7 +15,9 @@ function test(name, fn) {
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 // screen-up of the rendered view, as the view matrix carries it
 const screenUp = (cam) => { const v = lookAt(eyeOf(cam), cam.target, camUp(cam)); return [v[1], v[5], v[9]]; };
-const cam = (o) => ({ target: [0, 0, 0], dist: 100, yaw: 0.7, pitch: 0, fov: Math.PI / 4, up: 'y', ...o });
+// screen-right of the rendered view
+const screenRight = (cam) => { const v = lookAt(eyeOf(cam), cam.target, camUp(cam)); return [v[0], v[4], v[8]]; };
+const cam = (o) =>({ target: [0, 0, 0], dist: 100, yaw: 0.7, pitch: 0, fov: Math.PI / 4, up: 'y', ...o });
 
 for (const up of ['y', 'z']) {
   for (const [pole, sign] of [['top', 1], ['bottom', -1]]) {
@@ -163,6 +165,90 @@ test('reverse-Z separates surfaces 0.5 mm apart at 1 m where 24-bit standard dep
   assert.notEqual(f32(ndcZ(rev, 1000)), f32(ndcZ(rev, 1000.5)), 'depth32float reversed');
   const q24 = (d) => Math.round(d * (2 ** 24 - 1));
   assert.equal(q24(ndcZ(std, 1000)), q24(ndcZ(std, 1000.5)), 'mutation control: 24-bit standard depth DOES merge them');
+});
+
+// ---- touch / narrow layout ----
+
+test('pinch: fingers spreading apart zoom in, pinching together zooms out', () => {
+  const apart = pinchStep([100, 100], [200, 100], [50, 100], [250, 100]);
+  assert.ok(Math.abs(apart.scale - 0.5) < 1e-12 && apart.dx === 0 && apart.dy === 0);
+  const together = pinchStep([50, 100], [250, 100], [100, 100], [200, 100]);
+  assert.ok(Math.abs(together.scale - 2) < 1e-12);
+});
+
+test('pinch: a two-finger drag pans by the midpoint move and does not zoom', () => {
+  const st = pinchStep([100, 100], [200, 100], [130, 80], [230, 80]);
+  assert.ok(Math.abs(st.scale - 1) < 1e-12 && st.dx === 30 && st.dy === -20);
+});
+
+test('pinch: coincident fingers give scale 1, never 0 / Infinity / NaN', () => {
+  assert.equal(pinchStep([5, 5], [5, 5], [9, 9], [20, 20]).scale, 1);
+  assert.equal(pinchStep([5, 5], [6, 6], [9, 9], [9, 9]).scale, 1);
+});
+
+test('zoomBy clamps to [0.05 framed radius, 50 model radii]', () => {
+  const c = cam({ dist: 100, viewRadius: 10 });
+  zoomBy(c, 1e-9, 1000);
+  assert.equal(c.dist, 0.5);
+  zoomBy(c, 1e12, 1000);
+  assert.equal(c.dist, 50000);
+});
+
+test('panBy moves the target in the screen plane, by one px of image per px', () => {
+  for (const [up, pitch] of [['y', 0.4], ['z', -0.3], ['y', 1.55]]) {
+    const c = cam({ up, pitch, dist: 100, target: [0, 0, 0] });
+    panBy(c, 40, -25, 400);
+    const dir = camDir(c);
+    // the screen axes come from a Float32 view matrix: relative 1e-6, not exact
+    const len = Math.hypot(...c.target);
+    assert.ok(Math.abs(dot(c.target, dir)) < 1e-6 * len, `${up}/${pitch}: target left the screen plane`);
+    const pxPerUnit = 400 / (2 * 100 * Math.tan(Math.PI / 8));
+    assert.ok(Math.abs(len * pxPerUnit - Math.hypot(40, 25)) < 1e-4);
+    // the picture follows the finger: a drag RIGHT moves the target to the
+    // screen's left, a drag UP (dy < 0) moves it toward the screen's bottom
+    assert.ok(dot(c.target, screenRight(c)) < 0, `${up}/${pitch}: wrong horizontal pan direction`);
+    assert.ok(dot(c.target, screenUp(c)) < 0, `${up}/${pitch}: wrong vertical pan direction`);
+    // and in proportion: 40 px across, 25 px up
+    assert.ok(Math.abs(dot(c.target, screenRight(c)) / dot(c.target, screenUp(c)) - 40 / 25) < 1e-4);
+  }
+});
+
+test('an aspect round trip at a zoom limit returns dist exactly (refit + clamp, as main.js does it)', () => {
+  // main.js on each stage resize: dist = refitForAspect(...); zoomBy(cam, 1, R, aNew)
+  const resize = (c, a0, a1) => {
+    c.dist = refitForAspect(c.dist, c.viewRadius, c.fov, a0, a1);
+    zoomBy(c, 1, 1000, a1);
+  };
+  for (const [a0, a1] of [[0.54, 0.97], [0.46, 3.0], [3.0, 0.46]]) {
+    for (const end of ['floor', 'ceiling']) {
+      const c = cam({ dist: 100, viewRadius: 10 });
+      zoomBy(c, end === 'floor' ? 1e-9 : 1e12, 1000, a0);
+      const d0 = c.dist;
+      resize(c, a0, a1);
+      resize(c, a1, a0);
+      assert.ok(Math.abs(c.dist / d0 - 1) < 1e-9, `${end} ${a0}->${a1}->${a0}: dist ${d0} -> ${c.dist}`);
+    }
+  }
+});
+
+test('mutation control: aspect-blind limits (the round-5 clamp) DO lose zoom on that round trip', () => {
+  const c = cam({ dist: 100, viewRadius: 10 });
+  const clamp = () => { c.dist = Math.max(c.viewRadius * 0.05, Math.min(1000 * 50, c.dist)); };
+  c.dist = c.viewRadius * 0.05;
+  const d0 = c.dist;
+  c.dist = refitForAspect(c.dist, c.viewRadius, c.fov, 0.54, 0.97); clamp();
+  c.dist = refitForAspect(c.dist, c.viewRadius, c.fov, 0.97, 0.54); clamp();
+  assert.ok(c.dist / d0 > 1.5, `ratio ${c.dist / d0}`);
+});
+
+test('refitForAspect keeps the framed sphere fitting when a view narrows, and is identity when wide', () => {
+  const fov = Math.PI / 4;
+  const d0 = fitDistance(100, fov, 1.6);
+  assert.equal(refitForAspect(d0, 100, fov, 1.6, 2.0), d0); // both wide: vertical fit governs
+  const d1 = refitForAspect(d0, 100, fov, 1.6, 0.46); // landscape -> portrait phone
+  assert.ok(Math.abs(d1 - fitDistance(100, fov, 0.46)) < 1e-9);
+  assert.ok(Math.abs(refitForAspect(d1, 100, fov, 0.46, 1.6) - d0) < 1e-9); // and back
+  assert.equal(refitForAspect(d0, 100, fov, 0, 1), d0); // a 0-size stage changes nothing
 });
 
 test('perspective keeps eyeDist == dist (ortho push-back is ortho-only)', () => {

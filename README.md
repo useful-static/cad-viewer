@@ -41,6 +41,18 @@ URL parameters:
 - **Navigation.** Orbit (drag), pan (shift- or right-drag), zoom (wheel); the
   Iso / Front / Back / Left / Right / Top / Bottom views; fit; perspective or
   orthographic; Y-up or Z-up.
+- **Touch.** One finger orbits; two fingers pinch to zoom and drag to pan; tap
+  selects; double-tap zooms to the selection. Controls are finger-sized
+  wherever a touch screen is present.
+- **Phones and narrow windows.** Under 700 px wide, in portrait, or on a
+  short touch screen (a landscape phone), the 3D view takes the full width,
+  the parts tree folds into a **Parts** drawer below it, and the toolbar
+  becomes one scrolling row with the view presets in a **View** dropdown.
+  Rotating the device or opening the drawer keeps the same part of the model
+  framed.
+- **Keyboard and screen readers.** Open…, the tree (Enter selects, arrow keys
+  expand and collapse) and every control are reachable from the keyboard;
+  load results and errors are announced through a live region.
 - **Parts.** Assembly tree with visibility checkboxes. Click in the tree or
   the scene to select (ctrl adds). Isolate / Hide / Show all; double-click
   zooms to the selection; hovering names the body under the cursor.
