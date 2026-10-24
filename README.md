@@ -5,6 +5,8 @@ assemblies. It renders with **WebGPU** and falls back to **WebGL2**, then
 **WebGL1**. There is no build step and no CDN: serve the directory and open
 `index.html`.
 
+**Live: https://cad-viewer.known.name/** — drop a file on the page.
+
 STEP files are tessellated by [OpenCascade](https://dev.opencascade.org/)
 through [occt-import-js](https://github.com/kovacsv/occt-import-js) (WASM).
 That happens either in a Web Worker in the page or offline with a Node
