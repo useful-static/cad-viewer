@@ -364,6 +364,11 @@ export class WebGPURenderer {
     }
   }
 
+  // Resolves once every submitted frame has finished on the GPU. For ?gpubench.
+  sync() {
+    return this.lost ? Promise.resolve() : this.device.queue.onSubmittedWorkDone();
+  }
+
   destroy() {
     this.device.destroy();
   }

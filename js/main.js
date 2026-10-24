@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { decodeCadmesh } from './cadmesh.js';
+import { decodeCadmesh, deflateCadmesh, inflateCadmesh } from './cadmesh.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
@@ -495,7 +495,11 @@ function checkFits(r, mesh) {
 // Save .cadmesh writes), null for a .cadmesh load.
 async function loadBuffer(buf, name, seq, stepBuf = null) {
   const t0 = performance.now();
-  const mesh = decodeCadmesh(buf);
+  const raw = await inflateCadmesh(buf);
+  if (stale(seq)) return;
+  const inflateMs = performance.now() - t0;
+  const mesh = decodeCadmesh(raw);
+  const decodeMs = performance.now() - t0 - inflateMs;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
   app.wanted = mesh;
@@ -530,7 +534,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   buildTree();
   setView('iso');
   const tris = mesh.header.indexCount / 3;
-  app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount, uploadMs: Math.round(performance.now() - t0) };
+  app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
+    uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
+    inflateMs: Math.round(inflateMs), fileBytes: buf.byteLength, fetchMs: app.fetchMs ?? null };
   $('model').textContent = `${name} · ${mesh.header.meshes.length} bodies · ${fmtInt(tris)} triangles`;
   $('model').title = $('model').textContent; // the narrow footer truncates it
   showInfo();
@@ -613,6 +619,8 @@ async function loadUrl(url) {
   const seq = beginLoad();
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
+  const tf = performance.now();
+  app.fetchMs = null;
   const res = await fetch(url);
   if (stale(seq)) return;
   if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
@@ -645,11 +653,13 @@ async function loadUrl(url) {
   } else {
     buf = await res.arrayBuffer();
   }
+  app.fetchMs = Math.round(performance.now() - tf);
   return loadAny(buf, fileName(url), seq);
 }
 
 async function loadFile(file) {
   const seq = beginLoad();
+  app.fetchMs = null;
   setStatus('loading', `reading ${file.name}`);
   announce(`loading ${file.name}`); // a new load is news even mid-load
   const buf = await file.arrayBuffer();
@@ -1189,12 +1199,17 @@ function wireInput() {
   $('secaxis').onchange = (e) => { app.section.axis = e.target.value; $('secpos').disabled = app.section.axis === 'off'; viewChanged(); };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; viewChanged(); };
-  $('export').onclick = () => {
+  $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
+    const name = app.sourceName;
+    // gzipped (about a sixth of the raw size); a browser without
+    // CompressionStream saves the raw layout, which loads the same
+    const bytes = typeof CompressionStream === 'function'
+      ? await deflateCadmesh(app.lastStepBuffer) : app.lastStepBuffer;
     const a = document.createElement('a');
-    const url = URL.createObjectURL(new Blob([app.lastStepBuffer]));
+    const url = URL.createObjectURL(new Blob([bytes]));
     a.href = url;
-    a.download = `${app.sourceName.replace(/\.[^.]+$/, '')}.cadmesh`;
+    a.download = `${name.replace(/\.[^.]+$/, '')}.cadmesh`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
@@ -1260,6 +1275,45 @@ async function selftest() {
       const c = app.renderer.canvas;
       const id = await app.pickAt(c.width >> 1, c.height >> 1);
       Object.assign(out, { stats: app.stats, frames: app.frameCount, pickId: id, pickName: id ? meshLabel(id) : null });
+      // ?bench=N: orbit the camera one step per animation frame for N frames
+      // (each step redraws the whole model) and report the frame intervals.
+      // Frames run on the display's vsync, so a GPU that keeps up reads as the
+      // refresh rate; a slower one shows as longer intervals.
+      const n = Math.min(2000, Number(params.get('bench')) || 0);
+      if (n > 0) {
+        const f0 = app.frameCount;
+        const ts = [];
+        for (let i = 0; i < n; i++) {
+          app.cam.yaw += 0.02;
+          viewChanged();
+          ts.push(await new Promise((r) => requestAnimationFrame(r)));
+        }
+        await new Promise((r) => requestAnimationFrame(r));
+        const iv = ts.slice(1).map((t, i) => t - ts[i]).sort((a, b) => a - b);
+        const q = (p) => +iv[Math.min(iv.length - 1, Math.floor(p * iv.length))].toFixed(2);
+        const secs = (ts[ts.length - 1] - ts[0]) / 1000;
+        out.bench = { steps: n, drawn: app.frameCount - f0, seconds: +secs.toFixed(2),
+          fps: +((n - 1) / secs).toFixed(1), msP50: q(0.5), msP95: q(0.95), msMax: q(1 - 1e-9) };
+      }
+      // ?gpubench=N: N full redraws back to back in one task, then wait for the
+      // GPU: ms per frame with no vsync cap, so it shows the headroom that
+      // ?bench cannot (a GPU that keeps vsync always reads as the refresh rate).
+      const g = Math.min(1000, Number(params.get('gpubench')) || 0);
+      if (g > 0) {
+        resize();
+        app.renderer.render(frameState());
+        await app.renderer.sync();
+        const t0 = performance.now();
+        for (let i = 0; i < g; i++) {
+          app.cam.yaw += 0.02;
+          app.renderer.render(frameState());
+        }
+        await app.renderer.sync();
+        const ms = performance.now() - t0;
+        const c = app.renderer.canvas;
+        out.gpubench = { frames: g, size: [c.width, c.height], msPerFrame: +(ms / g).toFixed(3),
+          mtrisPerSec: +((app.stats.triangles * g) / ms / 1e3).toFixed(1) };
+      }
     }
   } catch (e) {
     out.error = String(e.message || e);
@@ -1269,6 +1323,12 @@ async function selftest() {
   pre.hidden = true;
   pre.textContent = `SELFTEST ${JSON.stringify(out)}`;
   document.body.append(pre);
+  // ?report=1: also POST the line to the SAME origin (tests/report-server.py),
+  // for a browser that cannot be driven over DevTools (iOS Simulator Safari)
+  if (params.get('report')) {
+    fetch('/__selftest', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: pre.textContent })
+      .catch(() => {});
+  }
 }
 
 guard(main()).then(() => { if (params.get('selftest')) return selftest(); });

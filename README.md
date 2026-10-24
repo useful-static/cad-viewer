@@ -78,6 +78,12 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
 | `--deflection R` | linear deflection as a ratio of the bounding box (default 0.001) |
 | `--absolute MM` | linear deflection as an absolute chord error, in mm |
 | `--angular RAD` | angular deflection (default 0.5) |
+| `--raw` | write the uncompressed layout (default: gzipped) |
+
+The converter and **Save .cadmesh** write the file gzipped, usually about a
+sixth of the raw size. The viewer inflates it with the browser's
+`DecompressionStream`, so no web-server compression setup is needed. Raw
+files load too.
 
 ## How it renders
 
@@ -97,7 +103,7 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
   fallback order applies again) and the model re-uploaded, up to 3 attempts.
 - **`.cadmesh` sections.** The file's attribute sections (`float32x3`
   position, `snorm16x4` normal, `unorm8x4` colour and id, `uint32` index) are
-  8-byte aligned and upload to the GPU without conversion. The layout is
+  8-byte aligned and upload to the GPU without conversion once inflated. The layout is
   documented at the top of [`js/cadmesh.js`](js/cadmesh.js).
 
 | File | Role |

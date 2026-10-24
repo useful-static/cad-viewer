@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { encodeCadmesh, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,7 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadme
   --absolute MM    linear deflection as an absolute chord error in mm (instead of --deflection)
   --angular RAD    angular deflection (default ${DEFAULT_TESSELLATION.angularDeflection})
   --occt DIR       occt-import-js dist dir (default: vendor/occt-import-js, staged by fetch-deps.sh)
+  --raw            write the uncompressed layout (default: gzipped, which the viewer inflates)
 `;
 
 function parseArgs(argv) {
@@ -46,6 +48,7 @@ function parseArgs(argv) {
       a.params.angularDeflection = v;
     }
     else if (k === '--occt') a.occt = val();
+    else if (k === '--raw') a.raw = true;
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;
     else throw new Error(`unexpected argument ${k}`);
@@ -89,10 +92,13 @@ async function main() {
     return 1;
   }
   const buf = encodeCadmesh(occtResultToModel(result));
-  writeFileSync(out, Buffer.from(buf));
+  const file = args.raw ? Buffer.from(buf) : gzipSync(Buffer.from(buf), { level: 6 });
+  writeFileSync(out, file);
   const meshes = result.meshes.length;
   const tris = result.meshes.reduce((s, m) => s + m.index.array.length / 3, 0);
-  process.stdout.write(`OK ${out}: ${meshes} bodies, ${tris} triangles, ${(buf.byteLength / 1e6).toFixed(1)} MB, tessellation ${((t1 - t0) / 1000).toFixed(1)} s\n`);
+  const mb = (n) => (n / 1e6).toFixed(1);
+  process.stdout.write(`OK ${out}: ${meshes} bodies, ${tris} triangles, ${mb(file.length)} MB`
+    + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s\n`);
   return 0;
 }
 

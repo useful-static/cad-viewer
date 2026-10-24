@@ -380,6 +380,14 @@ export class WebGLRenderer {
     return { id: (px[0] | (px[1] << 8) | (px[2] << 16)) >>> 0, mesh };
   }
 
+  // Resolves once every draw issued so far has finished on the GPU (a 1-pixel
+  // read-back blocks until then). For ?gpubench timing.
+  sync() {
+    const gl = this.gl;
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    return Promise.resolve();
+  }
+
   destroy() {
     const ext = this.gl.getExtension('WEBGL_lose_context');
     if (ext) ext.loseContext();

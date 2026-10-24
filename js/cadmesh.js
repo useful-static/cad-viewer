@@ -1,5 +1,6 @@
 // The .cadmesh container: one tessellated CAD assembly, laid out so every
 // attribute section uploads to the GPU as-is (WebGPU, WebGL2 and WebGL1 alike).
+// A file on disk or the wire may be the gzip of this layout (inflateCadmesh).
 //
 //   0   'CADM'                 magic
 //   4   u32 version (1)
@@ -131,6 +132,36 @@ export function encodeCadmesh(model) {
       .set(new Uint8Array(arrays[s].buffer, arrays[s].byteOffset, arrays[s].byteLength));
   }
   return out;
+}
+
+// A .cadmesh file may be stored gzip-compressed (RFC 1952): the sections are
+// mostly redundant bytes (a 650k-triangle assembly gzips to a sixth), and a
+// static host serves application/octet-stream uncompressed. The gzip magic
+// tells the two apart, so raw files keep loading. Both directions use the
+// platform's Compression Streams (browsers, Node 18+): no bundled inflater.
+export function isGzip(buf) {
+  const b = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+  return b.length === 2 && b[0] === 0x1f && b[1] === 0x8b;
+}
+
+const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThrough(stream)).arrayBuffer();
+
+// buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
+export async function inflateCadmesh(buf) {
+  if (!isGzip(buf)) return buf;
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('cadmesh: this file is gzip-compressed, and this browser cannot decompress (no DecompressionStream)');
+  }
+  try {
+    return await pipeBytes(buf, new DecompressionStream('gzip'));
+  } catch (e) {
+    throw new Error(`cadmesh: the gzip data is corrupt or truncated (${e.message || e})`);
+  }
+}
+
+// raw .cadmesh bytes -> gzip, for writing a file
+export function deflateCadmesh(buf) {
+  return pipeBytes(buf, new CompressionStream('gzip'));
 }
 
 // Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,

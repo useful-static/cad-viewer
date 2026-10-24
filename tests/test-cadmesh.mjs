@@ -11,8 +11,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bytesToId, computeNormals, decodeCadmesh, encodeCadmesh, idToBytes, occtResultToModel,
+  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, idToBytes, inflateCadmesh,
+  isGzip, occtResultToModel,
 } from '../js/cadmesh.js';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let passed = 0;
@@ -203,6 +205,40 @@ test('stp2mesh refuses a non-positive or non-numeric --angular (review r2)', () 
   }
 });
 
+async function atest(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`PASS ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`FAIL ${name}: ${e.message}`);
+  }
+}
+
+const sample = () => encodeCadmesh({
+  units: 'mm', meshes: [quad('a', 0, [1, 0, 0]), quad('b', 2)], root: { name: 'r', meshes: [0, 1], children: [] },
+});
+
+await atest('a gzipped file inflates to the same bytes; a raw one passes through untouched', async () => {
+  const raw = sample();
+  assert.equal(isGzip(raw), false);
+  assert.equal(await inflateCadmesh(raw), raw, 'raw input is returned as-is (no copy)');
+  // both writers: the browser's CompressionStream and Node's zlib (stp2mesh)
+  for (const gz of [await deflateCadmesh(raw), new Uint8Array(gzipSync(Buffer.from(raw))).buffer]) {
+    assert.equal(isGzip(gz), true);
+    assert.ok(gz.byteLength < raw.byteLength, 'smaller');
+    assert.deepEqual(new Uint8Array(await inflateCadmesh(gz)), new Uint8Array(raw));
+  }
+  assert.equal(decodeCadmesh(await inflateCadmesh(await deflateCadmesh(raw))).header.meshes.length, 2);
+});
+
+await atest('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {
+  const gz = await deflateCadmesh(sample());
+  await assert.rejects(inflateCadmesh(gz.slice(0, gz.byteLength >> 1)), /cadmesh: the gzip data is corrupt or truncated/);
+  assert.equal(isGzip(new ArrayBuffer(1)), false, 'a 1-byte buffer is not gzip');
+});
+
 const occtJs = join(HERE, '..', 'vendor', 'occt-import-js', 'occt-import-js.js');
 const stepFixture = process.env.CADV_STEP_FIXTURE;
 if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
@@ -212,7 +248,9 @@ if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
       const out = join(dir, 'x.cadmesh');
       const log = execFileSync('node', [join(HERE, '..', 'stp2mesh.mjs'), stepFixture, '-o', out], { encoding: 'utf8' });
       assert.match(log, /^OK /);
-      const m = decodeCadmesh(new Uint8Array(readFileSync(out)).buffer);
+      const file = readFileSync(out);
+      assert.equal(file[0], 0x1f, 'stp2mesh writes gzip by default');
+      const m = decodeCadmesh(gunzipSync(file).buffer);
       assert.ok(m.header.meshes.length > 0 && m.header.indexCount > 0, 'non-empty mesh');
       writeFileSync(join(dir, 'ok'), '');
     } finally {
