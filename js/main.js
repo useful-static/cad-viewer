@@ -227,6 +227,7 @@ function giveUp(msg) {
   showInfo(); // its renderer line must stop naming the dead renderer
 }
 async function recoverRenderer(why) {
+  app.gpuLosses = (app.gpuLosses || 0) + 1; // the selftest reports it: a smoke run that recovered is not a normal load
   if (recovering) { lossPending = why; return; }
   if (recoveries >= 3) {
     giveUp(`GPU lost repeatedly (${why}); reload the page`);
@@ -1234,7 +1235,7 @@ async function main() {
 // in <pre id="selftest"> so a headless run can grade the backend
 // (tests/browser-smoke.sh). Runs on success and on failure.
 async function selftest() {
-  const out = { status: app.status, backend: app.backend, attempts: app.attempts, error: app.error || null };
+  const out = { status: app.status, backend: app.backend, attempts: app.attempts, error: app.error || null, gpuLosses: app.gpuLosses || 0 };
   try {
     // ?race=<url>: start a load of <url> (pick a slower one), then immediately
     // re-load ?src. The newer load must win, and the GPU must hold the model
