@@ -3,7 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CAD viewer</title>
+<title>CAD viewer — view STEP, IGES and BREP files in your browser</title>
+<meta name="description" content="Free online 3D CAD viewer for STEP, IGES and BREP assemblies. Runs in your browser with WebGPU or WebGL; your file is opened locally and never uploaded. Parts tree, section planes, isolate and hide.">
+<meta name="theme-color" content="#1d2127">
+<link rel="canonical" href="https://cad-viewer.known.name/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Useful Static">
+<meta property="og:url" content="https://cad-viewer.known.name/">
+<meta property="og:title" content="CAD viewer — view STEP, IGES and BREP files in your browser">
+<meta property="og:description" content="Free 3D CAD viewer that runs in your browser. Your file is opened locally and never uploaded.">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"CAD viewer","url":"https://cad-viewer.known.name/",
+"description":"Browser-based 3D viewer for STEP, IGES and BREP assemblies, rendered with WebGPU or WebGL. Files are opened locally and never uploaded.",
+"applicationCategory":"DesignApplication","operatingSystem":"Any (web browser)","isAccessibleForFree":true,
+"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+"sameAs":["https://github.com/useful-static/cad-viewer"],
+"publisher":{"@type":"Organization","name":"Useful Static","url":"https://known.name/"}}
+</script>
 <style>
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   * { box-sizing: border-box; }
@@ -152,7 +169,7 @@
   <button id="panelbtn" aria-expanded="false" aria-controls="parts">Parts <span id="panelglyph" aria-hidden="true">▴</span></button>
   <div id="info"></div>
   <ul id="tree"></ul>
-  <div class="help"><span class="help-mouse">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span></div>
+  <div class="help"><span class="help-mouse">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span> · <a href="https://known.name/" style="color:inherit">More free tools</a></div>
 </aside>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div></div>
 <footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span></footer>
