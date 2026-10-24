@@ -15,7 +15,7 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadme
 
   -o FILE          output (default: input with .cadmesh)
   --deflection R   linear deflection as a ratio of the bounding box (default ${DEFAULT_TESSELLATION.linearDeflection})
-  --absolute MM    linear deflection as an absolute chord error in mm (overrides --deflection)
+  --absolute MM    linear deflection as an absolute chord error in mm (instead of --deflection)
   --angular RAD    angular deflection (default ${DEFAULT_TESSELLATION.angularDeflection})
   --occt DIR       occt-import-js dist dir (default: vendor/occt-import-js, staged by fetch-deps.sh)
 `;
@@ -30,9 +30,21 @@ function parseArgs(argv) {
     };
     if (k === '-h' || k === '--help') { a.help = true; }
     else if (k === '-o') a.out = val();
-    else if (k === '--deflection') a.params.linearDeflection = Number(val());
-    else if (k === '--absolute') { a.params.linearDeflectionType = 'absolute_value'; a.params.linearDeflection = Number(val()); }
-    else if (k === '--angular') a.params.angularDeflection = Number(val());
+    else if (k === '--deflection' || k === '--absolute') {
+      // one linear-deflection mode per run: given both, the later one used to
+      // overwrite the value while the mode stayed absolute
+      if (a.linearSet) throw new Error('give only one of --deflection / --absolute');
+      a.linearSet = true;
+      const v = Number(val());
+      if (!(v > 0)) throw new Error(`${k} needs a positive number`);
+      if (k === '--absolute') a.params.linearDeflectionType = 'absolute_value';
+      a.params.linearDeflection = v;
+    }
+    else if (k === '--angular') {
+      const v = Number(val());
+      if (!(v > 0)) throw new Error('--angular needs a positive number');
+      a.params.angularDeflection = v;
+    }
     else if (k === '--occt') a.occt = val();
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;

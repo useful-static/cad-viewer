@@ -77,6 +77,12 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
 - **Picking.** Each vertex carries its body id (mesh index + 1) as four RGBA
   bytes. The pick pass writes those bytes to a 1-pixel scissored RGBA8 target,
   and the read-back pixel *is* the id, identically on WebGPU, WebGL2 and WebGL1.
+- **Depth.** Near and far planes are fitted to the model's bounding sphere
+  from wherever the eye is. WebGPU uses reverse-Z on a `depth32float` buffer,
+  so zooming onto a small part of a large assembly does not z-fight. WebGL
+  keeps standard 24-bit depth.
+- **GPU loss.** A lost WebGPU device or WebGL context is replaced (the
+  fallback order applies again) and the model re-uploaded, up to 3 attempts.
 - **`.cadmesh` sections.** The file's attribute sections (`float32x3`
   position, `snorm16x4` normal, `unorm8x4` colour and id, `uint32` index) are
   8-byte aligned and upload to the GPU without conversion. The layout is
@@ -84,7 +90,8 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
 
 | File | Role |
 |---|---|
-| `index.html`, `js/main.js` | UI, camera, tree, picking, section, loading |
+| `index.html`, `js/main.js` | UI, tree, picking, section, loading, GPU-loss recovery |
+| `js/camera.js` | orbit camera: view direction, up vector, fit, near/far |
 | `js/renderer-webgpu.js` | WebGPU backend |
 | `js/renderer-webgl.js` | WebGL2 + WebGL1 backend (one GLSL ES 1.00 shader set) |
 | `js/cadmesh.js` | `.cadmesh` encode/decode, OpenCascade result mapping |
@@ -96,13 +103,16 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
 ## Tests
 
 ```sh
-npm test        # = node tests/test-cadmesh.mjs; set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
+npm test        # tests/test-cadmesh.mjs + tests/test-camera.mjs
+                # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
 ```
 
 `tests/webgpu-offscreen.html?src=<.cadmesh>` drives the real WebGPU renderer
 into an offscreen texture and checks the pick pass against the shaded frame:
 every sampled lit pixel must pick a body, and every background pixel must pick
-nothing. It exists because headless Chromium on a software adapter (SwiftShader)
+nothing. A CPU ray cast through each sampled pixel must name the same nearest
+body as the GPU pick, which checks the depth setup; `&mutate=noreverse` breaks
+it on purpose to show the check fails. It exists because headless Chromium on a software adapter (SwiftShader)
 cannot present a WebGPU canvas, so the page itself cannot be graded there.
 
 ## Third-party

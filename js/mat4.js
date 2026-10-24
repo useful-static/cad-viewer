@@ -19,13 +19,20 @@ export function multiply(a, b) {
 }
 
 // depthZeroToOne: WebGPU clip z is [0,1]; WebGL's is [-1,1].
-export function perspective(fovyRad, aspect, near, far, depthZeroToOne) {
+// reverse (with depthZeroToOne): near maps to 1 and far to 0. With a float
+// depth buffer that spreads precision evenly over distance; it has to be built
+// into the matrix here, in float64 -- flipping z = w - z later, in fp32, would
+// cancel exactly the bits it is meant to keep.
+export function perspective(fovyRad, aspect, near, far, depthZeroToOne, reverse = false) {
   const f = 1 / Math.tan(fovyRad / 2);
   const m = new Float32Array(16);
   m[0] = f / aspect;
   m[5] = f;
   m[11] = -1;
-  if (depthZeroToOne) {
+  if (depthZeroToOne && reverse) {
+    m[10] = near / (far - near);
+    m[14] = (near * far) / (far - near);
+  } else if (depthZeroToOne) {
     m[10] = far / (near - far);
     m[14] = (near * far) / (near - far);
   } else {
@@ -35,11 +42,14 @@ export function perspective(fovyRad, aspect, near, far, depthZeroToOne) {
   return m;
 }
 
-export function ortho(halfW, halfH, near, far, depthZeroToOne) {
+export function ortho(halfW, halfH, near, far, depthZeroToOne, reverse = false) {
   const m = identity();
   m[0] = 1 / halfW;
   m[5] = 1 / halfH;
-  if (depthZeroToOne) {
+  if (depthZeroToOne && reverse) {
+    m[10] = 1 / (far - near);
+    m[14] = far / (far - near);
+  } else if (depthZeroToOne) {
     m[10] = 1 / (near - far);
     m[14] = near / (near - far);
   } else {

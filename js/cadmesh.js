@@ -152,7 +152,8 @@ export function decodeCadmesh(buf) {
     }
     return new Ctor(buf, dataStart + s.offset, s.byteLength / Ctor.BYTES_PER_ELEMENT);
   };
-  return {
+  validateHeader(header);
+  const out = {
     header,
     position: view('position', Float32Array),
     normal: view('normal', Int16Array),
@@ -160,6 +161,54 @@ export function decodeCadmesh(buf) {
     id: view('id', Uint8Array),
     index: view('index', Uint32Array),
   };
+  // An index past the vertex data draws nothing on WebGL2 (INVALID_OPERATION,
+  // no error shown) and garbage on WebGPU: refuse it here, loudly.
+  const vc = header.vertexCount;
+  const idx = out.index;
+  for (let i = 0; i < idx.length; i++) {
+    if (idx[i] >= vc) throw new Error(`cadmesh: index ${i} names vertex ${idx[i]} of ${vc}`);
+  }
+  return out;
+}
+
+// Reject a header whose tree or mesh ranges do not fit its own counts, BEFORE
+// anything uses it: a bad tree used to throw half-way through switching the UI
+// to the new model.
+function validateHeader(h) {
+  const bad = (msg) => { throw new Error(`cadmesh: ${msg}`); };
+  const ok = (v) => Number.isInteger(v) && v >= 0;
+  const vec3 = (v) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+  const box = (b) => b && vec3(b.min) && vec3(b.max);
+  if (!ok(h.vertexCount) || !ok(h.indexCount)) bad('header vertex/index counts missing or invalid');
+  if (h.indexCount % 3) bad('index count is not a whole number of triangles');
+  if (h.vertexCount ? !box(h.bbox) : h.bbox !== null) bad('header bounding box malformed');
+  // each section must be exactly the size its count implies
+  const want = { position: 12 * h.vertexCount, normal: 8 * h.vertexCount, color: 4 * h.vertexCount, id: 4 * h.vertexCount, index: 4 * h.indexCount };
+  for (const [s, len] of Object.entries(want)) {
+    const sec = h.sections && h.sections[s];
+    if (!sec || !ok(sec.offset) || sec.byteLength !== len || sec.offset % 8) bad(`section ${s} does not match the header counts`);
+  }
+  if (!Array.isArray(h.meshes)) bad('header has no mesh list');
+  const n = h.meshes.length;
+  for (const [i, m] of h.meshes.entries()) {
+    if (!m || !ok(m.vtxStart) || !ok(m.vtxCount) || !ok(m.idxStart) || !ok(m.idxCount)
+      || m.vtxStart + m.vtxCount > h.vertexCount || m.idxStart + m.idxCount > h.indexCount) {
+      bad(`mesh ${i} range is outside the vertex/index data`);
+    }
+    if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
+  }
+  const seen = new Set();
+  const walk = (node, depth) => {
+    if (depth > 256) bad('assembly tree deeper than 256 levels (cycle?)');
+    if (!node || !Array.isArray(node.meshes) || !Array.isArray(node.children)) bad('malformed assembly tree node');
+    for (const i of node.meshes) {
+      if (!Number.isInteger(i) || i < 0 || i >= n) bad(`assembly tree names mesh ${i} of ${n}`);
+    }
+    if (seen.has(node)) bad('assembly tree node repeated');
+    seen.add(node);
+    for (const c of node.children) walk(c, depth + 1);
+  };
+  walk(h.root, 0);
 }
 
 export function computeNormals(positions, indices) {

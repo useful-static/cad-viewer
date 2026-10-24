@@ -92,6 +92,60 @@ test('decode rejects a wrong magic and a truncated file', () => {
   assert.throws(() => decodeCadmesh(new ArrayBuffer(4)), /too short/);
 });
 
+test('decode rejects a tree that names a mesh out of range (review r5)', () => {
+  const root = { name: 'asm', meshes: [], children: [{ name: 'x', meshes: [5], children: [] }] };
+  const buf = encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2), quad('c', 4)], root });
+  assert.throws(() => decodeCadmesh(buf), /names mesh 5 of 3/);
+});
+
+test('decode rejects a mesh range outside the vertex data (review r5)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  // rewrite the JSON header in place with a widened vtxCount
+  const dv = new DataView(buf);
+  const jlen = dv.getUint32(8, true);
+  const text = new TextDecoder().decode(new Uint8Array(buf, 12, jlen));
+  const evil = text.replace('"vtxCount":4', '"vtxCount":9');
+  assert.equal(evil.length, text.length);
+  new Uint8Array(buf, 12, jlen).set(new TextEncoder().encode(evil));
+  assert.throws(() => decodeCadmesh(buf), /mesh 0 range/);
+});
+
+// rewrite one JSON header field in place (same length) and return the buffer
+function patchHeader(buf, from, to) {
+  const dv = new DataView(buf);
+  const jlen = dv.getUint32(8, true);
+  const text = new TextDecoder().decode(new Uint8Array(buf, 12, jlen));
+  const evil = text.replace(from, to);
+  assert.notEqual(evil, text, `pattern ${from} not found`);
+  assert.equal(evil.length, text.length);
+  new Uint8Array(buf, 12, jlen).set(new TextEncoder().encode(evil));
+  return buf;
+}
+
+test('decode rejects a malformed bounding box (review r6)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  // "max" -> "mox": the header bbox loses its max corner
+  assert.throws(() => decodeCadmesh(patchHeader(buf, '"max"', '"mox"')), /bounding box malformed/);
+});
+
+test('decode rejects counts that disagree with the sections (review r6)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  assert.throws(() => decodeCadmesh(patchHeader(buf, '"vertexCount":4', '"vertexCount":5')), /does not match the header counts/);
+});
+
+test('decode rejects an index past the vertex data (review r6)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  const m = decodeCadmesh(buf);
+  m.index[2] = 99; // views alias the buffer
+  assert.throws(() => decodeCadmesh(buf), /index 2 names vertex 99 of 4/);
+});
+
+test('an empty model still decodes (no vertices, null bbox)', () => {
+  const m = decodeCadmesh(encodeCadmesh({ meshes: [] }));
+  assert.equal(m.header.vertexCount, 0);
+  assert.equal(m.header.bbox, null);
+});
+
 test('computeNormals points a CCW triangle along +Z', () => {
   const n = computeNormals(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2]));
   assert.deepEqual([...n.slice(0, 3)], [0, 0, 1]);
@@ -122,6 +176,31 @@ test('occt mapping: a colourless file gets one colour per part NAME', () => {
 
 test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
+});
+
+test('stp2mesh refuses --absolute together with --deflection (review r1)', () => {
+  let rc = 0;
+  let err = '';
+  try {
+    execFileSync('node', [join(HERE, '..', 'stp2mesh.mjs'), 'x.stp', '--absolute', '0.1', '--deflection', '0.001'], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (e) {
+    rc = e.status;
+    err = String(e.stderr);
+  }
+  assert.equal(rc, 2);
+  assert.match(err, /only one of --deflection \/ --absolute/);
+});
+
+test('stp2mesh refuses a non-positive or non-numeric --angular (review r2)', () => {
+  for (const bad of ['abc', '-1', '0']) {
+    let rc = 0;
+    try {
+      execFileSync('node', [join(HERE, '..', 'stp2mesh.mjs'), 'x.stp', '--angular', bad], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (e) {
+      rc = e.status;
+    }
+    assert.equal(rc, 2, `--angular ${bad}`);
+  }
 });
 
 const occtJs = join(HERE, '..', 'vendor', 'occt-import-js', 'occt-import-js.js');

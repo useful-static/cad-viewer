@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "deps": "./fetch-deps.sh",
-    "test": "node tests/test-cadmesh.mjs",
+    "test": "node tests/test-cadmesh.mjs && node tests/test-camera.mjs",
     "convert": "node stp2mesh.mjs"
   },
   "engines": {

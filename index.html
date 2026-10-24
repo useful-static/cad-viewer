@@ -43,7 +43,7 @@
 <header>
   <span class="title">CAD viewer</span>
   <label class="btn">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh" hidden></label>
-  <button id="export" disabled title="Save the tessellated mesh so the next load skips OpenCascade">Save .cadmesh</button>
+  <button id="export" autocomplete="off" disabled title="Save the tessellated mesh so the next load skips OpenCascade">Save .cadmesh</button>
   <span class="sep"></span>
   <button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button>
   <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button>
@@ -52,8 +52,8 @@
   <button id="isolate" title="i">Isolate</button><button id="hide" title="h">Hide</button><button id="showall" title="a">Show all</button>
   <span class="sep"></span>
   <span>Section</span>
-  <select id="secaxis"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
-  <input id="secpos" type="range" min="0" max="1000" value="500" disabled>
+  <select id="secaxis" autocomplete="off"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+  <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off">
   <button id="secflip">flip</button>
   <span id="backend">…</span>
 </header>

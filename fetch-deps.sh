@@ -28,7 +28,7 @@ USAGE
 }
 
 staged_ok() {
-	[[ -f "${DEST}/occt-import-js.wasm" && -f "${DEST}/occt-import-js.js" ]] \
+	[[ -f "${DEST}/occt-import-js.wasm" && -f "${DEST}/occt-import-js.js" && -f "${DEST}/package.json" ]] \
 		&& [[ "$(cat "${DEST}/VERSION" 2>/dev/null)" == "${VERSION}" ]]
 }
 
@@ -49,28 +49,39 @@ main() {
 
 	mkdir -p "${CACHE}"
 	local tgz="${CACHE}/occt-import-js-${VERSION}.tgz"
-	if [[ ! -f "${tgz}" ]]; then
+	local got=""
+	[[ -f "${tgz}" ]] && got="$(sha256sum "${tgz}" | cut -d' ' -f1)"
+	if [[ "${got}" != "${SHA256}" ]]; then
+		# Missing, or a cached copy that does not verify (truncated, tampered):
+		# set it aside and fetch fresh, so one bad download is not permanent.
+		[[ -f "${tgz}" ]] && mv -f "${tgz}" "${tgz}.bad"
 		curl -fsSL --retry 3 -o "${tgz}.part" \
 			"https://registry.npmjs.org/occt-import-js/-/occt-import-js-${VERSION}.tgz"
 		mv "${tgz}.part" "${tgz}"
+		got="$(sha256sum "${tgz}" | cut -d' ' -f1)"
 	fi
-	local got
-	got="$(sha256sum "${tgz}" | cut -d' ' -f1)"
 	if [[ "${got}" != "${SHA256}" ]]; then
 		echo "FAIL: sha256 mismatch for ${tgz}: got ${got}, want ${SHA256}" >&2
+		mv -f "${tgz}" "${tgz}.bad"
 		return 1
 	fi
 
-	# Extract into a fresh empty dir; copy out only the runtime files.
-	local tmp
-	tmp="$(mktemp -d "${CACHE}/extract.XXXXXX")"
-	trap 'rm -rf "${tmp}"' RETURN
+	# Extract into a fresh empty dir; copy out only the runtime files. The EXIT
+	# trap (set at the top level) removes it on every path, including a set -e
+	# abort in tar or cp, which a RETURN trap does not see.
+	EXTRACT_DIR="$(mktemp -d "${CACHE}/extract.XXXXXX")"
+	local tmp="${EXTRACT_DIR}"
 	tar -xzf "${tgz}" -C "${tmp}" package/dist
 	mkdir -p "${DEST}"
 	cp "${tmp}/package/dist/occt-import-js.js" "${tmp}/package/dist/occt-import-js.wasm" \
 		"${tmp}/package/dist/license.occt-import-js.txt" "${tmp}/package/dist/license.occt.txt" "${DEST}/"
+	# occt-import-js.js is CommonJS (stp2mesh.mjs require()s it); the viewer's
+	# own package.json says "type": "module", so mark this directory back.
+	echo '{ "type": "commonjs" }' > "${DEST}/package.json"
 	echo "${VERSION}" > "${DEST}/VERSION"
 	echo "OK staged occt-import-js ${VERSION} in ${DEST}"
 }
 
+EXTRACT_DIR=""
+trap '[[ -n "${EXTRACT_DIR}" ]] && rm -rf "${EXTRACT_DIR}"' EXIT
 main "$@"
