@@ -1,0 +1,10 @@
+.git
+.gitignore
+.assetsignore
+node_modules
+wrangler.jsonc
+package.json
+fetch-deps.sh
+stp2mesh.mjs
+tests
+models

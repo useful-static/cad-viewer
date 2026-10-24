@@ -1,0 +1,9 @@
+{
+  // Cloudflare Workers static assets. Build command: ./fetch-deps.sh (stages
+  // the OpenCascade WASM into vendor/, which is not in git). Deploy: npx wrangler deploy.
+  "name": "cad-viewer",
+  "compatibility_date": "2026-10-24",
+  "assets": {
+    "directory": "."
+  }
+}
