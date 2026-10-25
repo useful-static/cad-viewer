@@ -67,6 +67,14 @@ fn clipped(p : vec3f) -> bool {
   let fill = max(dot(n, normalize(-(l - dot(l, up) * up) + 0.3 * up)), 0.0);
   let spec = pow(max(dot(n, normalize(l + v)), 0.0), 48.0);
   var c = i.col * (0.28 + 0.17 * hemi + 0.62 * dif + 0.18 * fill) + vec3f(0.18 * spec);
+  // Cut faces: with a section on, a surface seen from INSIDE (its outward
+  // normal facing away from the eye) is the inside of a solid showing through
+  // the cut. It is shaded flat, lit as the plane would be, so a cut part reads
+  // as solid instead of a hollow shell.
+  if (u.params.z > 0.5 && dot(i.nrm, v) < 0.0) {
+    let pn = normalize(u.clip.xyz);
+    c = i.col * 0.8 * (0.35 + 0.5 * max(dot(pn, l), 0.0) + 0.15 * (0.5 + 0.5 * dot(pn, up)));
+  }
   // hi.a = 1 while anything is selected: the rest is greyed and darkened, so
   // the selection stands out whatever colours the model itself uses
   if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }

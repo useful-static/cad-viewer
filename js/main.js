@@ -473,6 +473,24 @@ function stateHeight(n) {
   return 2 ** Math.ceil(Math.log2(Math.max(1, rows)));
 }
 
+// Visibility history: Hide, Isolate, Show all and a tree checkbox each save
+// the hidden set first, and Undo (Ctrl/Cmd+Z) steps back through them. A new
+// model starts a new history.
+app.visUndo = [];
+function rememberVisibility() {
+  app.visUndo.push(new Set(app.hidden));
+  if (app.visUndo.length > 100) app.visUndo.shift();
+}
+function undoVisibility() {
+  if (!app.visUndo.length || !app.header) return;
+  app.hidden = app.visUndo.pop();
+  syncTreeChecks();
+  pushState();
+  showInfo();
+  viewChanged();
+  announce(`undone: ${app.hidden.size ? `${app.hidden.size} hidden` : 'everything shown'}`);
+}
+
 // Toolbar state: a button that would do nothing is disabled (Hide / Isolate
 // with nothing selected, Show all with nothing hidden), the toggles show
 // whether they are on, and the section slider says where the cut is.
@@ -480,6 +498,7 @@ function updateButtons() {
   const has = !!app.header;
   $('isolate').disabled = $('hide').disabled = !app.selected.size;
   $('showall').disabled = !app.hidden.size;
+  $('undo').disabled = !app.visUndo.length;
   $('fit').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.up === 'z'));
@@ -545,6 +564,7 @@ function dropModel(msg) {
   app.sphere = { center: [0, 0, 0], radius: 1 };
   app.selected.clear();
   app.hidden.clear();
+  app.visUndo = [];
   app.hover = 0;
   app.hoverSeq++;
   app.viewGen++;
@@ -623,6 +643,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   $('export').disabled = !stepBuf;
   app.selected.clear();
   app.hidden.clear();
+  app.visUndo = [];
   app.hover = 0;
   app.hoverSeq++; // a hover answer computed against the old model must not apply
   app.viewGen++; // and neither may a click aimed at it
@@ -973,6 +994,7 @@ function buildTree() {
       }
     };
     cb.onchange = () => {
+      rememberVisibility();
       for (const id of ids) (cb.checked ? app.hidden.delete(id) : app.hidden.add(id));
       syncTreeChecks();
       pushState();
@@ -1094,12 +1116,15 @@ function showInfo() {
   // the backend, and why any faster one was skipped -- with or without a model
   // (it explains a slow first load too): the badge's tooltip says so as well,
   // but a tooltip never shows on a touch screen or to the keyboard
+  // (in plain words: "graphics WebGL 2 -- WebGPU not available: no WebGPU adapter")
+  const NAMES = { webgpu: 'WebGPU', webgl2: 'WebGL 2', webgl1: 'WebGL 1' };
   if (gaveUp) {
-    add('renderer', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
+    add('graphics', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
   } else if (app.backend) {
-    const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok).map((a) => `${a.backend}: ${a.error}`);
+    const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok)
+      .map((a) => `${NAMES[a.backend] || a.backend} not available: ${a.error}`);
     const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
-    add('renderer', `${app.backend.toUpperCase()}${lost}${skipped.length ? ` (skipped ${skipped.join('; ')})` : ''}`);
+    add('graphics', `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`);
   }
   if (!app.header) return;
   const ids = [...app.selected];
@@ -1432,14 +1457,18 @@ function wireInput() {
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
   $('up').onclick = () => { app.cam.up = app.cam.up === 'y' ? 'z' : 'y'; updateButtons(); setView('iso'); };
+  $('undo').onclick = undoVisibility;
   $('isolate').onclick = () => {
     if (!app.selected.size) return;
+    rememberVisibility();
     app.hidden = new Set(app.header.meshes.map((_, i) => i + 1).filter((id) => !app.selected.has(id)));
     syncTreeChecks();
     pushState();
     viewChanged();
   };
   $('hide').onclick = () => {
+    if (!app.selected.size) return;
+    rememberVisibility();
     for (const id of app.selected) app.hidden.add(id);
     app.selected.clear();
     syncTreeChecks();
@@ -1447,7 +1476,14 @@ function wireInput() {
     showInfo();
     viewChanged();
   };
-  $('showall').onclick = () => { app.hidden.clear(); syncTreeChecks(); pushState(); viewChanged(); };
+  $('showall').onclick = () => {
+    if (!app.hidden.size) return;
+    rememberVisibility();
+    app.hidden.clear();
+    syncTreeChecks();
+    pushState();
+    viewChanged();
+  };
   $('secaxis').onchange = (e) => { app.section.axis = e.target.value; updateButtons(); viewChanged(); };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; updateButtons(); viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
@@ -1467,6 +1503,14 @@ function wireInput() {
   };
   window.addEventListener('keydown', (e) => {
     // leave browser shortcuts (Ctrl/Cmd/Alt+key) and typing in fields alone
+    // ...except Ctrl/Cmd+Z, which undoes a visibility change (outside text fields)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      const t0 = e.target;
+      const field = (t0.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t0.type))
+        || t0.tagName === 'TEXTAREA' || t0.isContentEditable;
+      if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // only fields that take typed text swallow the letters; a focused tree
     // checkbox or button must not disable the shortcuts

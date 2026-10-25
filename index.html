@@ -146,6 +146,7 @@
   @media (max-width: 1400px) {
     .wide-only { display:none; }
     #viewsel { display:inline-block; }
+    #export:disabled { display:none; } /* shown once a STEP import makes it useful */
   }
   /* Narrow, portrait or short screens (a landscape phone is ~390 px tall):
      the 3D view gets the width, the parts panel folds into a drawer below it
@@ -208,7 +209,7 @@
   <select id="viewsel" class="narrow-only" autocomplete="off" title="View preset"><option value="">View</option><option value="iso">Iso</option><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective)">Ortho</button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
   <span class="sep"></span>
-  <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button>
+  <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all or checkbox (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
   <span class="sep"></span>
   <span class="group"><span>Section</span>
   <select id="secaxis" autocomplete="off" aria-label="Section plane axis"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
@@ -222,7 +223,7 @@
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
-    <span class="keys">keys: F fit · I isolate · H hide · A show all · Esc clear · in the parts list ↑ ↓ move, Enter select, Space show/hide, → ← open/close</span></details>
+    <span class="keys">keys: F fit · I isolate · H hide · A show all · Ctrl+Z undo · Esc clear · in the parts list ↑ ↓ move, Enter select, Space show/hide, → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
 </aside>
 <div id="scrim" aria-hidden="true"></div>

@@ -62,12 +62,14 @@ URL parameters:
   Repeated names are numbered. Click in the tree or the scene to select
   (ctrl adds); a pick in the scene opens and scrolls to its row. The
   selection is tinted cyan and the rest of the model is greyed, so it stands
-  out whatever the model's colours. Isolate / Hide / Show all; double-click
+  out whatever the model's colours. Isolate / Hide / Show all, with Undo
+  (Ctrl/Cmd+Z) for each; double-click
   zooms to the selection; hovering names the body under the cursor, and on a
   touch screen a tap names what it picked.
 - **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
-  on X / Y / Z with a slider, the cut's position in model units, and a flip;
-  the cut is left open, with no cap.
+  on X / Y / Z with a slider, the cut's position in model units, and a flip.
+  Cut solids read as solid: what you see of a part's inside through the cut
+  is shaded flat, like a cut face.
 - **Colour.** File colours per body and per b-rep face. A file with no colours
   gets one muted colour per part name, so every instance of a part matches.
 - **Save .cadmesh** after an in-browser import, so the next load skips

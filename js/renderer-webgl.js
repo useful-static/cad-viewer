@@ -42,6 +42,7 @@ uniform vec4 uParams;   // x stateW, y stateH, z clip on, w unused
 uniform vec4 uLight;
 uniform vec4 uUp;       // world up axis: the sky and fill directions
 uniform vec4 uHi;
+uniform vec4 uCapN;     // the section plane's normal (the side cut away), for the cut faces
 varying float vClip;
 varying vec3 vView;
 varying vec3 vNrm;
@@ -80,6 +81,14 @@ void main() {
   float fill = max(dot(n, normalize(-(l - dot(l, up) * up) + 0.3 * up)), 0.0);
   float spec = pow(max(dot(n, normalize(l + v)), 0.0), 48.0);
   vec3 c = vCol * (0.28 + 0.17 * hemi + 0.62 * dif + 0.18 * fill) + vec3(0.18 * spec);
+  // Cut faces: with a section on, a surface seen from INSIDE (its outward
+  // normal facing away from the eye) is the inside of a solid showing through
+  // the cut. It is shaded flat, lit as the plane would be, so a cut part reads
+  // as solid instead of a hollow shell.
+  if (uParams.z > 0.5 && dot(vNrm, v) < 0.0) {
+    vec3 pn = normalize(uCapN.xyz);
+    c = vCol * 0.8 * (0.35 + 0.5 * max(dot(pn, l), 0.0) + 0.15 * (0.5 + 0.5 * dot(pn, up)));
+  }
   // uHi.a = 1 while anything is selected: the rest is greyed and darkened, so
   // the selection stands out whatever colours the model itself uses
   if (st.r > 0.5) c = mix(c, uHi.rgb, 0.5) + vec3(0.06);
@@ -111,7 +120,7 @@ function program(gl, fs) {
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`link: ${gl.getProgramInfoLog(p)}`);
   const u = {};
-  for (const n of ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi']) u[n] = gl.getUniformLocation(p, n);
+  for (const n of ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN']) u[n] = gl.getUniformLocation(p, n);
   return { p, u };
 }
 
@@ -290,6 +299,9 @@ export class WebGLRenderer {
     const up = frame.up || [0, 1, 0];
     gl.uniform4f(u.uUp, up[0], up[1], up[2], 0);
     gl.uniform4fv(u.uHi, frame.highlight);
+    // (null in the pick program, which never shades: setting a null location is a no-op)
+    const cn = frame.clip || [0, 0, 1, 0];
+    gl.uniform4f(u.uCapN, cn[0], cn[1], cn[2], 0);
   }
 
   _draw() {
