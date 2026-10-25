@@ -35,6 +35,9 @@
   button, select, label.btn { background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
   button:hover, label.btn:hover { border-color:#566173; }
   button:disabled { opacity:.4; cursor:default; }
+  button[aria-pressed=true] { background:#4a3420; border-color:var(--acc); color:#ffd9b0; } /* a toggle that is on */
+  .secval { color:var(--dim); font-variant-numeric:tabular-nums; min-width:0; }
+  .secval:empty { display:none; }
   .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
   #backend { margin-left:auto; padding:2px 7px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:11px; cursor:help; }
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
@@ -42,10 +45,14 @@
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
+  #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);
+    border-radius:4px; font:inherit; min-width:0; }
+  #treefilter[hidden] { display:none; }
+  #tree input:indeterminate { opacity:.75; }
   #tree ul { list-style:none; margin:0; padding:0; }
   #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px 4px; }
   #tree .row:hover { background:#2d333d; }
-  #tree .row.sel { background:#4a3420; }
+  #tree .row.sel { background:#16465a; } /* the same cyan family as the 3D selection tint */
   #tree .tw { width:12px; color:var(--dim); cursor:pointer; text-align:center; }
   #tree .label { cursor:pointer; overflow:hidden; text-overflow:ellipsis; flex:1; }
   #tree .cnt { color:var(--dim); font-size:11px; }
@@ -100,6 +107,8 @@
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   label.btn:focus-visible, #tree .label:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
   .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
+  .help summary { cursor:pointer; color:var(--fg); font-size:12px; margin-bottom:2px; }
+  .help .keys { display:block; margin-top:4px; }
   .help-touch, .narrow-only, #panelbtn, #scrim { display:none; }
   .wide-only { display:contents; } /* its buttons stay toolbar flex items (gap) */
   label.btn { display:inline-flex; align-items:center; }
@@ -129,7 +138,14 @@
     /* the name fills the 34 px row, so a tap above or below its text still
        selects (the line box, not the glyphs, is the hit area) */
     #tree .label { line-height:34px; }
+    #treefilter { font-size:16px; min-height:40px; } /* iOS zooms into a field under 16 px */
     .help-touch { display:inline; }
+  }
+  /* Medium-wide windows: the seven view buttons become the View dropdown, so
+     the toolbar stays one row (at 1280 px it wrapped, Section alone below). */
+  @media (max-width: 1400px) {
+    .wide-only { display:none; }
+    #viewsel { display:inline-block; }
   }
   /* Narrow, portrait or short screens (a landscape phone is ~390 px tall):
      the 3D view gets the width, the parts panel folds into a drawer below it
@@ -190,20 +206,24 @@
   <span class="wide-only"><button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button>
   <button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button></span>
   <select id="viewsel" class="narrow-only" autocomplete="off" title="View preset"><option value="">View</option><option value="iso">Iso</option><option value="front">Front</option><option value="back">Back</option><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select>
-  <button id="fit" title="f">Fit</button><button id="proj">persp</button><button id="up" title="Which model axis points up">Y-up</button>
+  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective)">Ortho</button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
   <span class="sep"></span>
-  <button id="isolate" title="i">Isolate</button><button id="hide" title="h">Hide</button><button id="showall" title="a">Show all</button>
+  <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button>
   <span class="sep"></span>
   <span class="group"><span>Section</span>
   <select id="secaxis" autocomplete="off" aria-label="Section plane axis"><option value="off">off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
-  <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position">
-  <button id="secflip">flip</button></span>
+  <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
+  <span id="secval" class="secval"></span>
+  <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button></span>
   <span id="backend">…</span>
 </div></header>
 <aside id="parts" aria-label="Parts">
   <div id="info"></div>
+  <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
-  <div class="help"><span class="help-mouse">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span> · <a href="https://known.name/" style="color:inherit">More free tools</a></div>
+  <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
+    <span class="keys">keys: F fit · I isolate · H hide · A show all · Esc clear · in the parts list ↑ ↓ move, Enter select, Space show/hide, → ← open/close</span></details>
+  <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div>

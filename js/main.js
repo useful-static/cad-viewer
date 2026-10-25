@@ -11,7 +11,9 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const STATE_W = 1024;
 const BG = [0.114, 0.129, 0.153];
-const HIGHLIGHT = [1.0, 0.55, 0.1, 1];
+// Selection tint (cyan; the 4th value is set per frame: 1 = something is
+// selected, so the shaders grey out everything else).
+const HIGHLIGHT = [0.1, 0.78, 1.0];
 
 const app = {
   status: 'init',
@@ -373,7 +375,7 @@ function frameState() {
   // direction to the viewer (ortho: one view vector for every pixel)
   const eye4 = c.ortho ? [d[0], d[1], d[2], 0] : [eye[0], eye[1], eye[2], 1];
   return {
-    viewProj: multiply(proj, view), eye: eye4, light, up, clip: sectionPlane(), highlight: HIGHLIGHT, background: BG,
+    viewProj: multiply(proj, view), eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0], background: BG,
     // the GPU holds a model the UI does not show (a superseded load mid-hand-
     // back): its ids do not match the state texture, so draw background only
     drawModel: r.drawn === app.mesh,
@@ -471,7 +473,27 @@ function stateHeight(n) {
   return 2 ** Math.ceil(Math.log2(Math.max(1, rows)));
 }
 
+// Toolbar state: a button that would do nothing is disabled (Hide / Isolate
+// with nothing selected, Show all with nothing hidden), the toggles show
+// whether they are on, and the section slider says where the cut is.
+function updateButtons() {
+  const has = !!app.header;
+  $('isolate').disabled = $('hide').disabled = !app.selected.size;
+  $('showall').disabled = !app.hidden.size;
+  $('fit').disabled = !has;
+  $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
+  $('up').setAttribute('aria-pressed', String(app.cam.up === 'z'));
+  const on = app.section.axis !== 'off';
+  $('secpos').disabled = !on;
+  $('secflip').disabled = !on;
+  $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
+  const p = sectionPlane();
+  const unit = !app.header ? '' : app.header.units === 'millimeter' ? 'mm' : app.header.units || '';
+  $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${(p[3] * (app.section.flip ? -1 : 1)).toFixed(1)} ${unit}` : '';
+}
+
 function pushState() {
+  updateButtons();
   if (!app.header || !app.renderer) return;
   const H = stateHeight(app.header.meshes.length);
   const bytes = new Uint8Array(STATE_W * H * 4);
@@ -529,6 +551,8 @@ function dropModel(msg) {
   app.lastStepBuffer = null;
   $('export').disabled = true;
   $('tree').textContent = '';
+  $('treefilter').hidden = true;
+  updateButtons();
   $('hover').textContent = '';
   $('model').textContent = '';
   $('model').title = '';
@@ -635,6 +659,15 @@ async function loadAny(buf, name, seq) {
     return;
   }
   if (stale(seq)) return;
+  // Not a STEP/IGES/BREP name: it must BE a .cadmesh (raw or gzipped), checked
+  // by its first bytes -- a URL may have no extension at all. Anything else is
+  // refused in plain words, not as a .cadmesh decode error ("bad magic").
+  const b = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+  const cadm = b.length === 4 && String.fromCharCode(...b) === 'CADM';
+  if (!cadm && !isGzip(buf)) {
+    throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: `
+      + 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file');
+  }
   await loadBuffer(buf, name, seq);
 }
 
@@ -709,9 +742,17 @@ async function loadUrl(url) {
   app.fetchMs = null;
   const name = fileName(url);
   showProgress(`Downloading ${name}`, null, 'connecting…');
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    throw new Error(`could not download ${name}: the server did not answer (${e.message || e})`);
+  }
   if (stale(seq)) return;
-  if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new Error(res.status === 404 ? `file not found (404): ${name}`
+      : `could not download ${name}: the server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
+  }
   // content-length is the size ON THE WIRE: with a content-encoding (gzip,
   // br) it is the compressed size and the decoded bytes overshoot it, so a
   // percentage is shown only for an unencoded body.
@@ -806,28 +847,58 @@ function labelMeshes() {
 
 const meshLabel = (id) => app.meshLabel[id - 1];
 
+// The name a tree node shows: its own, else its one body's, else "(unnamed)".
+const nodeName = (n) => n.name
+  || (n.meshes.length === 1 && !n.children.length ? app.header.meshes[n.meshes[0]].name : '') || '(unnamed)';
+
+// Repeated names among siblings get a number ("L000", "L000 #2", …): a row
+// that reads exactly like eleven others cannot be told apart.
+function numberRepeats(names) {
+  const total = new Map(), seen = new Map();
+  for (const n of names) total.set(n, (total.get(n) || 0) + 1);
+  return names.map((n) => {
+    if (total.get(n) < 2) return n;
+    const k = (seen.get(n) || 0) + 1;
+    seen.set(n, k);
+    return k === 1 ? n : `${n} #${k}`;
+  });
+}
+
 function buildTree() {
   labelMeshes();
   const root = $('tree');
   root.textContent = '';
-  const mk = (node, depth) => {
+  app.rowOf = new Map(); // body id -> the most specific row holding only it (picks reveal it)
+  // A node's own bodies get a row each when the node also has children or
+  // several bodies: otherwise a pick of one of them has no row to show (the
+  // rack's 19-body assembly node had none).
+  const kidsOf = (node) => {
+    const own = node.meshes.length && (node.children.length || node.meshes.length > 1)
+      ? node.meshes.map((i) => ({ name: app.header.meshes[i].name || `body ${i + 1}`, meshes: [i], children: [] }))
+      : [];
+    return [...node.children, ...own].filter((c) => collect(c).length);
+  };
+  const mk = (node, depth, name) => {
     const ids = collect(node);
     if (!ids.length) return null;
     const li = document.createElement('li');
     const row = document.createElement('div');
     row.className = 'row';
     row.style.paddingLeft = `${depth * 12 + 4}px`;
-    const kids = node.children.map((c) => mk(c, depth + 1)).filter(Boolean);
+    const items = node.meshes.length === 1 && !node.children.length ? [] : kidsOf(node);
+    const names = numberRepeats(items.map(nodeName));
+    const kids = items.map((c, j) => mk(c, depth + 1, names[j])).filter(Boolean);
+    if (ids.length === 1 && !app.rowOf.has(ids[0])) app.rowOf.set(ids[0], li); // the deepest wins
     const tw = document.createElement('span');
     tw.className = 'tw';
     tw.textContent = kids.length ? (depth < 2 ? '▾' : '▸') : '';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = true;
+    cb.tabIndex = -1; // the row is ONE tab stop (its name); Space on the name toggles this box
     const label = document.createElement('span');
     label.className = 'label';
-    const meshName = !node.name && node.meshes.length === 1 ? app.header.meshes[node.meshes[0]].name : '';
-    label.textContent = node.name || meshName || '(unnamed)';
+    label.textContent = name;
     // the full name (the row truncates it) and the body count
     label.title = `${label.textContent} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
     cb.setAttribute('aria-label', `Show ${label.textContent}`); // a screen reader names the part
@@ -860,25 +931,45 @@ function buildTree() {
         tw.setAttribute('aria-expanded', String(open));
         tw.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label.textContent}`);
       };
-      setOpen(depth < 2);
+      // the top two levels start open -- but not a node whose rows are only its
+      // own bodies (19 "COMPONENTn" rows would push every other part away);
+      // a pick inside it opens it (revealRow)
+      setOpen(depth < 2 && node.children.length > 0);
       tw.onclick = () => setOpen(ul.hidden);
       label._setOpen = setOpen;
       label.setAttribute('aria-keyshortcuts', 'ArrowRight ArrowLeft');
     } else {
       tw.setAttribute('aria-hidden', 'true'); // a leaf's empty twisty
     }
-    // Keyboard: the name is one tab stop per row (the checkbox is the other).
-    // Enter / Space selects (ctrl/shift adds), → / ← expand / collapse.
-    label.tabIndex = 0;
+    // Keyboard: the whole tree is ONE tab stop (a roving tabindex: the row
+    // last focused keeps it). ↑ / ↓ move between shown rows, Home / End jump,
+    // Enter selects (ctrl/shift adds), Space shows / hides, → / ← expand / collapse.
+    label.tabIndex = -1;
     label.setAttribute('role', 'button');
     label.setAttribute('aria-pressed', 'false'); // syncTreeChecks keeps it current
+    label.onfocus = () => {
+      for (const l of root.querySelectorAll('.label[tabindex="0"]')) if (l !== label) l.tabIndex = -1;
+      label.tabIndex = 0;
+    };
     label.onkeydown = (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
+      if (e.key === 'Enter') {
         e.preventDefault();
         select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        cb.click();
       } else if (label._setOpen && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
         e.preventDefault();
         label._setOpen(e.key === 'ArrowRight');
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault();
+        // the rows a user can see: not inside a collapsed or filtered-out branch
+        const shown = [...root.querySelectorAll('.label')].filter((l) => !l.closest('[hidden]'));
+        const i = shown.indexOf(label);
+        const j = e.key === 'Home' ? 0 : e.key === 'End' ? shown.length - 1
+          : Math.max(0, Math.min(shown.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+        shown[j].focus();
+        shown[j].scrollIntoView({ block: 'nearest' });
       }
     };
     cb.onchange = () => {
@@ -891,15 +982,65 @@ function buildTree() {
     label.ondblclick = () => fitTo(bboxOf(ids));
     return li;
   };
-  const top = mk(app.header.root, 0);
-  if (top) root.append(top);
+  // an unnamed root with a single branch (a typical STEP wrapper) is skipped:
+  // a "(unnamed)" row above everything says nothing
+  let start = app.header.root;
+  for (;;) {
+    const k = kidsOf(start);
+    if (start.name || start.meshes.length || k.length !== 1) break;
+    start = k[0];
+  }
+  const top = mk(start, 0, nodeName(start));
+  if (top) {
+    root.append(top);
+    top.querySelector('.label').tabIndex = 0; // the tree's one tab stop
+  }
+  $('treefilter').value = '';
+  $('treefilter').hidden = !top;
+}
+
+// Show only the rows whose name contains q (case-insensitive), with their
+// ancestors (expanded) and, under a matching row, all of its descendants.
+function filterTree(q) {
+  q = q.trim().toLowerCase();
+  const walk = (li, force) => {
+    const lab = li.querySelector(':scope > .row > .label');
+    const hit = force || !q || lab.textContent.toLowerCase().includes(q);
+    const ul = li.querySelector(':scope > ul');
+    let any = false;
+    if (ul) for (const c of ul.children) any = walk(c, hit && !!q) || any;
+    li.hidden = !(hit || any);
+    if (q && any && lab._setOpen) lab._setOpen(true);
+    return hit || any;
+  };
+  const top = $('tree').firstElementChild;
+  if (top) walk(top, false);
+}
+
+// Bring a body's row into view after a pick in the scene: expand its
+// branch, clear a filter that hides it, and scroll the tree to it.
+function revealRow(id) {
+  const li = app.rowOf && app.rowOf.get(id);
+  if (!li) return;
+  if (li.closest('[hidden]') && $('treefilter').value) {
+    $('treefilter').value = '';
+    filterTree('');
+  }
+  for (let p = li.parentElement.closest('li'); p; p = p.parentElement.closest('li')) {
+    const lab = p.querySelector(':scope > .row > .label');
+    if (lab._setOpen) lab._setOpen(true);
+  }
+  li.querySelector('.row').scrollIntoView({ block: 'nearest' });
 }
 
 // One source of truth for every row: a node is checked while any body under it
-// is visible, and highlighted while every body under it is selected.
+// is visible (half-checked while only some are), and highlighted while every
+// body under it is selected.
 function syncTreeChecks() {
   document.querySelectorAll('#tree li').forEach((li) => {
-    li._cb.checked = li._ids.some((id) => !app.hidden.has(id));
+    const shown = li._ids.filter((id) => !app.hidden.has(id)).length;
+    li._cb.checked = shown > 0;
+    li._cb.indeterminate = shown > 0 && shown < li._ids.length;
   });
   document.querySelectorAll('#tree .row').forEach((row) => {
     const li = row.parentElement;
@@ -1157,6 +1298,9 @@ function wireInput() {
       lastClick = app.pickAt(...devicePx(e)).then((id) => {
         if (id === null) return false;
         select(id ? [id] : [], additive);
+        if (id) revealRow(id);
+        // a finger has no hover: the view's name label shows what a tap picked
+        if (d.type === 'touch') $('hover').textContent = id ? meshLabel(id) : '';
         return true;
       });
     }
@@ -1257,6 +1401,11 @@ function wireInput() {
   // only leaving the view itself ends the drag highlight
   stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
   $('emptyopen').onclick = () => $('open').click();
+  $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
+  // Esc in the filter clears it (and stays in the field); a second Esc leaves
+  $('treefilter').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ''; filterTree(''); }
+  });
   // Cancel a running load: making it stale stops its fetch at the next chunk,
   // terminates a tessellation worker (beginLoad), and keeps any upload from
   // being shown. What was on screen before stays.
@@ -1279,8 +1428,10 @@ function wireInput() {
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => fitTo(app.selected.size ? bboxOf([...app.selected]) : app.header && app.header.bbox);
-  $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; $('proj').textContent = app.cam.ortho ? 'ortho' : 'persp'; viewChanged(); };
-  $('up').onclick = () => { app.cam.up = app.cam.up === 'y' ? 'z' : 'y'; $('up').textContent = `${app.cam.up.toUpperCase()}-up`; setView('iso'); };
+  // Ortho, Z up and Flip are on/off toggles: the label names the option, the
+  // pressed look (and aria-pressed, for a screen reader) says whether it is on
+  $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
+  $('up').onclick = () => { app.cam.up = app.cam.up === 'y' ? 'z' : 'y'; updateButtons(); setView('iso'); };
   $('isolate').onclick = () => {
     if (!app.selected.size) return;
     app.hidden = new Set(app.header.meshes.map((_, i) => i + 1).filter((id) => !app.selected.has(id)));
@@ -1297,9 +1448,9 @@ function wireInput() {
     viewChanged();
   };
   $('showall').onclick = () => { app.hidden.clear(); syncTreeChecks(); pushState(); viewChanged(); };
-  $('secaxis').onchange = (e) => { app.section.axis = e.target.value; $('secpos').disabled = app.section.axis === 'off'; viewChanged(); };
-  $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; viewChanged(); };
-  $('secflip').onclick = () => { app.section.flip = !app.section.flip; viewChanged(); };
+  $('secaxis').onchange = (e) => { app.section.axis = e.target.value; updateButtons(); viewChanged(); };
+  $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; updateButtons(); viewChanged(); };
+  $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;
@@ -1341,6 +1492,9 @@ function wireInput() {
 async function main() {
   setStatus('init', 'starting GPU');
   $('export').disabled = true; // a browser may restore the last page's state
+  updateButtons();
+  // on a short window the controls help starts folded: the parts list needs the room
+  if (innerHeight < 640) $('help').open = false;
   adoptRenderer(await makeRenderer());
   wireInput();
   queueFrame();

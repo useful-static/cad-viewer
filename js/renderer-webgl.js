@@ -80,7 +80,10 @@ void main() {
   float fill = max(dot(n, normalize(-(l - dot(l, up) * up) + 0.3 * up)), 0.0);
   float spec = pow(max(dot(n, normalize(l + v)), 0.0), 48.0);
   vec3 c = vCol * (0.28 + 0.17 * hemi + 0.62 * dif + 0.18 * fill) + vec3(0.18 * spec);
-  if (st.r > 0.5) c = mix(c, uHi.rgb, 0.55);
+  // uHi.a = 1 while anything is selected: the rest is greyed and darkened, so
+  // the selection stands out whatever colours the model itself uses
+  if (st.r > 0.5) c = mix(c, uHi.rgb, 0.5) + vec3(0.06);
+  else if (uHi.a > 0.5) c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.7) * 0.55;
   if (st.b > 0.5) c = c + vec3(0.12);
   gl_FragColor = vec4(c, 1.0);
 }`;

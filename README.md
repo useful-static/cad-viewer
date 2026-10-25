@@ -52,14 +52,22 @@ URL parameters:
   toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
   The toolbar becomes one scrolling row with the view presets in a **View**
   dropdown. Rotating the device keeps the same part of the model framed.
-- **Keyboard and screen readers.** Open…, the tree (Enter selects, arrow keys
-  expand and collapse) and every control are reachable from the keyboard;
-  load results and errors are announced through a live region.
-- **Parts.** Assembly tree with visibility checkboxes. Click in the tree or
-  the scene to select (ctrl adds). Isolate / Hide / Show all; double-click
-  zooms to the selection; hovering names the body under the cursor.
+- **Keyboard and screen readers.** Every control is reachable from the
+  keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
+  shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
+  A show all, Esc clear. Toggles report their state, and load results and
+  errors are announced through a live region.
+- **Parts.** An assembly tree with a row for every body, a filter box, and
+  visibility checkboxes (half-checked when only some parts are shown).
+  Repeated names are numbered. Click in the tree or the scene to select
+  (ctrl adds); a pick in the scene opens and scrolls to its row. The
+  selection is tinted cyan and the rest of the model is greyed, so it stands
+  out whatever the model's colours. Isolate / Hide / Show all; double-click
+  zooms to the selection; hovering names the body under the cursor, and on a
+  touch screen a tap names what it picked.
 - **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
-  on X / Y / Z with a slider and a flip; the cut is left open, with no cap.
+  on X / Y / Z with a slider, the cut's position in model units, and a flip;
+  the cut is left open, with no cap.
 - **Colour.** File colours per body and per b-rep face. A file with no colours
   gets one muted colour per part name, so every instance of a part matches.
 - **Save .cadmesh** after an in-browser import, so the next load skips
