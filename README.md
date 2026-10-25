@@ -75,6 +75,11 @@ URL parameters:
   an AP203 file, a common default export, has none, and gets one muted colour
   per part name, so every instance of a part matches. Transparency and
   per-instance colours in an assembly are not read.
+- **Colour schemes.** *Colours* in the parts panel switches in one click:
+  the file's colours, one colour per part name, per top-level assembly, per
+  body, or one colour for everything. Remembered in this browser. Only what is
+  drawn changes: Save .cadmesh and the saved conversions keep the file's
+  colours.
 - **Save .cadmesh** after an in-browser import, so the next load skips
   tessellation.
 - **Saved conversions.** The browser also keeps each conversion itself, in
@@ -142,6 +147,7 @@ files load too.
 | `js/import-progress.js` | the conversion-time forecast, the time left and the progress bar |
 | `js/step-features.js` | counts a STEP file's records, faces and holes per face, for the forecast |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
+| `js/palettes.js` | the colour schemes |
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
 | `fetch-deps.sh` | fetches occt-import-js: our build with progress reporting by default, `--stock` for the npm release |
@@ -150,7 +156,7 @@ files load too.
 ## Tests
 
 ```sh
-npm test        # tests/test-cadmesh.mjs, test-camera.mjs, test-import-progress.mjs, test-mesh-cache.mjs
+npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
 ```
 

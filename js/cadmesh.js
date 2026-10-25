@@ -296,13 +296,13 @@ export function occtResultToModel(result, units = 'millimeter') {
 // A file exported with no colours (common from some CAD packages) renders as one grey
 // block. Give each distinct part NAME its own muted colour instead, so every
 // instance of a part matches and neighbouring parts differ.
-const PALETTE = [
+export const PALETTE = [
   [0.62, 0.66, 0.72], [0.80, 0.55, 0.30], [0.36, 0.56, 0.74], [0.55, 0.70, 0.45],
   [0.74, 0.70, 0.48], [0.62, 0.48, 0.70], [0.42, 0.66, 0.66], [0.76, 0.50, 0.52],
   [0.50, 0.52, 0.58], [0.70, 0.62, 0.56],
 ];
 
-function hashName(s) {
+export function hashName(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;

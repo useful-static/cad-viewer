@@ -4,6 +4,7 @@
 
 import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
 import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
+import { PALETTES, schemeColours } from './palettes.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -39,8 +40,20 @@ const app = {
   section: { axis: 'off', t: 0.5, flip: false },
   frameQueued: false,
   frameCount: 0,
+  // the colour scheme shown (js/palettes.js), remembered in this browser;
+  // app.mesh is the model drawn in it, app.baseMesh the model as converted
+  palette: (() => {
+    let p = null;
+    try { p = localStorage.getItem('cadv.palette'); } catch { /* storage off */ }
+    return PALETTES.some((x) => x.id === p) ? p : 'file';
+  })(),
+  baseMesh: null,
 };
 window.__cadv = app;
+
+// The model as drawn in the current colour scheme: the decoded model itself
+// for the file's colours, else a copy that differs only in its colours.
+const inScheme = (base) => (app.palette === 'file' ? base : { ...base, color: schemeColours(base, app.palette) });
 
 // The ONE writer of the #announce live region. Every write takes a sequence
 // number; a write deferred to the next frame (to repeat the last text, which a
@@ -547,6 +560,32 @@ function stale(seq) {
 // was superseded) still holds the claim. If even that re-upload fails -- e.g.
 // out of memory, since an upload builds before it frees -- the UI and the GPU
 // would disagree with no error shown, so drop the model and say why.
+// Show the model in colour scheme id (js/palettes.js) and remember the choice.
+// Only the colours change: the drawn model becomes a copy of the converted
+// one with the scheme's colours, uploaded as a load's model would be (and so
+// re-uploaded the same way after a GPU loss). While a load is under way it
+// only records the choice: that load draws in it.
+function setPalette(id) {
+  if (!PALETTES.some((p) => p.id === id)) return;
+  app.palette = id;
+  try { localStorage.setItem('cadv.palette', id); } catch { /* storage off */ }
+  if (!app.baseMesh || app.wanted !== app.mesh) return;
+  const before = app.mesh;
+  const view = inScheme(app.baseMesh);
+  if (view === before) return;
+  app.mesh = view;
+  app.wanted = view;
+  gpuSync().then(() => {
+    announce(`colours: ${PALETTES.find((p) => p.id === id).label}`);
+  }, (e) => {
+    // the GPU would not take it: keep showing the scheme it holds
+    if (app.wanted !== view) return;
+    app.mesh = before;
+    app.wanted = before;
+    setStatus('ready', `could not recolour: ${e.message || e}`);
+  });
+}
+
 function handBack(mesh) {
   if (app.wanted !== mesh) return; // a newer load has claimed the GPU
   app.wanted = app.mesh;
@@ -561,6 +600,7 @@ function handBack(mesh) {
 
 function dropModel(msg) {
   app.mesh = null;
+  app.baseMesh = null;
   app.header = null;
   app.wanted = null;
   app.sphere = { center: [0, 0, 0], radius: 1 };
@@ -616,7 +656,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   const inflateMs = performance.now() - t0;
   if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
   const t1 = performance.now();
-  const mesh = decodeCadmesh(raw);
+  const base = decodeCadmesh(raw);
+  const mesh = inScheme(base);
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
@@ -638,6 +679,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
     return;
   }
   app.mesh = mesh;
+  app.baseMesh = base;
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sourceName = name;
@@ -1599,6 +1641,10 @@ function wireInput() {
   $('secaxis').onchange = (e) => { app.section.axis = e.target.value; updateButtons(); viewChanged(); };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; updateButtons(); viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
+  const pal = $('palette');
+  for (const p of PALETTES) pal.add(new Option(p.label, p.id));
+  pal.value = app.palette;
+  pal.onchange = () => setPalette(pal.value);
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;

@@ -109,6 +109,8 @@
   .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
   .help summary { cursor:pointer; color:var(--fg); font-size:12px; margin-bottom:2px; }
   .help .keys { display:block; margin-top:4px; }
+  #colours { display:flex; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
+  #colours select { flex:1; min-width:0; }
   #cachebar { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
   #cachebar[hidden] { display:none; }
   #cacheinfo { flex:1; }
@@ -223,6 +225,8 @@
 </div></header>
 <aside id="parts" aria-label="Parts">
   <div id="info"></div>
+  <div id="colours"><label for="palette">Colours</label>
+    <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
