@@ -74,12 +74,19 @@ URL parameters:
   gets one muted colour per part name, so every instance of a part matches.
 - **Save .cadmesh** after an in-browser import, so the next load skips
   tessellation.
+- **Saved conversions.** The browser also keeps each conversion itself, in
+  IndexedDB on your device; nothing is uploaded. Opening the same file again
+  skips OpenCascade (a 25.7 MB assembly: about 22 s to convert, 0.3 s from the
+  saved copy, which takes 2.9 MB). A file is recognised by the SHA-256 of its
+  bytes together with the tessellation settings; past 200 MB the least recently
+  used are dropped. The parts panel shows how many are saved and how much space
+  they take, with **Clear**.
 
 ## Large assemblies: convert once
 
 OpenCascade tessellation runs single-threaded in WASM. A large multi-part
 assembly can take a minute or more, in the browser and in Node alike (a
-25.7 MB assembly: 73 s with our build, 597 s without `occt.patch`). Convert
+25.7 MB assembly: 41 s with our build, 597 s with the stock one). Convert
 it once and serve the result:
 
 ```sh
@@ -127,6 +134,8 @@ files load too.
 | `js/renderer-webgl.js` | WebGL2 + WebGL1 backend (one GLSL ES 1.00 shader set) |
 | `js/cadmesh.js` | `.cadmesh` encode/decode, OpenCascade result mapping |
 | `js/step-worker.js` | in-browser STEP/IGES/BREP import |
+| `js/import-progress.js` | a conversion's overall progress from OpenCascade's step and fraction |
+| `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
 | `fetch-deps.sh` | fetches occt-import-js: our build with progress reporting by default, `--stock` for the npm release |
@@ -135,7 +144,7 @@ files load too.
 ## Tests
 
 ```sh
-npm test        # tests/test-cadmesh.mjs + tests/test-camera.mjs
+npm test        # tests/test-cadmesh.mjs, test-camera.mjs, test-import-progress.mjs, test-mesh-cache.mjs
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
 ```
 
@@ -153,26 +162,29 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress2`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress3`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
 - `progress.patch` passes OpenCascade's progress through the STEP and IGES
   transfer and the meshing to the page (`Module.onProgress(phase, fraction)`),
-  so a conversion shows real progress.
-- `occt.patch` removes wasted work in OpenCascade: three loops, each quadratic
+  so a conversion shows real progress. It also compiles with `-O3` instead of
+  upstream's `-Oz` (a large import takes about 60% of the time, for a WASM
+  about 28% larger gzipped), and copies the file into the WASM in one
+  typed-array copy instead of one element at a time.
+- `occt.patch` removes wasted work in OpenCascade: four loops, each quadratic
   in the number of wires (hole outlines) on a face, in shape healing
-  (`ShapeFix_IntersectionTool`) and in the mesher's face check
+  (`ShapeFix_IntersectionTool`, `ShapeFix_Face`) and in the mesher's face check
   (`BRepMesh_FaceChecker`). Each now does its work only after the test that
-  used to follow it, and skips what that test rejects. On a face with
-  thousands of holes this is most of the conversion time.
+  used to follow it, or without a copy. On a face with thousands of holes this
+  was most of the conversion time.
 
 The converted meshes are byte-identical to the stock build's:
 `occt-progress/compare.sh` converts files with two builds and compares them
 byte for byte (all 55 STEP/IGES/BREP test files of occt-import-js are
 identical). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress2/`, with a NOTICE;
-`0.0.23-progress1` (progress only) stays there too.
+`https://assets.known.name/occt-import-js/0.0.23-progress3/`, with a NOTICE;
+the earlier `0.0.23-progress1` and `0.0.23-progress2` stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead; the page then
 shows an estimate, labelled as one.
 

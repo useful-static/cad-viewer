@@ -35,6 +35,22 @@ index b78238d69..a0852a441 100644
      aSelector.SetSegments(aSegments2);
      for (Standard_Integer aSegmentIt = 0; aSegmentIt < aSegments1->Size(); ++aSegmentIt)
      {
+diff --git a/src/ShapeFix/ShapeFix_Face.cxx b/src/ShapeFix/ShapeFix_Face.cxx
+index 71b46ebee..f90dada14 100644
+--- a/src/ShapeFix/ShapeFix_Face.cxx
++++ b/src/ShapeFix/ShapeFix_Face.cxx
+@@ -1213,7 +1213,10 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
+       for ( Standard_Integer j = 1; j <= nbAll; j ++) {
+         aWireIt++;
+         //if(i==j) continue;
+-        TopoDS_Shape aSh2 = allSubShapes.Value(j);
++        // a reference, not a copy: this runs for every pair of the face's
++        // wires, most of which the box test below skips, and allSubShapes is
++        // not modified in the loop
++        const TopoDS_Shape& aSh2 = allSubShapes.Value(j);
+         if(aw == aSh2)
+           continue;
+         TopAbs_State stb = TopAbs_UNKNOWN;
 diff --git a/src/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
 index e5f268724..7deb2b809 100644
 --- a/src/ShapeFix/ShapeFix_IntersectionTool.cxx
@@ -103,7 +119,7 @@ index e5f268724..7deb2b809 100644
      Bnd_Box2d aBox1 = aSeqWirBoxes (n1);
 -    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) { 
 +    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) {
-       TopoDS_Wire wire2 = TopoDS::Wire(SeqWir.Value(n2));
+-      TopoDS_Wire wire2 = TopoDS::Wire(SeqWir.Value(n2));
 -      Handle(ShapeExtend_WireData) sewd2 = new ShapeExtend_WireData(wire2);
        ShapeFix_DataMapOfShapeBox2d& boxes2 = aSeqWirEdgeBoxes.ChangeValue (n2);
        Bnd_Box2d aBox2 = aSeqWirBoxes (n2);
@@ -111,9 +127,10 @@ index e5f268724..7deb2b809 100644
        {
          continue;
        }
-+      // built only for a pair whose boxes meet: it was built for every pair of
-+      // the face's wires before this test, which skips most of them (a face
++      // built only for a pair whose boxes meet: they were built for every pair
++      // of the face's wires before this test, which skips most of them (a face
 +      // with thousands of wires built millions of these to throw away)
++      TopoDS_Wire wire2 = TopoDS::Wire(SeqWir.Value(n2));
 +      Handle(ShapeExtend_WireData) sewd2 = new ShapeExtend_WireData(wire2);
        // detect possible intersections:
        Standard_Integer NbModif=0;

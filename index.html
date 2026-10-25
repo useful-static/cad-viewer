@@ -109,6 +109,9 @@
   .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
   .help summary { cursor:pointer; color:var(--fg); font-size:12px; margin-bottom:2px; }
   .help .keys { display:block; margin-top:4px; }
+  #cachebar { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
+  #cachebar[hidden] { display:none; }
+  #cacheinfo { flex:1; }
   .help-touch, .narrow-only, #panelbtn, #scrim { display:none; }
   .wide-only { display:contents; } /* its buttons stay toolbar flex items (gap) */
   label.btn { display:inline-flex; align-items:center; }
@@ -225,6 +228,7 @@
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">keys: F fit · I isolate · H hide · A show all · Ctrl+Z undo · Esc clear · in the parts list ↑ ↓ move, Enter select, Space show/hide, → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
+  <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div>

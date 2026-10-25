@@ -1,3 +1,18 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5e1568d..a2ab89f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -310,7 +310,9 @@ source_group ("OCCT" FILES ${OcctSourceFiles})
+ if (${EMSCRIPTEN})
+ 	add_executable (OcctImportJS ${OcctImportJSSourceFiles} ${OcctSourceFiles})
+ 	target_compile_options (OcctImportJS PUBLIC "$<$<CONFIG:Debug>:-gsource-map>")
+-	target_compile_options (OcctImportJS PUBLIC "$<$<CONFIG:Release>:-Oz>")
++	# optimised for speed, not size: a 25.7 MB STEP import went from 74.0 s
++	# to 45.7 s, for a WASM 28% larger gzipped (meshes byte-identical)
++	target_compile_options (OcctImportJS PUBLIC "$<$<CONFIG:Release>:-O3>")
+ 	target_compile_options (OcctImportJS PUBLIC -fexceptions)
+ 	target_compile_options (OcctImportJS PUBLIC -fwasm-exceptions)
+
 diff --git a/occt-import-js/src/importer-iges.cpp b/occt-import-js/src/importer-iges.cpp
 index 5e82196..fb84cd6 100644
 --- a/occt-import-js/src/importer-iges.cpp
@@ -148,6 +163,22 @@ index 820f3a7..d0e6192 100644
          return children;
      }
 
+diff --git a/occt-import-js/src/js-interface.cpp b/occt-import-js/src/js-interface.cpp
+index bb382e8..075e617 100644
+--- a/occt-import-js/src/js-interface.cpp
++++ b/occt-import-js/src/js-interface.cpp
+@@ -149,7 +149,10 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val&
+ {
+     emscripten::val resultObj (emscripten::val::object ());
+
+-    const std::vector<uint8_t>& bufferArr = emscripten::vecFromJSArray<std::uint8_t> (buffer);
++    // one typed-array copy of the file: vecFromJSArray read it one element
++    // (one JS call) at a time, about 3 s for a 25 MB file before the import
++    // could start
++    const std::vector<uint8_t> bufferArr = emscripten::convertJSArrayToNumberVector<std::uint8_t> (buffer);
+     Importer::Result importResult = importer->LoadFile (bufferArr, params);
+     resultObj.set ("success", importResult == Importer::Result::Success);
+     if (importResult != Importer::Result::Success) {
 diff --git a/occt-import-js/src/progress.hpp b/occt-import-js/src/progress.hpp
 new file mode 100644
 index 0000000..871c40b

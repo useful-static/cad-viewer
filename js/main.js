@@ -2,8 +2,10 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
+import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
+import { importFraction } from './import-progress.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -663,6 +665,26 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
 
 const STEP_EXT = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
 
+// Keep a conversion in this browser, gzipped where the browser can (about a
+// sixth of the raw size), then update the panel's line. Never throws.
+async function saveConversion(key, raw, name) {
+  try {
+    const data = typeof CompressionStream === 'function' ? await deflateCadmesh(raw) : raw.slice(0);
+    await cachePut(key, data, name);
+  } catch { /* the cache is an optimisation */ }
+  refreshCacheBar();
+}
+
+// The parts panel's "Saved conversions" line: how many, how much space, and
+// a Clear button. Hidden when there are none (or no IndexedDB).
+async function refreshCacheBar() {
+  const list = await cacheList();
+  const bytes = list.reduce((s, e) => s + e.size, 0);
+  $('cachebar').hidden = !list.length;
+  $('cacheinfo').textContent = `Saved conversions: ${list.length} · ${mb(bytes)} MB`;
+  $('cacheinfo').title = list.map((e) => `${e.name} (${mb(e.size)} MB)`).join('\n');
+}
+
 function extOf(name) {
   const m = /\.([a-z0-9]+)(?:$|\?)/i.exec(name);
   return m ? m[1].toLowerCase() : '';
@@ -674,8 +696,25 @@ async function loadAny(buf, name, seq) {
   if (stale(seq)) return;
   const ext = extOf(name);
   if (STEP_EXT[ext]) {
-    const out = await tessellate(buf, STEP_EXT[ext], seq, name);
+    const format = STEP_EXT[ext];
+    // A conversion of these exact bytes saved in this browser skips
+    // OpenCascade (js/mesh-cache.js: everything stays on this device). The
+    // key is hashed before the worker takes the buffer (posting detaches it).
+    let key = null;
+    if (cacheAvailable()) {
+      setStatus('loading', `checking for a saved conversion of ${name}`);
+      key = await cacheKey(buf, format, DEFAULT_TESSELLATION).catch(() => null);
+      const hit = key && await cacheGet(key);
+      if (stale(seq)) return;
+      if (hit) {
+        announce(`${name} was converted before: opening the copy saved in this browser`);
+        await loadBuffer(hit, name, seq, hit);
+        return;
+      }
+    }
+    const out = await tessellate(buf, format, seq, name);
     if (stale(seq)) return;
+    if (key) saveConversion(key, out, name); // in the background: the model shows meanwhile
     await loadBuffer(out, name, seq, out);
     return;
   }
@@ -720,7 +759,7 @@ function tessellate(buf, format, seq, name) {
     // REAL progress from our occt-import-js build (occt-progress/): which of
     // the three steps OpenCascade is in, and how far through it. The stock
     // build sends none, and the estimate below stands in.
-    let occt = null; // { phase, fraction, since }
+    let occt = null; // { phase, fraction, moved }
     const STEPS = ['reading the file', 'building the parts', 'meshing'];
     const show = () => {
       if (stale(seq)) return;
@@ -728,19 +767,21 @@ function tessellate(buf, format, seq, name) {
       const clock = fmt((now - t0) / 1000);
       let frac = null, detail = `${stage} · ${clock}`;
       if (occt) {
-        const { phase, fraction, since, moved } = occt;
-        const inStep = (now - since) / 1000;
+        const { phase, fraction, moved } = occt;
         const quiet = (now - moved) / 1000;
-        // The step's own pace gives its time left, once it is far enough in to
-        // say -- unless OpenCascade has gone quiet: some of its work reports no
-        // progress for minutes, and a pace-based estimate there would be
-        // fiction. (Measured on a 25.7 MB rack: two stretches of ~250 s each,
-        // single calls inside its shape healing, ShapeBuild_ReShape::Apply,
-        // with no loop that could report.)
+        // The bar and the time left are for the WHOLE conversion: the steps'
+        // shares of it put the step's fraction on one scale, and the pace so
+        // far gives the time left. (A step's own pace left out the steps
+        // after it, and the time left read as the total.) OpenCascade's
+        // fraction moves unevenly -- one large face's healing is a single
+        // tick -- so after 10 s without an update the card says so instead.
+        const all = importFraction(phase, fraction);
+        const run = (now - (tStart || t0)) / 1000;
         const left = quiet > 10 ? ` · still working, no update from OpenCascade for ${fmt(quiet)}`
-          : phase > 1 && fraction > 0.05 && fraction < 1 ? ` · ~${fmt(inStep * (1 - fraction) / fraction)} left in this step` : '';
-        frac = phase === 1 ? null : fraction; // reading reports only its start and end
-        detail = `step ${phase} of 3: ${STEPS[phase - 1]}${phase === 1 ? '' : ` · ${Math.round(fraction * 100)}%`}${left} · ${clock} so far`;
+          : all >= 0.15 && all < 1 ? ` · ~${fmt(run * (1 - all) / all)} left in total (estimated)` : '';
+        frac = all;
+        const what = phase === 3 && fraction >= 1 ? 'writing the result' : STEPS[phase - 1];
+        detail = `step ${phase} of 3: ${what}${phase === 1 || fraction >= 1 ? '' : ` · ${Math.round(fraction * 100)}%`}${left} · ${clock} so far`;
       } else if (tStart && est > 3) {
         // an estimate, never shown as done: it stops at 95% if the file takes longer
         const run = (now - tStart) / 1000;
@@ -778,7 +819,7 @@ function tessellate(buf, format, seq, name) {
         const t = performance.now();
         const p = Math.min(3, Math.max(1, m.phase | 0));
         const same = occt && occt.phase === p;
-        occt = { phase: p, fraction: f, since: same ? occt.since : t,
+        occt = { phase: p, fraction: f,
           moved: same && occt.fraction === f ? occt.moved : t }; // when the fraction last changed
         show();
       }
@@ -1551,15 +1592,21 @@ function wireInput() {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;
     // gzipped (about a sixth of the raw size); a browser without
-    // CompressionStream saves the raw layout, which loads the same
-    const bytes = typeof CompressionStream === 'function'
-      ? await deflateCadmesh(app.lastStepBuffer) : app.lastStepBuffer;
+    // CompressionStream saves the raw layout, which loads the same. A model
+    // opened from the browser's saved conversions is gzipped already.
+    const buf = app.lastStepBuffer;
+    const bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
     const a = document.createElement('a');
     const url = URL.createObjectURL(new Blob([bytes]));
     a.href = url;
     a.download = `${name.replace(/\.[^.]+$/, '')}.cadmesh`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+  $('cacheclear').onclick = async () => {
+    await cacheClear().catch(() => {});
+    await refreshCacheBar();
+    announce('saved conversions cleared');
   };
   window.addEventListener('keydown', (e) => {
     // leave browser shortcuts (Ctrl/Cmd/Alt+key) and typing in fields alone
@@ -1602,6 +1649,7 @@ async function main() {
   adoptRenderer(await makeRenderer());
   wireInput();
   queueFrame();
+  refreshCacheBar();
   const src = params.get('src');
   if (src) await startLoad(() => loadUrl(src));
   else setStatus('idle', IDLE_MSG);

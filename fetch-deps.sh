@@ -4,10 +4,11 @@
 # The .wasm is a binary, so it is gitignored and fetched here instead, pinned
 # by sha256; a mismatch stages nothing.
 #
-# Default: OUR build, 0.0.23-progress2 -- occt-import-js 0.0.23 plus
+# Default: OUR build, 0.0.23-progress3 -- occt-import-js 0.0.23 plus
 # occt-progress/progress.patch, which reports the import's progress to the page
-# (Module.onProgress), and occt-progress/occt.patch, which removes three
-# quadratic loops in OpenCascade (a big assembly converts in 12% of the time).
+# (Module.onProgress) and compiles with -O3, and occt-progress/occt.patch,
+# which removes wasted work in four quadratic loops in OpenCascade (a big
+# assembly converts in 7% of the stock build's time).
 # Built by occt-progress/build.sh, hosted under
 # https://assets.known.name/occt-import-js/. Its meshes are byte-identical to
 # the stock build's (occt-progress/compare.sh).
@@ -23,15 +24,15 @@ readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DEST="${HERE}/vendor/occt-import-js"
 readonly CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/cad-viewer"
 
-readonly PROGRESS_VERSION="0.0.23-progress2"
+readonly PROGRESS_VERSION="0.0.23-progress3"
 readonly PROGRESS_BASE="https://assets.known.name/occt-import-js/${PROGRESS_VERSION}"
 # file -> sha256 (occt-progress/build.sh prints these)
 readonly -A PROGRESS_SHA=(
-	[occt-import-js.js]="561c20cf6d620d0dea029c595b95cf46aeb031b893206bc6c3e48641ecd820a9"
-	[occt-import-js.wasm]="0b6153347862aa1f0331777de186f80836828c4f87794632c5ab4a3f784ce8b2"
+	[occt-import-js.js]="914410b159fa72e10997d89f420dfae60f4a08149f62c84e0b683911dbe917c3"
+	[occt-import-js.wasm]="6080e938732002f4c6e1253ffca4defbdb030d2fc66c8baa52141796c5ec2198"
 	[license.occt-import-js.txt]="7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
 	[license.occt.txt]="090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
-	[NOTICE.txt]="636c53e781017d869fe8e1105f28f64b6b938242dbd4345487647e9cb08b17eb"
+	[NOTICE.txt]="40dc8aef4c4b8d12e2b3e8397da569fa98c28115b88a4255c967bb3a7c63dfa3"
 )
 
 readonly STOCK_VERSION="0.0.23"

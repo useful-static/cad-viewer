@@ -3,18 +3,22 @@
 # reporting: progress.patch passes an OpenCascade Message_ProgressRange through
 # the STEP/IGES transfer and the meshing, and calls Module.onProgress(phase,
 # fraction) from the WASM, so the viewer can show real progress instead of a
-# guess. occt.patch removes wasted work in OpenCascade, output-neutral (gate:
+# guess. It also compiles with -O3 instead of upstream's -Oz, and copies the
+# file into the WASM in one typed-array copy instead of element by element.
+# occt.patch removes wasted work in OpenCascade, output-neutral (gate:
 # compare.sh, every converted mesh byte-identical), each piece done only when
 # the test it used to precede does not skip it:
 # - ShapeFix_IntersectionTool::FixSelfIntersectWire computed, for every wire it
 #   checked, a tolerance over the WHOLE face (context apply + vertex walk);
-# - ShapeFix_IntersectionTool::FixIntersectingWires built a wire object for
+# - ShapeFix_IntersectionTool::FixIntersectingWires built two wire objects for
 #   every pair of a face's wires before the box test that skips most pairs;
+# - ShapeFix_Face::FixOrientation copied a shape for every pair of wires;
 # - BRepMesh_FaceChecker::perform queried every segment of a wire against every
 #   later wire's box tree, even when the two wires' boxes are apart.
-# Each was quadratic in a face's wires (a 25.7 MB assembly: 597 s -> 73 s).
-# The OCCT tree is reset to the pinned commit before patching on every run.
-# Everything else is the upstream build (emscripten 3.1.69, -Oz, the same OCCT
+# Each was quadratic in a face's wires. A 25.7 MB assembly converts in 41 s
+# (597 s with the stock build).
+# The sources are reset to the pinned commits before patching on every run.
+# Everything else is the upstream build (emscripten 3.1.69, the same OCCT
 # commit as the published 0.0.23).
 #
 # Output: <out>/occt-import-js.js, <out>/occt-import-js.wasm, and their sha256.
@@ -90,7 +94,7 @@ main() {
 	# patch (idempotent: start from the pristine sources each time; a file the
 	# checkout does not change keeps its timestamp, so a rebuild recompiles
 	# only what the patches touch)
-	git -C "${src}" checkout -q -- occt-import-js
+	git -C "${src}" checkout -q -- occt-import-js CMakeLists.txt
 	rm -f "${src}/occt-import-js/src/progress.hpp"
 	git -C "${src}/occt" checkout -q -- .
 	if ((patch)); then
@@ -103,7 +107,11 @@ main() {
 	source "${work}/emsdk/emsdk_env.sh" > /dev/null 2>&1
 	local bdir="${src}/build/wasm-$( ((patch)) && echo progress || echo upstream)"
 	log "configuring in ${bdir}"
-	(cd "${src}" && emcmake cmake -B "${bdir}" -G "Unix Makefiles" -DEMSCRIPTEN=1 -DCMAKE_BUILD_TYPE=Release .) > "${work}/cmake.log" 2>&1
+	# OpenCascade's assert messages embed __FILE__: map the work tree to "."
+	# so the published WASM names no build machine's paths
+	local prefix_map="-ffile-prefix-map=${src}=."
+	(cd "${src}" && emcmake cmake -B "${bdir}" -G "Unix Makefiles" -DEMSCRIPTEN=1 -DCMAKE_BUILD_TYPE=Release \
+		"-DCMAKE_C_FLAGS=${prefix_map}" "-DCMAKE_CXX_FLAGS=${prefix_map}" .) > "${work}/cmake.log" 2>&1
 	log "building with ${jobs} jobs (log: ${work}/make.log)"
 	emmake make -C "${bdir}" -j "${jobs}" > "${work}/make.log" 2>&1
 	mkdir -p "${out}"
