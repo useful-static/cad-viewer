@@ -15,6 +15,10 @@
 //              of holes costs far more than its share of the bounds
 //   bsplines   B_SPLINE_SURFACE records (curved faces, the costly ones to mesh)
 //
+// Not counted: the parts. Counting placed parts (the assembly tree expanded)
+// came within 70 vs 75 of the converter's bodies, but did not improve the
+// forecast of any step: the time is in the geometry, not the number of parts.
+//
 // A file that is not ISO-10303-21 text (IGES, BREP) gets bytes only.
 
 export function stepFeatures(buf) {

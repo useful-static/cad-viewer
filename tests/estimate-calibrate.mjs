@@ -6,7 +6,8 @@
 //
 //   node tests/estimate-calibrate.mjs [--occt DIR] [--repeat N] FILE... > data.jsonl
 //
-// One JSON line per file: { file, ...features, secs, read, transfer, mesh, write }.
+// One JSON line per file: { file, ...features, secs, read, transfer, mesh, write,
+// bodies, triangles } -- bodies and triangles are what the converter produced.
 // Times are the median of --repeat runs (default 1). Run on an idle machine.
 
 import { readFileSync } from 'node:fs';
@@ -53,10 +54,15 @@ for (const file of files) {
     const meshEnd = (marks.filter((m) => m[0] === 3 && m[1] >= 1)[0] || [])[2] ?? t1;
     const tr = first(2) ?? t0, ms = first(3) ?? tr;
     runs.push({ secs: (t1 - t0) / 1000, read: (tr - t0) / 1000, transfer: (ms - tr) / 1000,
-      mesh: (meshEnd - ms) / 1000, write: (t1 - meshEnd) / 1000 });
+      mesh: (meshEnd - ms) / 1000, write: (t1 - meshEnd) / 1000, bodies: res.meshes.length,
+      triangles: res.meshes.reduce((s, m) => s + m.index.array.length / 3, 0) });
   }
   const ok = runs.filter(Boolean);
   const row = { file: basename(file), ...features, ok: ok.length === runs.length };
-  if (ok.length) for (const k of ['secs', 'read', 'transfer', 'mesh', 'write']) row[k] = +median(ok.map((x) => x[k])).toFixed(3);
+  if (ok.length) {
+    for (const k of ['secs', 'read', 'transfer', 'mesh', 'write']) row[k] = +median(ok.map((x) => x[k])).toFixed(3);
+    row.bodies = ok[0].bodies;
+    row.triangles = ok[0].triangles;
+  }
   process.stdout.write(JSON.stringify(row) + '\n');
 }
