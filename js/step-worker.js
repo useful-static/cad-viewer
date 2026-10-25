@@ -19,7 +19,14 @@ onmessage = async (ev) => {
       throw new Error('occt-import-js is not staged: run fetch-deps.sh');
     }
     const fmt = await import('./cadmesh.js');
-    const occt = await self.occtimportjs({ locateFile: (p) => VENDOR + p });
+    // Our build of occt-import-js (occt-progress/) calls onProgress(phase,
+    // fraction) from inside the import: 1 = reading the file (start / end
+    // only), 2 = transferring into OpenCascade, 3 = meshing. The stock npm
+    // build never calls it, and the page then falls back to an estimate.
+    const occt = await self.occtimportjs({
+      locateFile: (p) => VENDOR + p,
+      onProgress: (phase, fraction) => postMessage({ type: 'occt', phase, fraction }),
+    });
     post(`tessellating ${format.toUpperCase()} (${(buffer.byteLength / 1e6).toFixed(1)} MB)`);
     const t0 = performance.now();
     const result = occt.ReadFile(format, new Uint8Array(buffer), params || fmt.DEFAULT_TESSELLATION);

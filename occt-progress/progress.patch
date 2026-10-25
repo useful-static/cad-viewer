@@ -1,0 +1,224 @@
+diff --git a/occt-import-js/src/importer-iges.cpp b/occt-import-js/src/importer-iges.cpp
+index 5e82196..fb84cd6 100644
+--- a/occt-import-js/src/importer-iges.cpp
++++ b/occt-import-js/src/importer-iges.cpp
+@@ -1,5 +1,6 @@
+ #include "importer-iges.hpp"
+ #include "importer-utils.hpp"
++#include "progress.hpp"
+
+ #include <TDocStd_Document.hxx>
+ #include <IGESCAFControl_Reader.hxx>
+@@ -24,13 +25,16 @@ bool ImporterIges::TransferToDocument (const std::vector<std::uint8_t>& fileCont
+     igesCafReader.SetColorMode (true);
+     igesCafReader.SetNameMode (true);
+
++    ReportProgress (ProgressPhase::Read, 0.0);
+     IFSelect_ReturnStatus readStatus = igesCafReader.ReadFile (dummyFileName.c_str ());
+     if (readStatus != IFSelect_RetDone) {
+         std::remove (dummyFileName.c_str ());
+         return false;
+     }
++    ReportProgress (ProgressPhase::Read, 1.0);
+
+-    if (!igesCafReader.Transfer (document)) {
++    Handle (JsProgress) progress = new JsProgress (ProgressPhase::Transfer);
++    if (!igesCafReader.Transfer (document, progress->Start ())) {
+         std::remove (dummyFileName.c_str ());
+         return false;
+     }
+diff --git a/occt-import-js/src/importer-step.cpp b/occt-import-js/src/importer-step.cpp
+index a580b47..6c98f8c 100644
+--- a/occt-import-js/src/importer-step.cpp
++++ b/occt-import-js/src/importer-step.cpp
+@@ -1,5 +1,6 @@
+ #include "importer-step.hpp"
+ #include "importer-utils.hpp"
++#include "progress.hpp"
+
+ #include <TDocStd_Document.hxx>
+ #include <STEPCAFControl_Reader.hxx>
+@@ -20,14 +21,18 @@ bool ImporterStep::TransferToDocument (const std::vector<std::uint8_t>& fileCont
+     std::string dummyFileName = "stp";
+     VectorBuffer inputBuffer (fileContent);
+     std::istream inputStream (&inputBuffer);
++    ReportProgress (ProgressPhase::Read, 0.0);
+     IFSelect_ReturnStatus readStatus = stepReader.ReadStream (dummyFileName.c_str (), inputStream);
+     if (readStatus != IFSelect_RetDone) {
+         return false;
+     }
++    ReportProgress (ProgressPhase::Read, 1.0);
+
+-    if (!stepCafReader.Transfer (document)) {
++    Handle (JsProgress) progress = new JsProgress (ProgressPhase::Transfer);
++    if (!stepCafReader.Transfer (document, progress->Start ())) {
+         return false;
+     }
++    ReportProgress (ProgressPhase::Transfer, 1.0);
+
+     return true;
+ }
+diff --git a/occt-import-js/src/importer-utils.cpp b/occt-import-js/src/importer-utils.cpp
+index a1a7c77..8c03f83 100644
+--- a/occt-import-js/src/importer-utils.cpp
++++ b/occt-import-js/src/importer-utils.cpp
+@@ -115,7 +115,7 @@ UnitsMethods_LengthUnit LinearUnitToLengthUnit (ImportParams::LinearUnit linearU
+     }
+ }
+
+-bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
++bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params, const Message_ProgressRange& progress)
+ {
+     Standard_Real linDeflection = params.linearDeflection;
+     Standard_Real angDeflection = params.angularDeflection;
+@@ -141,6 +141,13 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
+         }
+     }
+
+-    BRepMesh_IncrementalMesh mesh (shape, linDeflection, Standard_False, angDeflection);
++    // the same parameters the (shape, deflection, relative, angle) constructor
++    // sets, through the constructor that also takes a progress range
++    IMeshTools_Parameters meshParams;
++    meshParams.Deflection = linDeflection;
++    meshParams.Angle = angDeflection;
++    meshParams.Relative = Standard_False;
++    meshParams.InParallel = Standard_False;
++    BRepMesh_IncrementalMesh mesh (shape, meshParams, progress);
+     return true;
+ }
+diff --git a/occt-import-js/src/importer-utils.hpp b/occt-import-js/src/importer-utils.hpp
+index ed45c39..532576b 100644
+--- a/occt-import-js/src/importer-utils.hpp
++++ b/occt-import-js/src/importer-utils.hpp
+@@ -7,6 +7,7 @@
+ #include <TopLoc_Location.hxx>
+ #include <Poly_Triangulation.hxx>
+ #include <UnitsMethods_LengthUnit.hxx>
++#include <Message_ProgressRange.hxx>
+
+ #include <vector>
+ #include <fstream>
+@@ -38,4 +39,4 @@ protected:
+ };
+
+ UnitsMethods_LengthUnit LinearUnitToLengthUnit (ImportParams::LinearUnit linearUnit);
+-bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params);
++bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params, const Message_ProgressRange& progress = Message_ProgressRange ());
+diff --git a/occt-import-js/src/importer-xcaf.cpp b/occt-import-js/src/importer-xcaf.cpp
+index 820f3a7..d0e6192 100644
+--- a/occt-import-js/src/importer-xcaf.cpp
++++ b/occt-import-js/src/importer-xcaf.cpp
+@@ -1,5 +1,6 @@
+ #include "importer-xcaf.hpp"
+ #include "importer-utils.hpp"
++#include "progress.hpp"
+
+ #include <TopExp_Explorer.hxx>
+ #include <TopoDS.hxx>
+@@ -324,12 +325,23 @@ public:
+     {
+         TDF_Label mainLabel = shapeTool->Label ();
+
++        // meshing progress, over all the free shapes (each one's range is
++        // split further by BRepMesh, face by face)
++        int freeCount = 0;
++        for (TDF_ChildIterator it (mainLabel); it.More (); it.Next ()) {
++            if (IsFreeShape (it.Value (), shapeTool)) {
++                freeCount++;
++            }
++        }
++        Handle (JsProgress) progress = new JsProgress (ProgressPhase::Mesh);
++        Message_ProgressScope scope (progress->Start (), "Meshing", freeCount > 0 ? freeCount : 1);
++
+         std::vector<NodePtr> children;
+         for (TDF_ChildIterator it (mainLabel); it.More (); it.Next ()) {
+             TDF_Label childLabel = it.Value ();
+             if (IsFreeShape (childLabel, shapeTool)) {
+                 TopoDS_Shape shape = shapeTool->GetShape (childLabel);
+-                if (!TriangulateShape (shape, params)) {
++                if (!TriangulateShape (shape, params, scope.Next ())) {
+                     continue;
+                 }
+                 children.push_back (std::make_shared<const XcafNode> (
+@@ -338,6 +350,7 @@ public:
+             }
+         }
+
++        ReportProgress (ProgressPhase::Mesh, 1.0);
+         return children;
+     }
+
+diff --git a/occt-import-js/src/progress.hpp b/occt-import-js/src/progress.hpp
+new file mode 100644
+index 0000000..871c40b
+--- /dev/null
++++ b/occt-import-js/src/progress.hpp
+@@ -0,0 +1,68 @@
++#pragma once
++
++// Progress reporting to JavaScript: Module.onProgress (phase, fraction), when
++// the page passed an onProgress to the module factory. Phases: 1 = reading the
++// file (no fraction available: reported at its start and end), 2 = transferring
++// the model into OpenCascade's document, 3 = meshing.
++
++#include <Message_ProgressIndicator.hxx>
++#include <Message_ProgressScope.hxx>
++
++#include <chrono>
++
++#ifdef EMSCRIPTEN
++#include <emscripten.h>
++#endif
++
++enum class ProgressPhase : int
++{
++    Read = 1,
++    Transfer = 2,
++    Mesh = 3
++};
++
++inline void ReportProgress (ProgressPhase phase, double fraction)
++{
++#ifdef EMSCRIPTEN
++    EM_ASM ({
++        if (typeof Module !== 'undefined' && Module.onProgress) {
++            Module.onProgress ($0, $1);
++        }
++    }, (int) phase, fraction);
++#else
++    (void) phase;
++    (void) fraction;
++#endif
++}
++
++// An OpenCascade progress indicator that forwards its position, at most every
++// half percent or quarter second.
++class JsProgress : public Message_ProgressIndicator
++{
++public:
++    explicit JsProgress (ProgressPhase phase) :
++        Message_ProgressIndicator (),
++        phase (phase),
++        last (-1.0),
++        lastTime (std::chrono::steady_clock::now ())
++    {
++    }
++
++protected:
++    virtual void Show (const Message_ProgressScope& /*scope*/, const Standard_Boolean isForce) override
++    {
++        double position = GetPosition ();
++        auto now = std::chrono::steady_clock::now ();
++        double since = std::chrono::duration<double> (now - lastTime).count ();
++        if (isForce || position - last >= 0.005 || since > 0.25) {
++            last = position;
++            lastTime = now;
++            ReportProgress (phase, position);
++        }
++    }
++
++private:
++    ProgressPhase phase;
++    double last;
++    std::chrono::steady_clock::time_point lastTime;
++};

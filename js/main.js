@@ -717,12 +717,31 @@ function tessellate(buf, format, seq, name) {
     const est = tessEstimateSec(bytes / 1e6);
     let tStart = 0; // when OpenCascade started converting (after its WASM loaded)
     const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
+    // REAL progress from our occt-import-js build (occt-progress/): which of
+    // the three steps OpenCascade is in, and how far through it. The stock
+    // build sends none, and the estimate below stands in.
+    let occt = null; // { phase, fraction, since }
+    const STEPS = ['reading the file', 'building the parts', 'meshing'];
     const show = () => {
       if (stale(seq)) return;
       const now = performance.now();
       const clock = fmt((now - t0) / 1000);
       let frac = null, detail = `${stage} · ${clock}`;
-      if (tStart && est > 3) {
+      if (occt) {
+        const { phase, fraction, since, moved } = occt;
+        const inStep = (now - since) / 1000;
+        const quiet = (now - moved) / 1000;
+        // The step's own pace gives its time left, once it is far enough in to
+        // say -- unless OpenCascade has gone quiet: some of its work reports no
+        // progress for minutes, and a pace-based estimate there would be
+        // fiction. (Measured on a 25.7 MB rack: two stretches of ~250 s each,
+        // single calls inside its shape healing, ShapeBuild_ReShape::Apply,
+        // with no loop that could report.)
+        const left = quiet > 10 ? ` · still working, no update from OpenCascade for ${fmt(quiet)}`
+          : phase > 1 && fraction > 0.05 && fraction < 1 ? ` · ~${fmt(inStep * (1 - fraction) / fraction)} left in this step` : '';
+        frac = phase === 1 ? null : fraction; // reading reports only its start and end
+        detail = `step ${phase} of 3: ${STEPS[phase - 1]}${phase === 1 ? '' : ` · ${Math.round(fraction * 100)}%`}${left} · ${clock} so far`;
+      } else if (tStart && est > 3) {
         // an estimate, never shown as done: it stops at 95% if the file takes longer
         const run = (now - tStart) / 1000;
         frac = Math.min(0.95, run / est);
@@ -730,7 +749,9 @@ function tessellate(buf, format, seq, name) {
           ? `about ${Math.round(frac * 100)}% (estimated) · ~${fmt(est - run)} left · ${clock} so far`
           : `taking longer than the ~${fmt(est)} estimated · ${clock} so far`;
       }
-      setStatus('tessellating', `${stage} · ${clock}`);
+      setStatus('tessellating', occt
+        ? `${STEPS[occt.phase - 1]}${occt.phase === 1 ? '' : ` ${Math.round(occt.fraction * 100)}%`} · ${clock}`
+        : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
     };
     const tick = setInterval(show, 1000);
@@ -750,6 +771,15 @@ function tessellate(buf, format, seq, name) {
       if (m.type === 'progress') {
         stage = m.stage;
         if (!tStart && /^tessellating/.test(stage)) tStart = performance.now();
+        show();
+      }
+      else if (m.type === 'occt') {
+        const f = Math.min(1, Math.max(0, +m.fraction || 0));
+        const t = performance.now();
+        const p = Math.min(3, Math.max(1, m.phase | 0));
+        const same = occt && occt.phase === p;
+        occt = { phase: p, fraction: f, since: same ? occt.since : t,
+          moved: same && occt.fraction === f ? occt.moved : t }; // when the fraction last changed
         show();
       }
       else if (m.type === 'done') done(resolve, m.buffer);

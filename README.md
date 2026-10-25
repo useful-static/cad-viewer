@@ -15,7 +15,7 @@ converter, which writes a compact, GPU-ready `.cadmesh` that loads instantly.
 ## Quick start
 
 ```sh
-./fetch-deps.sh                 # stage occt-import-js 0.0.23 into vendor/ (pinned, sha256-checked)
+./fetch-deps.sh                 # stage occt-import-js into vendor/ (pinned, sha256-checked)
 python3 -m http.server 8000     # or any static server
 # open http://localhost:8000/   and drop a .stp/.step/.igs/.brep/.cadmesh on the page
 ```
@@ -128,7 +128,8 @@ files load too.
 | `js/step-worker.js` | in-browser STEP/IGES/BREP import |
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
-| `fetch-deps.sh` | fetches occt-import-js |
+| `fetch-deps.sh` | fetches occt-import-js: our build with progress reporting by default, `--stock` for the npm release |
+| `occt-progress/` | `progress.patch` (our change to occt-import-js) and `build.sh` (builds it) |
 
 ## Tests
 
@@ -148,5 +149,19 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 ## Third-party
 
 `occt-import-js` and OpenCascade are LGPL-2.1. They are not stored in this
-repository: `fetch-deps.sh` downloads the published npm tarball and copies its
-licence files beside the runtime in `vendor/`.
+repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
+licence files, into `vendor/`.
+
+By default it fetches **our build, `0.0.23-progress1`**. This is occt-import-js
+0.0.23 with `occt-progress/progress.patch` applied, built by
+`occt-progress/build.sh` (emscripten 3.1.69, the same OpenCascade commit as
+upstream). The patch passes OpenCascade's progress through the STEP and IGES
+transfer and the meshing to the page (`Module.onProgress(phase, fraction)`),
+so a conversion shows real progress. OpenCascade itself is unmodified, and the
+converted meshes are byte-identical to the stock build's. The build is hosted
+at `https://assets.known.name/occt-import-js/0.0.23-progress1/`, with a NOTICE.
+`./fetch-deps.sh --stock` uses the unmodified npm release instead; the page then
+shows an estimate, labelled as one.
+
+OpenCascade reports progress unevenly. Some of its shape-healing work runs for
+minutes without an update, and the progress card then says so rather than guess.

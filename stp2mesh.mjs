@@ -20,6 +20,7 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadme
   --angular RAD    angular deflection (default ${DEFAULT_TESSELLATION.angularDeflection})
   --occt DIR       occt-import-js dist dir (default: vendor/occt-import-js, staged by fetch-deps.sh)
   --raw            write the uncompressed layout (default: gzipped, which the viewer inflates)
+  --progress       print OpenCascade's progress to stderr (needs the occt-progress build)
 `;
 
 function parseArgs(argv) {
@@ -49,6 +50,7 @@ function parseArgs(argv) {
     }
     else if (k === '--occt') a.occt = val();
     else if (k === '--raw') a.raw = true;
+    else if (k === '--progress') a.progress = true;
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;
     else throw new Error(`unexpected argument ${k}`);
@@ -83,7 +85,20 @@ async function main() {
     return 3;
   }
   const out = args.out || args.input.replace(/\.[^.]+$/, '') + '.cadmesh';
-  const occt = await createRequire(import.meta.url)(occtJs)({ locateFile: (p) => join(occtDir, p) });
+  // --progress: print OpenCascade's progress (our occt-progress build only;
+  // the stock npm build never calls onProgress): each phase's start and end,
+  // and every 10% of it, with the time since the import began
+  const tp = Date.now();
+  let lastKey = '';
+  const steps = Number(process.env.CADV_PROGRESS_STEPS) || 10; // prints per phase (1000 = every 0.1%)
+  const onProgress = !args.progress ? undefined : (phase, fraction) => {
+    const key = `${phase}:${Math.floor(fraction * steps)}`;
+    if (key === lastKey && fraction < 1) return;
+    lastKey = key;
+    const name = { 1: 'read', 2: 'transfer', 3: 'mesh' }[phase] || phase;
+    process.stderr.write(`progress ${name} ${(fraction * 100).toFixed(1)}% at ${((Date.now() - tp) / 1000).toFixed(1)} s\n`);
+  };
+  const occt = await createRequire(import.meta.url)(occtJs)({ locateFile: (p) => join(occtDir, p), onProgress });
   const t0 = Date.now();
   const result = occt.ReadFile(format, readFileSync(args.input), args.params);
   const t1 = Date.now();
