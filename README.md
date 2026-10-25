@@ -134,7 +134,8 @@ files load too.
 | `js/renderer-webgl.js` | WebGL2 + WebGL1 backend (one GLSL ES 1.00 shader set) |
 | `js/cadmesh.js` | `.cadmesh` encode/decode, OpenCascade result mapping |
 | `js/step-worker.js` | in-browser STEP/IGES/BREP import |
-| `js/import-progress.js` | a conversion's overall progress from OpenCascade's step and fraction |
+| `js/import-progress.js` | the conversion-time forecast, the time left and the progress bar |
+| `js/step-features.js` | counts a STEP file's records, faces and holes per face, for the forecast |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
@@ -185,9 +186,17 @@ byte for byte (all 55 STEP/IGES/BREP test files of occt-import-js are
 identical). The build is hosted at
 `https://assets.known.name/occt-import-js/0.0.23-progress3/`, with a NOTICE;
 the earlier `0.0.23-progress1` and `0.0.23-progress2` stay there too.
-`./fetch-deps.sh --stock` uses the unmodified npm release instead; the page then
-shows an estimate, labelled as one.
+`./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
+no steps; the page then shows the forecast alone.
 
-OpenCascade reports progress unevenly. Some of its shape-healing work can run
-for a while without an update, and the progress card then says so rather than
-guess.
+The progress card's time left is a forecast for each step from what the file
+holds: its size, its records, and how many holes its faces have, counted from
+the file's text before the conversion starts. The forecast is scaled by this
+device's speed, measured on the first step, and leans toward each step's own
+pace as the step advances. The file size alone is a poor guide: a 5.7 MB part
+with thousands of holes on one face can take fifteen times as long as an
+ordinary 5.8 MB part. Progress also arrives unevenly: a step can sit for a
+while on one large face. When a step outlasts its forecast or stops moving,
+the card says "taking longer than expected" rather than guess.
+`tests/estimate-calibrate.mjs` measures the data the forecast is fitted to,
+and `tests/gen-holes-step.py` writes the many-holes test plates.

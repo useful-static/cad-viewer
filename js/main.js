@@ -5,7 +5,7 @@
 import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
 import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
-import { importFraction } from './import-progress.js';
+import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -731,19 +731,10 @@ async function loadAny(buf, name, seq) {
   await loadBuffer(buf, name, seq);
 }
 
-// OpenCascade imports in ONE call with no progress of its own, so the card
-// shows the step it is on, the time so far, and what to expect.
-const TESS_HINT = 'OpenCascade converts the file in this tab. A large assembly can take several minutes. '
-  + 'Afterwards, Save .cadmesh keeps the result, so the next open is instant.';
-
-// Expected conversion time in seconds for a STEP file of `mb` megabytes, at
-// the default tessellation. Fitted to three measured conversions (Node 22,
-// occt-import-js 0.0.23, one core of a desktop CPU; 2026-10-25): 0.14 MB in
-// 0.4 s, 0.44 MB in 0.7 s, 25.7 MB in 635 s. The time grows faster than the
-// size (the STEP read, not the meshing, dominates), so a power law fits it.
-// It is a rough ESTIMATE: the model's complexity and the device both move it,
-// and the card says so.
-const tessEstimateSec = (mb) => 0.3 + 2.77 * mb ** 1.68;
+// The conversion runs in this tab, in one call; the card shows the step it is
+// on, the time so far, and what to expect.
+const TESS_HINT = 'The file is converted in this tab, on this device. A large assembly can take a minute or more. '
+  + 'The result is kept in this browser, so opening the same file again is instant; Save .cadmesh keeps a copy.';
 
 function tessellate(buf, format, seq, name) {
   return new Promise((resolve, reject) => {
@@ -751,47 +742,57 @@ function tessellate(buf, format, seq, name) {
     const t0 = performance.now();
     const bytes = buf.byteLength; // read now: posting buf to the worker detaches it (length 0)
     const size = mb(bytes);
-    let stage = 'starting OpenCascade worker';
-    if (!stale(seq)) announce('tessellating with OpenCascade'); // its ticks are progress, not news
-    const est = tessEstimateSec(bytes / 1e6);
-    let tStart = 0; // when OpenCascade started converting (after its WASM loaded)
+    let stage = 'starting the converter';
+    if (!stale(seq)) announce('converting'); // its ticks are progress, not news
+    // The forecast from the file's contents (js/import-progress.js), until the
+    // worker has counted them: from the size alone.
+    let fc = forecast({ bytes, step: false });
+    let tStart = 0; // when the conversion started (after the converter loaded)
     const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
-    // REAL progress from our occt-import-js build (occt-progress/): which of
-    // the three steps OpenCascade is in, and how far through it. The stock
-    // build sends none, and the estimate below stands in.
-    let occt = null; // { phase, fraction, moved }
-    const STEPS = ['reading the file', 'building the parts', 'meshing'];
+    // REAL progress from our converter build (occt-progress/): which step it
+    // is on, and how far through it. The stock build sends none, and the
+    // forecast alone stands in.
+    let conv = null; // { phase, fraction, moved }
+    let step = -1, stepAt = 0, readAt = 0, readSecs = 0, barMax = 0, overStep = -1;
+    const STEPS = ['reading the file', 'building the parts', 'meshing', 'writing the result'];
     const show = () => {
       if (stale(seq)) return;
       const now = performance.now();
       const clock = fmt((now - t0) / 1000);
       let frac = null, detail = `${stage} · ${clock}`;
-      if (occt) {
-        const { phase, fraction, moved } = occt;
-        const quiet = (now - moved) / 1000;
-        // The bar and the time left are for the WHOLE conversion: the steps'
-        // shares of it put the step's fraction on one scale, and the pace so
-        // far gives the time left. (A step's own pace left out the steps
-        // after it, and the time left read as the total.) OpenCascade's
-        // fraction moves unevenly -- one large face's healing is a single
-        // tick -- so after 10 s without an update the card says so instead.
-        const all = importFraction(phase, fraction);
-        const run = (now - (tStart || t0)) / 1000;
-        const left = quiet > 10 ? ` · still working, no update from OpenCascade for ${fmt(quiet)}`
-          : all >= 0.15 && all < 1 ? ` · ~${fmt(run * (1 - all) / all)} left in total (estimated)` : '';
-        frac = all;
-        const what = phase === 3 && fraction >= 1 ? 'writing the result' : STEPS[phase - 1];
-        detail = `step ${phase} of 3: ${what}${phase === 1 || fraction >= 1 ? '' : ` · ${Math.round(fraction * 100)}%`}${left} · ${clock} so far`;
-      } else if (tStart && est > 3) {
-        // an estimate, never shown as done: it stops at 95% if the file takes longer
-        const run = (now - tStart) / 1000;
-        frac = Math.min(0.95, run / est);
-        detail = run < est
-          ? `about ${Math.round(frac * 100)}% (estimated) · ~${fmt(est - run)} left · ${clock} so far`
-          : `taking longer than the ~${fmt(est)} estimated · ${clock} so far`;
+      if (!conv && tStart && forecastTotal(fc) > 3) {
+        // the stock converter reports nothing: the forecast alone, never shown as done
+        const run = (now - tStart) / 1000, tot = forecastTotal(fc);
+        barMax = Math.max(barMax, Math.min(0.95, run / tot));
+        frac = barMax;
+        detail = `${run < tot ? `~${fmt(tot - run)} left (estimate)` : 'taking longer than expected'} · ${clock} so far`;
+      } else if (conv) {
+        // Time left for the WHOLE conversion: the forecast for the steps to
+        // come, scaled by this device's speed (read off the first step), plus
+        // the current step's, which leans toward the step's own pace as it
+        // advances. When a step outlasts both, the card says so rather than
+        // count down to a number that is wrong.
+        const factor = deviceFactor(fc, readSecs);
+        const st = step;
+        const inStep = (now - stepAt) / 1000;
+        const f = conv.fraction;
+        const quiet = (now - conv.moved) / 1000;
+        // once a step has said "longer than expected" it keeps saying so: a 1%
+        // twitch after a long stall would otherwise bring back a short pace
+        const left = overStep === st ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
+        if (typeof left !== 'number') overStep = st;
+        // the bar: the forecast's share of the conversion done, never moving back
+        const total = forecastTotal(fc) * factor;
+        const doneSecs = forecastDone(fc, factor, st, f, inStep);
+        barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));
+        frac = barMax;
+        const leftText = typeof left !== 'number' ? 'taking longer than expected'
+          : left < 1 ? 'almost done' : `~${fmt(left)} left (estimate)`;
+        const pct = (st === 1 || st === 2) && f < 1 ? ` · ${Math.round(f * 100)}%` : '';
+        detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct} · ${leftText} · ${clock} so far`;
       }
-      setStatus('tessellating', occt
-        ? `${STEPS[occt.phase - 1]}${occt.phase === 1 ? '' : ` ${Math.round(occt.fraction * 100)}%`} · ${clock}`
+      setStatus('tessellating', conv
+        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 ? ` ${Math.round(conv.fraction * 100)}%` : ''} · ${clock}`
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
     };
@@ -811,16 +812,26 @@ function tessellate(buf, format, seq, name) {
       const m = ev.data;
       if (m.type === 'progress') {
         stage = m.stage;
-        if (!tStart && /^tessellating/.test(stage)) tStart = performance.now();
+        if (!tStart && m.converting) tStart = performance.now();
         show();
+      }
+      else if (m.type === 'features') {
+        fc = forecast(m.features);
       }
       else if (m.type === 'occt') {
         const f = Math.min(1, Math.max(0, +m.fraction || 0));
         const t = performance.now();
         const p = Math.min(3, Math.max(1, m.phase | 0));
-        const same = occt && occt.phase === p;
-        occt = { phase: p, fraction: f,
-          moved: same && occt.fraction === f ? occt.moved : t }; // when the fraction last changed
+        const st = stepOf(p, f);
+        if (st !== step) {
+          stepAt = t;
+          if (st === 0 && !readAt) readAt = t;
+          if (st >= 1 && !readSecs && readAt) readSecs = (t - readAt) / 1000; // the device's speed
+        }
+        const same = conv && st === step;
+        conv = { phase: p, fraction: f,
+          moved: same && conv.fraction === f ? conv.moved : t }; // when the fraction last changed
+        step = st;
         show();
       }
       else if (m.type === 'done') done(resolve, m.buffer);
