@@ -100,7 +100,7 @@
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   label.btn:focus-visible, #tree .label:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
   .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
-  .help-touch, .narrow-only, #panelbtn { display:none; }
+  .help-touch, .narrow-only, #panelbtn, #scrim { display:none; }
   .wide-only { display:contents; } /* its buttons stay toolbar flex items (gap) */
   label.btn { display:inline-flex; align-items:center; }
   body { height:100dvh; } /* the visible height on mobile, address bar excluded */
@@ -138,7 +138,7 @@
   @media (max-width: 700px), (max-aspect-ratio: 4/5) and (max-width: 900px), (max-height: 500px) and (pointer: coarse) {
     /* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a long nowrap model name
        in the footer would otherwise widen the column past the screen */
-    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto auto; }
+    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; overflow:hidden; }
     header { grid-column:1; }
     /* a control reached by Tab stops short of the right-edge fade */
     #tb { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; scroll-padding-inline-end:40px; }
@@ -155,18 +155,26 @@
     #tb > * { flex:none; }
     header .title, .wide-only, #export:disabled { display:none; }
     .narrow-only { display:inline-block; }
-    #stage { grid-row:2; }
-    aside { grid-row:3; border-right:0; border-top:1px solid var(--line); max-height:45vh; max-height:45dvh; }
-    #panelbtn { display:block; width:100%; text-align:left; border:0; border-radius:0; background:var(--panel);
-      position:sticky; top:0; z-index:1; }
-    /* the open drawer scrolls as a whole: on a short landscape phone its info
-       and help alone fill the 45% cap, and a tree that shrank alone got 0 px */
-    body.panel-open aside { overflow-y:auto; scroll-padding-top:44px; } /* focus scrolls below the sticky Parts button */
-    aside #tree { flex:none; overflow:visible; }
-    body:not(.panel-open) aside > :not(#panelbtn) { display:none; }
+    /* The parts panel slides out from the left OVER the 3D view (it shares
+       the view's grid cell), so opening it never shrinks or reframes the view;
+       a scrim dims the view and closes the panel when tapped. Closed, the
+       panel is translated off-screen and invisible, so Tab never enters it. */
+    #stage { grid-row:2; grid-column:1; }
+    #panelbtn { display:inline-flex; align-items:center; gap:5px; }
+    body.panel-open #panelbtn { background:#4a3420; border-color:var(--acc); }
+    aside { grid-row:2; grid-column:1; z-index:3; justify-self:start; width:min(86vw, 340px); height:100%;
+      border-right:1px solid var(--line); box-shadow:4px 0 18px rgba(0,0,0,.4);
+      overflow-y:auto; overscroll-behavior:contain;
+      transform:translateX(-102%); visibility:hidden; transition:transform .22s ease, visibility 0s linear .22s; }
+    body.panel-open aside { transform:none; visibility:visible; transition:transform .22s ease, visibility 0s; }
+    aside #tree { flex:none; overflow:visible; } /* the panel scrolls as a whole */
+    #scrim { grid-row:2; grid-column:1; z-index:2; background:rgba(0,0,0,.35); display:block;
+      opacity:0; pointer-events:none; transition:opacity .22s; }
+    body.panel-open #scrim { opacity:1; pointer-events:auto; }
+    @media (prefers-reduced-motion: reduce) { aside, body.panel-open aside, #scrim { transition:none; } }
     /* narrow: one line; the model name truncates (wrapping it to a second
        line would cost the 3D view a row on every phone) */
-    footer { grid-column:1; grid-row:4; flex-wrap:nowrap; }
+    footer { grid-column:1; grid-row:3; flex-wrap:nowrap; }
     /* the status (errors included) wraps; the model name gives way */
     #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
   }
@@ -175,6 +183,7 @@
 <body>
 <header><div id="tb">
   <span class="title">CAD viewer</span>
+  <button id="panelbtn" aria-expanded="false" aria-controls="parts"><span aria-hidden="true">☰</span> Parts</button>
   <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh" hidden></label>
   <button id="export" autocomplete="off" disabled title="Save the tessellated mesh so the next load skips OpenCascade">Save .cadmesh</button>
   <span class="sep"></span>
@@ -191,12 +200,12 @@
   <button id="secflip">flip</button></span>
   <span id="backend">…</span>
 </div></header>
-<aside id="parts">
-  <button id="panelbtn" aria-expanded="false" aria-controls="parts">Parts <span id="panelglyph" aria-hidden="true">▴</span></button>
+<aside id="parts" aria-label="Parts">
   <div id="info"></div>
   <ul id="tree"></ul>
   <div class="help"><span class="help-mouse">drag: orbit · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection · Esc: clear</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span> · <a href="https://known.name/" style="color:inherit">More free tools</a></div>
 </aside>
+<div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div>
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>

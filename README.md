@@ -38,18 +38,20 @@ URL parameters:
   on a fresh canvas. WebGPU adapter/device requests time out after 6 s so that
   a hung request still falls back. The badge's tooltip says why any backend was
   skipped.
-- **Navigation.** Orbit (drag), pan (shift- or right-drag), zoom (wheel); the
-  Iso / Front / Back / Left / Right / Top / Bottom views; fit; perspective or
+- **Navigation.** Orbit (drag) turns freely about every axis: over the top,
+  upside down, round and round, with no stop at the poles. Pan (shift- or
+  right-drag) and zoom (wheel). The Iso / Front / Back / Left / Right / Top /
+  Bottom views each set a level, upright view again. Fit; perspective or
   orthographic; Y-up or Z-up.
 - **Touch.** One finger orbits; two fingers pinch to zoom and drag to pan; tap
   selects; double-tap zooms to the selection. Controls are finger-sized
   wherever a touch screen is present.
 - **Phones and narrow windows.** Under 700 px wide, in portrait, or on a
-  short touch screen (a landscape phone), the 3D view takes the full width,
-  the parts tree folds into a **Parts** drawer below it, and the toolbar
-  becomes one scrolling row with the view presets in a **View** dropdown.
-  Rotating the device or opening the drawer keeps the same part of the model
-  framed.
+  short touch screen (a landscape phone), the 3D view takes the whole screen.
+  The parts panel slides out from the left over the view (**☰ Parts** in the
+  toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
+  The toolbar becomes one scrolling row with the view presets in a **View**
+  dropdown. Rotating the device keeps the same part of the model framed.
 - **Keyboard and screen readers.** Open…, the tree (Enter selects, arrow keys
   expand and collapse) and every control are reachable from the keyboard;
   load results and errors are announced through a live region.

@@ -3,7 +3,7 @@
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
 import { decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
-import { camDir, camUp, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -84,6 +84,18 @@ function showEmpty() {
   $('empty').hidden = !!app.mesh || busy;
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
+}
+
+// The narrow layout's parts panel, a slide-out over the view. It is "open"
+// only where the slide-out exists (the Parts button is shown): a class left
+// on from a phone-sized window must not swallow Esc on the desktop layout.
+const panelOpen = () => document.body.classList.contains('panel-open')
+  && getComputedStyle($('panelbtn')).display !== 'none';
+function setPanel(open, focusBack = false) {
+  document.body.classList.toggle('panel-open', open);
+  $('panelbtn').setAttribute('aria-expanded', String(open));
+  // closed from inside (Esc): focus would otherwise sit in a hidden panel
+  if (!open && focusBack && $('parts').contains(document.activeElement)) $('panelbtn').focus();
 }
 
 // The progress card over the view, for a load in progress. frac is 0..1, or
@@ -411,6 +423,7 @@ const VIEWS = {
 
 function setView(v) {
   [app.cam.yaw, app.cam.pitch] = VIEWS[v];
+  app.cam.q = quatFromView(app.cam.yaw, app.cam.pitch, app.cam.up);
   fitTo(app.header && app.header.bbox);
 }
 
@@ -1125,8 +1138,7 @@ function wireInput() {
     if (drag.pan) {
       panBy(c, dx, dy, stage.clientHeight);
     } else {
-      c.yaw -= dx * 0.008;
-      c.pitch = Math.max(-Math.PI / 2 + 1e-4, Math.min(Math.PI / 2 - 1e-4, c.pitch + dy * 0.008));
+      orbitBy(c, dx, dy); // free about every axis: no pole clamp, upside down allowed
     }
     viewChanged();
   });
@@ -1199,11 +1211,8 @@ function wireInput() {
     queueFrame();
   }).observe(stage);
   window.addEventListener('resize', queueFrame); // devicePixelRatio changes (browser zoom) keep the CSS size
-  $('panelbtn').onclick = () => {
-    const open = document.body.classList.toggle('panel-open');
-    $('panelbtn').setAttribute('aria-expanded', String(open));
-    $('panelglyph').textContent = open ? '▾' : '▴';
-  };
+  $('panelbtn').onclick = () => setPanel(!panelOpen());
+  $('scrim').addEventListener('pointerdown', (e) => { e.preventDefault(); setPanel(false); });
   // the Open… label is the file picker's only visible control: make it
   // reachable and operable from the keyboard
   const openLbl = $('open').parentElement;
@@ -1317,7 +1326,9 @@ function wireInput() {
     const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
       || (t.tagName === 'SELECT' && t.id !== 'viewsel') || t.tagName === 'TEXTAREA' || t.isContentEditable;
     if (typed) return;
-    const act = { f: () => $('fit').click(), Escape: () => select([], false), h: () => $('hide').click(),
+    // Esc closes an open parts panel first (the narrow layout's slide-out);
+    // the next Esc clears the selection
+    const act = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
       i: () => $('isolate').click(), a: () => $('showall').click() }[e.key];
     if (!act) return;
     if (t.id === 'viewsel') e.preventDefault();
@@ -1376,7 +1387,7 @@ async function selftest() {
         const f0 = app.frameCount;
         const ts = [];
         for (let i = 0; i < n; i++) {
-          app.cam.yaw += 0.02;
+          orbitBy(app.cam, -2.5, 0); // 0.02 rad a frame
           viewChanged();
           ts.push(await new Promise((r) => requestAnimationFrame(r)));
         }
@@ -1397,7 +1408,7 @@ async function selftest() {
         await app.renderer.sync();
         const t0 = performance.now();
         for (let i = 0; i < g; i++) {
-          app.cam.yaw += 0.02;
+          orbitBy(app.cam, -2.5, 0);
           app.renderer.render(frameState());
         }
         await app.renderer.sync();

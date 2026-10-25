@@ -3,7 +3,9 @@
 // Each test names the review finding it guards (2026-10-24 review round 1).
 
 import assert from 'node:assert/strict';
-import { camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from '../js/camera.js';
+import {
+  camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy,
+} from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 
 let passed = 0;
@@ -254,6 +256,73 @@ test('refitForAspect keeps the framed sphere fitting when a view narrows, and is
 test('perspective keeps eyeDist == dist (ortho push-back is ortho-only)', () => {
   const s = sphereOf({ min: [-500, -500, -500], max: [500, 500, 500] });
   assert.equal(eyeDist(cam({ dist: 25 }), s), 25);
+});
+
+// ---- free rotation (2026-10-25: "infinite rotation on all axes") ----
+
+const near = (a, b, eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) < eps);
+const PRESETS = [[0.7, 0.45], [0, 0], [Math.PI, 0], [-Math.PI / 2, 0], [Math.PI / 2, 0],
+  [0, Math.PI / 2 - 1e-4], [0, -Math.PI / 2 + 1e-4], [2.1, -1.2]];
+
+test('a preset as a quaternion looks and stands exactly like its yaw/pitch (both up axes)', () => {
+  for (const up of ['y', 'z']) {
+    for (const [yaw, pitch] of PRESETS) {
+      const old = cam({ up, yaw, pitch });
+      const q = { ...old, q: quatFromView(yaw, pitch, up) };
+      assert.ok(near(camDir(q), camDir(old), 1e-9), `${up} ${yaw},${pitch}: direction`);
+      // the up vector itself differs (orthonormalised); the SCREEN up is what must match
+      assert.ok(near(screenUp(q), screenUp(old), 1e-6), `${up} ${yaw},${pitch}: screen up`);
+    }
+  }
+});
+
+test('a horizontal drag from a level preset turns like the old yaw orbit', () => {
+  for (const up of ['y', 'z']) {
+    const c = cam({ up, yaw: 0.7, pitch: 0, q: quatFromView(0.7, 0, up) });
+    orbitBy(c, 40, 0); // old code: yaw -= 40 * 0.008
+    assert.ok(near(camDir(c), camDir(cam({ up, yaw: 0.7 - 0.32, pitch: 0 })), 1e-9), up);
+  }
+});
+
+test('a vertical drag goes over the pole with no clamp, and on to upside down', () => {
+  const c = cam({ q: quatFromView(0, 0, 'y') }); // front, looking along -z
+  orbitBy(c, 0, 1); // drag down a little: the eye rises (old pitch += dy * rate)
+  assert.ok(camDir(c)[1] > 0, 'eye rises on a downward drag');
+  const steps = Math.round(Math.PI / 0.008); // half a turn in 1 px steps
+  for (let i = 1; i < steps; i++) orbitBy(c, 0, 1);
+  // half a turn about the screen's horizontal axis: behind the model, upside down
+  const d = camDir(c), u = camUp(c);
+  assert.ok(d[2] < -0.99, `eye behind: dir ${d.map((v) => v.toFixed(3))}`);
+  assert.ok(u[1] < -0.99, `upside down: up ${u.map((v) => v.toFixed(3))}`);
+});
+
+test('a full turn about either screen axis comes back to the start', () => {
+  for (const [dx, dy] of [[1, 0], [0, 1], [1, 1]]) {
+    const q0 = quatFromView(0.7, 0.45, 'y');
+    const c = cam({ q: q0 });
+    const steps = Math.round(2 * Math.PI / 0.008);
+    // a turn about ONE fixed axis closes; the diagonal drag is checked for unit length only
+    for (let i = 0; i < steps; i++) orbitBy(c, dx, dy, (2 * Math.PI) / steps);
+    if (!(dx && dy)) {
+      assert.ok(near(camDir(c), camDir({ q: q0 }), 1e-6), `${dx},${dy}: direction after a full turn`);
+      assert.ok(near(camUp(c), camUp({ q: q0 }), 1e-6), `${dx},${dy}: up after a full turn`);
+    }
+    assert.ok(Math.abs(Math.hypot(...c.q) - 1) < 1e-12, `${dx},${dy}: q stays unit (${steps} steps)`);
+  }
+});
+
+test('the view stays orthonormal after 10,000 mixed drag steps', () => {
+  const c = cam({ q: quatFromView(0.7, 0.45, 'z') });
+  for (let i = 0; i < 10000; i++) orbitBy(c, Math.sin(i * 0.37) * 7, Math.cos(i * 0.11) * 5);
+  const d = camDir(c), u = camUp(c);
+  assert.ok(Math.abs(Math.hypot(...d) - 1) < 1e-9 && Math.abs(Math.hypot(...u) - 1) < 1e-9);
+  assert.ok(Math.abs(dot(d, u)) < 1e-9);
+});
+
+test('a cam with no q orbits from its yaw/pitch (the first drag before any preset)', () => {
+  const c = cam({ yaw: 0.7, pitch: 0.45 });
+  orbitBy(c, 0, 0);
+  assert.ok(near(camDir(c), camDir(cam({ yaw: 0.7, pitch: 0.45 })), 1e-9));
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

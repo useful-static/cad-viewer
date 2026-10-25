@@ -1,10 +1,95 @@
 // Orbit-camera math, pure (no DOM) so tests/test-camera.mjs can check it in Node.
-// cam: { target:[x,y,z], dist, yaw, pitch, fov, up:'y'|'z' }
+// cam: { target:[x,y,z], dist, q, yaw, pitch, fov, up:'y'|'z' }
+//
+// The camera's orientation is the unit quaternion q (camera frame -> world):
+// the eye sits along q·(0,0,1) from the target and the screen's up is q·(0,1,0).
+// A drag rotates q about the SCREEN's axes (orbitBy), so the model turns freely
+// about every axis, through the poles and upside down, with no clamp. yaw /
+// pitch / up describe the view presets only (quatFromView); a cam with no q
+// falls back to them (the tests build such cams).
 
 import { lookAt } from './mat4.js';
 
+// ---- quaternions [x, y, z, w] ----
+
+export function qMul(a, b) {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+}
+
+export function qAxis(axis, angle) {
+  const s = Math.sin(angle / 2);
+  return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(angle / 2)];
+}
+
+export function qNorm(q) {
+  const n = Math.hypot(...q) || 1;
+  return q.map((v) => v / n);
+}
+
+// Rotate vector v by unit quaternion q.
+export function qRotate(q, v) {
+  const [x, y, z, w] = q;
+  // t = 2 (q.xyz × v); v' = v + w t + q.xyz × t
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
+}
+
+// The quaternion whose rotation matrix has columns x, y, z (an orthonormal,
+// right-handed basis).
+export function qFromBasis(x, y, z) {
+  const [m00, m10, m20] = x, [m01, m11, m21] = y, [m02, m12, m22] = z;
+  const tr = m00 + m11 + m22;
+  let q;
+  if (tr > 0) {
+    const s = Math.sqrt(tr + 1) * 2;
+    q = [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s];
+  } else if (m00 > m11 && m00 > m22) {
+    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+    q = [0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s];
+  } else if (m11 > m22) {
+    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+    q = [(m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s];
+  } else {
+    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+    q = [(m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s];
+  }
+  return qNorm(q);
+}
+
+// The orientation of a view preset: eye direction from yaw/pitch, screen-up
+// from the world up axis (camUp's pole limit near the poles).
+export function quatFromView(yaw, pitch, up) {
+  const c = { yaw, pitch, up };
+  const z = camDir(c);
+  const u = camUp(c);
+  const xr = [u[1] * z[2] - u[2] * z[1], u[2] * z[0] - u[0] * z[2], u[0] * z[1] - u[1] * z[0]];
+  const xn = Math.hypot(...xr);
+  const x = xr.map((v) => v / xn);
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  return qFromBasis(x, y, z);
+}
+
+// One orbit step for a drag of (dx, dy) px: the model follows the pointer,
+// turning about the screen's vertical axis for dx and its horizontal axis for
+// dy, by `rate` radians per px. Rotating in the CAMERA frame (q * r) is what
+// makes every axis free: there is no pole to stop at and no world-up to keep.
+// From a preset with the world up on screen, a horizontal drag starts exactly
+// like the old yaw orbit.
+export function orbitBy(cam, dx, dy, rate = 0.008) {
+  if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
+  let q = qMul(cam.q, qAxis([0, 1, 0], -dx * rate));
+  q = qMul(q, qAxis([1, 0, 0], -dy * rate));
+  cam.q = qNorm(q);
+}
+
 // Unit vector from the orbit target to the eye.
 export function camDir(cam) {
+  if (cam.q) return qRotate(cam.q, [0, 0, 1]);
   const cp = Math.cos(cam.pitch);
   return cam.up === 'z'
     ? [cp * Math.sin(cam.yaw), -cp * Math.cos(cam.yaw), Math.sin(cam.pitch)]
@@ -17,6 +102,7 @@ export function camDir(cam) {
 // +horizontal(yaw) under the BOTTOM one -- the sign follows pitch, so orbiting
 // through either pole region never rolls the image.
 export function camUp(cam) {
+  if (cam.q) return qRotate(cam.q, [0, 1, 0]);
   if (Math.abs(cam.pitch) <= 1.5) return cam.up === 'z' ? [0, 0, 1] : [0, 1, 0];
   const s = cam.pitch > 0 ? -1 : 1;
   return cam.up === 'z'
