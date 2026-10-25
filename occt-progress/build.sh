@@ -3,9 +3,19 @@
 # reporting: progress.patch passes an OpenCascade Message_ProgressRange through
 # the STEP/IGES transfer and the meshing, and calls Module.onProgress(phase,
 # fraction) from the WASM, so the viewer can show real progress instead of a
-# guess. OpenCascade itself is unmodified (its tree is reset to the pinned
-# commit on every run). Everything else is the upstream build (emscripten
-# 3.1.69, -Oz, the same OCCT commit as the published 0.0.23).
+# guess. occt.patch removes wasted work in OpenCascade, output-neutral (gate:
+# compare.sh, every converted mesh byte-identical), each piece done only when
+# the test it used to precede does not skip it:
+# - ShapeFix_IntersectionTool::FixSelfIntersectWire computed, for every wire it
+#   checked, a tolerance over the WHOLE face (context apply + vertex walk);
+# - ShapeFix_IntersectionTool::FixIntersectingWires built a wire object for
+#   every pair of a face's wires before the box test that skips most pairs;
+# - BRepMesh_FaceChecker::perform queried every segment of a wire against every
+#   later wire's box tree, even when the two wires' boxes are apart.
+# Each was quadratic in a face's wires (a 25.7 MB assembly: 597 s -> 73 s).
+# The OCCT tree is reset to the pinned commit before patching on every run.
+# Everything else is the upstream build (emscripten 3.1.69, -Oz, the same OCCT
+# commit as the published 0.0.23).
 #
 # Output: <out>/occt-import-js.js, <out>/occt-import-js.wasm, and their sha256.
 # The work tree (sources, emsdk, objects) lives under the cache directory:
@@ -84,8 +94,9 @@ main() {
 	rm -f "${src}/occt-import-js/src/progress.hpp"
 	git -C "${src}/occt" checkout -q -- .
 	if ((patch)); then
-		log "applying progress.patch"
+		log "applying progress.patch and occt.patch"
 		git -C "${src}" apply "${HERE}/progress.patch"
+		git -C "${src}/occt" apply "${HERE}/occt.patch"
 	fi
 
 	# shellcheck disable=SC1091

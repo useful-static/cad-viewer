@@ -78,8 +78,9 @@ URL parameters:
 ## Large assemblies: convert once
 
 OpenCascade tessellation runs single-threaded in WASM. A large multi-part
-assembly can take minutes, in the browser and in Node alike. Convert it once
-and serve the result:
+assembly can take a minute or more, in the browser and in Node alike (a
+25.7 MB assembly: 73 s with our build, 597 s without `occt.patch`). Convert
+it once and serve the result:
 
 ```sh
 node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
@@ -129,7 +130,7 @@ files load too.
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
 | `fetch-deps.sh` | fetches occt-import-js: our build with progress reporting by default, `--stock` for the npm release |
-| `occt-progress/` | `progress.patch` (our change to occt-import-js) and `build.sh` (builds it) |
+| `occt-progress/` | `progress.patch` (our change to occt-import-js), `occt.patch` (our change to OpenCascade), `build.sh` (builds both) and `compare.sh` (checks two builds give byte-identical meshes) |
 
 ## Tests
 
@@ -152,16 +153,29 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress1`**. This is occt-import-js
-0.0.23 with `occt-progress/progress.patch` applied, built by
-`occt-progress/build.sh` (emscripten 3.1.69, the same OpenCascade commit as
-upstream). The patch passes OpenCascade's progress through the STEP and IGES
-transfer and the meshing to the page (`Module.onProgress(phase, fraction)`),
-so a conversion shows real progress. OpenCascade itself is unmodified, and the
-converted meshes are byte-identical to the stock build's. The build is hosted
-at `https://assets.known.name/occt-import-js/0.0.23-progress1/`, with a NOTICE.
+By default it fetches **our build, `0.0.23-progress2`**. This is occt-import-js
+0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
+OpenCascade commit as upstream) with two patches:
+
+- `progress.patch` passes OpenCascade's progress through the STEP and IGES
+  transfer and the meshing to the page (`Module.onProgress(phase, fraction)`),
+  so a conversion shows real progress.
+- `occt.patch` removes wasted work in OpenCascade: three loops, each quadratic
+  in the number of wires (hole outlines) on a face, in shape healing
+  (`ShapeFix_IntersectionTool`) and in the mesher's face check
+  (`BRepMesh_FaceChecker`). Each now does its work only after the test that
+  used to follow it, and skips what that test rejects. On a face with
+  thousands of holes this is most of the conversion time.
+
+The converted meshes are byte-identical to the stock build's:
+`occt-progress/compare.sh` converts files with two builds and compares them
+byte for byte (all 55 STEP/IGES/BREP test files of occt-import-js are
+identical). The build is hosted at
+`https://assets.known.name/occt-import-js/0.0.23-progress2/`, with a NOTICE;
+`0.0.23-progress1` (progress only) stays there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead; the page then
 shows an estimate, labelled as one.
 
-OpenCascade reports progress unevenly. Some of its shape-healing work runs for
-minutes without an update, and the progress card then says so rather than guess.
+OpenCascade reports progress unevenly. Some of its shape-healing work can run
+for a while without an update, and the progress card then says so rather than
+guess.

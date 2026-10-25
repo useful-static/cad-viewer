@@ -1,0 +1,120 @@
+diff --git a/src/BRepMesh/BRepMesh_FaceChecker.cxx b/src/BRepMesh/BRepMesh_FaceChecker.cxx
+index b78238d69..a0852a441 100644
+--- a/src/BRepMesh/BRepMesh_FaceChecker.cxx
++++ b/src/BRepMesh/BRepMesh_FaceChecker.cxx
+@@ -268,11 +268,32 @@ void BRepMesh_FaceChecker::perform(const Standard_Integer theWireIndex) const
+ 
+   // TODO: Tolerance is set to twice value of face deflection in order to fit regressions.
+   BndBox2dTreeSelector aSelector(2 * myDFace->GetDeflection());
++
++  // The box of this whole wire, built like each segment's box in the selector
++  // (both end points, enlarged by Precision::Confusion()), so it contains every
++  // one of them. When it is out of another wire's tree root, every segment's
++  // query against that tree is rejected at the root and selects nothing: the
++  // wire is skipped without them. Otherwise every segment of this wire was
++  // queried against every later wire -- quadratic in a face's wires (tens of
++  // seconds on a face with thousands of holes). The result is the same.
++  Bnd_Box2d aWireBox1;
++  for (Standard_Integer aSegmentIt = 0; aSegmentIt < aSegments1->Size(); ++aSegmentIt)
++  {
++    aWireBox1.Add(*aSegments1->Value(aSegmentIt).Point1);
++    aWireBox1.Add(*aSegments1->Value(aSegmentIt).Point2);
++  }
++  aWireBox1.Enlarge(Precision::Confusion());
++
+   for (Standard_Integer aWireIt = theWireIndex; aWireIt < myDFace->WiresNb(); ++aWireIt)
+   {
+     const Handle(IMeshData::BndBox2dTree)& aBndBoxTree2 = myWiresBndBoxTree->Value(aWireIt);
+     const Handle(Segments)&                aSegments2 = myWiresSegments->Value(aWireIt);
+ 
++    if (aBndBoxTree2->IsEmpty() || aWireBox1.IsOut(aBndBoxTree2->Root().Bnd()))
++    {
++      continue;
++    }
++
+     aSelector.SetSegments(aSegments2);
+     for (Standard_Integer aSegmentIt = 0; aSegmentIt < aSegments1->Size(); ++aSegmentIt)
+     {
+diff --git a/src/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
+index e5f268724..7deb2b809 100644
+--- a/src/ShapeFix/ShapeFix_IntersectionTool.cxx
++++ b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
+@@ -855,13 +855,27 @@ Standard_Boolean ShapeFix_IntersectionTool::FixSelfIntersectWire
+   //Standard_Real area2d = ShapeAnalysis::TotCross2D(sewd,face);
+   //if(area2d<Precision::PConfusion()*Precision::PConfusion()) return Standard_False; //gka 06.09.04 BUG 6555
+ 
+-  TopoDS_Shape SF = Context()->Apply(face);
+-  Standard_Real MaxTolVert=0.0;
+-  for(TopExp_Explorer exp(SF,TopAbs_VERTEX); exp.More(); exp.Next()) { 
+-    Standard_Real tolV = BRep_Tool::Tolerance(TopoDS::Vertex(exp.Current()));
+-    MaxTolVert = Max(MaxTolVert,tolV);
+-  }
+-  MaxTolVert = Min(MaxTolVert,myMaxTol);
++  // MaxTolVert -- the largest vertex tolerance on the face, after the
++  // context's replacements -- is read only once an intersection is found.
++  // Computing it up front applied the context to the WHOLE face and walked
++  // all its vertices for every wire checked, which is quadratic in a face's
++  // wires: about 500 s of a 600 s STEP import, on a face with thousands of
++  // holes, almost all of whose wires intersect nothing. It is now computed at
++  // the first intersection of this call, before this call modifies anything,
++  // so it has the value the up-front computation had.
++  Standard_Real MaxTolVert = -1.0; // < 0: not computed yet
++  const auto aComputeMaxTolVert = [&]()
++  {
++    if (MaxTolVert >= 0.0)
++      return;
++    TopoDS_Shape SF = Context()->Apply(face);
++    MaxTolVert = 0.0;
++    for(TopExp_Explorer exp(SF,TopAbs_VERTEX); exp.More(); exp.Next()) {
++      Standard_Real tolV = BRep_Tool::Tolerance(TopoDS::Vertex(exp.Current()));
++      MaxTolVert = Max(MaxTolVert,tolV);
++    }
++    MaxTolVert = Min(MaxTolVert,myMaxTol);
++  };
+   ShapeAnalysis_Edge sae;
+ 
+   // step 1 : intersection of adjacent edges
+@@ -902,12 +916,13 @@ Standard_Boolean ShapeFix_IntersectionTool::FixSelfIntersectWire
+         if(!Inter.IsDone()) continue;
+         // intersection is point
+         if( Inter.NbPoints()>0 && Inter.NbPoints()<3 ) {
++          aComputeMaxTolVert();
+           IntRes2d_IntersectionPoint IP;
+           IntRes2d_Transition Tr1, Tr2;
+           SelectIntPnt(Inter,IP,Tr1,Tr2);
+           if( Tr1.PositionOnCurve() == IntRes2d_Middle &&
+              Tr2.PositionOnCurve() == IntRes2d_Middle ) {
+-            Standard_Real param1 = IP.ParamOnFirst(); 
++            Standard_Real param1 = IP.ParamOnFirst();
+             Standard_Real param2 = IP.ParamOnSecond();
+             gp_Pnt pi1 = GetPointOnEdge(edge1,sas,C1,param1);
+             gp_Pnt pi2 = GetPointOnEdge(edge2,sas,C2,param2);
+@@ -1036,6 +1051,7 @@ Standard_Boolean ShapeFix_IntersectionTool::FixSelfIntersectWire
+         }
+         // intersection is segment
+         if( Inter.NbSegments()==1 ) {
++          aComputeMaxTolVert();
+           IntRes2d_IntersectionSegment IS = Inter.Segment(1);
+           if ( IS.HasFirstPoint() && IS.HasLastPoint() ) {
+             Standard_Boolean IsModified1 = Standard_False;
+@@ -1508,15 +1524,18 @@ Standard_Boolean ShapeFix_IntersectionTool::FixIntersectingWires
+     Handle(ShapeExtend_WireData) sewd1 = new ShapeExtend_WireData(wire1);
+     ShapeFix_DataMapOfShapeBox2d& boxes1 = aSeqWirEdgeBoxes.ChangeValue (n1);
+     Bnd_Box2d aBox1 = aSeqWirBoxes (n1);
+-    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) { 
++    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) {
+       TopoDS_Wire wire2 = TopoDS::Wire(SeqWir.Value(n2));
+-      Handle(ShapeExtend_WireData) sewd2 = new ShapeExtend_WireData(wire2);
+       ShapeFix_DataMapOfShapeBox2d& boxes2 = aSeqWirEdgeBoxes.ChangeValue (n2);
+       Bnd_Box2d aBox2 = aSeqWirBoxes (n2);
+       if (!aBox1.IsVoid() && !aBox2.IsVoid() && aBox1.IsOut (aBox2))
+       {
+         continue;
+       }
++      // built only for a pair whose boxes meet: it was built for every pair of
++      // the face's wires before this test, which skips most of them (a face
++      // with thousands of wires built millions of these to throw away)
++      Handle(ShapeExtend_WireData) sewd2 = new ShapeExtend_WireData(wire2);
+       // detect possible intersections:
+       Standard_Integer NbModif=0;
+       Standard_Integer nbReplaced =0;//gka 06.09.04
