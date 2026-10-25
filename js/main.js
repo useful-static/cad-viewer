@@ -697,6 +697,15 @@ async function loadAny(buf, name, seq) {
 const TESS_HINT = 'OpenCascade converts the file in this tab. A large assembly can take several minutes. '
   + 'Afterwards, Save .cadmesh keeps the result, so the next open is instant.';
 
+// Expected conversion time in seconds for a STEP file of `mb` megabytes, at
+// the default tessellation. Fitted to three measured conversions (Node 22,
+// occt-import-js 0.0.23, one core of a desktop CPU; 2026-10-25): 0.14 MB in
+// 0.4 s, 0.44 MB in 0.7 s, 25.7 MB in 635 s. The time grows faster than the
+// size (the STEP read, not the meshing, dominates), so a power law fits it.
+// It is a rough ESTIMATE: the model's complexity and the device both move it,
+// and the card says so.
+const tessEstimateSec = (mb) => 0.3 + 2.77 * mb ** 1.68;
+
 function tessellate(buf, format, seq, name) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
@@ -705,12 +714,24 @@ function tessellate(buf, format, seq, name) {
     const size = mb(bytes);
     let stage = 'starting OpenCascade worker';
     if (!stale(seq)) announce('tessellating with OpenCascade'); // its ticks are progress, not news
+    const est = tessEstimateSec(bytes / 1e6);
+    let tStart = 0; // when OpenCascade started converting (after its WASM loaded)
+    const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
     const show = () => {
       if (stale(seq)) return;
-      const s = Math.round((performance.now() - t0) / 1000);
-      const clock = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+      const now = performance.now();
+      const clock = fmt((now - t0) / 1000);
+      let frac = null, detail = `${stage} · ${clock}`;
+      if (tStart && est > 3) {
+        // an estimate, never shown as done: it stops at 95% if the file takes longer
+        const run = (now - tStart) / 1000;
+        frac = Math.min(0.95, run / est);
+        detail = run < est
+          ? `about ${Math.round(frac * 100)}% (estimated) · ~${fmt(est - run)} left · ${clock} so far`
+          : `taking longer than the ~${fmt(est)} estimated · ${clock} so far`;
+      }
       setStatus('tessellating', `${stage} · ${clock}`);
-      showProgress(`Converting ${name} (${size} MB)`, null, `${stage} · ${clock}`, bytes > 2e6 ? TESS_HINT : '');
+      showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
     };
     const tick = setInterval(show, 1000);
     let settled = false;
@@ -726,7 +747,11 @@ function tessellate(buf, format, seq, name) {
     app.cancelTess = cancel;
     w.onmessage = (ev) => {
       const m = ev.data;
-      if (m.type === 'progress') { stage = m.stage; show(); }
+      if (m.type === 'progress') {
+        stage = m.stage;
+        if (!tStart && /^tessellating/.test(stage)) tStart = performance.now();
+        show();
+      }
       else if (m.type === 'done') done(resolve, m.buffer);
       else done(reject, new Error(m.message));
     };
