@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { decodeCadmesh, deflateCadmesh, inflateCadmesh } from './cadmesh.js';
+import { decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, panBy, pinchStep, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
@@ -70,7 +70,53 @@ function setStatus(s, msg) {
   $('status').textContent = msg || s;
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
+  if (!PROGRESS_STATES.has(s)) $('progress').hidden = true;
+  showEmpty();
 }
+
+const IDLE_MSG = 'open or drop a STEP, IGES, BREP or .cadmesh file';
+const mb = (n) => (n / 1e6).toFixed(1);
+
+// The empty-state card: shown while there is no model and no load running (and,
+// by CSS, during a drag over the view). After a failed load it carries the error.
+function showEmpty() {
+  const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering';
+  $('empty').hidden = !!app.mesh || busy;
+  $('emptyerr').hidden = app.status !== 'error';
+  $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
+}
+
+// The progress card over the view, for a load in progress. frac is 0..1, or
+// null when the length is unknown (tessellation; a stream with no size).
+// setStatus hides it on any state that is not a load in progress.
+function showProgress(title, frac, detail = '', hint = '') {
+  $('progress').hidden = false;
+  $('ptitle').textContent = title;
+  const bar = $('pbar');
+  bar.classList.toggle('busy', frac == null);
+  if (frac == null) {
+    bar.removeAttribute('aria-valuenow');
+    $('pfill').style.width = '';
+  } else {
+    const p = Math.round(Math.min(1, Math.max(0, frac)) * 100);
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.setAttribute('aria-valuenow', String(p));
+    $('pfill').style.width = `${p}%`;
+  }
+  $('pdetail').textContent = detail;
+  $('phint').textContent = hint;
+  $('phint').hidden = !hint;
+  showEmpty();
+}
+
+// Let the browser paint a progress update before a long synchronous step
+// (inflate, decode, upload). requestAnimationFrame never fires in a hidden
+// tab, so a timeout bounds the wait: a background load must not stall.
+const nextPaint = () => new Promise((resolve) => {
+  const t = setTimeout(resolve, 50);
+  requestAnimationFrame(() => { clearTimeout(t); setTimeout(resolve, 0); });
+});
 
 // ---------- backend ----------
 
@@ -494,14 +540,28 @@ function checkFits(r, mesh) {
 // stepBuf: the tessellated buffer when this load came from a STEP import (what
 // Save .cadmesh writes), null for a .cadmesh load.
 async function loadBuffer(buf, name, seq, stepBuf = null) {
+  // Each step names itself (card and status line) and lets that paint first:
+  // on a phone, inflate + decode + upload of a big model is a second or more
+  // of a frozen page that would otherwise read as "stuck at 100%".
+  const phase = async (what, detail) => {
+    if (stale(seq)) return false; // a superseded load paints nothing over the newer one
+    setStatus('loading', `${what} ${name}`);
+    showProgress(`Opening ${name}`, null, detail);
+    await nextPaint();
+    return !stale(seq);
+  };
   const t0 = performance.now();
+  if (isGzip(buf) && !(await phase('unpacking', `unpacking ${mb(buf.byteLength)} MB`))) return;
   const raw = await inflateCadmesh(buf);
   if (stale(seq)) return;
   const inflateMs = performance.now() - t0;
+  if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
+  const t1 = performance.now();
   const mesh = decodeCadmesh(raw);
-  const decodeMs = performance.now() - t0 - inflateMs;
+  const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
+  if (!(await phase('uploading', `uploading ${fmtInt(mesh.header.indexCount / 3)} triangles to the GPU`))) return;
   app.wanted = mesh;
   try {
     // Rejects on a GPU allocation/validation failure; the renderer then still
@@ -556,7 +616,7 @@ async function loadAny(buf, name, seq) {
   if (stale(seq)) return;
   const ext = extOf(name);
   if (STEP_EXT[ext]) {
-    const out = await tessellate(buf, STEP_EXT[ext], seq);
+    const out = await tessellate(buf, STEP_EXT[ext], seq, name);
     if (stale(seq)) return;
     await loadBuffer(out, name, seq, out);
     return;
@@ -565,13 +625,26 @@ async function loadAny(buf, name, seq) {
   await loadBuffer(buf, name, seq);
 }
 
-function tessellate(buf, format, seq) {
+// OpenCascade imports in ONE call with no progress of its own, so the card
+// shows the step it is on, the time so far, and what to expect.
+const TESS_HINT = 'OpenCascade converts the file in this tab. A large assembly can take several minutes. '
+  + 'Afterwards, Save .cadmesh keeps the result, so the next open is instant.';
+
+function tessellate(buf, format, seq, name) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
     const t0 = performance.now();
+    const bytes = buf.byteLength; // read now: posting buf to the worker detaches it (length 0)
+    const size = mb(bytes);
     let stage = 'starting OpenCascade worker';
     if (!stale(seq)) announce('tessellating with OpenCascade'); // its ticks are progress, not news
-    const show = () => { if (!stale(seq)) setStatus('tessellating', `${stage} · ${Math.round((performance.now() - t0) / 1000)} s`); };
+    const show = () => {
+      if (stale(seq)) return;
+      const s = Math.round((performance.now() - t0) / 1000);
+      const clock = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+      setStatus('tessellating', `${stage} · ${clock}`);
+      showProgress(`Converting ${name} (${size} MB)`, null, `${stage} · ${clock}`, bytes > 2e6 ? TESS_HINT : '');
+    };
     const tick = setInterval(show, 1000);
     let settled = false;
     const done = (fn, v) => {
@@ -621,6 +694,8 @@ async function loadUrl(url) {
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
   const tf = performance.now();
   app.fetchMs = null;
+  const name = fileName(url);
+  showProgress(`Downloading ${name}`, null, 'connecting…');
   const res = await fetch(url);
   if (stale(seq)) return;
   if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
@@ -645,6 +720,10 @@ async function loadUrl(url) {
       setStatus('loading', pct
         ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${(total / 1e6).toFixed(1)} MB`
         : `fetching ${(got / 1e6).toFixed(1)} MB`);
+      const secs = (performance.now() - tf) / 1000;
+      const rate = secs > 0.5 ? ` · ${mb(got / secs)} MB/s` : '';
+      showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
+        pct ? `${mb(got)} of ${mb(total)} MB${rate}` : `${mb(got)} MB${rate}`);
     }
     const all = new Uint8Array(got);
     let o = 0;
@@ -654,13 +733,14 @@ async function loadUrl(url) {
     buf = await res.arrayBuffer();
   }
   app.fetchMs = Math.round(performance.now() - tf);
-  return loadAny(buf, fileName(url), seq);
+  return loadAny(buf, name, seq);
 }
 
 async function loadFile(file) {
   const seq = beginLoad();
   app.fetchMs = null;
   setStatus('loading', `reading ${file.name}`);
+  showProgress(`Opening ${file.name}`, null, `reading ${mb(file.size)} MB from disk`);
   announce(`loading ${file.name}`); // a new load is news even mid-load
   const buf = await file.arrayBuffer();
   if (stale(seq)) return;
@@ -1164,7 +1244,19 @@ function wireInput() {
   // the sidebar or header would open or download it and lose the view.
   window.addEventListener('dragover', (e) => e.preventDefault());
   stage.addEventListener('dragover', (e) => { e.preventDefault(); stage.classList.add('drop'); });
-  stage.addEventListener('dragleave', () => stage.classList.remove('drop'));
+  // dragleave also fires when the pointer moves onto a child (the cards):
+  // only leaving the view itself ends the drag highlight
+  stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
+  $('emptyopen').onclick = () => $('open').click();
+  // Cancel a running load: making it stale stops its fetch at the next chunk,
+  // terminates a tessellation worker (beginLoad), and keeps any upload from
+  // being shown. What was on screen before stays.
+  $('pcancel').onclick = () => {
+    beginLoad();
+    announce('loading cancelled');
+    if (app.mesh) setStatus('ready', 'ready');
+    else setStatus('idle', IDLE_MSG);
+  };
   window.addEventListener('drop', (e) => {
     e.preventDefault();
     stage.classList.remove('drop');
@@ -1243,7 +1335,7 @@ async function main() {
   queueFrame();
   const src = params.get('src');
   if (src) await startLoad(() => loadUrl(src));
-  else setStatus('idle', 'open or drop a .stp / .step / .igs / .cadmesh file');
+  else setStatus('idle', IDLE_MSG);
 }
 
 // ?selftest=1: after loading, pick the canvas centre and publish one JSON line
