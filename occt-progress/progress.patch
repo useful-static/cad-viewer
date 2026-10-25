@@ -130,7 +130,20 @@ index 820f3a7..d0e6192 100644
 
  #include <TopExp_Explorer.hxx>
  #include <TopoDS.hxx>
-@@ -324,12 +325,23 @@ public:
+@@ -56,7 +57,11 @@ static bool GetLabelColorNoRef (const TDF_Label& label, const Handle (XCAFDoc_ColorTool)& colorTool, Co
+     Quantity_Color qColor;
+     for (XCAFDoc_ColorType colorType : colorTypes) {
+         if (colorTool->GetColor (label, colorType, qColor)) {
+-            color = Color (qColor.Red (), qColor.Green (), qColor.Blue ());
++            // the colour as the file gives it: STEP colours are sRGB, and
++            // OCCT keeps them linear, so Red () etc. come out darker
++            Standard_Real r, g, b;
++            qColor.Values (r, g, b, Quantity_TOC_sRGB);
++            color = Color (r, g, b);
+             return true;
+         }
+     }
+@@ -324,12 +329,23 @@ public:
      {
          TDF_Label mainLabel = shapeTool->Label ();
 
@@ -155,7 +168,7 @@ index 820f3a7..d0e6192 100644
                      continue;
                  }
                  children.push_back (std::make_shared<const XcafNode> (
-@@ -338,6 +350,7 @@ public:
+@@ -338,6 +354,7 @@ public:
              }
          }
 

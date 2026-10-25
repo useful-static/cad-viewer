@@ -11,7 +11,9 @@
 // entries are dropped. Without IndexedDB or crypto.subtle (plain http is not a
 // secure context) every call is a no-op and the viewer converts as before.
 
-export const CACHE_VERSION = 1; // bump when a converter change alters the meshes
+// Bump when a converter change alters the meshes. 2: file colours read as
+// sRGB (they were darkened), and faces that ran out of memory now mesh.
+export const CACHE_VERSION = 2;
 export const CACHE_CAP_BYTES = 200e6;
 const DB = 'cad-viewer-meshes';
 

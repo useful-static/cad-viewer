@@ -14,9 +14,15 @@
 #   every pair of a face's wires before the box test that skips most pairs;
 # - ShapeFix_Face::FixOrientation copied a shape for every pair of wires;
 # - BRepMesh_FaceChecker::perform queried every segment of a wire against every
-#   later wire's box tree, even when the two wires' boxes are apart.
-# Each was quadratic in a face's wires. A 25.7 MB assembly converts in 41 s
-# (597 s with the stock build).
+#   later wire's box tree, even when the two wires' boxes are apart;
+# - BRepMesh_CircleTool added each of the large circumcircles at the edge of
+#   the growing triangulation to every grid cell it covers (they now go in a
+#   separate list, merged back in the same order);
+# and the mesher kept each edge's points in std::deques, 4 KB apiece and never
+# freed, about 32 KB an edge (now std::vectors). The first four were quadratic
+# in a face's wires; the last two together ran a 25.7 MB assembly into WASM's
+# 2 GB ceiling, so a face with thousands of holes was silently left unmeshed.
+# save-occt-patch.py writes the work tree's OCCT changes back to occt.patch.
 # The sources are reset to the pinned commits before patching on every run.
 # Everything else is the upstream build (emscripten 3.1.69, the same OCCT
 # commit as the published 0.0.23).

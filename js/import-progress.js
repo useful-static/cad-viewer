@@ -8,14 +8,15 @@
 //                                               0.93-1.13 of the measured time)
 //   building the parts 0.0238 s per 1000 records + 0.0053 s per 1000 of
 //                      sum(wires per face ^ 1.5)
-//   meshing            0.0093 s per 1000 records
-//   writing the result 0.0012 s per 1000 records
+//   meshing            0.0241 s per 1000 records
+//   writing the result 0.0057 s per 1000 records
 //
 // (meshing and writing fitted by absolute time, so the large assembly weighs
-// in). The sum came within 0.90-1.48 of the measured time on the real files
-// over 0.5 s, 0.91 on a 25.7 MB assembly. Meshing is the part the file's text
-// cannot predict: a face with thousands of holes can mesh 5-10 times slower
-// than the forecast. So while it runs:
+// in; refitted with the build that meshes all of that assembly's faces). The
+// sum came within 0.69-1.70 of the measured time on the real files over
+// 0.5 s, 0.92 on a 25.7 MB assembly. Meshing is the part the file's text
+// cannot predict: a face with thousands of holes can mesh several times
+// slower than the forecast (2.5 s against 0.9 s at 4000 holes). So while it runs:
 //   - the device's speed is read off the first step (reading the file, which
 //     tracks the file size closely) and scales the rest of the forecast;
 //   - within a step, the time left leans from the forecast toward the step's
@@ -28,8 +29,8 @@
 export const COEF = {
   read: 0.192, // s per MB
   transfer: [0.0238, 0.0053], // s per 1000 records, per 1000 of sum(wires^1.5)
-  mesh: 0.0164, // s per 1000 records
-  write: 0.0051, // s per 1000 records
+  mesh: 0.0241, // s per 1000 records
+  write: 0.0057, // s per 1000 records
 };
 const STEPS = ['read', 'transfer', 'mesh', 'write'];
 

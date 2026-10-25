@@ -70,8 +70,11 @@ URL parameters:
   on X / Y / Z with a slider, the cut's position in model units, and a flip.
   Cut solids read as solid: what you see of a part's inside through the cut
   is shaded flat, like a cut face.
-- **Colour.** File colours per body and per b-rep face. A file with no colours
-  gets one muted colour per part name, so every instance of a part matches.
+- **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
+  named colours), as the file gives them. STEP carries colour from AP214 on;
+  an AP203 file, a common default export, has none, and gets one muted colour
+  per part name, so every instance of a part matches. Transparency and
+  per-instance colours in an assembly are not read.
 - **Save .cadmesh** after an in-browser import, so the next load skips
   tessellation.
 - **Saved conversions.** The browser also keeps each conversion itself, in
@@ -86,8 +89,10 @@ URL parameters:
 
 OpenCascade tessellation runs single-threaded in WASM. A large multi-part
 assembly can take a minute or more, in the browser and in Node alike (a
-25.7 MB assembly: 41 s with our build, 597 s with the stock one). Convert
-it once and serve the result:
+25.7 MB assembly: 43 s with our build; 597 s with the stock one, which also
+runs out of WASM memory on its body with thousands of holes and leaves half
+that body's faces unmeshed, without an error). Convert it once and serve the
+result:
 
 ```sh
 node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
@@ -163,7 +168,7 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress3`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress5`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
@@ -172,20 +177,27 @@ OpenCascade commit as upstream) with two patches:
   so a conversion shows real progress. It also compiles with `-O3` instead of
   upstream's `-Oz` (a large import takes about 60% of the time, for a WASM
   about 28% larger gzipped), and copies the file into the WASM in one
-  typed-array copy instead of one element at a time.
+  typed-array copy instead of one element at a time. Colours come back as the
+  file gives them: OpenCascade keeps them as linear RGB, and the stock build
+  returned that, which shows every mid-tone darker (0.5 as 0.21).
 - `occt.patch` removes wasted work in OpenCascade: four loops, each quadratic
   in the number of wires (hole outlines) on a face, in shape healing
   (`ShapeFix_IntersectionTool`, `ShapeFix_Face`) and in the mesher's face check
   (`BRepMesh_FaceChecker`). Each now does its work only after the test that
-  used to follow it, or without a copy. On a face with thousands of holes this
-  was most of the conversion time.
+  used to follow it, or without a copy. In the mesher's triangulation, the
+  large circumcircles at the edge of the growing mesh go in a list of their own
+  instead of every cell of its search grid (`BRepMesh_CircleTool`), and each
+  edge's points are kept in vectors instead of 4 KB deques
+  (`IMeshData_Types`): meshing a face with N holes now grows about N^1.1
+  instead of N^1.5, and a face that ran WASM out of memory, which OpenCascade
+  leaves unmeshed without an error, now meshes.
 
-The converted meshes are byte-identical to the stock build's:
-`occt-progress/compare.sh` converts files with two builds and compares them
-byte for byte (all 55 STEP/IGES/BREP test files of occt-import-js are
-identical). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress3/`, with a NOTICE;
-the earlier `0.0.23-progress1` and `0.0.23-progress2` stay there too.
+Wherever the stock build meshes every face, the converted geometry is
+byte-identical to its: `occt-progress/compare.sh` converts files with two
+builds and compares them byte for byte (all 55 STEP/IGES/BREP test files of
+occt-import-js). The build is hosted at
+`https://assets.known.name/occt-import-js/0.0.23-progress5/`, with a NOTICE;
+the earlier builds stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
 no steps; the page then shows the forecast alone.
 

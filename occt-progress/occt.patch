@@ -1,3 +1,203 @@
+diff --git a/src/BRepMesh/BRepMesh_CircleTool.cxx b/src/BRepMesh/BRepMesh_CircleTool.cxx
+index 67aa20ee6..860343c49 100644
+--- a/src/BRepMesh/BRepMesh_CircleTool.cxx
++++ b/src/BRepMesh/BRepMesh_CircleTool.cxx
+@@ -21,6 +21,9 @@
+ #include <BRepMesh_Circle.hxx>
+ #include <BRepMesh_CircleInspector.hxx>
+ 
++#include <climits>
++#include <cmath>
++
+ //=======================================================================
+ //function : BRepMesh_CircleTool
+ //purpose  : 
+@@ -30,7 +33,10 @@ BRepMesh_CircleTool::BRepMesh_CircleTool(
+ : myTolerance (Precision::PConfusion()),
+   myAllocator (theAllocator),
+   myCellFilter(10.0, theAllocator),
+-  mySelector  (myTolerance, 64, theAllocator)
++  mySelector  (myTolerance, 64, theAllocator),
++  myCellSizeX (10.0),
++  myCellSizeY (10.0),
++  myBindCount (0)
+ {
+ }
+ 
+@@ -44,7 +50,10 @@ BRepMesh_CircleTool::BRepMesh_CircleTool(
+ : myTolerance (Precision::PConfusion()),
+   myAllocator (theAllocator),
+   myCellFilter(10.0, theAllocator),
+-  mySelector  (myTolerance, Max(theReservedSize, 64), theAllocator)
++  mySelector  (myTolerance, Max(theReservedSize, 64), theAllocator),
++  myCellSizeX (10.0),
++  myCellSizeY (10.0),
++  myBindCount (0)
+ {
+ }
+ 
+@@ -52,6 +61,21 @@ BRepMesh_CircleTool::BRepMesh_CircleTool(
+ //function : bind
+ //purpose  : 
+ //=======================================================================
++namespace
++{
++  //! A coordinate's cell index, computed exactly as NCollection_CellFilter::Cell does.
++  int cellIndex (const Standard_Real theCoord, const Standard_Real theSize)
++  {
++    const Standard_Real val = theCoord / theSize;
++    return (int) long ((val > INT_MAX - 1) ? fmod (val, (Standard_Real) INT_MAX)
++                                           : (val < INT_MIN + 1) ? fmod (val, (Standard_Real) INT_MIN)
++                                                                 : val);
++  }
++
++  //! Circles covering more cells than this are kept out of the cell filter.
++  const Standard_Integer THE_BIG_CIRCLE_CELLS = 64;
++}
++
+ void BRepMesh_CircleTool::bind(const Standard_Integer theIndex,
+                                const gp_XY&           theLocation,
+                                const Standard_Real    theRadius)
+@@ -67,7 +91,25 @@ void BRepMesh_CircleTool::bind(const Standard_Integer theIndex,
+   gp_XY aMinPnt(aMinX, aMinY);
+   gp_XY aMaxPnt(aMaxX, aMaxY);
+ 
+-  myCellFilter.Add(theIndex, aMinPnt, aMaxPnt);
++  // when it was bound: a cell's list holds its circles newest first, and
++  // Select merges the big ones into that order
++  myBindOrder.SetValue(theIndex, ++myBindCount);
++  const int aMinCX = cellIndex (aMinX, myCellSizeX), aMaxCX = cellIndex (aMaxX, myCellSizeX);
++  const int aMinCY = cellIndex (aMinY, myCellSizeY), aMaxCY = cellIndex (aMaxY, myCellSizeY);
++  if (aMaxCX >= aMinCX && aMaxCY >= aMinCY
++   && (Standard_Real) (aMaxCX - aMinCX + 1) * (aMaxCY - aMinCY + 1) > THE_BIG_CIRCLE_CELLS)
++  {
++    // The cell filter would add it to every one of these cells, and keep
++    // it in each until a query there purges it; the large circumcircles at
++    // the edge of the growing triangulation made that quadratic in time and
++    // memory on a face with many holes. Select checks this list too.
++    BigCircle aBig = { theIndex, aMinCX, aMaxCX, aMinCY, aMaxCY };
++    myBigCircles.Append (aBig);
++  }
++  else
++  {
++    myCellFilter.Add(theIndex, aMinPnt, aMaxPnt);
++  }
+   mySelector.Bind(theIndex, aCirle);
+ }
+ 
+@@ -174,7 +216,67 @@ IMeshData::ListOfInteger& BRepMesh_CircleTool::Select(const gp_XY& thePoint)
+ {
+   mySelector.SetPoint(thePoint);
+   myCellFilter.Inspect(thePoint, mySelector);
+-  return mySelector.GetShotCircles();
++  IMeshData::ListOfInteger& aShot = mySelector.GetShotCircles();
++  if (myBigCircles.IsEmpty())
++  {
++    return aShot;
++  }
++
++  // The big circles the point's cell would hold, newest first; deleted ones
++  // are dropped from the list, as the cell filter purges them.
++  const int aCX = cellIndex (thePoint.X(), myCellSizeX);
++  const int aCY = cellIndex (thePoint.Y(), myCellSizeY);
++  const Standard_Integer aCellShot = aShot.Extent();
++  Standard_Integer aDead = 0;
++  for (Standard_Integer i = myBigCircles.Upper(); i >= myBigCircles.Lower(); --i)
++  {
++    const BigCircle& aBig = myBigCircles (i);
++    if (mySelector.Circle (aBig.Index).Radius() < 0.)
++    {
++      ++aDead;
++      continue;
++    }
++    if (aCX < aBig.MinX || aCX > aBig.MaxX || aCY < aBig.MinY || aCY > aBig.MaxY)
++    {
++      continue;
++    }
++    mySelector.Inspect (aBig.Index); // appends it to the shot list if the point is in it
++  }
++  if (aDead > myBigCircles.Length() / 2)
++  {
++    NCollection_Vector<BigCircle> aLive;
++    for (Standard_Integer i = myBigCircles.Lower(); i <= myBigCircles.Upper(); ++i)
++    {
++      if (mySelector.Circle (myBigCircles (i).Index).Radius() >= 0.)
++        aLive.Append (myBigCircles (i));
++    }
++    myBigCircles = aLive;
++  }
++  if (aShot.Extent() == aCellShot || aCellShot == 0)
++  {
++    return aShot; // one source only: already newest first
++  }
++
++  // Both lists are newest first: merge them into the order a single cell's
++  // list has (every circle added at the front), so the result is the same as
++  // with all circles in the cell filter.
++  NCollection_Vector<Standard_Integer> aAll;
++  for (IMeshData::ListOfInteger::Iterator it (aShot); it.More(); it.Next())
++    aAll.Append (it.Value());
++  NCollection_Vector<Standard_Integer> aMerged;
++  Standard_Integer a = 0, b = aCellShot;
++  const Standard_Integer aEnd = aAll.Length();
++  while (a < aCellShot || b < aEnd)
++  {
++    if (b >= aEnd || (a < aCellShot && myBindOrder (aAll (a)) > myBindOrder (aAll (b))))
++      aMerged.Append (aAll (a++));
++    else
++      aMerged.Append (aAll (b++));
++  }
++  aShot.Clear();
++  for (Standard_Integer i = 0; i < aMerged.Length(); ++i)
++    aShot.Append (aMerged (i));
++  return aShot;
+ }
+ 
+ //=======================================================================
+diff --git a/src/BRepMesh/BRepMesh_CircleTool.hxx b/src/BRepMesh/BRepMesh_CircleTool.hxx
+index 7a307bef3..aac54bf5f 100644
+--- a/src/BRepMesh/BRepMesh_CircleTool.hxx
++++ b/src/BRepMesh/BRepMesh_CircleTool.hxx
+@@ -60,6 +60,8 @@ public:
+   void SetCellSize(const Standard_Real theSize)
+   {
+     myCellFilter.Reset(theSize, myAllocator);
++    myCellSizeX = myCellSizeY = theSize;
++    myBigCircles.Clear();
+   }
+ 
+   //! Sets new size for cell filter.
+@@ -71,6 +73,9 @@ public:
+     Standard_Real aCellSizeC[2] = { theSizeX, theSizeY };
+     NCollection_Array1<Standard_Real> aCellSize(aCellSizeC[0], 1, 2);
+     myCellFilter.Reset(aCellSize, myAllocator);
++    myCellSizeX = theSizeX;
++    myCellSizeY = theSizeY;
++    myBigCircles.Clear();
+   }
+ 
+   //! Sets limits of inspection area.
+@@ -151,6 +156,20 @@ private:
+   BRepMesh_CircleInspector          mySelector;
+   gp_XY                             myFaceMax;
+   gp_XY                             myFaceMin;
++
++  //! A circle whose box covers many cells (one of the large circumcircles at
++  //! the edge of the growing triangulation) is kept here instead of being
++  //! added to every one of those cells, with the range of cells it covers.
++  struct BigCircle
++  {
++    Standard_Integer Index;
++    int MinX, MaxX, MinY, MaxY;
++  };
++  Standard_Real                        myCellSizeX;
++  Standard_Real                        myCellSizeY;
++  NCollection_Vector<BigCircle>        myBigCircles; //!< oldest first
++  NCollection_Vector<Standard_Integer> myBindOrder;  //!< per circle index: when it was bound
++  Standard_Integer                     myBindCount;
+ };
+ 
+ #endif
 diff --git a/src/BRepMesh/BRepMesh_FaceChecker.cxx b/src/BRepMesh/BRepMesh_FaceChecker.cxx
 index b78238d69..a0852a441 100644
 --- a/src/BRepMesh/BRepMesh_FaceChecker.cxx
@@ -35,8 +235,41 @@ index b78238d69..a0852a441 100644
      aSelector.SetSegments(aSegments2);
      for (Standard_Integer aSegmentIt = 0; aSegmentIt < aSegments1->Size(); ++aSegmentIt)
      {
+diff --git a/src/IMeshData/IMeshData_Types.hxx b/src/IMeshData/IMeshData_Types.hxx
+index 0b52effc0..2eefbea1c 100644
+--- a/src/IMeshData/IMeshData_Types.hxx
++++ b/src/IMeshData/IMeshData_Types.hxx
+@@ -25,6 +25,7 @@
+ #include <TopoDS_Shape.hxx>
+ #include <NCollection_DefineAlloc.hxx>
+ #include <NCollection_StdAllocator.hxx>
++#include <vector>
+ #include <IMeshData_ParametersListArrayAdaptor.hxx>
+ #include <TColStd_PackedMapOfInteger.hxx>
+ #include <TColStd_MapIteratorOfPackedMapOfInteger.hxx>
+@@ -114,10 +115,16 @@ namespace IMeshData
+ 
+   namespace Model
+   {
+-    typedef std::deque<gp_Pnt, NCollection_StdAllocator<gp_Pnt> >                     SequenceOfPnt;
+-    typedef std::deque<gp_Pnt2d, NCollection_StdAllocator<gp_Pnt2d> >                 SequenceOfPnt2d;
+-    typedef std::deque<Standard_Real, NCollection_StdAllocator<Standard_Real> >       SequenceOfReal;
+-    typedef std::deque<Standard_Integer, NCollection_StdAllocator<Standard_Integer> > SequenceOfInteger;
++    // std::vector, not std::deque: a deque takes a 4 KB block however few
++    // points it holds, and these live on the model's IncAllocator, which
++    // frees nothing until the model goes -- five per edge (3d points and
++    // parameters, then 2d points, parameters and indices per face) cost
++    // about 32 KB an edge, 1.4 GB on a 46,000-edge assembly. Nothing keeps
++    // a reference across an insertion, so the vector holds the same values.
++    typedef std::vector<gp_Pnt, NCollection_StdAllocator<gp_Pnt> >                     SequenceOfPnt;
++    typedef std::vector<gp_Pnt2d, NCollection_StdAllocator<gp_Pnt2d> >                 SequenceOfPnt2d;
++    typedef std::vector<Standard_Real, NCollection_StdAllocator<Standard_Real> >       SequenceOfReal;
++    typedef std::vector<Standard_Integer, NCollection_StdAllocator<Standard_Integer> > SequenceOfInteger;
+   }
+ 
+   // Lists
 diff --git a/src/ShapeFix/ShapeFix_Face.cxx b/src/ShapeFix/ShapeFix_Face.cxx
-index 71b46ebee..f90dada14 100644
+index 71b46ebee..a1e46119d 100644
 --- a/src/ShapeFix/ShapeFix_Face.cxx
 +++ b/src/ShapeFix/ShapeFix_Face.cxx
 @@ -1213,7 +1213,10 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
@@ -52,7 +285,7 @@ index 71b46ebee..f90dada14 100644
            continue;
          TopAbs_State stb = TopAbs_UNKNOWN;
 diff --git a/src/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
-index e5f268724..7deb2b809 100644
+index e5f268724..2701bf16c 100644
 --- a/src/ShapeFix/ShapeFix_IntersectionTool.cxx
 +++ b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
 @@ -855,13 +855,27 @@ Standard_Boolean ShapeFix_IntersectionTool::FixSelfIntersectWire
@@ -118,9 +351,9 @@ index e5f268724..7deb2b809 100644
      ShapeFix_DataMapOfShapeBox2d& boxes1 = aSeqWirEdgeBoxes.ChangeValue (n1);
      Bnd_Box2d aBox1 = aSeqWirBoxes (n1);
 -    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) { 
-+    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) {
 -      TopoDS_Wire wire2 = TopoDS::Wire(SeqWir.Value(n2));
 -      Handle(ShapeExtend_WireData) sewd2 = new ShapeExtend_WireData(wire2);
++    for(Standard_Integer n2=n1+1; n2<=SeqWir.Length(); n2++) {
        ShapeFix_DataMapOfShapeBox2d& boxes2 = aSeqWirEdgeBoxes.ChangeValue (n2);
        Bnd_Box2d aBox2 = aSeqWirBoxes (n2);
        if (!aBox1.IsVoid() && !aBox2.IsVoid() && aBox1.IsOut (aBox2))
