@@ -4,7 +4,7 @@
 
 import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
 import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
-import { PALETTES, schemeColours } from './palettes.js';
+import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -48,12 +48,16 @@ const app = {
     return PALETTES.some((x) => x.id === p) ? p : 'file';
   })(),
   baseMesh: null,
+  // colours picked for single parts of the loaded model: body index -> [r, g, b]
+  overrides: new Map(),
 };
 window.__cadv = app;
 
-// The model as drawn in the current colour scheme: the decoded model itself
-// for the file's colours, else a copy that differs only in its colours.
-const inScheme = (base) => (app.palette === 'file' ? base : { ...base, color: schemeColours(base, app.palette) });
+// The model as drawn in the current colour scheme and part colours: the
+// decoded model itself for the file's colours with nothing overridden, else a
+// copy that differs only in its colours.
+const inScheme = (base, overrides = app.overrides) => (app.palette === 'file' && overrides.size === 0
+  ? base : { ...base, color: schemeColours(base, app.palette, overrides) });
 
 // The ONE writer of the #announce live region. Every write takes a sequence
 // number; a write deferred to the next frame (to repeat the last text, which a
@@ -524,6 +528,12 @@ function updateButtons() {
   const p = sectionPlane();
   const unit = !app.header ? '' : app.header.units === 'millimeter' ? 'mm' : app.header.units || '';
   $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${(p[3] * (app.section.flip ? -1 : 1)).toFixed(1)} ${unit}` : '';
+  // the part colour: on with a selection, showing the first selected body's
+  // colour; Reset only while a selected body has a picked colour
+  const sel = app.header ? [...app.selected] : [];
+  $('partcolour').disabled = !sel.length;
+  if (sel.length) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
+  $('partreset').disabled = !sel.some((id) => app.overrides.has(id - 1));
 }
 
 function pushState() {
@@ -569,21 +579,56 @@ function setPalette(id) {
   if (!PALETTES.some((p) => p.id === id)) return;
   app.palette = id;
   try { localStorage.setItem('cadv.palette', id); } catch { /* storage off */ }
-  if (!app.baseMesh || app.wanted !== app.mesh) return;
+  recolour(`colours: ${PALETTES.find((p) => p.id === id).label}`);
+}
+
+// Draw the loaded model in the current scheme and part colours. Returns the
+// GPU sync's promise (resolved at once when nothing changes or a load is under
+// way); on a failure the drawn colours stay as they were.
+function recolour(announcement) {
+  if (!app.baseMesh || app.wanted !== app.mesh) return Promise.resolve();
   const before = app.mesh;
   const view = inScheme(app.baseMesh);
-  if (view === before) return;
+  if (view === before) return Promise.resolve();
   app.mesh = view;
   app.wanted = view;
-  gpuSync().then(() => {
-    announce(`colours: ${PALETTES.find((p) => p.id === id).label}`);
+  return gpuSync().then(() => {
+    if (announcement) announce(announcement);
   }, (e) => {
-    // the GPU would not take it: keep showing the scheme it holds
+    // the GPU would not take it: keep showing the colours it holds
     if (app.wanted !== view) return;
     app.mesh = before;
     app.wanted = before;
     setStatus('ready', `could not recolour: ${e.message || e}`);
   });
+}
+
+// The colour of the selected parts: pick one (every selected body takes it),
+// or reset them to the scheme's colours. Kept for this model while it is open.
+function setPartColour(hex) {
+  if (!app.selected.size) return;
+  const c = hexToRgb(hex);
+  for (const id of app.selected) app.overrides.set(id - 1, c);
+  updateButtons();
+  recolour(`${app.selected.size} part${app.selected.size > 1 ? 's' : ''} recoloured`);
+}
+
+function resetPartColour() {
+  let n = 0;
+  for (const id of app.selected) if (app.overrides.delete(id - 1)) n++;
+  updateButtons();
+  if (n) recolour(`${n} part colour${n > 1 ? 's' : ''} reset`);
+}
+
+// What the picker shows: the first selected body's colour as drawn
+function partColourOf(id) {
+  if (app.overrides.has(id - 1)) return app.overrides.get(id - 1);
+  const per = bodyColours(app.header, app.palette);
+  if (per) return per[id - 1];
+  const m = app.header.meshes[id - 1];
+  if (m.color) return m.color;
+  const c = app.baseMesh.color, v = 4 * m.vtxStart;
+  return [c[v] / 255, c[v + 1] / 255, c[v + 2] / 255];
 }
 
 function handBack(mesh) {
@@ -657,7 +702,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
-  const mesh = inScheme(base);
+  const mesh = inScheme(base, new Map()); // part colours belong to the model they were picked on
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
@@ -680,6 +725,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   }
   app.mesh = mesh;
   app.baseMesh = base;
+  app.overrides = new Map();
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sourceName = name;
@@ -1645,6 +1691,10 @@ function wireInput() {
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));
   pal.value = app.palette;
   pal.onchange = () => setPalette(pal.value);
+  // 'change', not 'input': a picker drag fires input continuously, and each
+  // recolour re-uploads the model
+  $('partcolour').onchange = (e) => setPartColour(e.target.value);
+  $('partreset').onclick = () => resetPartColour();
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;

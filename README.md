@@ -77,9 +77,11 @@ URL parameters:
   per-instance colours in an assembly are not read.
 - **Colour schemes.** *Colours* in the parts panel switches in one click:
   the file's colours, one colour per part name, per top-level assembly, per
-  body, or one colour for everything. Remembered in this browser. Only what is
-  drawn changes: Save .cadmesh and the saved conversions keep the file's
-  colours.
+  body, or one colour for everything. Remembered in this browser. Beside it, a
+  colour picker recolours the selected parts (the colour shows once they are
+  deselected), and Reset gives them the scheme's colour again; picked colours
+  last while the model is open. Only what is drawn changes: Save .cadmesh and
+  the saved conversions keep the file's colours.
 - **Save .cadmesh** after an in-browser import, so the next load skips
   tessellation.
 - **Saved conversions.** The browser also keeps each conversion itself, in

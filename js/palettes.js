@@ -72,17 +72,26 @@ export function bodyColours(header, id) {
 }
 
 // The per-vertex colour array (RGBA8) for scheme id, or the model's own when
-// id is 'file'. mesh: a decoded .cadmesh ({ header, color }).
-export function schemeColours(mesh, id) {
+// id is 'file' and nothing is overridden. mesh: a decoded .cadmesh
+// ({ header, color }). overrides: body index -> [r, g, b], colours the user
+// picked for single parts, which win over the scheme.
+export function schemeColours(mesh, id, overrides = new Map()) {
   const per = bodyColours(mesh.header, id);
-  if (!per) return mesh.color;
-  const out = new Uint8Array(mesh.color.length);
-  mesh.header.meshes.forEach((m, i) => {
-    const [r, g, b] = per[i];
+  if (!per && overrides.size === 0) return mesh.color;
+  const out = per ? new Uint8Array(mesh.color.length) : mesh.color.slice();
+  const fill = (m, [r, g, b]) => {
     const R = Math.round(r * 255), G = Math.round(g * 255), B = Math.round(b * 255);
     for (let v = m.vtxStart, end = m.vtxStart + m.vtxCount; v < end; v++) {
       out[4 * v] = R; out[4 * v + 1] = G; out[4 * v + 2] = B; out[4 * v + 3] = 255;
     }
+  };
+  mesh.header.meshes.forEach((m, i) => {
+    if (overrides.has(i)) fill(m, overrides.get(i));
+    else if (per) fill(m, per[i]);
   });
   return out;
 }
+
+// '#rrggbb' <-> [r, g, b] in 0..1, for the colour picker
+export const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+export const rgbToHex = (c) => '#' + c.map((x) => Math.round(x * 255).toString(16).padStart(2, '0')).join('');

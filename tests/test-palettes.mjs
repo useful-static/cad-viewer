@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { PALETTE } from '../js/cadmesh.js';
-import { MONO, PALETTES, bodyColours, distinct, schemeColours } from '../js/palettes.js';
+import { MONO, PALETTES, bodyColours, distinct, hexToRgb, rgbToHex, schemeColours } from '../js/palettes.js';
 
 let passed = 0;
 let failed = 0;
@@ -80,6 +80,26 @@ test('scheme colours fill each body\'s vertex range, opaque, and leave the model
       assert.deepEqual([...out.subarray(4 * v, 4 * v + 4)], [...per[i].map((x) => Math.round(x * 255)), 255]);
     }
   });
+});
+test('a part colour wins over the scheme, and over the file colours', () => {
+  const o = new Map([[3, [1, 0, 0]]]);
+  for (const id of ['body', 'file']) {
+    const out = schemeColours(mesh, id, o);
+    assert.deepEqual([...out.subarray(4 * 7, 4 * 8)], [255, 0, 0, 255], id);
+    // the other bodies keep the scheme's (or the file's) colours
+    const plain = schemeColours(mesh, id);
+    assert.deepEqual([...out.subarray(0, 4 * 7)], [...plain.subarray(0, 4 * 7)], id);
+  }
+});
+test('file colours with a part colour copy the model, never write into it', () => {
+  const before = color.slice();
+  const out = schemeColours(mesh, 'file', new Map([[0, [0, 1, 0]]]));
+  assert.notEqual(out, color);
+  assert.deepEqual(color, before);
+});
+test('hex and rgb convert both ways', () => {
+  assert.deepEqual(hexToRgb('#ff8000').map((x) => Math.round(x * 255)), [255, 128, 0]);
+  assert.equal(rgbToHex([1, 0.5, 0]), '#ff8000');
 });
 test('an unknown scheme is refused', () => {
   assert.throws(() => bodyColours(header, 'nope'), /unknown colour scheme/);
