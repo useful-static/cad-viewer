@@ -112,7 +112,12 @@
   #colours { display:flex; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   #colours select { flex:1; min-width:0; }
   #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
-  #colours input[type=color]:disabled { opacity:0.4; cursor:default; }
+  /* with nothing selected the picker has no colour to show: an empty dashed
+     swatch, not a black one that reads as "black" */
+  #colours input[type=color]:disabled { cursor:default; border-style:dashed; }
+  #colours input[type=color]:disabled::-webkit-color-swatch { background:transparent !important; border:none; }
+  #colours input[type=color]:disabled::-moz-color-swatch { background:transparent !important; border:none; }
+  #colours button[hidden] { display:none; }
   #cachebar { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
   #cachebar[hidden] { display:none; }
   #cacheinfo { flex:1; }
@@ -158,8 +163,10 @@
   /* Narrow, portrait or short screens (a landscape phone is ~390 px tall):
      the 3D view gets the width, the parts panel folds into a drawer below it
      (closed by default), and the toolbar is one scrolling row with the view
-     presets in a dropdown; its right edge fades while more lies past it. */
-  @media (max-width: 700px), (max-aspect-ratio: 4/5) and (max-width: 900px), (max-height: 500px) and (pointer: coarse) {
+     presets in a dropdown; its right edge fades while more lies past it.
+     Short means any window under 500 px tall, mouse or touch: there the
+     wrapping toolbar took 71-99 px of 390. */
+  @media (max-width: 700px), (max-aspect-ratio: 4/5) and (max-width: 900px), (max-height: 500px) {
     /* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a long nowrap model name
        in the footer would otherwise widen the column past the screen */
     body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; overflow:hidden; }

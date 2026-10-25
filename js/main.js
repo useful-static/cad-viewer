@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
@@ -48,9 +48,37 @@ const app = {
     return PALETTES.some((x) => x.id === p) ? p : 'file';
   })(),
   baseMesh: null,
-  // colours picked for single parts of the loaded model: body index -> [r, g, b]
+  // colours picked for single parts of the loaded model: body index -> [r, g, b],
+  // remembered in this browser under the model's key (modelKey)
   overrides: new Map(),
+  modelKey: '',
 };
+
+// A model's key for its remembered part colours: its bodies' names and sizes,
+// so the same model opened again (from STEP or from a saved .cadmesh) finds
+// them, and a different one does not.
+const modelKeyOf = (header) => `cadv.colours.${header.meshes.length}-${
+  hashName(JSON.stringify(header.meshes.map((m) => [m.name, m.vtxCount, m.idxCount]))).toString(36)}`;
+
+function loadOverrides(key, bodies) {
+  const out = new Map();
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || '{}');
+    for (const [i, hex] of Object.entries(saved)) {
+      const n = Number(i);
+      if (Number.isInteger(n) && n >= 0 && n < bodies && /^#[0-9a-f]{6}$/i.test(hex)) out.set(n, hexToRgb(hex));
+    }
+  } catch { /* storage off or a damaged entry: no remembered colours */ }
+  return out;
+}
+
+function saveOverrides() {
+  if (!app.modelKey) return;
+  try {
+    if (!app.overrides.size) localStorage.removeItem(app.modelKey);
+    else localStorage.setItem(app.modelKey, JSON.stringify(Object.fromEntries([...app.overrides].map(([i, c]) => [i, rgbToHex(c)]))));
+  } catch { /* storage off or full: the colours last while the model is open */ }
+}
 window.__cadv = app;
 
 // The model as drawn in the current colour scheme and part colours: the
@@ -533,7 +561,12 @@ function updateButtons() {
   const sel = app.header ? [...app.selected] : [];
   $('partcolour').disabled = !sel.length;
   if (sel.length) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
-  $('partreset').disabled = !sel.some((id) => app.overrides.has(id - 1));
+  const all = !sel.length;
+  $('partreset').disabled = all ? !app.overrides.size : !sel.some((id) => app.overrides.has(id - 1));
+  $('partreset').hidden = $('partreset').disabled; // shown only when there is something to reset
+  $('partreset').textContent = all ? 'Reset all' : 'Reset';
+  $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
+    : 'Give the selected parts their scheme colour again';
 }
 
 function pushState() {
@@ -609,13 +642,22 @@ function setPartColour(hex) {
   if (!app.selected.size) return;
   const c = hexToRgb(hex);
   for (const id of app.selected) app.overrides.set(id - 1, c);
+  saveOverrides();
   updateButtons();
   recolour(`${app.selected.size} part${app.selected.size > 1 ? 's' : ''} recoloured`);
 }
 
+// Reset: the selected parts' picked colours, or with nothing selected every
+// picked colour of this model; the parts take the scheme's colours again
 function resetPartColour() {
   let n = 0;
-  for (const id of app.selected) if (app.overrides.delete(id - 1)) n++;
+  if (app.selected.size) {
+    for (const id of app.selected) if (app.overrides.delete(id - 1)) n++;
+  } else {
+    n = app.overrides.size;
+    app.overrides.clear();
+  }
+  saveOverrides();
   updateButtons();
   if (n) recolour(`${n} part colour${n > 1 ? 's' : ''} reset`);
 }
@@ -646,6 +688,8 @@ function handBack(mesh) {
 function dropModel(msg) {
   app.mesh = null;
   app.baseMesh = null;
+  app.overrides = new Map();
+  app.modelKey = '';
   app.header = null;
   app.wanted = null;
   app.sphere = { center: [0, 0, 0], radius: 1 };
@@ -702,7 +746,10 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
-  const mesh = inScheme(base, new Map()); // part colours belong to the model they were picked on
+  // part colours belong to the model they were picked on: this model's own
+  const key = modelKeyOf(base.header);
+  const overrides = loadOverrides(key, base.header.meshes.length);
+  const mesh = inScheme(base, overrides);
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
@@ -725,7 +772,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   }
   app.mesh = mesh;
   app.baseMesh = base;
-  app.overrides = new Map();
+  app.overrides = overrides;
+  app.modelKey = key;
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sourceName = name;
@@ -1332,7 +1380,9 @@ function showInfo() {
   else if (ids.length > 1) title = `${ids.length} bodies`;
   const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
   add('selection', title);
-  add(`extent X × Y × Z (${app.header.units === 'millimeter' ? 'mm' : app.header.units})`, dims);
+  // "size (mm)" rather than "extent X × Y × Z (mm)": the longer label wrapped
+  // the third value onto a line of its own in the 300 px panel
+  add(`size (${app.header.units === 'millimeter' ? 'mm' : app.header.units})`, dims);
   add('triangles', fmtInt(tris));
 }
 
