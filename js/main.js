@@ -1206,6 +1206,10 @@ function wireInput() {
   };
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
   stage.addEventListener('pointerdown', (e) => {
+    // The cards (empty state, progress) sit inside the view: a press on them
+    // is theirs. Capturing it for an orbit retargeted the click to the view,
+    // so "Choose a file…" and Cancel never received it.
+    if (e.target.closest('.card')) return;
     if (e.pointerType === 'touch') {
       touches.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
@@ -1352,11 +1356,12 @@ function wireInput() {
   const fitAfterClick = () => lastClick.catch(() => false).then((clicked) => {
     if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
   });
-  stage.addEventListener('dblclick', () => {
-    if (lastType === 'touch') return; // handled as a double-tap
+  stage.addEventListener('dblclick', (e) => {
+    if (lastType === 'touch' || e.target.closest('.card')) return; // a double-tap / a card's own clicks
     fitAfterClick();
   });
   stage.addEventListener('wheel', (e) => {
+    if (e.target.closest('.card')) return; // a card scrolls (a long error), the view stays put
     e.preventDefault();
     // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch)
     zoomBy(app.cam, Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015)), app.sphere.radius, app.stageAspect);
