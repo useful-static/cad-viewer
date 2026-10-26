@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
@@ -946,6 +946,18 @@ async function loadAny(buf, name, seq) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
+  // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
+  // to download): unpacked here, then opened as the file inside it
+  const inner = name.replace(/\.gz$/i, '');
+  if (inner !== name && STEP_EXT[extOf(inner)] && isGzip(buf)) {
+    setStatus('loading', `unpacking ${name}`);
+    showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
+    await nextPaint();
+    if (stale(seq)) return;
+    buf = await gunzip(buf);
+    if (stale(seq)) return;
+    name = inner;
+  }
   const ext = extOf(name);
   if (STEP_EXT[ext]) {
     const format = STEP_EXT[ext];
@@ -1125,7 +1137,7 @@ function tessellate(buf, format, seq, name, threads) {
 //   rack.cadmesh?v=2                        -> rack.cadmesh   (path part, query dropped)
 //   /api/download?file=part.step&token=abc  -> part.step      (a query value naming a model file)
 //   /api/download?id=7                      -> download       (no extension anywhere)
-const MODEL_EXT = /\.(?:stp|step|igs|iges|brep|cadmesh)$/i;
+const MODEL_EXT = /\.(?:stp|step|igs|iges|brep|cadmesh)(?:\.gz)?$/i;
 const fileName = (url) => {
   const [path, query = ''] = url.split('#')[0].split('?');
   const tail = path.split('/').pop();

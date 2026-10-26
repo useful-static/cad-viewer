@@ -146,16 +146,25 @@ export function isGzip(buf) {
 
 const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThrough(stream)).arrayBuffer();
 
-// buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
-export async function inflateCadmesh(buf) {
-  if (!isGzip(buf)) return buf;
+// gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz)
+export async function gunzip(buf) {
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('cadmesh: this file is gzip-compressed, and this browser cannot decompress (no DecompressionStream)');
+    throw new Error('this file is gzip-compressed, and this browser cannot decompress (no DecompressionStream)');
   }
   try {
     return await pipeBytes(buf, new DecompressionStream('gzip'));
   } catch (e) {
-    throw new Error(`cadmesh: the gzip data is corrupt or truncated (${e.message || e})`);
+    throw new Error(`the gzip data is corrupt or truncated (${e.message || e})`);
+  }
+}
+
+// buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
+export async function inflateCadmesh(buf) {
+  if (!isGzip(buf)) return buf;
+  try {
+    return await gunzip(buf);
+  } catch (e) {
+    throw new Error(`cadmesh: ${e.message}`);
   }
 }
 

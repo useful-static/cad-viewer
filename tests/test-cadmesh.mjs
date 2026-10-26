@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, idToBytes, inflateCadmesh,
+  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, idToBytes, inflateCadmesh,
   isGzip, occtResultToModel,
 } from '../js/cadmesh.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
@@ -246,6 +246,13 @@ await atest('a truncated gzip file is refused with a cadmesh error, not decoded'
   const gz = await deflateCadmesh(sample());
   await assert.rejects(inflateCadmesh(gz.slice(0, gz.byteLength >> 1)), /cadmesh: the gzip data is corrupt or truncated/);
   assert.equal(isGzip(new ArrayBuffer(1)), false, 'a 1-byte buffer is not gzip');
+});
+
+await atest('gunzip unpacks any gzip file (a part.stp.gz) to the bytes inside', async () => {
+  const step = new TextEncoder().encode('ISO-10303-21;\nHEADER;\nENDSEC;\n').buffer;
+  const gz = new Uint8Array(gzipSync(Buffer.from(step))).buffer;
+  assert.deepEqual(new Uint8Array(await gunzip(gz)), new Uint8Array(step));
+  await assert.rejects(gunzip(gz.slice(0, gz.byteLength >> 1)), /^Error: the gzip data is corrupt or truncated/);
 });
 
 const occtJs = join(HERE, '..', 'vendor', 'occt-import-js', 'occt-import-js.js');

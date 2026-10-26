@@ -20,6 +20,9 @@ python3 -m http.server 8000     # or any static server
 # open http://localhost:8000/   and drop a .stp/.step/.igs/.brep/.cadmesh on the page
 ```
 
+A gzip-compressed model (`part.stp.gz`, about a sixth of the size to
+download) opens too: the page unpacks it and opens the file inside.
+
 WebGPU is only exposed in a **secure context** (https or localhost). Served
 over plain http from another host, the viewer runs on WebGL2.
 
