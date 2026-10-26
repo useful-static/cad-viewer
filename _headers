@@ -1,0 +1,7 @@
+# Cross-origin isolation: the page may then use SharedArrayBuffer, which the
+# multi-core converter (vendor/occt-import-js/mt/) needs for its threads.
+# Everything the page loads is its own, so nothing else is affected; without
+# these headers the viewer converts on one thread.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

@@ -92,12 +92,24 @@ URL parameters:
   bytes together with the tessellation settings; past 200 MB the least recently
   used are dropped. The parts panel shows how many are saved and how much space
   they take, with **Clear**.
+- **Multi-core conversion.** On a desktop or laptop with 4 or more cores (and
+  8 GB or more, where the browser says), a page served with cross-origin
+  isolation headers (`_headers`: COOP and COEP) converts on the multi-core
+  build, which meshes faces on up to 4 threads and gives the same triangles (a
+  25.7 MB assembly in Chromium: about 25 s instead of 29). It needs more
+  memory (1.6 GB of WASM at its peak against 0.7 GB), so phones and tablets
+  always use one thread, and a multi-core conversion that fails is run again
+  on one thread. The info panel says which ran.
+- **Missing faces are reported.** A face the converter could not mesh is named
+  in the status line and the info panel, and such a conversion is not saved.
 
 ## Large assemblies: convert once
 
-OpenCascade tessellation runs single-threaded in WASM. A large multi-part
+OpenCascade tessellation runs in WASM, and only its meshing uses more than one
+thread. A large multi-part
 assembly can take a minute or more, in the browser and in Node alike (a
-25.7 MB assembly: 43 s with our build; 597 s with the stock one, which also
+25.7 MB assembly: 43 s with our build, 39 s on its multi-core variant; 597 s
+with the stock one, which also
 runs out of WASM memory on its body with thousands of holes and leaves half
 that body's faces unmeshed, without an error). Convert it once and serve the
 result:
@@ -112,6 +124,7 @@ node stp2mesh.mjs model.stp -o model.cadmesh --absolute 0.3 --angular 0.35
 | `--absolute MM` | linear deflection as an absolute chord error, in mm |
 | `--angular RAD` | angular deflection (default 0.5) |
 | `--raw` | write the uncompressed layout (default: gzipped) |
+| `--threads` | the multi-core build: faces meshed on up to 4 threads, the same triangles, more memory |
 
 The converter and **Save .cadmesh** write the file gzipped, usually about a
 sixth of the raw size. The viewer inflates it with the browser's
@@ -151,6 +164,8 @@ files load too.
 | `js/step-features.js` | counts a STEP file's records, faces and holes per face, for the forecast |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |
+| `js/converter-choice.js` | whether an import runs on the multi-core build |
+| `_headers` | the cross-origin isolation headers the multi-core build needs |
 | `js/mat4.js` | matrix helpers |
 | `stp2mesh.mjs` | offline converter (same importer and packing code as the browser) |
 | `fetch-deps.sh` | fetches occt-import-js: our build with progress reporting by default, `--stock` for the npm release |
@@ -159,7 +174,8 @@ files load too.
 ## Tests
 
 ```sh
-npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes
+npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes,
+                # test-converter-choice
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
 ```
 
@@ -177,7 +193,7 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress5`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress6`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
@@ -201,12 +217,18 @@ OpenCascade commit as upstream) with two patches:
   instead of N^1.5, and a face that ran WASM out of memory, which OpenCascade
   leaves unmeshed without an error, now meshes.
 
+It comes in two builds of the same sources: single-threaded, and in `mt/` a
+multi-core one (`build.sh --threads 4`): emscripten threads, OpenCascade's
+thread pool capped at 4, and the mimalloc allocator, without which the threads
+wait on the default allocator's lock and run slower than one. Both mesh the
+same triangles.
+
 Wherever the stock build meshes every face, the converted geometry is
 byte-identical to its: `occt-progress/compare.sh` converts files with two
 builds and compares them byte for byte (all 55 STEP/IGES/BREP test files of
 occt-import-js). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress5/`, with a NOTICE;
-the earlier builds stay there too.
+`https://assets.known.name/occt-import-js/0.0.23-progress6/`, with a NOTICE;
+`progress3` and later stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
 no steps; the page then shows the forecast alone.
 

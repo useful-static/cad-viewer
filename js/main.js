@@ -7,6 +7,7 @@ import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } f
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
+import { browserEnv, useThreads } from './converter-choice.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -700,6 +701,7 @@ function dropModel(msg) {
   app.hoverSeq++;
   app.viewGen++;
   app.lastStepBuffer = null;
+  app.unmeshedFaces = 0;
   $('export').disabled = true;
   $('tree').textContent = '';
   $('treefilter').hidden = true;
@@ -727,7 +729,11 @@ function checkFits(r, mesh) {
 
 // stepBuf: the tessellated buffer when this load came from a STEP import (what
 // Save .cadmesh writes), null for a .cadmesh load.
-async function loadBuffer(buf, name, seq, stepBuf = null) {
+// conversion (a conversion only): { unmeshedFaces, threads } -- the faces the
+// converter returned without triangles, shown in the status line and the info
+// panel, and whether it ran on the multi-core converter.
+async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
+  const unmeshedFaces = conversion?.unmeshedFaces || 0;
   // Each step names itself (card and status line) and lets that paint first:
   // on a phone, inflate + decode + upload of a big model is a second or more
   // of a frozen page that would otherwise read as "stuck at 100%".
@@ -778,6 +784,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   app.sphere = sphereOf(mesh.header.bbox);
   app.sourceName = name;
   app.lastStepBuffer = stepBuf;
+  app.unmeshedFaces = unmeshedFaces;
   $('export').disabled = !stepBuf;
   app.selected.clear();
   app.hidden.clear();
@@ -792,12 +799,18 @@ async function loadBuffer(buf, name, seq, stepBuf = null) {
   const tris = mesh.header.indexCount / 3;
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
     uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
-    inflateMs: Math.round(inflateMs), fileBytes: buf.byteLength, fetchMs: app.fetchMs ?? null };
+    inflateMs: Math.round(inflateMs), fileBytes: buf.byteLength, fetchMs: app.fetchMs ?? null, unmeshedFaces,
+    converter: conversion ? (conversion.threads ? 'multi-core' : 'one thread') : null };
   $('model').textContent = `${name} · ${mesh.header.meshes.length} bodies · ${fmtInt(tris)} triangles`;
   $('model').title = $('model').textContent; // the narrow footer truncates it
   showInfo();
-  setStatus('ready', 'ready');
+  setStatus('ready', readyText()); // announced with the change into ready
 }
+
+// "ready", or with faces the conversion could not mesh, what is missing
+const readyText = () => (app.unmeshedFaces
+  ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
+  : 'ready');
 
 const STEP_EXT = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
 
@@ -848,10 +861,13 @@ async function loadAny(buf, name, seq) {
         return;
       }
     }
-    const out = await tessellate(buf, format, seq, name);
+    const conversion = await convert(buf, format, seq, name);
     if (stale(seq)) return;
-    if (key) saveConversion(key, out, name); // in the background: the model shows meanwhile
-    await loadBuffer(out, name, seq, out);
+    const out = conversion.buffer;
+    // an incomplete conversion is shown (it is what the converter could do)
+    // but never saved as if it were the model
+    if (key && !conversion.unmeshedFaces) saveConversion(key, out, name); // in the background: the model shows meanwhile
+    await loadBuffer(out, name, seq, out, conversion);
     return;
   }
   if (stale(seq)) return;
@@ -872,7 +888,27 @@ async function loadAny(buf, name, seq) {
 const TESS_HINT = 'The file is converted in this tab, on this device. A large assembly can take a minute or more. '
   + 'The result is kept in this browser, so opening the same file again is instant; Save .cadmesh keeps a copy.';
 
-function tessellate(buf, format, seq, name) {
+// On the multi-core converter where this device can take it
+// (js/converter-choice.js); if that fails, or leaves faces unmeshed, once more
+// on the single-threaded one, which needs less memory.
+async function convert(buf, format, seq, name) {
+  if (!useThreads(browserEnv())) return tessellate(buf, format, seq, name, false);
+  let why;
+  try {
+    const r = await tessellate(buf, format, seq, name, true);
+    if (!r.unmeshedFaces) return r;
+    why = `${fmtInt(r.unmeshedFaces)} face${r.unmeshedFaces > 1 ? 's' : ''} could not be meshed`;
+  } catch (e) {
+    if (stale(seq)) throw e; // cancelled or superseded: no second try
+    why = e.message;
+  }
+  if (stale(seq)) throw new Error('superseded by a newer load');
+  console.warn(`multi-core conversion of ${name}: ${why}; converting again on one thread`);
+  announce('converting again on one thread, which needs less memory');
+  return tessellate(buf, format, seq, name, false);
+}
+
+function tessellate(buf, format, seq, name, threads) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
     const t0 = performance.now();
@@ -882,7 +918,7 @@ function tessellate(buf, format, seq, name) {
     if (!stale(seq)) announce('converting'); // its ticks are progress, not news
     // The forecast from the file's contents (js/import-progress.js), until the
     // worker has counted them: from the size alone.
-    let fc = forecast({ bytes, step: false });
+    let fc = forecast({ bytes, step: false }, threads);
     let tStart = 0; // when the conversion started (after the converter loaded)
     const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
     // REAL progress from our converter build (occt-progress/): which step it
@@ -952,7 +988,7 @@ function tessellate(buf, format, seq, name) {
         show();
       }
       else if (m.type === 'features') {
-        fc = forecast(m.features);
+        fc = forecast(m.features, threads);
       }
       else if (m.type === 'occt') {
         const f = Math.min(1, Math.max(0, +m.fraction || 0));
@@ -970,12 +1006,14 @@ function tessellate(buf, format, seq, name) {
         step = st;
         show();
       }
-      else if (m.type === 'done') done(resolve, m.buffer);
+      else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads });
       else done(reject, new Error(m.message));
     };
     w.onerror = (e) => done(reject, new Error(e.message || 'worker failed'));
     show();
-    w.postMessage({ buffer: buf, format }, [buf]);
+    // the multi-core try is sent a copy, so the bytes are still here for the
+    // single-threaded one if it fails
+    w.postMessage({ buffer: buf, format, threads }, threads ? [] : [buf]);
   });
 }
 
@@ -1384,6 +1422,9 @@ function showInfo() {
   // the third value onto a line of its own in the 300 px panel
   add(`size (${app.header.units === 'millimeter' ? 'mm' : app.header.units})`, dims);
   add('triangles', fmtInt(tris));
+  if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
+  // converted in this tab just now: on how many threads (js/converter-choice.js)
+  if (app.stats?.converter) add('converted on', app.stats.converter);
 }
 
 const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
@@ -1687,7 +1728,7 @@ function wireInput() {
   $('pcancel').onclick = () => {
     beginLoad();
     announce('loading cancelled');
-    if (app.mesh) setStatus('ready', 'ready');
+    if (app.mesh) setStatus('ready', readyText());
     else setStatus('idle', IDLE_MSG);
   };
   window.addEventListener('drop', (e) => {

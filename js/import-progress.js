@@ -33,22 +33,28 @@ export const COEF = {
   write: 0.0057, // s per 1000 records
 };
 const STEPS = ['read', 'transfer', 'mesh', 'write'];
+// The multi-core converter (occt-progress/build.sh --threads) meshes faces on
+// up to 4 threads: 7.41 s against 14.31 s on the 25.7 MB assembly. Its other
+// steps run on one thread, as fast as the single-threaded build's.
+export const THREADED_MESH = 0.52;
 
 // Seconds per step on the reference machine. A file that is not STEP text
 // (IGES, BREP) has only its size: the whole forecast is scaled from it.
-export function forecast(f) {
+// threaded: the conversion runs on the multi-core converter.
+export function forecast(f, threaded = false) {
   const mb = f.bytes / 1e6;
+  const meshScale = threaded ? THREADED_MESH : 1;
   if (!f.step) {
     // the real STEP files measured took 0.6-0.8 s per MB in all (1.5 for the
     // 25.7 MB assembly), split about 27 / 54 / 16 / 3%
     const total = 0.7 * mb;
-    return { read: 0.27 * total, transfer: 0.54 * total, mesh: 0.16 * total, write: 0.03 * total };
+    return { read: 0.27 * total, transfer: 0.54 * total, mesh: 0.16 * total * meshScale, write: 0.03 * total };
   }
   const k = f.entities / 1e3;
   return {
     read: COEF.read * mb,
     transfer: COEF.transfer[0] * k + COEF.transfer[1] * (f.bounds15 / 1e3),
-    mesh: COEF.mesh * k,
+    mesh: COEF.mesh * k * meshScale,
     write: COEF.write * k,
   };
 }

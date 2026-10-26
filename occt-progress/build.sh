@@ -22,7 +22,12 @@
 # freed, about 32 KB an edge (now std::vectors). The first four were quadratic
 # in a face's wires; the last two together ran a 25.7 MB assembly into WASM's
 # 2 GB ceiling, so a face with thousands of holes was silently left unmeshed.
-# save-occt-patch.py writes the work tree's OCCT changes back to occt.patch.
+# --threads N builds the multi-core variant: emscripten pthreads, faces meshed
+# in parallel on at most N threads (progress.patch caps OCCT's pool at 4, the
+# measured best), and mimalloc, without which the threads queue on the default
+# allocator's lock and the build is slower than one thread. It meshes the same
+# triangles; a page can run it only when cross-origin isolated (COOP/COEP).
+# save-occt-patch.py writes the work tree's changes back to the two patches.
 # The sources are reset to the pinned commits before patching on every run.
 # Everything else is the upstream build (emscripten 3.1.69, the same OCCT
 # commit as the published 0.0.23).
@@ -46,10 +51,11 @@ readonly EMSDK_VER="3.1.69" # tools/setup_emscripten_win.bat at 0.0.23
 
 usage() {
 	cat <<EOF
-usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--fetch-only] [--no-patch]
+usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fetch-only] [--no-patch]
   --work DIR    work tree (default ~/.cache/occt-wasm)
-  --out DIR     where the built .js/.wasm go (default <work>/out)
+  --out DIR     where the built .js/.wasm go (default <work>/out, <work>/out-mt with --threads)
   --jobs N      parallel compile jobs (default nproc)
+  --threads N   the multi-core variant, meshing on up to N threads (4 = what the patch caps OCCT at)
   --fetch-only  only fetch the sources and the toolchain
   --no-patch    build the unmodified upstream (a control for the patch)
 EOF
@@ -58,20 +64,23 @@ EOF
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 main() {
-	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1
+	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1 threads=0
 	jobs="$(nproc)"
 	while (($#)); do
 		case "$1" in
 			--work) work="$2"; shift 2 ;;
 			--out) out="$2"; shift 2 ;;
 			--jobs) jobs="$2"; shift 2 ;;
+			--threads)
+				[[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || { echo "--threads needs a positive number" >&2; return 2; }
+				threads="$2"; shift 2 ;;
 			--fetch-only) fetch_only=1; shift ;;
 			--no-patch) patch=0; shift ;;
 			-h | --help) usage; return 0 ;;
 			*) usage >&2; return 2 ;;
 		esac
 	done
-	out="${out:-${work}/out}"
+	out="${out:-${work}/out$( ((threads)) && echo -mt)}"
 	mkdir -p "${work}"
 	local src="${work}/occt-import-js"
 
@@ -111,13 +120,19 @@ main() {
 
 	# shellcheck disable=SC1091
 	source "${work}/emsdk/emsdk_env.sh" > /dev/null 2>&1
-	local bdir="${src}/build/wasm-$( ((patch)) && echo progress || echo upstream)"
+	local bdir="${src}/build/wasm-$( ((patch)) && echo progress || echo upstream)$( ((threads)) && echo -mt)"
 	log "configuring in ${bdir}"
 	# OpenCascade's assert messages embed __FILE__: map the work tree to "."
 	# so the published WASM names no build machine's paths
-	local prefix_map="-ffile-prefix-map=${src}=."
+	local cflags="-ffile-prefix-map=${src}=." ldflags=""
+	if ((threads)); then
+		cflags="-pthread ${cflags}"
+		# the workers are started with the module (never mid-import, which
+		# would need the thread to yield), no more than the machine has cores
+		ldflags="-pthread -sPTHREAD_POOL_SIZE=Math.min(${threads},navigator.hardwareConcurrency) -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc"
+	fi
 	(cd "${src}" && emcmake cmake -B "${bdir}" -G "Unix Makefiles" -DEMSCRIPTEN=1 -DCMAKE_BUILD_TYPE=Release \
-		"-DCMAKE_C_FLAGS=${prefix_map}" "-DCMAKE_CXX_FLAGS=${prefix_map}" .) > "${work}/cmake.log" 2>&1
+		"-DCMAKE_C_FLAGS=${cflags}" "-DCMAKE_CXX_FLAGS=${cflags}" "-DCMAKE_EXE_LINKER_FLAGS=${ldflags}" .) > "${work}/cmake.log" 2>&1
 	log "building with ${jobs} jobs (log: ${work}/make.log)"
 	emmake make -C "${bdir}" -j "${jobs}" > "${work}/make.log" 2>&1
 	mkdir -p "${out}"

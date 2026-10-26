@@ -176,6 +176,15 @@ test('occt mapping: a colourless file gets one colour per part NAME', () => {
   assert.ok(model.meshes.every((m) => Array.isArray(m.color)), 'every body has a colour');
 });
 
+test('occt mapping: counts the faces the converter returned without triangles', () => {
+  const root = { name: 'r', meshes: [0, 1], children: [] };
+  const ok = occtResultToModel(occt([om('a', null, [{ first: 0, last: 1 }])], { name: 'r', meshes: [0], children: [] }));
+  assert.equal(ok.unmeshedFaces, 0);
+  // an empty face: its range ends before it starts (last = first - 1)
+  const bad = occtResultToModel(occt([om('a', null, [{ first: 0, last: 1 }, { first: 2, last: 1 }]), om('b', null, [{ first: 0, last: -1 }])], root));
+  assert.equal(bad.unmeshedFaces, 2);
+});
+
 test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
 });

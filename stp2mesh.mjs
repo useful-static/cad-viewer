@@ -12,13 +12,15 @@ import { encodeCadmesh, occtResultToModel, DEFAULT_TESSELLATION } from './js/cad
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadmesh]
-                    [--deflection R] [--absolute MM] [--angular RAD] [--occt DIR]
+                    [--deflection R] [--absolute MM] [--angular RAD] [--occt DIR | --threads]
 
   -o FILE          output (default: input with .cadmesh)
   --deflection R   linear deflection as a ratio of the bounding box (default ${DEFAULT_TESSELLATION.linearDeflection})
   --absolute MM    linear deflection as an absolute chord error in mm (instead of --deflection)
   --angular RAD    angular deflection (default ${DEFAULT_TESSELLATION.angularDeflection})
   --occt DIR       occt-import-js dist dir (default: vendor/occt-import-js, staged by fetch-deps.sh)
+  --threads        the multi-core build (vendor/occt-import-js/mt): faces meshed on up to 4
+                   threads, the same triangles, more memory
   --raw            write the uncompressed layout (default: gzipped, which the viewer inflates)
   --progress       print OpenCascade's progress to stderr (needs the occt-progress build)
 `;
@@ -50,6 +52,7 @@ function parseArgs(argv) {
     }
     else if (k === '--occt') a.occt = val();
     else if (k === '--raw') a.raw = true;
+    else if (k === '--threads') a.threads = true;
     else if (k === '--progress') a.progress = true;
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;
@@ -78,7 +81,11 @@ async function main() {
     process.stderr.write(`unsupported extension .${ext} (want ${Object.keys(FORMATS).join(', ')})\n`);
     return 2;
   }
-  const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js'));
+  if (args.occt && args.threads) {
+    process.stderr.write(`give only one of --occt / --threads\n${USAGE}`);
+    return 2;
+  }
+  const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');
   if (!existsSync(occtJs)) {
     process.stderr.write(`occt-import-js not found at ${occtJs}: run ${join(HERE, 'fetch-deps.sh')}\n`);
@@ -106,7 +113,11 @@ async function main() {
     process.stderr.write(`FAIL: OpenCascade could not import ${args.input}\n`);
     return 1;
   }
-  const buf = encodeCadmesh(occtResultToModel(result));
+  const model = occtResultToModel(result);
+  const buf = encodeCadmesh(model);
+  if (model.unmeshedFaces) {
+    process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
+  }
   const file = args.raw ? Buffer.from(buf) : gzipSync(Buffer.from(buf), { level: 6 });
   writeFileSync(out, file);
   const meshes = result.meshes.length;

@@ -10,7 +10,9 @@
 # sRGB, and occt-progress/occt.patch, which removes wasted work in four
 # quadratic loops in OpenCascade and fixes the mesher's time and memory on
 # faces with many holes (the stock build leaves such faces unmeshed once
-# WASM runs out of memory).
+# WASM runs out of memory). Two builds of it: single-threaded, and in mt/ the
+# multi-core one (faces meshed on up to 4 threads, for cross-origin isolated
+# pages on devices with the memory: js/converter-choice.js).
 # Built by occt-progress/build.sh, hosted under
 # https://assets.known.name/occt-import-js/. Its meshes are byte-identical to
 # the stock build's wherever that meshed every face (occt-progress/compare.sh).
@@ -26,15 +28,19 @@ readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DEST="${HERE}/vendor/occt-import-js"
 readonly CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/cad-viewer"
 
-readonly PROGRESS_VERSION="0.0.23-progress5"
+readonly PROGRESS_VERSION="0.0.23-progress6"
 readonly PROGRESS_BASE="https://assets.known.name/occt-import-js/${PROGRESS_VERSION}"
-# file -> sha256 (occt-progress/build.sh prints these)
+# file -> sha256 (occt-progress/build.sh prints these); mt/ is the multi-core
+# build (build.sh --threads 4), which the page uses where js/converter-choice.js
+# allows
 readonly -A PROGRESS_SHA=(
 	[occt-import-js.js]="5cf1cc9142ca1174e604c58fc4e5c8c13db41302e700d9934db0db1801aef964"
 	[occt-import-js.wasm]="d40dcbf809d61b9f07b56fdf383f1e0363d13cb38a6abc7d3e4ec8d4eaab7786"
+	[mt/occt-import-js.js]="bd2089828138b52e1705f112a935857226fe371a2123a2a9ff11ad0c92c67be1"
+	[mt/occt-import-js.wasm]="b836ff326bda1c43a3bea725383454dd010e705a0d045f084065cfee5a9499ba"
 	[license.occt-import-js.txt]="7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
 	[license.occt.txt]="090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
-	[NOTICE.txt]="1bdf86b875dec2934994070ac74820ff71ba5b96247d0d6333ca4d593756325e"
+	[NOTICE.txt]="d59f3ba5fde223775ff9efc0423a262b591384a360aa97305e0fe9f468e21dea"
 )
 
 readonly STOCK_VERSION="0.0.23"
@@ -53,7 +59,8 @@ USAGE
 
 staged_ok() {
 	[[ -f "${DEST}/occt-import-js.wasm" && -f "${DEST}/occt-import-js.js" && -f "${DEST}/package.json" ]] \
-		&& [[ "$(cat "${DEST}/VERSION" 2>/dev/null)" == "$1" ]]
+		&& [[ "$(cat "${DEST}/VERSION" 2>/dev/null)" == "$1" ]] \
+		&& { [[ "$1" == "${STOCK_VERSION}" ]] || [[ -f "${DEST}/mt/occt-import-js.wasm" ]]; }
 }
 
 finish() { # version
@@ -66,7 +73,7 @@ finish() { # version
 
 fetch_progress() {
 	local dir="${CACHE}/${PROGRESS_VERSION}" f got want
-	mkdir -p "${dir}"
+	mkdir -p "${dir}/mt"
 	for f in "${!PROGRESS_SHA[@]}"; do
 		want="${PROGRESS_SHA[${f}]}"
 		got=""
@@ -82,8 +89,8 @@ fetch_progress() {
 			return 1
 		fi
 	done
-	mkdir -p "${DEST}"
-	for f in "${!PROGRESS_SHA[@]}"; do cp "${dir}/${f}" "${DEST}/"; done
+	mkdir -p "${DEST}/mt"
+	for f in "${!PROGRESS_SHA[@]}"; do cp "${dir}/${f}" "${DEST}/${f}"; done
 	finish "${PROGRESS_VERSION}"
 }
 
@@ -113,7 +120,8 @@ fetch_stock() {
 	local tmp="${EXTRACT_DIR}"
 	tar -xzf "${tgz}" -C "${tmp}" package/dist
 	mkdir -p "${DEST}"
-	rm -f "${DEST}/NOTICE.txt"
+	# the stock release has no multi-core build: the page must not find ours
+	rm -rf "${DEST}/NOTICE.txt" "${DEST}/mt"
 	cp "${tmp}/package/dist/occt-import-js.js" "${tmp}/package/dist/occt-import-js.wasm" \
 		"${tmp}/package/dist/license.occt-import-js.txt" "${tmp}/package/dist/license.occt.txt" "${DEST}/"
 	finish "${STOCK_VERSION}"

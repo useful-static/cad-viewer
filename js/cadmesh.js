@@ -290,7 +290,12 @@ export function occtResultToModel(result, units = 'millimeter') {
   const conv = (n) => ({ name: n.name || '', meshes: n.meshes || [], children: (n.children || []).map(conv) });
   const root = conv(result.root);
   if (!meshes.some((m) => m.color || m.colors)) paletteByPart(meshes, root);
-  return { units, meshes, root };
+  // b-rep faces that came back with no triangles: OpenCascade drops a face it
+  // could not mesh (out of memory, a meshing failure) without an error, and
+  // nothing else says so. None on the 59 test files and the rack with the
+  // current converter; 2 on the rack when it ran out of memory.
+  const unmeshedFaces = result.meshes.reduce((n, m) => n + (m.brep_faces || []).filter((f) => f.last < f.first).length, 0);
+  return { units, meshes, root, unmeshedFaces };
 }
 
 // A file exported with no colours (common from some CAD packages) renders as one grey

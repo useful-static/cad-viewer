@@ -7,10 +7,13 @@
 // The WASM is not in git (binary): fetch-deps.sh stages it
 // into ../vendor/occt-import-js/.
 
-const VENDOR = new URL('../vendor/occt-import-js/', self.location.href).href;
+// threads: the multi-core build (js/converter-choice.js), in mt/ beside the
+// single-threaded one
+const vendorDir = (threads) => new URL(`../vendor/occt-import-js/${threads ? 'mt/' : ''}`, self.location.href).href;
 
 onmessage = async (ev) => {
-  const { buffer, format, params } = ev.data;
+  const { buffer, format, params, threads } = ev.data;
+  const VENDOR = vendorDir(threads);
   try {
     const post = (stage, converting = false) => postMessage({ type: 'progress', stage, converting });
     post('loading the converter');
@@ -29,6 +32,9 @@ onmessage = async (ev) => {
     // calls it, and the page then goes by its forecast alone.
     const occt = await self.occtimportjs({
       locateFile: (p) => VENDOR + p,
+      // the multi-core build starts its threads from this script; left to
+      // itself it would take this worker's own URL
+      mainScriptUrlOrBlob: `${VENDOR}occt-import-js.js`,
       onProgress: (phase, fraction) => postMessage({ type: 'occt', phase, fraction }),
     });
     post(`converting ${format.toUpperCase()} (${(buffer.byteLength / 1e6).toFixed(1)} MB)`, true);
@@ -36,8 +42,9 @@ onmessage = async (ev) => {
     const result = occt.ReadFile(format, new Uint8Array(buffer), params || fmt.DEFAULT_TESSELLATION);
     const t1 = performance.now();
     post('packing mesh');
-    const out = fmt.encodeCadmesh(fmt.occtResultToModel(result));
-    postMessage({ type: 'done', buffer: out, ms: Math.round(t1 - t0) }, [out]);
+    const model = fmt.occtResultToModel(result);
+    const out = fmt.encodeCadmesh(model);
+    postMessage({ type: 'done', buffer: out, ms: Math.round(t1 - t0), unmeshedFaces: model.unmeshedFaces }, [out]);
   } catch (e) {
     postMessage({ type: 'error', message: String(e && e.message ? e.message : e) });
   }
