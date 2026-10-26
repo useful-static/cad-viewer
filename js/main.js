@@ -539,6 +539,103 @@ function undoVisibility() {
   announce(`undone: ${app.hidden.size ? `${app.hidden.size} hidden` : 'everything shown'}`);
 }
 
+// ---------- toolbar menus ----------
+// The View and Show groups stand in the toolbar row where it has room for
+// them and fold behind a menu button where it has not. Whether the row fits
+// is MEASURED (one row on a wrapping desktop toolbar, no sideways scroll on
+// the narrow one), so a width breakpoint cannot go stale as labels or fonts
+// change. View is decided with the section controls and Save counted as
+// shown, so turning a section on never folds away the dropdown just used;
+// Show is decided on the row as it is, and folds while a section is on if it
+// must.
+
+const MENUS = ['viewmenu', 'showmenu'];
+let foldKey = '';
+
+function toolbarFits(tb) {
+  if (getComputedStyle(tb).flexWrap === 'nowrap') return tb.scrollWidth <= tb.clientWidth + 1;
+  const cs = getComputedStyle(tb);
+  const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  let row = 0;
+  for (const el of tb.querySelectorAll('button, select, label.btn, input')) row = Math.max(row, el.offsetHeight);
+  return tb.clientHeight <= row + pad + 2;
+}
+
+function refold() {
+  const tb = $('tb');
+  const was = MENUS.map((id) => $(id).classList.contains('folded'));
+  for (const id of MENUS) $(id).classList.remove('folded');
+  tb.classList.add('measuring');
+  $('viewmenu').classList.toggle('folded', !toolbarFits(tb));
+  tb.classList.remove('measuring');
+  $('showmenu').classList.toggle('folded', !toolbarFits(tb));
+  MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
+}
+
+function setMenu(menu, open, focusFirst = false) {
+  const btn = menu.querySelector('.menu-btn');
+  const panel = menu.querySelector('.menu-panel');
+  if (open) {
+    closeMenus(false, menu);
+    menu.classList.add('open');
+    // under the toolbar, at the button's left edge, kept on screen
+    const r = btn.getBoundingClientRect();
+    const top = document.querySelector('header').getBoundingClientRect().bottom + 4;
+    panel.style.top = `${top}px`;
+    panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - panel.offsetWidth - 8))}px`;
+    panel.style.maxHeight = `${innerHeight - top - 8}px`;
+    panel.style.overflowY = 'auto';
+    if (focusFirst) panel.querySelector('button:not(:disabled), select')?.focus();
+  } else {
+    menu.classList.remove('open');
+  }
+  btn.setAttribute('aria-expanded', String(open));
+}
+
+// Close every open menu (but `except`); returns whether one was open.
+// refocus: give focus back to the closed menu's button (Esc from the keyboard)
+function closeMenus(refocus = false, except = null) {
+  let closed = false;
+  for (const id of MENUS) {
+    const m = $(id);
+    if (m === except || !m.classList.contains('open')) continue;
+    const inside = m.contains(document.activeElement);
+    setMenu(m, false);
+    if (refocus && inside) m.querySelector('.menu-btn').focus();
+    closed = true;
+  }
+  return closed;
+}
+
+function wireMenus() {
+  for (const id of MENUS) {
+    const m = $(id);
+    const btn = m.querySelector('.menu-btn');
+    // detail 0 = a keyboard press (Enter / Space): focus moves into the panel
+    btn.onclick = (e) => setMenu(m, !m.classList.contains('open'), e.detail === 0);
+    // an action closes its menu; a toggle (Ortho, Z up) leaves it open to show its new state
+    m.querySelector('.menu-panel').addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b && m.classList.contains('folded') && !b.hasAttribute('aria-pressed')) setMenu(m, false);
+    });
+    // Tab out of an open menu closes it
+    m.addEventListener('focusout', (e) => { if (e.relatedTarget && !m.contains(e.relatedTarget)) setMenu(m, false); });
+  }
+  // choosing a section axis closes the menu, so the slider it shows is in view
+  // (and the narrow layout's scrolling row brings the slider into view)
+  $('secaxis').addEventListener('change', (e) => {
+    closeMenus();
+    if (e.target.value !== 'off') requestAnimationFrame(() => $('secflip').scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.menu')) closeMenus();
+  }, true);
+  $('tb').addEventListener('scroll', () => closeMenus());
+  addEventListener('resize', () => { closeMenus(); refold(); });
+  new ResizeObserver(() => refold()).observe(document.querySelector('header'));
+  refold();
+}
+
 // Toolbar state: a button that would do nothing is disabled (Hide / Isolate
 // with nothing selected, Show all with nothing hidden), the toggles show
 // whether they are on, and the section slider says where the cut is.
@@ -550,10 +647,16 @@ function updateButtons() {
   $('fit').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.up === 'z'));
+  // a folded Show menu with nothing it could do is disabled, like its items
+  $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   const on = app.section.axis !== 'off';
+  $('secgroup').classList.toggle('off', !on);
   $('secpos').disabled = !on;
   $('secflip').disabled = !on;
   $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
+  // the row's contents changed width: fold again (not on every slider move)
+  const key = `${on}|${$('export').disabled}`;
+  if (key !== foldKey) { foldKey = key; refold(); }
   const p = sectionPlane();
   const unit = !app.header ? '' : app.header.units === 'millimeter' ? 'mm' : app.header.units || '';
   $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${(p[3] * (app.section.flip ? -1 : 1)).toFixed(1)} ${unit}` : '';
@@ -1036,6 +1139,21 @@ const fileName = (url) => {
   return tail;
 };
 
+// A fetch that throws had no usable answer. From another site the usual
+// cause is that the site does not allow other web pages to read its files
+// (no CORS headers) -- the browser hides which, so the message names both.
+function fetchFailedText(url, name, e) {
+  let host = null;
+  try {
+    const u = new URL(url, location.href);
+    if (u.origin !== location.origin) host = u.host;
+  } catch { /* an unparsable URL: treated as this site's */ }
+  return host
+    ? `could not download ${name} from ${host}: that site does not let other web pages load its files (no CORS), `
+      + 'or it did not answer. Download the file and open it here instead.'
+    : `could not download ${name}: the server did not answer (${e.message || e})`;
+}
+
 async function loadUrl(url) {
   const seq = beginLoad();
   setStatus('loading', `fetching ${url}`);
@@ -1048,7 +1166,7 @@ async function loadUrl(url) {
   try {
     res = await fetch(url);
   } catch (e) {
-    throw new Error(`could not download ${name}: the server did not answer (${e.message || e})`);
+    throw new Error(fetchFailedText(url, name, e));
   }
   if (stale(seq)) return;
   if (!res.ok) {
@@ -1679,14 +1797,7 @@ function wireInput() {
   openLbl.onkeydown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('open').click(); }
   };
-  // A preset is an action, not a state: the dropdown goes back to "View" as
-  // it is opened by mouse or touch (pointerdown) and when it loses focus, so
-  // the same preset can be chosen again even though orbiting, pinching or the
-  // wheel never take focus from it. It is NOT reset on change: arrow keys
-  // fire change per press, and a reset there snapped every press back.
-  $('viewsel').onchange = (e) => { if (e.target.value) setView(e.target.value); };
-  $('viewsel').onblur = (e) => { e.target.value = ''; };
-  $('viewsel').addEventListener('pointerdown', (e) => { e.target.value = ''; });
+  wireMenus();
   // The narrow toolbar is one scrolling row: let a plain mouse wheel scroll it
   // sideways, and fade its right edge while more controls lie past it.
   // #tb is the scrolling row; the fade is an overlay on the header around it.
@@ -1820,18 +1931,17 @@ function wireInput() {
     // only fields that take typed text swallow the letters; a focused tree
     // checkbox or button must not disable the shortcuts
     const t = e.target;
-    // The View preset dropdown keeps focus after a pick (it is an action
-    // menu, not a field): the shortcuts stay live there, and preventDefault
-    // stops its type-ahead from turning f into Front and i into Iso.
+    // Esc closes an open toolbar menu first, wherever focus is (the section
+    // axis dropdown sits in one)
+    if (e.key === 'Escape' && closeMenus(true)) { e.preventDefault(); return; }
     const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
-      || (t.tagName === 'SELECT' && t.id !== 'viewsel') || t.tagName === 'TEXTAREA' || t.isContentEditable;
+      || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
     if (typed) return;
-    // Esc closes an open parts panel first (the narrow layout's slide-out);
-    // the next Esc clears the selection
+    // then an open parts panel (the narrow layout's slide-out); the next Esc
+    // clears the selection
     const act = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
       i: () => $('isolate').click(), a: () => $('showall').click() }[e.key];
     if (!act) return;
-    if (t.id === 'viewsel') e.preventDefault();
     act();
   });
 }

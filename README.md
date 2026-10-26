@@ -27,7 +27,7 @@ URL parameters:
 
 | Parameter | Effect |
 |---|---|
-| `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start |
+| `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start; a file on another site loads only if that site sends CORS headers (`Access-Control-Allow-Origin`), as GitHub raw files, most CDNs and CORS-enabled buckets do |
 | `backend=webgpu\|webgl2\|webgl1` | force one backend (default: try them in that order) |
 | `selftest=1` | after loading, pick the canvas centre and publish one JSON line in `<pre id="selftest">` (for automated checks) |
 
@@ -50,8 +50,11 @@ URL parameters:
   short touch screen (a landscape phone), the 3D view takes the whole screen.
   The parts panel slides out from the left over the view (**☰ Parts** in the
   toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
-  The toolbar becomes one scrolling row with the view presets in a **View**
-  dropdown. Rotating the device keeps the same part of the model framed.
+  Rotating the device keeps the same part of the model framed.
+- **A toolbar that fits.** The toolbar stays one row at every size: where
+  its controls do not fit, the view presets, Ortho, Z up and the section axis
+  fold into a **View** menu, then Isolate / Hide / Show all / Undo into a
+  **Show** menu. The section slider appears only while a section is on.
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
   shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
