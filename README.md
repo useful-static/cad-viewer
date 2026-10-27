@@ -199,6 +199,7 @@ files load too.
 | `js/edges.js`, `js/edges-worker.js` | the edge list (face boundaries; silhouette candidates inside curved faces) and each body's closed / area / volume facts, built by the converter or, for an older `.cadmesh`, in a worker |
 | `js/styles.js` | the display styles, their defaults and the paper edge colours |
 | `js/view-link.js` | a view as a URL hash and back |
+| `js/face-order.js` | the faces' draw order: solids, then sheet bodies with less depth bias, so a sheet lying on a solid's face (a board's pads) shows |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |
 | `js/converter-choice.js` | whether an import runs on the multi-core build |
@@ -213,7 +214,7 @@ files load too.
 ```sh
 npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes,
                 # test-converter-choice, test-source-units, test-units, test-edges,
-                # test-styles, test-view-link
+                # test-styles, test-view-link, test-face-order
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion,
                 # CADV_INCH_STEP=<an inch STEP file> to add a real inch file
 ```

@@ -2,6 +2,8 @@
 // one pixel whose bytes are copied back as the mesh id. Same shading model,
 // state texture and clip plane as the WebGL backend (renderer-webgl.js).
 
+import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
+
 const WGSL = /* wgsl */`
 struct U {
   viewProj : mat4x4f,
@@ -309,15 +311,24 @@ export class WebGPURenderer {
     // The faces are always pushed back a little, so their own boundary edges
     // win the depth test along them: NEGATIVE, since reverse-Z puts far at 0.
     // The pick pass has the same bias, so it sees the shaded pass's depths.
-    const bias = { depthBias: -2, depthBiasSlopeScale: -1 };
-    this.shadePipe = mk('fsShade', this.format, MSAA, bias);
-    this.pickPipe = mk('fsPick', 'rgba8unorm', 1, bias);
-    // the hidden-line styles' depth-only faces, and X-ray's blended ones
-    this.depthPipe = mk('fsShade', this.format, MSAA, bias, { writeMask: 0 });
+    // Two of each face pipeline: the solids', and the sheets' with less bias,
+    // so a sheet lying on a solid's face shows (face-order.js; this float
+    // depth's unit is finer than WebGL's, hence the units doubled).
     const blendOver = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
-    this.xrayPipe = mk('fsShade', this.format, MSAA, { ...bias, depthWriteEnabled: false }, { blend: blendOver });
-    // the cut fill: the same bias, so its depths equal the depth-only pass's
-    this.fillPipe = mk('fsFill', this.format, MSAA, { ...bias, depthWriteEnabled: false, depthCompare: 'greater-equal' });
+    const facePipes = ([slope, units]) => {
+      const bias = { depthBias: -2 * units, depthBiasSlopeScale: -slope };
+      return {
+        shade: mk('fsShade', this.format, MSAA, bias),
+        pick: mk('fsPick', 'rgba8unorm', 1, bias),
+        // the hidden-line styles' depth-only faces, and X-ray's blended ones
+        depth: mk('fsShade', this.format, MSAA, bias, { writeMask: 0 }),
+        xray: mk('fsShade', this.format, MSAA, { ...bias, depthWriteEnabled: false }, { blend: blendOver }),
+        // the cut fill: the same bias, so its depths equal the depth-only pass's
+        fill: mk('fsFill', this.format, MSAA, { ...bias, depthWriteEnabled: false, depthCompare: 'greater-equal' }),
+      };
+    };
+    this.solidPipes = facePipes(BIAS_SOLID);
+    this.sheetPipes = facePipes(BIAS_SHEET);
     // Edge passes: their own uniforms in group 1, one buffer per pass slot
     this.passBgl = device.createBindGroupLayout({
       entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
@@ -390,6 +401,8 @@ export class WebGPURenderer {
     for (const [name, a] of Object.entries({ position: mesh.position, normal: mesh.normal, color: mesh.color, id: mesh.id, index: mesh.index })) {
       if (a.byteLength > max) throw new Error(`${name} data is ${(a.byteLength / 2 ** 20).toFixed(0)} MiB, over this GPU's ${(max / 2 ** 20).toFixed(0)} MiB buffer limit`);
     }
+    // solids first, then sheets: drawn with different biases (face-order.js)
+    const order = sheetsLast(mesh.index, mesh.header && mesh.header.meshes);
     d.pushErrorScope('out-of-memory');
     d.pushErrorScope('validation');
     const made = []; // every buffer created, so a throw part-way frees them all
@@ -404,7 +417,7 @@ export class WebGPURenderer {
     let err = null;
     try {
       for (const a of [mesh.position, mesh.normal, mesh.color, mesh.id]) mk(a, GPUBufferUsage.VERTEX);
-      mk(mesh.index, GPUBufferUsage.INDEX);
+      mk(order.index, GPUBufferUsage.INDEX);
     } catch (e) {
       err = e;
     }
@@ -418,6 +431,7 @@ export class WebGPURenderer {
     this.vbs = made.slice(0, 4);
     this.ib = made[4];
     this.drawCount = mesh.index.length;
+    this.split = order.split;
     this.drawn = mesh;
     for (const b of old) b.destroy();
   }
@@ -535,12 +549,21 @@ export class WebGPURenderer {
     });
   }
 
-  _encodeDraw(pass, pipe) {
-    pass.setPipeline(pipe);
+  // kind: shade | pick | depth | xray | fill. The solids, then the sheets,
+  // each with its own pipeline's bias.
+  _encodeDraw(pass, kind) {
     pass.setBindGroup(0, this.bind);
     this.vbs.forEach((b, i) => pass.setVertexBuffer(i, b));
     pass.setIndexBuffer(this.ib, 'uint32');
-    pass.drawIndexed(this.drawCount);
+    const split = Math.min(this.split ?? this.drawCount, this.drawCount);
+    if (split) {
+      pass.setPipeline(this.solidPipes[kind]);
+      pass.drawIndexed(split);
+    }
+    if (this.drawCount > split) {
+      pass.setPipeline(this.sheetPipes[kind]);
+      pass.drawIndexed(this.drawCount - split, 1, split);
+    }
   }
 
   render(frame) {
@@ -561,9 +584,8 @@ export class WebGPURenderer {
       // faces: shaded, depth only (the hidden-line styles), none (Wire), or
       // blended at a quarter without depth (X-ray)
       const faces = (frame.style && frame.style.faces) || 'shade';
-      const fp = { shade: this.shadePipe, depth: this.depthPipe, xray: this.xrayPipe }[faces];
-      if (fp) this._encodeDraw(pass, fp);
-      if (faces === 'depth' && frame.clip && frame.fill) this._encodeDraw(pass, this.fillPipe);
+      if (['shade', 'depth', 'xray'].includes(faces)) this._encodeDraw(pass, faces);
+      if (faces === 'depth' && frame.clip && frame.fill) this._encodeDraw(pass, 'fill');
       if (edges) {
         const passes = (frame.edgePasses || [{ depth: 'lequal', mode: 0 }]).slice(0, this.passSlots.length);
         const outline = frame.style && frame.style.outline && this.silCount;
@@ -640,7 +662,7 @@ export class WebGPURenderer {
         depthStencilAttachment: { view: this.pickDepth.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
       });
       pass.setScissorRect(x, y, 1, 1);
-      this._encodeDraw(pass, this.pickPipe);
+      this._encodeDraw(pass, 'pick');
       pass.end();
       enc.copyTextureToBuffer({ texture: this.pickTex, origin: [x, y] }, { buffer: this.readBuf, bytesPerRow: 256 }, [1, 1]);
       this.device.queue.submit([enc.finish()]);

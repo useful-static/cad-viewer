@@ -9,6 +9,9 @@
 // some GPUs -- then sees only small, well-conditioned values. (uClipV / uEyeV
 // are separate from any fragment uniform: GLSL ES 1.00 refuses to link a
 // uniform declared in both stages with different precision.)
+
+import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
+
 const VS = `
 attribute vec3 aPos;
 attribute vec4 aNrm;
@@ -352,7 +355,9 @@ export class WebGLRenderer {
     // clear EVERY stale error flag (WebGL may hold several at once) so the
     // checks below see only ours
     for (let i = 0; i < 32 && gl.getError() !== gl.NO_ERROR; i++);
-    let { position, normal, color, id, index } = mesh;
+    let { position, normal, color, id } = mesh;
+    // solids first, then sheets: drawn with different biases (face-order.js)
+    const { index, split } = sheetsLast(mesh.index, mesh.header && mesh.header.meshes);
     if (!this.uintIndex) {
       // Expand: one vertex per index. Costs memory, keeps WebGL1-only GPUs working.
       const n = index.length;
@@ -394,6 +399,7 @@ export class WebGLRenderer {
     this.ib = ib;
     this.indexed = this.uintIndex;
     this.drawCount = index.length;
+    this.split = split;
     this.drawn = mesh;
   }
 
@@ -606,11 +612,17 @@ export class WebGLRenderer {
     gl.uniform4f(u.uCapN, cn[0], cn[1], cn[2], 0);
   }
 
+  // Every face pass is biased (POLYGON_OFFSET_FILL on): the solids, then the
+  // sheets with less bias, so a sheet lying on a solid's face shows.
   _draw() {
     const gl = this.gl;
-    if (!this.drawCount) return;
-    if (this.indexed) gl.drawElements(gl.TRIANGLES, this.drawCount, gl.UNSIGNED_INT, 0);
-    else gl.drawArrays(gl.TRIANGLES, 0, this.drawCount);
+    const split = Math.min(this.split ?? this.drawCount, this.drawCount);
+    for (const [first, count, bias] of [[0, split, BIAS_SOLID], [split, this.drawCount - split, BIAS_SHEET]]) {
+      if (!count) continue;
+      gl.polygonOffset(bias[0], bias[1]);
+      if (this.indexed) gl.drawElements(gl.TRIANGLES, count, gl.UNSIGNED_INT, first * 4);
+      else gl.drawArrays(gl.TRIANGLES, first, count);
+    }
   }
 
   render(frame) {
@@ -630,8 +642,7 @@ export class WebGLRenderer {
     // 'depth' (the hidden-line styles) writes their depth only; 'none' (Wire)
     // draws none; 'xray' blends them at a quarter, writing no depth.
     if (faces !== 'none') {
-      gl.enable(gl.POLYGON_OFFSET_FILL);
-      gl.polygonOffset(1, 1);
+      gl.enable(gl.POLYGON_OFFSET_FILL); // _draw sets the offsets
       if (faces === 'depth') gl.colorMask(false, false, false, false);
       if (faces === 'xray') {
         gl.depthMask(false);
@@ -718,8 +729,7 @@ export class WebGLRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this._bind(this.pickProg, frame);
-    gl.enable(gl.POLYGON_OFFSET_FILL); // the shaded pass's face depths
-    gl.polygonOffset(1, 1);
+    gl.enable(gl.POLYGON_OFFSET_FILL); // the shaded pass's face depths (_draw sets the offsets)
     this._draw();
     gl.disable(gl.POLYGON_OFFSET_FILL);
     const px = new Uint8Array(4);
