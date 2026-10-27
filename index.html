@@ -55,14 +55,27 @@
     width:max-content; max-width:calc(100vw - 16px); padding:8px; background:var(--panel);
     border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   .menu.folded .presets { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; flex-basis:100%; }
-  .menu.folded #secaxis { flex-basis:100%; }
-  #showmenu.folded > .menu-panel { flex-direction:column; align-items:stretch; }
-  /* the section slider, readout and Flip only while a section is on; while
-     main.js measures whether the row fits they count as shown, so turning a
-     section on never refolds the toolbar */
-  #secgroup.off { display:none; }
-  #tb.measuring #secgroup.off { display:inline-flex; }
-  #tb.measuring .secval:empty { display:inline-block; }
+  :is(#showmenu, #filemenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
+  #panelbtn .lbl { margin-left:5px; }
+  /* The options bar along the bottom of the 3D view: one row per tool that
+     is on. Each row scrolls sideways where it is too narrow; its frame (.opt,
+     not scrolling) carries the right-edge fade, as the header does for #tb. */
+  #optbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-direction:column;
+    background:var(--panel); border-top:1px solid var(--line); }
+  #optbar[hidden], .opt[hidden] { display:none; }
+  .opt { position:relative; min-width:0; }
+  .opt + .opt { border-top:1px solid var(--line); }
+  .opt-row { display:flex; gap:6px; align-items:center; padding:5px 10px; overflow-x:auto; scrollbar-width:thin;
+    scroll-padding-inline-end:40px; }
+  .opt-row > * { flex:none; }
+  .opt.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
+    background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
+  .seg { display:inline-flex; }
+  .seg button { border-radius:0; margin-left:-1px; }
+  .seg button:first-child { border-radius:4px 0 0 4px; margin-left:0; }
+  .seg button:last-child { border-radius:0 4px 4px 0; }
+  .seg button[aria-pressed=true] { position:relative; } /* its orange border over the neighbours' */
+  #secpos { width:clamp(110px, 32vw, 360px); }
   #secval { min-width:11ch; }
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
   #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
@@ -111,7 +124,8 @@
   @keyframes sweep { from { transform:translateX(-100%); } to { transform:translateX(333%); } }
   @media (prefers-reduced-motion: reduce) { .pbar.busy #pfill { animation:none; width:100%; opacity:.5; } #pfill { transition:none; } }
   #pdetail { color:var(--dim); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-  #hover { position:absolute; left:10px; bottom:8px; color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
+  /* above the options bar (main.js sets --optbar-h to its height) */
+  #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
   footer { grid-column: 1 / 3; display:flex; gap:12px; padding:3px 10px; background:var(--panel); border-top:1px solid var(--line); font-size:12px; color:var(--dim); }
   #status[data-state=error] { color:#ff7b7b; }
   #status[data-state=ready] { color:#9fd8a6; }
@@ -205,7 +219,7 @@
     header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    header .title, #export:disabled { display:none; }
+    header .title, #export:disabled, #panelbtn .lbl { display:none; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
     /* The parts panel slides out from the left OVER the 3D view (it shares
@@ -237,24 +251,26 @@
 <body>
 <header><div id="tb">
   <span class="title">CAD viewer</span>
-  <button id="panelbtn" aria-expanded="false" aria-controls="parts"><span aria-hidden="true">☰</span> Parts</button>
+  <!-- narrow layout: an icon, named by aria-label -->
+  <button id="panelbtn" aria-expanded="false" aria-controls="parts" aria-label="Parts" title="Parts list"><span aria-hidden="true">☰</span><span class="lbl">Parts</span></button>
   <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz" hidden></label>
-  <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button>
+  <!-- A .menu shows its controls in the row where they fit, and folds them
+       behind its button into a drop-down panel where they do not (main.js
+       measures the row and folds View, then Save, then Show). In the narrow
+       layout this one is File: main.js moves Open… into it and it is
+       always folded. -->
+  <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model">Save</button>
+    <div class="menu-panel" id="filepanel" aria-label="Save">
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button>
+    </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
-  <!-- A .menu shows its controls in the row where they fit, and folds them
-       behind its button into a drop-down panel where they do not (the CSS
-       media queries below decide which; main.js opens and closes it) -->
   <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis and section">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
       <span class="presets"><button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button></span>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective)">Ortho</button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
-      <select id="secaxis" autocomplete="off" aria-label="Section plane axis" title="Cut the model with a plane across X, Y or Z"><option value="off">Section: off</option><option value="x">Section: X</option><option value="y">Section: Y</option><option value="z">Section: Z</option></select>
+      <button id="section" aria-pressed="false" title="Cut the model with a plane; its controls show along the bottom of the view">Section</button>
     </div></div>
-  <!-- shown only while a section is on (they are disabled, and hidden, when it is off) -->
-  <span class="group" id="secgroup"><input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
-  <span id="secval" class="secval"></span>
-  <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button></span>
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
     <div class="menu-panel" id="showpanel" aria-label="Show">
@@ -276,6 +292,18 @@
 </aside>
 <div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div>
+  <!-- The options bar: the controls of the tools that are on, one row each
+       (scrolling sideways where it is too narrow), each led by the tool's
+       name as a pressed toggle that turns it off -->
+  <div id="optbar" hidden>
+    <div class="opt" id="secopt" hidden><div class="opt-row">
+      <button id="secoff" aria-pressed="true" title="Turn the section off">Section <span aria-hidden="true">×</span></button>
+      <span class="seg" role="group" aria-label="Section plane axis"><button data-axis="x" aria-pressed="false" title="Cut across X">X</button><button data-axis="y" aria-pressed="false" title="Cut across Y">Y</button><button data-axis="z" aria-pressed="false" title="Cut across Z">Z</button></span>
+      <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
+      <span id="secval" class="secval"></span>
+      <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
+    </div></div>
+  </div>
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>
     <h2>Open a CAD file</h2>

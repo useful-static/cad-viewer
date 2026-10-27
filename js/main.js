@@ -38,7 +38,7 @@ const app = {
   hoverSeq: 0,
   viewGen: 0,
   cam: { target: [0, 0, 0], dist: 1000, yaw: 0.7, pitch: 0.45, fov: Math.PI / 4, ortho: false, up: 'y', viewRadius: 500 },
-  section: { axis: 'off', t: 0.5, flip: false },
+  section: { axis: 'off', t: 0.5, flip: false, last: 'z' }, // last: the axis it turns on at
   frameQueued: false,
   frameCount: 0,
   // the colour scheme shown (js/palettes.js), remembered in this browser;
@@ -457,8 +457,22 @@ function fitTo(bbox) {
   c.target = s.center;
   c.viewRadius = s.radius;
   const box = $('stage');
-  const aspect = box.clientWidth / Math.max(1, box.clientHeight);
-  c.dist = fitDistance(s.radius, c.fov, aspect);
+  const h = Math.max(1, box.clientHeight);
+  const aspect = box.clientWidth / h;
+  // The options bar covers the bottom of the view: fit in the part above it
+  // (a narrower vertical angle, the same width), and centre there by moving
+  // the target down by half the bar, so the model sits above the bar.
+  const bar = Math.min(optbarHeight(), h - 1);
+  if (bar > 0) {
+    const vis = h - bar;
+    const fov = 2 * Math.atan(Math.tan(c.fov / 2) * vis / h);
+    c.dist = fitDistance(s.radius, fov, box.clientWidth / vis);
+    const perPx = (2 * c.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
+    const up = camUp(c);
+    c.target = s.center.map((v, k) => v - up[k] * (bar / 2) * perPx);
+  } else {
+    c.dist = fitDistance(s.radius, c.fov, aspect);
+  }
   // this fit is for the stage as it is NOW: the resize refit must measure
   // later aspect changes from here, or a layout change in the same task
   // (the parts drawer growing as a load fills the tree) is applied twice
@@ -540,17 +554,42 @@ function undoVisibility() {
 }
 
 // ---------- toolbar menus ----------
-// The View and Show groups stand in the toolbar row where it has room for
-// them and fold behind a menu button where it has not. Whether the row fits
-// is MEASURED (one row on a wrapping desktop toolbar, no sideways scroll on
-// the narrow one), so a width breakpoint cannot go stale as labels or fonts
-// change. View is decided with the section controls and Save counted as
-// shown, so turning a section on never folds away the dropdown just used;
-// Show is decided on the row as it is, and folds while a section is on if it
-// must.
+// The View, Save and Show groups stand in the toolbar row where it has room
+// for them and fold behind a menu button where it has not, in that order
+// (FOLD_ORDER). Whether the row fits is MEASURED (one row on a wrapping
+// desktop toolbar, no sideways scroll on the narrow one), so a width
+// breakpoint cannot go stale as labels or fonts change. It is measured with
+// Save .cadmesh counted as shown, so a load that enables it never refolds
+// the row. The toolbar holds only modes and actions; a tool's own controls
+// are in the options bar, so turning a tool on never refolds it either.
+// In the narrow layout the Save group is File: Open… moves into it, and it
+// is always folded.
 
-const MENUS = ['viewmenu', 'showmenu'];
-let foldKey = '';
+const FOLD_ORDER = ['viewmenu', 'filemenu', 'showmenu'];
+// what sits over the 3D view and takes its own pointer input
+const OVER_VIEW = '.card, #optbar';
+const MENUS = FOLD_ORDER;
+
+const narrowLayout = () => getComputedStyle($('tb')).flexWrap === 'nowrap';
+
+// Open… stands in the row (wide), or is File's first item (narrow)
+function placeOpen(narrow) {
+  const lbl = $('open').parentElement;
+  const menu = $('filemenu');
+  const panel = $('filepanel');
+  const btn = menu.querySelector('.menu-btn');
+  if (narrow && lbl.parentElement !== panel) panel.prepend(lbl);
+  else if (!narrow && lbl.parentElement === panel) menu.before(lbl);
+  btn.textContent = narrow ? 'File' : 'Save';
+  btn.title = narrow ? 'Open a file, or save the converted model' : 'Save the converted model';
+  panel.setAttribute('aria-label', btn.textContent);
+}
+
+// a folded menu with nothing it could do is disabled, like its items
+function syncMenuButtons() {
+  $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && !$('filepanel').contains($('open'));
+}
 
 function toolbarFits(tb) {
   if (getComputedStyle(tb).flexWrap === 'nowrap') return tb.scrollWidth <= tb.clientWidth + 1;
@@ -564,12 +603,17 @@ function toolbarFits(tb) {
 function refold() {
   const tb = $('tb');
   const was = MENUS.map((id) => $(id).classList.contains('folded'));
-  for (const id of MENUS) $(id).classList.remove('folded');
+  const narrow = narrowLayout();
+  placeOpen(narrow);
+  for (const id of MENUS) $(id).classList.toggle('folded', narrow && id === 'filemenu');
   tb.classList.add('measuring');
-  $('viewmenu').classList.toggle('folded', !toolbarFits(tb));
+  for (const id of FOLD_ORDER) {
+    if (toolbarFits(tb)) break;
+    $(id).classList.add('folded');
+  }
   tb.classList.remove('measuring');
-  $('showmenu').classList.toggle('folded', !toolbarFits(tb));
   MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
+  syncMenuButtons();
 }
 
 function setMenu(menu, open, focusFirst = false) {
@@ -585,7 +629,7 @@ function setMenu(menu, open, focusFirst = false) {
     panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - panel.offsetWidth - 8))}px`;
     panel.style.maxHeight = `${innerHeight - top - 8}px`;
     panel.style.overflowY = 'auto';
-    if (focusFirst) panel.querySelector('button:not(:disabled), select')?.focus();
+    if (focusFirst) panel.querySelector('button:not(:disabled), select, label.btn')?.focus();
   } else {
     menu.classList.remove('open');
   }
@@ -613,20 +657,15 @@ function wireMenus() {
     const btn = m.querySelector('.menu-btn');
     // detail 0 = a keyboard press (Enter / Space): focus moves into the panel
     btn.onclick = (e) => setMenu(m, !m.classList.contains('open'), e.detail === 0);
-    // an action closes its menu; a toggle (Ortho, Z up) leaves it open to show its new state
+    // an action (Open… included) closes its menu; a toggle (Ortho, Z up)
+    // leaves it open to show its new state
     m.querySelector('.menu-panel').addEventListener('click', (e) => {
-      const b = e.target.closest('button');
+      const b = e.target.closest('button, label.btn');
       if (b && m.classList.contains('folded') && !b.hasAttribute('aria-pressed')) setMenu(m, false);
     });
     // Tab out of an open menu closes it
     m.addEventListener('focusout', (e) => { if (e.relatedTarget && !m.contains(e.relatedTarget)) setMenu(m, false); });
   }
-  // choosing a section axis closes the menu, so the slider it shows is in view
-  // (and the narrow layout's scrolling row brings the slider into view)
-  $('secaxis').addEventListener('change', (e) => {
-    closeMenus();
-    if (e.target.value !== 'off') requestAnimationFrame(() => $('secflip').scrollIntoView({ block: 'nearest', inline: 'nearest' }));
-  });
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest('.menu')) closeMenus();
   }, true);
@@ -634,6 +673,66 @@ function wireMenus() {
   addEventListener('resize', () => { closeMenus(); refold(); });
   new ResizeObserver(() => refold()).observe(document.querySelector('header'));
   refold();
+}
+
+// ---------- options bar ----------
+// Along the bottom of the 3D view, the controls of each tool that is on (one
+// .opt row each). It is hidden while a card (empty state, loading) shows, and
+// its height is published as --optbar-h, which lifts #hover above it and
+// insets Fit.
+
+function syncOptbar() {
+  const bar = $('optbar');
+  const card = !$('empty').hidden || !$('progress').hidden;
+  bar.hidden = card || ![...bar.children].some((o) => !o.hidden);
+  $('stage').style.setProperty('--optbar-h', `${optbarHeight()}px`);
+  for (const o of bar.children) optFade(o);
+}
+
+const optbarHeight = () => ($('optbar').hidden ? 0 : $('optbar').offsetHeight);
+
+// a row's right edge fades while more of it lies past the edge (as #tb's)
+function optFade(o) {
+  const row = o.firstElementChild;
+  o.classList.toggle('more-right', !o.hidden && row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+  o.style.setProperty('--sbh', `${Math.max(0, row.offsetHeight - row.clientHeight)}px`);
+}
+
+// Section on (at the axis last used in this session, else Z) or off. Turned
+// on, focus goes to its toggle in the options bar ("Section ×"); turned off
+// from there, back to where it was turned on.
+function setSection(axis, focus = false) {
+  const was = app.section.axis;
+  app.section.axis = axis;
+  if (axis !== 'off') app.section.last = axis;
+  updateButtons();
+  viewChanged();
+  if (!focus) return;
+  if (axis !== 'off' && was === 'off') $('secoff').focus();
+  else if (axis === 'off') ($('viewmenu').classList.contains('folded') ? $('viewmenu').querySelector('.menu-btn') : $('section')).focus();
+}
+
+function wireOptbar() {
+  $('section').onclick = () => {
+    closeMenus();
+    setSection(app.section.axis === 'off' ? app.section.last : 'off', true);
+  };
+  $('secoff').onclick = () => setSection('off', true);
+  for (const b of document.querySelectorAll('[data-axis]')) b.onclick = () => setSection(b.dataset.axis);
+  for (const o of $('optbar').children) {
+    const row = o.firstElementChild;
+    row.addEventListener('scroll', () => optFade(o));
+    // a plain mouse wheel scrolls the row sideways, as on #tb
+    row.addEventListener('wheel', (e) => {
+      if (row.scrollWidth <= row.clientWidth || e.deltaX || !e.deltaY) return;
+      e.preventDefault();
+      row.scrollLeft += e.deltaY * ([1, 16, row.clientWidth][e.deltaMode] ?? 1);
+    }, { passive: false });
+  }
+  new ResizeObserver(syncOptbar).observe($('optbar'));
+  // the cards come and go in setStatus; the bar follows them
+  const cards = new MutationObserver(syncOptbar);
+  for (const id of ['empty', 'progress']) cards.observe($(id), { attributes: true, attributeFilter: ['hidden'] });
 }
 
 // Toolbar state: a button that would do nothing is disabled (Hide / Isolate
@@ -647,16 +746,15 @@ function updateButtons() {
   $('fit').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.up === 'z'));
-  // a folded Show menu with nothing it could do is disabled, like its items
-  $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
+  syncMenuButtons();
   const on = app.section.axis !== 'off';
-  $('secgroup').classList.toggle('off', !on);
+  $('section').setAttribute('aria-pressed', String(on));
+  $('secopt').hidden = !on;
+  for (const b of document.querySelectorAll('[data-axis]')) b.setAttribute('aria-pressed', String(b.dataset.axis === app.section.axis));
   $('secpos').disabled = !on;
   $('secflip').disabled = !on;
   $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
-  // the row's contents changed width: fold again (not on every slider move)
-  const key = `${on}|${$('export').disabled}`;
-  if (key !== foldKey) { foldKey = key; refold(); }
+  syncOptbar();
   const p = sectionPlane();
   const unit = !app.header ? '' : app.header.units === 'millimeter' ? 'mm' : app.header.units || '';
   $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${(p[3] * (app.section.flip ? -1 : 1)).toFixed(1)} ${unit}` : '';
@@ -1622,10 +1720,10 @@ function wireInput() {
   };
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
   stage.addEventListener('pointerdown', (e) => {
-    // The cards (empty state, progress) sit inside the view: a press on them
-    // is theirs. Capturing it for an orbit retargeted the click to the view,
-    // so "Choose a file…" and Cancel never received it.
-    if (e.target.closest('.card')) return;
+    // The cards (empty state, progress) and the options bar sit inside the
+    // view: a press on them is theirs. Capturing it for an orbit retargeted
+    // the click to the view, so "Choose a file…" and Cancel never received it.
+    if (e.target.closest(OVER_VIEW)) return;
     if (e.pointerType === 'touch') {
       touches.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
@@ -1705,6 +1803,13 @@ function wireInput() {
     }
     if (!drag) {
       if (!app.mesh || e.pointerType === 'touch') return;
+      if (e.target.closest(OVER_VIEW)) { // over the bar: nothing of the model is hovered
+        hoverXY = null;
+        if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+        app.hoverSeq++;
+        setHover(0);
+        return;
+      }
       hoverXY = devicePx(e);
       const wait = 60 - (performance.now() - hoverT);
       if (wait <= 0) hoverPick();
@@ -1773,11 +1878,11 @@ function wireInput() {
     if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
   });
   stage.addEventListener('dblclick', (e) => {
-    if (lastType === 'touch' || e.target.closest('.card')) return; // a double-tap / a card's own clicks
+    if (lastType === 'touch' || e.target.closest(OVER_VIEW)) return; // a double-tap / a card's or the bar's own clicks
     fitAfterClick();
   });
   stage.addEventListener('wheel', (e) => {
-    if (e.target.closest('.card')) return; // a card scrolls (a long error), the view stays put
+    if (e.target.closest(OVER_VIEW)) return; // a card scrolls (a long error), the bar scrolls sideways; the view stays put
     e.preventDefault();
     // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch)
     zoomBy(app.cam, Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015)), app.sphere.radius, app.stageAspect);
@@ -1810,6 +1915,7 @@ function wireInput() {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('open').click(); }
   };
   wireMenus();
+  wireOptbar();
   // The narrow toolbar is one scrolling row: let a plain mouse wheel scroll it
   // sideways, and fade its right edge while more controls lie past it.
   // #tb is the scrolling row; the fade is an overlay on the header around it.
@@ -1898,7 +2004,6 @@ function wireInput() {
     pushState();
     viewChanged();
   };
-  $('secaxis').onchange = (e) => { app.section.axis = e.target.value; updateButtons(); viewChanged(); };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; updateButtons(); viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
   const pal = $('palette');
@@ -1943,8 +2048,7 @@ function wireInput() {
     // only fields that take typed text swallow the letters; a focused tree
     // checkbox or button must not disable the shortcuts
     const t = e.target;
-    // Esc closes an open toolbar menu first, wherever focus is (the section
-    // axis dropdown sits in one)
+    // Esc closes an open toolbar menu first, wherever focus is
     if (e.key === 'Escape' && closeMenus(true)) { e.preventDefault(); return; }
     const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
       || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;

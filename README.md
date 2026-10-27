@@ -51,13 +51,16 @@ URL parameters:
   wherever a touch screen is present.
 - **Phones and narrow windows.** Under 700 px wide, in portrait, or on a
   short touch screen (a landscape phone), the 3D view takes the whole screen.
-  The parts panel slides out from the left over the view (**☰ Parts** in the
+  The parts panel slides out from the left over the view (**☰** in the
   toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
-  Rotating the device keeps the same part of the model framed.
+  Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
+  the same part of the model framed.
 - **A toolbar that fits.** The toolbar stays one row at every size: where
-  its controls do not fit, the view presets, Ortho, Z up and the section axis
-  fold into a **View** menu, then Isolate / Hide / Show all / Undo into a
-  **Show** menu. The section slider appears only while a section is on.
+  its controls do not fit, the view presets, Ortho, Z up and Section fold
+  into a **View** menu, then Save .cadmesh into a **Save** menu, then
+  Isolate / Hide / Show all / Undo into a **Show** menu. A tool's own
+  controls are in an **options bar** along the bottom of the view while the
+  tool is on, led by the tool's name as a toggle that turns it off.
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
   shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
@@ -73,7 +76,8 @@ URL parameters:
   zooms to the selection; hovering names the body under the cursor, and on a
   touch screen a tap names what it picked.
 - **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
-  on X / Y / Z with a slider, the cut's position in model units, and a flip.
+  (View > Section): along the bottom of the view, X / Y / Z, a slider, the
+  cut's position in model units, and a flip.
   Cut solids read as solid: what you see of a part's inside through the cut
   is shaded flat, like a cut face.
 - **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
