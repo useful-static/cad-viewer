@@ -61,10 +61,14 @@ URL parameters:
   Isolate / Hide / Show all / Undo into a **Show** menu. A tool's own
   controls are in an **options bar** along the bottom of the view while the
   tool is on, led by the tool's name as a toggle that turns it off.
+- **Full screen.** A button at the top right of the view takes the whole
+  screen, toolbar and parts panel included, where the browser allows it.
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
   shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
-  A show all, Esc clear. Toggles report their state, and load results and
+  A show all, Esc clear. Number keys set the view, on the digit row or the
+  numpad: 1 front, 3 right, 7 top, 0 iso, 9 the opposite view, 5 Ortho on
+  or off. Toggles report their state, and load results and
   errors are announced through a live region.
 - **Parts.** An assembly tree with a row for every body, a filter box, and
   visibility checkboxes (half-checked when only some parts are shown).

@@ -485,6 +485,47 @@ const VIEWS = {
   right: [Math.PI / 2, 0], top: [0, Math.PI / 2 - 1e-4], bottom: [0, -Math.PI / 2 + 1e-4],
 };
 
+// Number-key views (Blender's numpad layout): 1 front, 3 right, 7 top,
+// 0 iso, 5 Ortho on/off, 9 the opposite of the preset nearest the view.
+const VIEW_KEYS = { 1: 'front', 3: 'right', 7: 'top', 0: 'iso', 5: 'ortho', 9: 'opposite' };
+const OPPOSITE = { front: 'back', back: 'front', left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
+const VIEW_NAMES = { iso: 'Iso', front: 'Front', back: 'Back', left: 'Left', right: 'Right', top: 'Top', bottom: 'Bottom' };
+
+// the axis preset whose view direction is nearest the camera's (after a
+// free orbit too)
+function nearestPreset(cam) {
+  const d = camDir(cam);
+  let best = 'front', bestDot = -2;
+  for (const v of Object.keys(OPPOSITE)) {
+    const p = camDir({ q: quatFromView(VIEWS[v][0], VIEWS[v][1], cam.up) });
+    const dot = d[0] * p[0] + d[1] * p[1] + d[2] * p[2];
+    if (dot > bestDot) { bestDot = dot; best = v; }
+  }
+  return best;
+}
+
+let viewNameTimer = null;
+function viewKey(digit) {
+  if (!app.header) return;
+  const what = VIEW_KEYS[digit];
+  let name;
+  if (what === 'ortho') {
+    $('proj').click();
+    name = app.cam.ortho ? 'Orthographic' : 'Perspective';
+  } else {
+    const v = what === 'opposite' ? OPPOSITE[nearestPreset(app.cam)] : what;
+    setView(v);
+    name = VIEW_NAMES[v];
+  }
+  // name the result where the hovered part's name goes, so 9's is never a
+  // guess; the next hover replaces it
+  const hov = $('hover');
+  hov.textContent = name;
+  clearTimeout(viewNameTimer);
+  viewNameTimer = setTimeout(() => { if (hov.textContent === name) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, 1500);
+  announce(`${name} view`);
+}
+
 function setView(v) {
   [app.cam.yaw, app.cam.pitch] = VIEWS[v];
   app.cam.q = quatFromView(app.cam.yaw, app.cam.pitch, app.cam.up);
@@ -567,7 +608,7 @@ function undoVisibility() {
 
 const FOLD_ORDER = ['viewmenu', 'filemenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
-const OVER_VIEW = '.card, #optbar';
+const OVER_VIEW = '.card, #optbar, #fullscreen';
 const MENUS = FOLD_ORDER;
 
 const narrowLayout = () => getComputedStyle($('tb')).flexWrap === 'nowrap';
@@ -710,6 +751,41 @@ function setSection(axis, focus = false) {
   if (!focus) return;
   if (axis !== 'off' && was === 'off') $('secoff').focus();
   else if (axis === 'off') ($('viewmenu').classList.contains('folded') ? $('viewmenu').querySelector('.menu-btn') : $('section')).focus();
+}
+
+// ---------- full screen ----------
+// The whole page, toolbar and parts panel included. The standard API, or
+// WebKit's prefixed one (iPadOS before 16.4); the button is hidden where
+// there is neither (iPhone). The browser takes Esc to leave full screen, so
+// nothing the viewer does relies on Esc alone.
+
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+const fsApi = () => !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+
+function syncFullscreen() {
+  const on = !!fsElement();
+  const b = $('fullscreen');
+  b.setAttribute('aria-pressed', String(on));
+  b.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+  b.title = on ? 'Exit full screen' : 'Full screen';
+  queueFrame();
+}
+
+function wireFullscreen() {
+  const b = $('fullscreen');
+  b.hidden = !fsApi();
+  if (b.hidden) return;
+  b.onclick = () => {
+    const el = document.documentElement;
+    const p = fsElement()
+      ? (document.exitFullscreen || document.webkitExitFullscreen).call(document)
+      : (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+    // refused (no user gesture, a policy): nothing changes, the button says so
+    if (p && p.catch) p.catch(() => syncFullscreen());
+  };
+  document.addEventListener('fullscreenchange', syncFullscreen);
+  document.addEventListener('webkitfullscreenchange', syncFullscreen);
+  syncFullscreen();
 }
 
 function wireOptbar() {
@@ -1916,6 +1992,7 @@ function wireInput() {
   };
   wireMenus();
   wireOptbar();
+  wireFullscreen();
   // The narrow toolbar is one scrolling row: let a plain mouse wheel scroll it
   // sideways, and fade its right edge while more controls lie past it.
   // #tb is the scrolling row; the fade is an overlay on the header around it.
@@ -2053,10 +2130,20 @@ function wireInput() {
     const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
       || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
     if (typed) return;
+    // number keys: the digit row by the character typed (AZERTY types a
+    // digit with Shift), the numpad by its key code (whatever NumLock says)
+    const digit = /^[0-9]$/.test(e.key) ? e.key : /^Numpad[0-9]$/.test(e.code) ? e.code.slice(6) : null;
+    if (digit !== null && digit in VIEW_KEYS) {
+      e.preventDefault();
+      viewKey(digit);
+      return;
+    }
     // then an open parts panel (the narrow layout's slide-out); the next Esc
-    // clears the selection
+    // clears the selection. Letters match in either case, so Caps Lock does
+    // not turn the shortcuts off.
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const act = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
-      i: () => $('isolate').click(), a: () => $('showall').click() }[e.key];
+      i: () => $('isolate').click(), a: () => $('showall').click() }[k];
     if (!act) return;
     act();
   });

@@ -57,6 +57,23 @@
   .menu.folded .presets { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; flex-basis:100%; }
   :is(#showmenu, #filemenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
   #panelbtn .lbl { margin-left:5px; }
+  /* Number-key hints: in the open View panel only (the row keeps its width),
+     and not on a touch-only device (no keyboard to press them on) */
+  kbd, .kbdnote { display:none; }
+  .menu.folded kbd { display:inline-block; margin-left:6px; padding:0 4px; border:1px solid var(--line); border-radius:3px;
+    color:var(--dim); font:11px/15px ui-monospace, monospace; }
+  .menu.folded .kbdnote { display:block; flex-basis:100%; color:var(--dim); font-size:12px; }
+  .menu.folded .kbdnote kbd { margin:0 4px 0 0; }
+  @media (any-pointer: coarse) and (not (any-pointer: fine)) { .menu.folded :is(kbd, .kbdnote) { display:none; } }
+  /* Full screen: an icon over the 3D view's top right corner */
+  #fullscreen { position:absolute; top:8px; right:8px; z-index:1; width:32px; height:32px; padding:5px;
+    display:inline-flex; align-items:center; justify-content:center; background:rgba(37,42,50,.85); }
+  #fullscreen[hidden] { display:none; }
+  #fullscreen:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  #fullscreen svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
+  #fullscreen[aria-pressed=true] .fs-off { display:inline; }
+  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow; its frame (.opt,
      not scrolling) carries the right-edge fade, as the header does for #tb. */
@@ -267,8 +284,9 @@
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
   <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis and section">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
-      <span class="presets"><button data-view="iso">Iso</button><button data-view="front">Front</button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right">Right</button><button data-view="top">Top</button><button data-view="bottom">Bottom</button></span>
-      <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective)">Ortho</button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
+      <span class="presets"><button data-view="iso" title="Iso view (0)" aria-keyshortcuts="0">Iso<kbd>0</kbd></button><button data-view="front" title="Front view (1)" aria-keyshortcuts="1">Front<kbd>1</kbd></button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right" title="Right view (3)" aria-keyshortcuts="3">Right<kbd>3</kbd></button><button data-view="top" title="Top view (7)" aria-keyshortcuts="7">Top<kbd>7</kbd></button><button data-view="bottom">Bottom</button></span>
+      <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
+      <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
       <button id="section" aria-pressed="false" title="Cut the model with a plane; its controls show along the bottom of the view">Section</button>
     </div></div>
   <span class="sep"></span>
@@ -286,12 +304,16 @@
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
-    <span class="keys">keys: F fit · I isolate · H hide · A show all · Ctrl+Z undo · Esc clear · in the parts list ↑ ↓ move, Enter select, Space show/hide, → ← open/close</span></details>
+    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit</span>
+    <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
+    <span class="keys">parts list: ↑ ↓ move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><div id="hover"></div>
+  <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
+  <button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's
        name as a pressed toggle that turns it off -->
