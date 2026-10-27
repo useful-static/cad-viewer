@@ -12,8 +12,12 @@
 // Header JSON:
 //   { units, bbox:{min,max}, vertexCount, indexCount,
 //     sections:{ position, normal, color, id, index : {offset, byteLength} },
-//     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox }],
+//     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox, kind? }],
 //     root:{ name, meshes:[i...], children:[...] } }
+// kind (optional; absent from files converted before it existed) is the
+// body's status taken from the b-rep by the converter, not from the mesh:
+// "closed", "capped" (closed by planar faces the converter added where the
+// file left a hole), "sheet" (flat, zero thickness: a pad, a label) or "open".
 //
 // Per-vertex sections (vertexCount entries):
 //   position float32x3 · normal snorm16x4 (w=0) · color unorm8x4 · id unorm8x4
@@ -28,6 +32,9 @@ export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
 
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
+// the b-rep statuses the converter reports: BodyKind in
+// occt-progress/progress.patch is the source; this list follows it
+export const BODY_KINDS = ['closed', 'capped', 'sheet', 'open'];
 
 const align8 = (n) => (n + 7) & ~7;
 
@@ -101,6 +108,7 @@ export function encodeCadmesh(model) {
       color: m.color || null,
       vtxStart: v0, vtxCount: nv, idxStart: i0, idxCount: ni,
       bbox: nv ? { min: mMin, max: mMax } : null,
+      ...(m.kind ? { kind: m.kind } : {}),
     });
     v0 += nv;
     i0 += ni;
@@ -236,6 +244,7 @@ function validateHeader(h) {
       bad(`mesh ${i} range is outside the vertex/index data`);
     }
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
+    if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
   }
   const seen = new Set();
   const walk = (node, depth) => {
@@ -294,17 +303,24 @@ export function occtResultToModel(result, units = 'millimeter') {
         }
       }
     }
-    return { name: m.name, color: m.color || null, positions, normals, colors, indices };
+    // a status this code does not know is dropped, so an advisory field never
+    // fails a conversion (the strings come from BodyKind in progress.patch)
+    const kind = BODY_KINDS.includes(m.brep_kind) ? m.brep_kind : null;
+    return { name: m.name, color: m.color || null, positions, normals, colors, indices, kind };
   });
   const conv = (n) => ({ name: n.name || '', meshes: n.meshes || [], children: (n.children || []).map(conv) });
   const root = conv(result.root);
   if (!meshes.some((m) => m.color || m.colors)) paletteByPart(meshes, root);
   // b-rep faces that came back with no triangles: OpenCascade drops a face it
   // could not mesh (out of memory, a meshing failure) without an error, and
-  // nothing else says so. None on the 59 test files and the rack with the
-  // current converter; 2 on the rack when it ran out of memory.
+  // nothing else says so. None on occt-import-js's test files, our models and
+  // the rack with the current converter; 2 on the rack when it ran out of
+  // memory (2026-10-25 audits).
   const unmeshedFaces = result.meshes.reduce((n, m) => n + (m.brep_faces || []).filter((f) => f.last < f.first).length, 0);
-  return { units, meshes, root, unmeshedFaces };
+  // faces the converter added to close planar holes (null from a build
+  // without CapPlanarHoles)
+  const brepCaps = Number.isInteger(result.brep_caps) ? result.brep_caps : null;
+  return { units, meshes, root, unmeshedFaces, brepCaps };
 }
 
 // A file exported with no colours (common from some CAD packages) renders as one grey

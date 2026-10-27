@@ -185,6 +185,34 @@ test('occt mapping: counts the faces the converter returned without triangles', 
   assert.equal(bad.unmeshedFaces, 2);
 });
 
+test('occt mapping: the converter\'s b-rep status reaches the header as kind, with the caps count', () => {
+  const root = { name: 'r', meshes: [0, 1, 2], children: [] };
+  const res = occt([{ ...om('a', null, []), brep_kind: 'capped' }, { ...om('b', null, []), brep_kind: 'sheet' }, om('c', null, [])], root);
+  res.brep_caps = 2;
+  const model = occtResultToModel(res);
+  assert.equal(model.brepCaps, 2);
+  const h = decodeCadmesh(encodeCadmesh(model)).header;
+  assert.equal(h.meshes[0].kind, 'capped');
+  assert.equal(h.meshes[1].kind, 'sheet');
+  assert.equal(h.meshes[2].kind, undefined, 'a converter without b-rep status writes no kind');
+  assert.equal(occtResultToModel(occt([om('a', null, [])], { name: 'r', meshes: [0], children: [] })).brepCaps, null,
+    'a build without CapPlanarHoles reports no caps count, not zero');
+});
+
+test('occt mapping drops a body status it does not know', () => {
+  const model = occtResultToModel(occt([{ ...om('a', null, []), brep_kind: 'watertight' }], { name: 'r', meshes: [0], children: [] }));
+  assert.equal(model.meshes[0].kind, null);
+  assert.equal(decodeCadmesh(encodeCadmesh(model)).header.meshes[0].kind, undefined);
+});
+
+test('decode rejects an unknown body kind', () => {
+  const model = { units: 'millimeter', meshes: [{ ...quad('a', 0), kind: 'closed' }], root: { name: 'r', meshes: [0], children: [] } };
+  const buf = encodeCadmesh(model);
+  assert.equal(decodeCadmesh(buf).header.meshes[0].kind, 'closed');
+  model.meshes[0].kind = 'watertight';
+  assert.throws(() => decodeCadmesh(encodeCadmesh(model)), /kind "watertight"/);
+});
+
 test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
 });

@@ -199,7 +199,7 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress6`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress7`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
@@ -211,6 +211,14 @@ OpenCascade commit as upstream) with two patches:
   typed-array copy instead of one element at a time. Colours come back as the
   file gives them: OpenCascade keeps them as linear RGB, and the stock build
   returned that, which shows every mid-tone darker (0.5 as 0.21).
+  Before meshing, it closes an open solid whose missing faces are planar: a
+  closed loop of the solid's own free edges that lies in a plane, and is not a
+  hole in a face that is still there, gets a face built on those edges, and
+  coplanar loops nest into one face with holes. A solid gets all of its caps
+  or none, and no existing face is rebuilt, so colours stay. A surface model (a
+  shell outside any solid), a flat sheet and a non-planar hole are left as they
+  are. Each body in the result says what it is (`brep_kind`: closed, capped,
+  sheet or open), and the `.cadmesh` header keeps it as `kind`.
 - `occt.patch` removes wasted work in OpenCascade: four loops, each quadratic
   in the number of wires (hole outlines) on a face, in shape healing
   (`ShapeFix_IntersectionTool`, `ShapeFix_Face`) and in the mesher's face check
@@ -229,11 +237,11 @@ thread pool capped at 4, and the mimalloc allocator, without which the threads
 wait on the default allocator's lock and run slower than one. Both mesh the
 same triangles.
 
-Wherever the stock build meshes every face, the converted geometry is
-byte-identical to its: `occt-progress/compare.sh` converts files with two
+Wherever the stock build meshes every face and no solid needed closing, the
+converted geometry is byte-identical to its: `occt-progress/compare.sh` converts files with two
 builds and compares them byte for byte (all 55 STEP/IGES/BREP test files of
 occt-import-js). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress6/`, with a NOTICE;
+`https://assets.known.name/occt-import-js/0.0.23-progress7/`, with a NOTICE;
 `progress3` and later stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
 no steps; the page then shows the forecast alone.

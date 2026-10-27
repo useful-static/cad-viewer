@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { encodeCadmesh, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { BODY_KINDS, encodeCadmesh, hashName, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadmesh]
@@ -23,6 +23,8 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadme
                    threads, the same triangles, more memory
   --raw            write the uncompressed layout (default: gzipped, which the viewer inflates)
   --progress       print OpenCascade's progress to stderr (needs the occt-progress build)
+  --no-kind        leave each body's b-rep status out of the header, so builds with and without
+                   it can be compared byte for byte (occt-progress/compare.sh)
 `;
 
 function parseArgs(argv) {
@@ -54,6 +56,7 @@ function parseArgs(argv) {
     else if (k === '--raw') a.raw = true;
     else if (k === '--threads') a.threads = true;
     else if (k === '--progress') a.progress = true;
+    else if (k === '--no-kind') a.noKind = true;
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;
     else throw new Error(`unexpected argument ${k}`);
@@ -114,6 +117,16 @@ async function main() {
     return 1;
   }
   const model = occtResultToModel(result);
+  // the statuses are reported (and digested for compare.sh) even when
+  // --no-kind leaves them out of the header
+  // the converter's own strings, not the filtered kind, so a status the JS
+  // list does not know still shows (and still changes the digest)
+  const statuses = result.meshes.map((m) => (typeof m.brep_kind === 'string' && m.brep_kind) || null);
+  const unknown = [...new Set(statuses.filter((k) => k && !BODY_KINDS.includes(k)))];
+  if (unknown.length) {
+    process.stderr.write(`WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
+  }
+  if (args.noKind) for (const m of model.meshes) m.kind = null;
   const buf = encodeCadmesh(model);
   if (model.unmeshedFaces) {
     process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
@@ -125,6 +138,17 @@ async function main() {
   const mb = (n) => (n / 1e6).toFixed(1);
   process.stdout.write(`OK ${out}: ${meshes} bodies, ${tris} triangles, ${mb(file.length)} MB`
     + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s\n`);
+  // the b-rep status of each body, as the converter found it
+  const kinds = {};
+  for (const k of statuses) if (k) kinds[k] = (kinds[k] || 0) + 1;
+  if (Object.keys(kinds).length) {
+    // the digest is of every body's status in order, so compare.sh can tell
+    // two builds that classify differently even when the totals agree;
+    // brep_caps counts distinct cap faces (a part's instances share them)
+    const digest = hashName(statuses.map((k) => k || '-').join(',')).toString(16).padStart(8, '0');
+    process.stdout.write(`bodies by b-rep status: ${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(', ')}`
+      + `${model.brepCaps !== null ? `; ${model.brepCaps} distinct planar cap face(s) added` : ''}; statuses ${digest}\n`);
+  }
   return 0;
 }
 

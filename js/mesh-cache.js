@@ -13,7 +13,12 @@
 
 // Bump when a converter change alters the meshes. 2: file colours read as
 // sRGB (they were darkened), and faces that ran out of memory now mesh.
-export const CACHE_VERSION = 2;
+// 3: open solids with planar missing faces are closed, and every body
+// carries its b-rep status (kind) (converter 0.0.23-progress7).
+export const CACHE_VERSION = 3;
+
+// Keys written under an older CACHE_VERSION: never read again, so dropped.
+export const staleKeys = (entries) => entries.map((e) => e.key).filter((k) => !k.startsWith(`v${CACHE_VERSION}|`));
 export const CACHE_CAP_BYTES = 200e6;
 const DB = 'cad-viewer-meshes';
 
@@ -105,11 +110,18 @@ export async function cachePut(key, data, name) {
   }
 }
 
-// [{ key, name, size, used }]: the metadata only, never the mesh bytes.
+// [{ key, name, size, used }]: the metadata only, never the mesh bytes, of
+// this CACHE_VERSION. Entries of an older one are deleted here, so they stop
+// counting toward the cap and the "Saved conversions" figure.
 export async function cacheList() {
   if (!cacheAvailable()) return [];
   try {
-    return (await tx('readonly', (meta) => meta.getAll())) || [];
+    const all = (await tx('readonly', (meta) => meta.getAll())) || [];
+    const stale = staleKeys(all);
+    if (stale.length) {
+      await tx('readwrite', (meta, data) => { for (const k of stale) { meta.delete(k); data.delete(k); } });
+    }
+    return all.filter((e) => !stale.includes(e.key));
   } catch {
     return [];
   }

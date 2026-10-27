@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { CACHE_CAP_BYTES, CACHE_VERSION, cacheKey, evictionPlan } from '../js/mesh-cache.js';
+import { CACHE_CAP_BYTES, CACHE_VERSION, cacheKey, evictionPlan, staleKeys } from '../js/mesh-cache.js';
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto; // Node 18 has no global crypto
 
@@ -42,6 +42,12 @@ await test('least recently used dropped first, only as many as needed', () => {
   const e = [{ key: 'new', size: 40, used: 30 }, { key: 'old', size: 40, used: 10 }, { key: 'mid', size: 40, used: 20 }];
   assert.deepEqual(evictionPlan(e, 30, 100), ['old', 'mid']);
   assert.deepEqual(evictionPlan(e, 10, 100), ['old']);
+});
+await test('entries of an older CACHE_VERSION are stale, this one\'s are not', () => {
+  const cur = `v${CACHE_VERSION}|step|a=1|abc`;
+  const old = `v${CACHE_VERSION - 1}|step|a=1|abc`;
+  const longer = `v${CACHE_VERSION}0|step|a=1|abc`; // v30 is not v3
+  assert.deepEqual(staleKeys([{ key: cur }, { key: old }, { key: longer }]), [old, longer]);
 });
 await test('the cap is generous for a large assembly (the rack is 3.2 MB gzipped)', () => {
   assert.ok(CACHE_CAP_BYTES >= 100e6);

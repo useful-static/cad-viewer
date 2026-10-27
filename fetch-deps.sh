@@ -4,10 +4,11 @@
 # The .wasm is a binary, so it is gitignored and fetched here instead, pinned
 # by sha256; a mismatch stages nothing.
 #
-# Default: OUR build, 0.0.23-progress5 -- occt-import-js 0.0.23 plus
+# Default: OUR build, 0.0.23-progress7 -- occt-import-js 0.0.23 plus
 # occt-progress/progress.patch, which reports the import's progress to the page
-# (Module.onProgress), compiles with -O3 and returns the file's colours as
-# sRGB, and occt-progress/occt.patch, which removes wasted work in four
+# (Module.onProgress), compiles with -O3, returns the file's colours as sRGB,
+# closes open solids whose missing faces are planar and reports each body's
+# b-rep status (brep_kind), and occt-progress/occt.patch, which removes wasted work in four
 # quadratic loops in OpenCascade and fixes the mesher's time and memory on
 # faces with many holes (the stock build leaves such faces unmeshed once
 # WASM runs out of memory). Two builds of it: single-threaded, and in mt/ the
@@ -28,19 +29,19 @@ readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DEST="${HERE}/vendor/occt-import-js"
 readonly CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/cad-viewer"
 
-readonly PROGRESS_VERSION="0.0.23-progress6"
+readonly PROGRESS_VERSION="0.0.23-progress7"
 readonly PROGRESS_BASE="https://assets.known.name/occt-import-js/${PROGRESS_VERSION}"
 # file -> sha256 (occt-progress/build.sh prints these); mt/ is the multi-core
 # build (build.sh --threads 4), which the page uses where js/converter-choice.js
 # allows
 readonly -A PROGRESS_SHA=(
-	[occt-import-js.js]="5cf1cc9142ca1174e604c58fc4e5c8c13db41302e700d9934db0db1801aef964"
-	[occt-import-js.wasm]="d40dcbf809d61b9f07b56fdf383f1e0363d13cb38a6abc7d3e4ec8d4eaab7786"
-	[mt/occt-import-js.js]="bd2089828138b52e1705f112a935857226fe371a2123a2a9ff11ad0c92c67be1"
-	[mt/occt-import-js.wasm]="b836ff326bda1c43a3bea725383454dd010e705a0d045f084065cfee5a9499ba"
+	[occt-import-js.js]="294aa2e9fe074fa8b9826d70d3dce25dd0dc0f85b0a06dbb4952d8313fa964fe"
+	[occt-import-js.wasm]="0024b053c819dc074dc3afdf5d4ec0dfb899bdefcde05d270f9e6d09a31943c9"
+	[mt/occt-import-js.js]="5de56488d2d296494f07e8aa656565b88a95868a82c9600e9d212090a31297d3"
+	[mt/occt-import-js.wasm]="42750b7ba10063ed22c5eb433690f76bb4571d4fe1304a57f0361028570fd9a7"
 	[license.occt-import-js.txt]="7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
 	[license.occt.txt]="090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
-	[NOTICE.txt]="d59f3ba5fde223775ff9efc0423a262b591384a360aa97305e0fe9f468e21dea"
+	[NOTICE.txt]="b9b652b2263476de7a2b685b4a743ec6c3129f33c1e77576cc4b68239babdd7e"
 )
 
 readonly STOCK_VERSION="0.0.23"

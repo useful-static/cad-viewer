@@ -13,6 +13,57 @@ index 5e1568d..585cdff 100644
  	target_compile_options (OcctImportJS PUBLIC -fexceptions)
  	target_compile_options (OcctImportJS PUBLIC -fwasm-exceptions)
  
+diff --git a/occt-import-js/src/importer-brep.cpp b/occt-import-js/src/importer-brep.cpp
+index b7c4158..d987202 100644
+--- a/occt-import-js/src/importer-brep.cpp
++++ b/occt-import-js/src/importer-brep.cpp
+@@ -6,6 +6,7 @@
+ #include <TopoDS_Face.hxx>
+ #include <BRep_Builder.hxx>
+ #include <BRepTools.hxx>
++#include <TopoDS_Compound.hxx>
+ 
+ class BrepShapeMesh : public Mesh
+ {
+@@ -36,6 +37,11 @@ public:
+         }
+     }
+ 
++    virtual std::string GetBodyKind () const override
++    {
++        return BodyKind (shape);
++    }
++
+ private:
+     const TopoDS_Shape& shape;
+ };
+@@ -75,6 +81,18 @@ public:
+         }
+     }
+ 
++    virtual std::string GetBodyKind () const override
++    {
++        // only the faces outside any shell
++        TopoDS_Compound loose;
++        BRep_Builder builder;
++        builder.MakeCompound (loose);
++        for (TopExp_Explorer ex (shape, TopAbs_FACE, TopAbs_SHELL); ex.More (); ex.Next ()) {
++            builder.Add (loose, ex.Current ());
++        }
++        return BodyKind (loose);
++    }
++
+ private:
+     const TopoDS_Shape& shape;
+ };
+@@ -148,6 +166,7 @@ Importer::Result ImporterBrep::LoadFile (const std::vector<std::uint8_t>& fileCo
+         return Importer::Result::ImportFailed;
+     }
+ 
++    CapPlanarHoles (shape); // before meshing, as for STEP and IGES
+     TriangulateShape (shape, params);
+     return Importer::Result::Success;
+ }
 diff --git a/occt-import-js/src/importer-iges.cpp b/occt-import-js/src/importer-iges.cpp
 index 5e82196..fb84cd6 100644
 --- a/occt-import-js/src/importer-iges.cpp
@@ -74,7 +125,7 @@ index a580b47..6c98f8c 100644
      return true;
  }
 diff --git a/occt-import-js/src/importer-utils.cpp b/occt-import-js/src/importer-utils.cpp
-index a1a7c77..d55308a 100644
+index a1a7c77..8da6225 100644
 --- a/occt-import-js/src/importer-utils.cpp
 +++ b/occt-import-js/src/importer-utils.cpp
 @@ -1,4 +1,7 @@
@@ -85,7 +136,489 @@ index a1a7c77..d55308a 100644
  
  #include <TopExp_Explorer.hxx>
  #include <TopoDS.hxx>
-@@ -115,7 +118,7 @@ UnitsMethods_LengthUnit LinearUnitToLengthUnit (ImportParams::LinearUnit linearU
+@@ -11,6 +14,481 @@
+ #include <BRepMesh_IncrementalMesh.hxx>
+ #include <UnitsMethods.hxx>
+ 
++#include <BRepBuilderAPI_MakeFace.hxx>
++#include <BRep_Builder.hxx>
++#include <GeomLib_IsPlanarSurface.hxx>
++#include <Geom_Surface.hxx>
++#include <ShapeAnalysis_FreeBounds.hxx>
++#include <TopExp.hxx>
++#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
++#include <TopTools_ListIteratorOfListOfShape.hxx>
++#include <TopTools_MapOfShape.hxx>
++#include <TopoDS_Compound.hxx>
++#include <TopoDS_Edge.hxx>
++#include <TopoDS_Shell.hxx>
++#include <TopoDS_Wire.hxx>
++#include <gp_Pln.hxx>
++#include <gp_Pnt2d.hxx>
++#include <BRepLib_FindSurface.hxx>
++#include <BRepTopAdaptor_FClass2d.hxx>
++#include <GeomAPI_ProjectPointOnSurf.hxx>
++#include <Geom_Plane.hxx>
++#include <NCollection_DataMap.hxx>
++#include <Standard_Failure.hxx>
++#include <TopTools_ShapeMapHasher.hxx>
++#include <BRepAdaptor_Curve.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <BRepLProp_SLProps.hxx>
++#include <Geom2d_Curve.hxx>
++#include <Poly_Triangulation.hxx>
++#include <Bnd_Box.hxx>
++#include <ElSLib.hxx>
++#include <TopoDS_Iterator.hxx>
++#include <cmath>
++#include <memory>
++#include <TopoDS_Vertex.hxx>
++
++// the caps this import added, without location (a part's faces are shared by
++// all its instances), and each body's status once computed (keyed the same)
++static TopTools_MapOfShape gCapFaces;
++static NCollection_DataMap<TopoDS_Shape, std::string, TopTools_ShapeMapHasher> gKinds;
++
++// a face's plane, in the frame the face is seen in; false when not planar
++static bool FacePlane (const TopoDS_Face& face, gp_Pln& plane)
++{
++    TopLoc_Location loc;
++    Handle (Geom_Surface) surface = BRep_Tool::Surface (face, loc); // loc not yet applied
++    if (surface.IsNull ()) {
++        return false;
++    }
++    GeomLib_IsPlanarSurface planar (surface, 1e-7);
++    if (!planar.IsPlanar ()) {
++        return false;
++    }
++    plane = planar.Plan ();
++    if (!loc.IsIdentity ()) {
++        plane.Transform (loc.Transformation ());
++    }
++    return true;
++}
++
++// one plane, within a distance tolerance; the angle tolerance is that
++// distance over the size it must hold across
++static bool SamePlane (const gp_Pln& a, const gp_Pln& b, double tol = 1e-6, double size = 1.0)
++{
++    const double angle = std::max (1e-6, tol / std::max (size, 1e-9));
++    return a.Axis ().IsParallel (b.Axis (), angle) && a.Distance (b.Location ()) <= tol;
++}
++
++// free edges: bounding exactly one face, not degenerate, not a seam
++static int CountFreeEdges (const TopoDS_Shape& shape)
++{
++    TopTools_IndexedDataMapOfShapeListOfShape map;
++    TopExp::MapShapesAndAncestors (shape, TopAbs_EDGE, TopAbs_FACE, map);
++    // an INTERNAL or EXTERNAL edge marks something inside or outside a face,
++    // not its boundary: never free (as in OpenCascade's own free bounds)
++    TopTools_MapOfShape notBoundary;
++    for (TopExp_Explorer fex (shape, TopAbs_FACE); fex.More (); fex.Next ()) {
++        for (TopExp_Explorer eex (fex.Current (), TopAbs_EDGE); eex.More (); eex.Next ()) {
++            const TopAbs_Orientation o = eex.Current ().Orientation ();
++            if (o == TopAbs_INTERNAL || o == TopAbs_EXTERNAL) {
++                notBoundary.Add (eex.Current ());
++            }
++        }
++    }
++    int n = 0;
++    for (int i = 1; i <= map.Extent (); i++) {
++        const TopoDS_Edge& edge = TopoDS::Edge (map.FindKey (i));
++        const TopTools_ListOfShape& faces = map.FindFromIndex (i);
++        if (BRep_Tool::Degenerated (edge) || faces.IsEmpty () || notBoundary.Contains (edge)) {
++            continue;
++        }
++        const TopoDS_Shape& first = faces.First ();
++        bool second = false;
++        for (TopTools_ListIteratorOfListOfShape it (faces); it.More () && !second; it.Next ()) {
++            second = !it.Value ().IsSame (first);
++        }
++        if (!second && !BRep_Tool::IsClosed (edge, TopoDS::Face (first))) {
++            n++;
++        }
++    }
++    return n;
++}
++
++// every face planar and in one plane: a zero-thickness pad, label or outline
++static bool AllCoplanar (const TopoDS_Shape& shape)
++{
++    bool have = false;
++    gp_Pln ref;
++    for (TopExp_Explorer ex (shape, TopAbs_FACE); ex.More (); ex.Next ()) {
++        gp_Pln plane;
++        if (!FacePlane (TopoDS::Face (ex.Current ()), plane)) {
++            return false;
++        }
++        if (!have) {
++            ref = plane;
++            have = true;
++        } else if (!SamePlane (ref, plane)) {
++            return false;
++        }
++    }
++    return have;
++}
++
++// the orientation an edge has as seen in a face (explorer orientations compose)
++static bool EdgeOrientationIn (const TopoDS_Shape& face, const TopoDS_Edge& edge, TopAbs_Orientation& orientation)
++{
++    for (TopExp_Explorer ex (face, TopAbs_EDGE); ex.More (); ex.Next ()) {
++        if (ex.Current ().IsSame (edge)) {
++            orientation = ex.Current ().Orientation ();
++            return true;
++        }
++    }
++    return false;
++}
++
++// Is the face flat in the loop's plane next to this edge? Its normal at the
++// edge's middle must be the plane's, AND a point stepped into the face (a
++// tenth of the loop's size, along the pcurve's inward normal) must still lie
++// on the plane. The step catches every way a face can leave the plane while
++// touching it along the edge: a fillet (offset d^2/2r), a curvature-
++// continuous blend (offset ~d^3), a draft; and it ignores a flat face's
++// noise. Returns false when the face cannot be evaluated there.
++static bool FlatInPlaneAlongEdge (const TopoDS_Edge& edge, const TopoDS_Face& face, const gp_Pln& plane,
++    double tol, double size, bool& flat)
++{
++    // the face taken FORWARD: a REVERSED face covers the same region of its
++    // surface's parameters (only its normal flips), so which side of the
++    // pcurve is inside is read off the forward face, as OpenCascade's own
++    // classifiers do
++    const TopoDS_Face forward = TopoDS::Face (face.Oriented (TopAbs_FORWARD));
++    Standard_Real first, last;
++    Handle (Geom2d_Curve) pcurve = BRep_Tool::CurveOnSurface (edge, forward, first, last);
++    TopAbs_Orientation inFace;
++    if (pcurve.IsNull () || !EdgeOrientationIn (forward, edge, inFace)) {
++        return false;
++    }
++    gp_Pnt2d uv;
++    gp_Vec2d tangent;
++    pcurve->D1 (0.5 * (first + last), uv, tangent);
++    if (tangent.Magnitude () < gp::Resolution ()) {
++        return false;
++    }
++    BRepAdaptor_Surface surface (face); // with the face's location
++    BRepLProp_SLProps props (surface, uv.X (), uv.Y (), 1, Precision::Confusion ());
++    if (!props.IsNormalDefined ()) {
++        return false;
++    }
++    if (!props.Normal ().IsParallel (plane.Axis ().Direction (), 1e-3)) {
++        flat = false; // crosses the plane at an angle: well over any draft
++        return true;
++    }
++    // in the forward face, the face is left of the pcurve where the edge
++    // runs FORWARD, right where it runs REVERSED
++    gp_Vec2d inward (-tangent.Y (), tangent.X ());
++    if (inFace == TopAbs_REVERSED) {
++        inward.Reverse ();
++    }
++    inward.Normalize ();
++    gp_Pnt p0;
++    gp_Vec du, dv;
++    surface.D1 (uv.X (), uv.Y (), p0, du, dv);
++    const double perUnit = (du * inward.X () + dv * inward.Y ()).Magnitude ();
++    if (perUnit < gp::Resolution ()) {
++        return false;
++    }
++    const double step3d = 0.1 * size;
++    double t = step3d / perUnit;
++    const double u0 = surface.FirstUParameter (), u1 = surface.LastUParameter ();
++    const double v0 = surface.FirstVParameter (), v1 = surface.LastVParameter ();
++    gp_Pnt2d in (uv.X () + t * inward.X (), uv.Y () + t * inward.Y ());
++    auto outside = [&](const gp_Pnt2d& q) { return q.X () < u0 || q.X () > u1 || q.Y () < v0 || q.Y () > v1; };
++    for (int i = 0; i < 8 && outside (in); i++) {
++        t *= 0.5; // stay on the surface
++        in = gp_Pnt2d (uv.X () + t * inward.X (), uv.Y () + t * inward.Y ());
++    }
++    if (outside (in)) {
++        return false; // never evaluate the surface outside its parameters
++    }
++    const gp_Pnt p = surface.Value (in.X (), in.Y ());
++    const double reach = p.Distance (p0);
++    // on the plane within the loop's tolerance, or a 1e-4 slope over the step
++    flat = plane.Distance (p) <= std::max (10.0 * tol, 1e-4 * reach);
++    return true;
++}
++
++struct CapLoop {
++    TopoDS_Wire wire;
++    gp_Pln plane;
++    double tol = 0;    // the loop's own tolerance: its edges', or its plane fit's
++    double size = 0;   // its bounding box diagonal
++    Bnd_Box box;
++    gp_Pnt probe;      // a point on the loop (an edge's middle), for containment
++    TopoDS_Face alone; // the loop as a face on its own plane: wire oriented as an outer boundary
++    std::shared_ptr<BRepTopAdaptor_FClass2d> classifier;
++    std::vector<int> containers; // the coplanar loops that contain it
++    int parent = -1;   // the container with the most containers itself
++};
++
++// is point p (on the loop's plane, within its tolerance) strictly inside it?
++static bool LoopContains (const CapLoop& loop, const gp_Pnt& p)
++{
++    if (loop.box.IsOut (p)) {
++        return false;
++    }
++    Standard_Real u, v;
++    ElSLib::Parameters (loop.plane, p, u, v);
++    // alone was built on loop.plane itself, so (u, v) are its parameters
++    return loop.classifier->Perform (gp_Pnt2d (u, v)) == TopAbs_IN;
++}
++
++// Plans the caps for one body and changes nothing. A cap closes closed loops
++// of free edges, the body's own, that are planar and not holes in a face that
++// is still there (neighbours all coplanar). Coplanar loops nest: an outline
++// with holes becomes one face with holes. A cap is oriented against its
++// neighbours on every edge, and its edges all lie in one shell. All or
++// nothing: unless EVERY free loop of the body ends up in a cap (no open
++// wires, no rejected loop), no cap is planned, so no hole is plugged on its
++// own and a body is never left half-capped.
++static std::vector<std::pair<TopoDS_Face, TopoDS_Shape>> PlanCaps (const TopoDS_Shape& body)
++{
++    std::vector<std::pair<TopoDS_Face, TopoDS_Shape>> none, caps;
++    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces, faceShells;
++    TopExp::MapShapesAndAncestors (body, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
++    TopExp::MapShapesAndAncestors (body, TopAbs_FACE, TopAbs_SHELL, faceShells);
++    // the topological free bounds: the body's own edges, no sewing, no copies
++    // (checkinternaledges: an edge INTERNAL to a face is not free, as in CountFreeEdges)
++    ShapeAnalysis_FreeBounds freeBounds (body, Standard_False, Standard_False, Standard_True);
++    if (TopoDS_Iterator (freeBounds.GetOpenWires ()).More ()) {
++        return none; // free edges that close no loop: nothing to cap properly
++    }
++    std::vector<CapLoop> loops;
++    for (TopExp_Explorer wex (freeBounds.GetClosedWires (), TopAbs_WIRE); wex.More (); wex.Next ()) {
++        CapLoop loop;
++        loop.wire = TopoDS::Wire (wex.Current ());
++        double edgeTol = Precision::Confusion ();
++        for (TopExp_Explorer eex (loop.wire, TopAbs_EDGE); eex.More (); eex.Next ()) {
++            edgeTol = std::max (edgeTol, BRep_Tool::Tolerance (TopoDS::Edge (eex.Current ())));
++        }
++        BRepLib_FindSurface find (loop.wire, -1, Standard_True); // planes only; changes nothing
++        Handle (Geom_Plane) surface = find.Found () ? Handle (Geom_Plane)::DownCast (find.Surface ()) : Handle (Geom_Plane) ();
++        // not planar, or planar only more loosely than its edges allow (the
++        // edges' tolerances are not raised, so such a cap would be invalid)
++        if (surface.IsNull () || find.ToleranceReached () > edgeTol) {
++            return none;
++        }
++        loop.plane = surface->Pln ();
++        if (!find.Location ().IsIdentity ()) {
++            loop.plane.Transform (find.Location ().Transformation ());
++        }
++        loop.tol = edgeTol;
++        BRepBndLib::Add (loop.wire, loop.box);
++        loop.box.Enlarge (loop.tol);
++        loop.size = loop.box.IsVoid () ? 0 : std::sqrt (loop.box.SquareExtent ());
++        bool own = true, allCoplanar = true, probed = false;
++        for (TopExp_Explorer eex (loop.wire, TopAbs_EDGE); eex.More (); eex.Next ()) {
++            const TopoDS_Edge& edge = TopoDS::Edge (eex.Current ());
++            const TopTools_ListOfShape* faces = edgeFaces.Seek (edge);
++            if (faces == nullptr || faces->IsEmpty ()) {
++                own = false;
++                break;
++            }
++            // the neighbour lies in the loop's plane next to this edge
++            // (FlatInPlaneAlongEdge). A neighbour that cannot be evaluated,
++            // or a degenerate edge, is not counted as evidence for a cap
++            bool flat = true;
++            if (!BRep_Tool::Degenerated (edge)
++                && FlatInPlaneAlongEdge (edge, TopoDS::Face (faces->First ()), loop.plane, loop.tol, loop.size, flat)
++                && !flat) {
++                allCoplanar = false;
++            }
++            if (!probed && !BRep_Tool::Degenerated (edge)) {
++                BRepAdaptor_Curve curve (edge);
++                loop.probe = curve.Value (0.5 * (curve.FirstParameter () + curve.LastParameter ()));
++                probed = true;
++            }
++        }
++        if (!own || allCoplanar || !probed) {
++            return none; // not the body's own edges, or a hole in a face that is there
++        }
++        BRepBuilderAPI_MakeFace alone (loop.plane, loop.wire, Standard_True);
++        if (!alone.IsDone ()) {
++            return none;
++        }
++        loop.alone = alone.Face ();
++        loop.classifier = std::make_shared<BRepTopAdaptor_FClass2d> (loop.alone, loop.tol);
++        loops.push_back (loop);
++    }
++    // nesting among coplanar loops, in one pass of pairs (a box test first)
++    for (size_t i = 0; i < loops.size (); i++) {
++        for (size_t j = 0; j < loops.size (); j++) {
++            const double tol = std::max (loops[i].tol, loops[j].tol);
++            if (i != j && SamePlane (loops[i].plane, loops[j].plane, tol, std::max (loops[i].size, loops[j].size))
++                && LoopContains (loops[j], loops[i].probe)) {
++                loops[i].containers.push_back ((int) j);
++            }
++        }
++    }
++    for (CapLoop& loop : loops) {
++        for (int c : loop.containers) {
++            if (loop.parent < 0 || loops[c].containers.size () > loops[loop.parent].containers.size ()) {
++                loop.parent = c;
++            }
++        }
++    }
++    size_t used = 0;
++    for (size_t i = 0; i < loops.size (); i++) {
++        if (loops[i].containers.size () % 2 != 0) {
++            continue; // a hole: it goes into its outline's face
++        }
++        used++;
++        TopoDS_Face cap = loops[i].alone;
++        bool holes = false;
++        BRepBuilderAPI_MakeFace build (loops[i].alone);
++        for (size_t j = 0; j < loops.size (); j++) {
++            if (loops[j].parent != (int) i) {
++                continue;
++            }
++            // the hole as a face on the OUTLINE's plane, so its outer
++            // orientation is the outline's; reversed, it bounds a hole
++            BRepBuilderAPI_MakeFace hole (loops[i].plane, loops[j].wire, Standard_True);
++            if (!hole.IsDone ()) {
++                return none;
++            }
++            build.Add (TopoDS::Wire (BRepTools::OuterWire (hole.Face ()).Reversed ()));
++            holes = true;
++            used++;
++        }
++        if (holes) {
++            // (a MakeFace loaded from a face reports done only once a wire is added)
++            if (!build.IsDone ()) {
++                return none;
++            }
++            cap = build.Face ();
++        }
++        // on every edge the cap must run opposite to its neighbour, as seen
++        // from the body, and every neighbour must be in the same shell
++        int same = 0, opposite = 0;
++        TopoDS_Shape shell;
++        for (TopExp_Explorer eex (cap, TopAbs_EDGE); eex.More (); eex.Next ()) {
++            const TopoDS_Edge& edge = TopoDS::Edge (eex.Current ());
++            const TopTools_ListOfShape* faces = edgeFaces.Seek (edge);
++            TopAbs_Orientation inNeighbour;
++            if (faces == nullptr || faces->IsEmpty () || !EdgeOrientationIn (faces->First (), edge, inNeighbour)) {
++                return none;
++            }
++            (eex.Current ().Orientation () == inNeighbour ? same : opposite)++;
++            const TopTools_ListOfShape* shells = faceShells.Seek (faces->First ());
++            if (shells == nullptr || shells->IsEmpty () || (!shell.IsNull () && !shell.IsSame (shells->First ()))) {
++                return none;
++            }
++            shell = shells->First ();
++        }
++        if (shell.IsNull () || (same > 0 && opposite > 0)) {
++            return none; // the neighbours disagree on its direction
++        }
++        if (same > 0) {
++            cap.Reverse ();
++        }
++        caps.push_back ({ cap, shell });
++    }
++    // every loop must be in a cap: an outline, or a hole of one
++    return used == loops.size () ? caps : none;
++}
++
++static int CapBody (const TopoDS_Shape& body)
++{
++    std::vector<std::pair<TopoDS_Face, TopoDS_Shape>> caps;
++    try {
++        if (CountFreeEdges (body) == 0 || AllCoplanar (body)) {
++            return 0;
++        }
++        caps = PlanCaps (body);
++    } catch (const Standard_Failure&) {
++        return 0; // a body OpenCascade cannot analyse is left as it is
++    }
++    // only now is anything changed. Add takes the shell as seen from the body
++    // (its location and orientation) and stores the cap relative to it, so
++    // from the body the cap is seen exactly as it was built.
++    BRep_Builder builder;
++    for (auto& entry : caps) {
++        TopoDS_Shape target = entry.second;
++        const bool wasFree = target.Free ();
++        target.Free (Standard_True);
++        builder.Add (target, entry.first);
++        target.Free (wasFree);
++        gCapFaces.Add (entry.first.Located (TopLoc_Location ()));
++    }
++    if (!caps.empty ()) {
++        for (TopExp_Explorer sex (body, TopAbs_SHELL); sex.More (); sex.Next ()) {
++            TopoDS_Shape shell = sex.Current ();
++            shell.Closed (CountFreeEdges (shell) == 0);
++        }
++    }
++    return (int) caps.size ();
++}
++
++int CapPlanarHoles (const TopoDS_Shape& root)
++{
++    TopTools_MapOfShape done; // a part's TShape once, whatever its instances
++    int added = 0;
++    for (TopExp_Explorer ex (root, TopAbs_SOLID); ex.More (); ex.Next ()) {
++        if (done.Add (ex.Current ().Located (TopLoc_Location ()))) {
++            added += CapBody (ex.Current ().Located (TopLoc_Location ()));
++        }
++    }
++    // only solids: a solid is closed by definition, so an open one is a defect
++    // to repair; a shell outside any solid is a surface model, open by design,
++    // and is left as it is (operator decision, 2026-10-27)
++    return added;
++}
++
++void ResetCaps ()
++{
++    gCapFaces.Clear ();
++    gKinds.Clear ();
++}
++
++int CapsAdded ()
++{
++    return gCapFaces.Extent ();
++}
++
++static std::string ComputeBodyKind (const TopoDS_Shape& body)
++{
++    if (CountFreeEdges (body) == 0) {
++        bool capped = false;
++        for (TopExp_Explorer ex (body, TopAbs_FACE); ex.More (); ex.Next ()) {
++            if (gCapFaces.Contains (ex.Current ().Located (TopLoc_Location ()))) {
++                TopLoc_Location loc;
++                if (BRep_Tool::Triangulation (TopoDS::Face (ex.Current ()), loc).IsNull ()) {
++                    return "open"; // a cap that did not mesh leaves the hole on screen
++                }
++                capped = true;
++            }
++        }
++        return capped ? "capped" : "closed";
++    }
++    return AllCoplanar (body) ? "sheet" : "open";
++}
++
++std::string BodyKind (const TopoDS_Shape& body)
++{
++    // once per part (its TShape), not once per instance
++    const TopoDS_Shape key = body.Located (TopLoc_Location ());
++    if (const std::string* known = gKinds.Seek (key)) {
++        return *known;
++    }
++    std::string kind;
++    try {
++        kind = ComputeBodyKind (body);
++    } catch (const Standard_Failure&) {
++        kind = std::string (); // no status rather than a failed import
++    }
++    gKinds.Bind (key, kind);
++    return kind;
++}
++
+ VectorBuffer::VectorBuffer (const std::vector<uint8_t>& v)
+ {
+     setg ((char*) v.data (), (char*) v.data (), (char*) (v.data () + v.size ()));
+@@ -115,7 +593,7 @@ UnitsMethods_LengthUnit LinearUnitToLengthUnit (ImportParams::LinearUnit linearU
      }
  }
  
@@ -94,7 +627,7 @@ index a1a7c77..d55308a 100644
  {
      Standard_Real linDeflection = params.linearDeflection;
      Standard_Real angDeflection = params.angularDeflection;
-@@ -141,6 +144,26 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
+@@ -141,6 +619,26 @@ bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params)
          }
      }
  
@@ -123,7 +656,7 @@ index a1a7c77..d55308a 100644
      return true;
  }
 diff --git a/occt-import-js/src/importer-utils.hpp b/occt-import-js/src/importer-utils.hpp
-index ed45c39..532576b 100644
+index ed45c39..626045b 100644
 --- a/occt-import-js/src/importer-utils.hpp
 +++ b/occt-import-js/src/importer-utils.hpp
 @@ -7,6 +7,7 @@
@@ -134,14 +667,31 @@ index ed45c39..532576b 100644
  
  #include <vector>
  #include <fstream>
-@@ -38,4 +39,4 @@ protected:
+@@ -37,5 +38,21 @@ protected:
+     TopLoc_Location location;
  };
  
++// Close each open SOLID whose missing faces are planar, before meshing (a
++// shell outside any solid is a surface model and is never capped). A
++// closed loop of free edges (the body's own edges) that lies in a plane, and
++// is not a hole in a face that is still there, gets a face on the body's own
++// edges; coplanar loops nest, so an outline with holes becomes one face with
++// holes. Each cap is oriented against its neighbours on every edge and goes
++// into their one shell, or is not made. Everything is checked before anything
++// changes, no existing face is rebuilt (colours and names stay), a shared part
++// is capped once for all its instances, an OpenCascade exception leaves the
++// body as it was, and a non-planar hole or a flat sheet is left as it is.
++int CapPlanarHoles (const TopoDS_Shape& root);
++void ResetCaps ();
++int CapsAdded ();
++// "closed", "capped", "sheet" or "open", from the b-rep (free edges)
++std::string BodyKind (const TopoDS_Shape& body);
++
  UnitsMethods_LengthUnit LinearUnitToLengthUnit (ImportParams::LinearUnit linearUnit);
 -bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params);
 +bool TriangulateShape (TopoDS_Shape& shape, const ImportParams& params, const Message_ProgressRange& progress = Message_ProgressRange ());
 diff --git a/occt-import-js/src/importer-xcaf.cpp b/occt-import-js/src/importer-xcaf.cpp
-index 820f3a7..5d6d262 100644
+index 820f3a7..15e1145 100644
 --- a/occt-import-js/src/importer-xcaf.cpp
 +++ b/occt-import-js/src/importer-xcaf.cpp
 @@ -1,5 +1,6 @@
@@ -151,7 +701,16 @@ index 820f3a7..5d6d262 100644
  
  #include <TopExp_Explorer.hxx>
  #include <TopoDS.hxx>
-@@ -56,7 +57,11 @@ static bool GetLabelColorNoRef (const TDF_Label& label, const Handle (XCAFDoc_Co
+@@ -9,6 +10,8 @@
+ #include <TDataStd_Name.hxx>
+ #include <Quantity_Color.hxx>
+ #include <BRep_Tool.hxx>
++#include <BRep_Builder.hxx>
++#include <TopoDS_Compound.hxx>
+ #include <XCAFDoc_DocumentTool.hxx>
+ 
+ static std::string GetLabelNameNoRef (const TDF_Label& label)
+@@ -56,7 +59,11 @@ static bool GetLabelColorNoRef (const TDF_Label& label, const Handle (XCAFDoc_Co
      Quantity_Color qColor;
      for (XCAFDoc_ColorType colorType : colorTypes) {
          if (colorTool->GetColor (label, colorType, qColor)) {
@@ -164,7 +723,38 @@ index 820f3a7..5d6d262 100644
              return true;
          }
      }
-@@ -324,12 +329,23 @@ public:
+@@ -146,6 +153,11 @@ public:
+         }
+     }
+ 
++    virtual std::string GetBodyKind () const override
++    {
++        return BodyKind (shape);
++    }
++
+ private:
+     const TopoDS_Shape& shape;
+     const Handle (XCAFDoc_ShapeTool)& shapeTool;
+@@ -189,6 +201,18 @@ public:
+         }
+     }
+ 
++    virtual std::string GetBodyKind () const override
++    {
++        // only the faces outside any shell
++        TopoDS_Compound loose;
++        BRep_Builder builder;
++        builder.MakeCompound (loose);
++        for (TopExp_Explorer ex (shape, TopAbs_FACE, TopAbs_SHELL); ex.More (); ex.Next ()) {
++            builder.Add (loose, ex.Current ());
++        }
++        return BodyKind (loose);
++    }
++
+ private:
+     const TopoDS_Shape& shape;
+     const Handle (XCAFDoc_ShapeTool)& shapeTool;
+@@ -324,12 +348,26 @@ public:
      {
          TDF_Label mainLabel = shapeTool->Label ();
  
@@ -185,11 +775,14 @@ index 820f3a7..5d6d262 100644
              if (IsFreeShape (childLabel, shapeTool)) {
                  TopoDS_Shape shape = shapeTool->GetShape (childLabel);
 -                if (!TriangulateShape (shape, params)) {
++                // planar holes closed before meshing, so a cap and its
++                // neighbours share one discretisation of their edges
++                CapPlanarHoles (shape);
 +                if (!TriangulateShape (shape, params, scope.Next ())) {
                      continue;
                  }
                  children.push_back (std::make_shared<const XcafNode> (
-@@ -338,6 +354,7 @@ public:
+@@ -338,6 +376,7 @@ public:
              }
          }
  
@@ -197,11 +790,44 @@ index 820f3a7..5d6d262 100644
          return children;
      }
  
+diff --git a/occt-import-js/src/importer.hpp b/occt-import-js/src/importer.hpp
+index 2ef8616..a05d0d7 100644
+--- a/occt-import-js/src/importer.hpp
++++ b/occt-import-js/src/importer.hpp
+@@ -44,6 +44,9 @@ public:
+     virtual std::string GetName () const = 0;
+     virtual bool GetColor (Color& color) const = 0;
+     virtual void EnumerateFaces (const std::function<void (const Face& face)>& onFace) const = 0;
++    // the body's b-rep status: "closed", "capped" (closed by planar caps the
++    // importer added), "sheet" (flat, zero thickness) or "open"
++    virtual std::string GetBodyKind () const { return std::string (); }
+ };
+ 
+ class Node
 diff --git a/occt-import-js/src/js-interface.cpp b/occt-import-js/src/js-interface.cpp
-index bb382e8..11c8957 100644
+index bb382e8..736870b 100644
 --- a/occt-import-js/src/js-interface.cpp
 +++ b/occt-import-js/src/js-interface.cpp
-@@ -149,7 +149,10 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val&
+@@ -4,6 +4,7 @@
+ #include "importer-step.hpp"
+ #include "importer-iges.hpp"
+ #include "importer-brep.hpp"
++#include "importer-utils.hpp"
+ #include <emscripten/bind.h>
+ 
+ class HierarchyWriter
+@@ -122,6 +123,10 @@ private:
+             }
+ 
+             meshObj.set ("brep_faces", brepFaceArr);
++            std::string bodyKind = mesh.GetBodyKind ();
++            if (!bodyKind.empty ()) {
++                meshObj.set ("brep_kind", bodyKind);
++            }
+ 
+             mMeshesArr.set (mMeshCount, meshObj);
+             nodeMeshesArr.set (nodeMeshCount, mMeshCount);
+@@ -149,10 +154,15 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val&
  {
      emscripten::val resultObj (emscripten::val::object ());
  
@@ -210,9 +836,24 @@ index bb382e8..11c8957 100644
 +    // (one JS call) at a time, about 3 s for a 25 MB file before the import
 +    // could start
 +    const std::vector<uint8_t> bufferArr = emscripten::convertJSArrayToNumberVector<std::uint8_t> (buffer);
++    ResetCaps ();
      Importer::Result importResult = importer->LoadFile (bufferArr, params);
      resultObj.set ("success", importResult == Importer::Result::Success);
      if (importResult != Importer::Result::Success) {
++        ResetCaps (); // no model's shapes kept alive past a failed import
+         return resultObj;
+     }
+ 
+@@ -166,6 +176,9 @@ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val&
+ 
+     resultObj.set ("root", rootNodeObj);
+     resultObj.set ("meshes", meshesArr);
++    // faces the importer added to close planar holes (CapPlanarHoles)
++    resultObj.set ("brep_caps", CapsAdded ());
++    ResetCaps ();
+     return resultObj;
+ }
+ 
 diff --git a/occt-import-js/src/progress.hpp b/occt-import-js/src/progress.hpp
 new file mode 100644
 index 0000000..3655be2

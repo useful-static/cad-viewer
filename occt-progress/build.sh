@@ -5,6 +5,15 @@
 # fraction) from the WASM, so the viewer can show real progress instead of a
 # guess. It also compiles with -O3 instead of upstream's -Oz, and copies the
 # file into the WASM in one typed-array copy instead of element by element.
+# Before meshing it closes each open SOLID whose missing faces are planar
+# (CapPlanarHoles: a planar closed loop of the body's own free edges, not a
+# hole in a face that is still there, gets a face on those edges; coplanar
+# loops nest into one face with holes; all of a body's loops or none; no face
+# is rebuilt, so colours stay; a shell outside any solid is a surface model
+# and is never capped),
+# and it reports each body's b-rep status (brep_kind: closed, capped, sheet,
+# open) and the distinct cap faces it added (brep_caps). A flat sheet or a
+# non-planar hole is left as is. Gate: tests/heal-probe.sh --fixtures.
 # occt.patch removes wasted work in OpenCascade, output-neutral (gate:
 # compare.sh, every converted mesh byte-identical), each piece done only when
 # the test it used to precede does not skip it:
