@@ -15,7 +15,7 @@ struct U {
   up : vec4f,       // world up axis: the sky and fill directions
   px : vec4f,       // edges: x, y target px; z width px; w extra px for the hovered body
   hover : vec4f,    // the hovered body's id bytes (0 = none)
-  cull : vec4f,     // edges: x focal px, y min radius px, z on
+  cull : vec4f,     // x focal px, y min radius px, z on for edges, w on for faces (the paper styles)
   fill : vec4f,     // the cut fill's colour
 };
 @group(0) @binding(0) var<uniform> u : U;
@@ -45,12 +45,23 @@ struct VOut {
   o.nrm = v.nrm.xyz;
   o.col = v.col.rgb;
   o.idc = v.idc;
+  // the paper styles: a body under cull.y px (whose edges are culled) is
+  // collapsed in the face and pick passes too, so it neither blanks the
+  // lines behind it nor can be picked unseen
+  if (u.cull.w > 0.5 && culled(v.idc)) { o.clipPos = GONE; }
   return o;
 }
 
 fn meshId(idc : vec4f) -> u32 {
   let b = vec4u(round(idc * 255.0));
   return b.x | (b.y << 8u) | (b.z << 16u);
+}
+// projected radius under cull.y px: radius * focal px / w, perspective and
+// ortho alike; a centre behind the eye is left to the clip
+fn culled(idc : vec4f) -> bool {
+  let cr = bodies[meshId(idc) * 2u + 1u];
+  let cc = u.viewProj * vec4f(cr.xyz, 1.0);
+  return cc.w > 0.0 && cr.w * u.cull.x < u.cull.y * cc.w;
 }
 fn stateOf(id : u32) -> vec4f {
   let w = u32(u.params.x);
@@ -116,7 +127,7 @@ fn clipped(p : vec3f) -> bool {
 // Each edge pass has its own small uniforms (group 1): the colour mode, the
 // dash period and the paper colours.
 struct P {
-  mode : vec4f,   // x: 0 face colour darkened, 1 paper by state, 2 face colour lightened; y dash period px (0 solid)
+  mode : vec4f,   // x: 0 face colour darkened, 1 paper by state, 2 face colour lightened; y dash period px (0 solid); z only selected / hovered bodies
   plain : vec4f,
   sel : vec4f,
   faded : vec4f,
@@ -161,11 +172,7 @@ fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> 
   o.dash = 0.0;
   // a body whose projected radius is under cull.y px draws no edges (as in
   // renderer-webgl.js): radius * focal px / w, perspective and ortho alike
-  if (u.cull.z > 0.5) {
-    let cr = bodies[meshId(idc) * 2u + 1u];
-    let cc = u.viewProj * vec4f(cr.xyz, 1.0);
-    if (cc.w > 0.0 && cr.w * u.cull.x < u.cull.y * cc.w) { o.clipPos = GONE; return o; }
-  }
+  if (u.cull.z > 0.5 && culled(idc)) { o.clipPos = GONE; return o; }
   let e = EIn(corner, p0, p1, idc, col);
   var c0 = u.viewProj * vec4f(e.p0, 1.0);
   var c1 = u.viewProj * vec4f(e.p1, 1.0);
@@ -195,6 +202,8 @@ fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> 
 @fragment fn fsEdge(i : VOut) -> @location(0) vec4f {
   let st = stateOf(meshId(i.idc));
   if (clipped(i.wpos) || st.g > 0.5) { discard; }
+  // z on (Hidden grey's hidden pass): only the selected or hovered bodies' edges
+  if (pu.mode.z > 0.5 && st.r < 0.5 && st.b < 0.5) { discard; }
   if (pu.mode.y > 0.0 && (i.dash % pu.mode.y) > 0.5 * pu.mode.y) { discard; }
   var c = i.col;
   if (pu.mode.x > 0.5 && pu.mode.x < 1.5) {
@@ -502,7 +511,8 @@ export class WebGPURenderer {
     const h = frame.hoverId || 0;
     f.set([h & 255, (h >>> 8) & 255, (h >>> 16) & 255, (h >>> 24) & 255], 44);
     const cull = !!(frame.edges && frame.edges.minPx && this.bodiesFor === this.drawn);
-    f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, 0], 48);
+    // the faces too in the paper styles (frame.cullFaces), the same bodies as the edges
+    f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, cull && frame.cullFaces ? 1 : 0], 48);
     const fill = frame.fill || [0, 0, 0];
     f.set([fill[0], fill[1], fill[2], 1], 52);
     this.device.queue.writeBuffer(this.ubo, 0, f);
@@ -592,7 +602,7 @@ export class WebGPURenderer {
         passes.forEach((ps, k) => {
           const c = ps.colours || {};
           const z = [0, 0, 0];
-          const pf = new Float32Array([ps.mode || 0, ps.dash || 0, 0, 0, ...(c.plain || z), 1, ...(c.selected || z), 1, ...(c.faded || z), 1]);
+          const pf = new Float32Array([ps.mode || 0, ps.dash || 0, ps.selectedOnly ? 1 : 0, 0, ...(c.plain || z), 1, ...(c.selected || z), 1, ...(c.faded || z), 1]);
           this.device.queue.writeBuffer(this.passSlots[k].buf, 0, pf);
           const draw = (buf, count, sil) => {
             pass.setPipeline(this.edgePipe(ps.depth || 'lequal', sil));

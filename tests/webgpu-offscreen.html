@@ -261,12 +261,22 @@ async function run() {
         if (Math.abs(q[o] - 0xb8) <= 4 && Math.abs(q[o + 1] - 0xb8) <= 4 && Math.abs(q[o + 2] - 0xb2) <= 4) fill++;
       }
     }
+    // a checksum of the whole frame, to tell two frames equal
+    let sig = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W * 4; x++) sig = (Math.imul(sig, 31) + q[y * bpr + x]) | 0;
     return { paper: +(paper / (W * H)).toFixed(3), dark: +(dark / (W * H)).toFixed(4), coloured: +(coloured / (W * H)).toFixed(4),
-      fill: +(fill / (W * H)).toFixed(4) };
+      fill: +(fill / (W * H)).toFixed(4), sig };
   };
   const hg = await styled({ background: rgb(PAPER), style: { faces: 'depth', outline: true },
     edgePasses: [{ depth: 'greater', mode: 1, dash: 6, colours: cols(1) }, { depth: 'lequal', mode: 1, colours: cols(0) }] });
   const xr = await styled({ style: { faces: 'xray', outline: true }, edgePasses: [{ depth: 'always', mode: 2 }] });
+  // Hidden grey's hidden pass with selectedOnly and nothing selected or
+  // hovered draws nothing: the frame equals Hidden line's
+  const visibleOnly = await styled({ background: rgb(PAPER), style: { faces: 'depth', outline: true },
+    edgePasses: [{ depth: 'lequal', mode: 1, colours: cols(0) }] });
+  const greyOnly = await styled({ background: rgb(PAPER), style: { faces: 'depth', outline: true },
+    edgePasses: [{ depth: 'greater', mode: 1, dash: 6, colours: cols(1), selectedOnly: true }, { depth: 'lequal', mode: 1, colours: cols(0) }] });
+  out.hiddenSelectedOnly = { equalsHiddenLine: greyOnly.sig === visibleOnly.sig, allHiddenDiffers: hg.sig !== visibleOnly.sig };
   // the cut fill: Hidden line, cut at the middle of z, every body closed
   // (state alpha 255) and then every body open (alpha 0)
   const { CUT_FILL } = await import('../js/styles.js');
@@ -280,7 +290,20 @@ async function run() {
   r.setState(new Uint8Array(1024 * 4), 1024, 1);
   const cutOpen = await styled(hl);
   const fillOk = cutClosed.fill > 0.001 && cutOpen.fill === 0;
-  const stylesOk = fillOk && hg.paper > 0.5 && hg.dark > 0 && hg.coloured < 0.01 && xr.coloured > 0.01 && !gpuErrors.length && !styleErrors.length;
+  // the paper styles' face cull: with a threshold no body reaches, a lit
+  // pixel picks nothing when the faces are culled too (cullFaces), and its
+  // body when only the edges are
+  let paperCull = null;
+  if (interior.length) {
+    const [px0, py0] = interior[Math.floor(interior.length / 2)];
+    const far = { ...frame, edges: { widthPx: 1.5, hoverPx: 1, minPx: 1e9 }, focalPx: H / 2 / Math.tan(Math.PI / 8), hoverId: 0 };
+    const culledPick = (await r.pick(px0, py0, { ...far, cullFaces: true })).id;
+    const keptPick = (await r.pick(px0, py0, far)).id;
+    paperCull = { culled: culledPick, kept: keptPick };
+  }
+  out.paperCull = paperCull;
+  const paperCullOk = !!paperCull && paperCull.culled === 0 && paperCull.kept > 0;
+  const stylesOk = fillOk && paperCullOk && out.hiddenSelectedOnly.equalsHiddenLine && out.hiddenSelectedOnly.allHiddenDiffers && hg.paper > 0.5 && hg.dark > 0 && hg.coloured < 0.01 && xr.coloured > 0.01 && !gpuErrors.length && !styleErrors.length;
   out.styles = { hiddenGrey: hg, xray: xr, cutFillClosed: cutClosed.fill, cutFillOpen: cutOpen.fill, errors: styleErrors };
   const edgesOk = stylesOk && r.edgeCount === el.edges.length / 2 && changed > 0 && darker >= 0.9 * changed
     && culledChanged === 0 && !gpuErrors.length;

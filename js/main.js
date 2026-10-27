@@ -483,13 +483,17 @@ function styleFrame(s, scale) {
   const passes = {
     edges: [{ depth: 'lequal', mode: 0 }],
     hidden: [visible],
-    // the hidden edges first, so a visible edge wins where they cross
-    hiddengrey: [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: PAPER_COLS(1) }, visible],
+    // the hidden edges first, so a visible edge wins where they cross; only
+    // the selected or hovered parts' (every part's is a grey thicket on a
+    // dense model), so with nothing selected it reads as Hidden line
+    hiddengrey: [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: PAPER_COLS(1), selectedOnly: true }, visible],
     wire: [{ ...visible, depth: 'always' }],
     xray: [{ depth: 'always', mode: 2 }],
   }[s.id] || null;
   return { background: s.paper ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
-    fill: s.faces === 'depth' ? FILL_RGB : null };
+    fill: s.faces === 'depth' ? FILL_RGB : null,
+    // a body too small to draw edges is collapsed in the face and pick passes too
+    cullFaces: !!s.paper };
 }
 
 function frameState() {

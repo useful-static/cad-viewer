@@ -25,6 +25,11 @@ varying vec3 vView;
 varying vec3 vNrm;
 varying vec3 vCol;
 varying vec4 vId;
+#ifdef CULL
+uniform sampler2D uBodies; // the body table, as in VS_EDGE
+uniform vec4 uBodyTex;
+uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
+#endif
 void main() {
   vClip = dot(uClipV.xyz, aPos) - uClipV.w;
   vView = normalize(uEyeV.xyz - aPos * uEyeV.w); // w = 0: ortho view direction
@@ -32,6 +37,18 @@ void main() {
   vCol = aCol.rgb;
   vId = aId;
   gl_Position = uViewProj * vec4(aPos, 1.0);
+#ifdef CULL
+  // the paper styles: a body under uCull.y px (whose edges are culled) is
+  // collapsed in the face and pick passes too, so it neither blanks the lines
+  // behind it nor can be picked unseen
+  if (uCull.w > 0.5) {
+    vec4 b = floor(aId * 255.0 + 0.5);
+    float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
+    vec4 cr = texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
+    vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
+    if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  }
+#endif
 }`;
 
 const FS_COMMON = `
@@ -224,6 +241,8 @@ void main() {
   if (clipped()) discard;
   vec4 st = stateOf();
   if (st.g > 0.5) discard;
+  // z on (Hidden grey's hidden pass): only the selected or hovered bodies' edges
+  if (uEdgeMode.z > 0.5 && st.r < 0.5 && st.b < 0.5) discard;
   if (uEdgeMode.y > 0.0 && mod(vDash, uEdgeMode.y) > 0.5 * uEdgeMode.y) discard;
   vec3 c;
   if (uEdgeMode.x > 0.5 && uEdgeMode.x < 1.5) {
@@ -281,9 +300,16 @@ export class WebGLRenderer {
     this.version = version;
     this.name = version === 2 ? 'webgl2' : 'webgl1';
     this.uintIndex = version === 2 || !!gl.getExtension('OES_element_index_uint');
-    this.shade = program(gl, FS_SHADE);
-    this.pickProg = program(gl, FS_PICK);
-    this.fillProg = program(gl, FS_FILL);
+    // The body table, a float texture read in the vertex shader: WebGL2
+    // always; WebGL1 with OES_texture_float and vertex texture units.
+    // Without it nothing is culled, and the face shaders are built without
+    // the cull (CULL), so they never sample a texture in the vertex stage.
+    this.bodyTexOk = version === 2
+      || (!!gl.getExtension('OES_texture_float') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0);
+    const vs = this.bodyTexOk ? `#define CULL\n${VS}` : VS;
+    this.shade = program(gl, FS_SHADE, vs);
+    this.pickProg = program(gl, FS_PICK, vs);
+    this.fillProg = program(gl, FS_FILL, vs);
     // Edges need instancing: native on WebGL2, ANGLE_instanced_arrays on
     // WebGL1. Without it (rare) no edges are drawn (canDrawEdges false).
     const ia = version === 2 ? null : gl.getExtension('ANGLE_instanced_arrays');
@@ -301,11 +327,6 @@ export class WebGLRenderer {
     this.silBuf = null;
     this.silCount = 0;
     this.edgesFor = null; // the mesh the edge instances were built for
-    // The body table, a float texture read in the vertex shader: WebGL2
-    // always; WebGL1 with OES_texture_float and vertex texture units.
-    // Without it nothing is culled.
-    this.bodyTexOk = version === 2
-      || (!!gl.getExtension('OES_texture_float') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0);
     this.bodyTex = null;
     this.bodySize = [1, 1];
     this.bodiesFor = null;
@@ -517,7 +538,7 @@ export class WebGLRenderer {
     const outline = frame.style && frame.style.outline && this.silCount;
     for (const ps of passes) {
       gl.depthFunc(DEPTH[ps.depth] || gl.LEQUAL);
-      gl.uniform4f(u.uEdgeMode, ps.mode || 0, ps.dash || 0, 0, 0);
+      gl.uniform4f(u.uEdgeMode, ps.mode || 0, ps.dash || 0, ps.selectedOnly ? 1 : 0, 0);
       const c = ps.colours || {};
       gl.uniform4f(u.uPaperPlain, ...col(c.plain), 1);
       gl.uniform4f(u.uPaperSel, ...col(c.selected), 1);
@@ -610,6 +631,20 @@ export class WebGLRenderer {
     // (null in the pick program, which never shades: setting a null location is a no-op)
     const cn = frame.clip || [0, 0, 1, 0];
     gl.uniform4f(u.uCapN, cn[0], cn[1], cn[2], 0);
+    // the paper styles' face cull (frame.cullFaces): the edges' bodies and
+    // threshold. The body table on unit 1; with none, the sampler points at
+    // the state texture so no unit is left empty. (Null locations in a
+    // program built without CULL: no-ops.)
+    const e = frame.edges;
+    const cull = !!(this.bodyTexOk && frame.cullFaces && e && e.minPx && this.bodyTex && this.bodiesFor === this.drawn);
+    if (cull) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    gl.uniform1i(u.uBodies, cull ? 1 : 0);
+    gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
+    gl.uniform4f(u.uCull, frame.focalPx || 0, cull ? e.minPx : 0, 0, cull ? 1 : 0);
   }
 
   // Every face pass is biased (POLYGON_OFFSET_FILL on): the solids, then the
