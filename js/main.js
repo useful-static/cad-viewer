@@ -8,6 +8,7 @@ import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './pale
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
+import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -47,6 +48,13 @@ const app = {
     let p = null;
     try { p = localStorage.getItem('cadv.palette'); } catch { /* storage off */ }
     return PALETTES.some((x) => x.id === p) ? p : 'file';
+  })(),
+  // the display unit chosen (js/units.js); only an explicit choice is
+  // remembered, so 'auto' (the file's declared unit) is the absence of one
+  unitChoice: (() => {
+    let u = null;
+    try { u = localStorage.getItem('cadv.units'); } catch { /* storage off */ }
+    return DISPLAY_UNITS.includes(u) ? u : 'auto';
   })(),
   baseMesh: null,
   // colours picked for single parts of the loaded model: body index -> [r, g, b],
@@ -832,8 +840,7 @@ function updateButtons() {
   $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
   syncOptbar();
   const p = sectionPlane();
-  const unit = !app.header ? '' : app.header.units === 'millimeter' ? 'mm' : app.header.units || '';
-  $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${(p[3] * (app.section.flip ? -1 : 1)).toFixed(1)} ${unit}` : '';
+  $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(p[3] * (app.section.flip ? -1 : 1), 'section')} ${lenUnit()}` : '';
   // the part colour: on with a selection, showing the first selected body's
   // colour; Reset only while a selected body has a picked colour
   const sel = app.header ? [...app.selected] : [];
@@ -1685,9 +1692,53 @@ function select(ids, additive, name = null) {
   showInfo();
 }
 
+// The display unit in force, and a length (model units) in it. The geometry
+// is in mm (OpenCascade converts on import); a file whose header names
+// another unit is shown in that unit, unconverted.
+const geomMm = () => !app.header || app.header.units === 'millimeter';
+const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits);
+const lenUnit = () => (geomMm() ? curUnit() : app.header.units);
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : v.toFixed(1));
+
+// What the file declares, in the picker's spelling where it has one
+const UNIT_WORDS = { mixed: 'mixed (its parts disagree)', um: 'µm', uin: 'µin' };
+
+// The info block's units row: its select lives outside the rebuilt values,
+// so a refresh (a selection, a load) never closes an open picker. Only its
+// text is set here.
+function syncUnitsRow() {
+  const row = $('infounits');
+  row.hidden = !app.header;
+  if (!app.header) return;
+  const declared = app.header.sourceUnits;
+  $('unitsrc').textContent = !geomMm() ? `${app.header.units} (not converted)`
+    : declared ? (UNIT_WORDS[declared] || declared) : 'not recorded';
+  const sel = $('unitsel');
+  sel.disabled = !geomMm();
+  sel.options[0].text = `Auto (${autoUnit(declared)})`;
+  sel.value = app.unitChoice;
+}
+
+function setUnitChoice(u) {
+  app.unitChoice = DISPLAY_UNITS.includes(u) ? u : 'auto';
+  try {
+    if (app.unitChoice === 'auto') localStorage.removeItem('cadv.units');
+    else localStorage.setItem('cadv.units', app.unitChoice);
+  } catch { /* storage off */ }
+  showInfo();
+  updateButtons(); // the section readout
+}
+
 function showInfo() {
-  const el = $('info');
+  syncUnitsRow();
+  const el = $('infovals');
   el.innerHTML = '';
+  fillInfo(el);
+  // no renderer and no model: no blank box or double rule
+  $('info').hidden = !el.childElementCount;
+}
+
+function fillInfo(el) {
   const add = (k, v) => {
     const d = document.createElement('div');
     const a = document.createElement('b');
@@ -1714,7 +1765,7 @@ function showInfo() {
   if (!app.header) return;
   const ids = [...app.selected];
   const b = ids.length ? bboxOf(ids) : app.header.bbox;
-  const dims = b ? [0, 1, 2].map((k) => (b.max[k] - b.min[k]).toFixed(1)).join(' × ') : '-';
+  const dims = b ? [0, 1, 2].map((k) => lenNum(b.max[k] - b.min[k], 'size')).join(' × ') : '-';
   let title = 'whole model';
   // a tree row chosen on its own: its full name (the row truncates it)
   if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} bodies` : app.selName;
@@ -1724,7 +1775,7 @@ function showInfo() {
   add('selection', title);
   // "size (mm)" rather than "extent X × Y × Z (mm)": the longer label wrapped
   // the third value onto a line of its own in the 300 px panel
-  add(`size (${app.header.units === 'millimeter' ? 'mm' : app.header.units})`, dims);
+  add(`size (${lenUnit()})`, dims);
   add('triangles', fmtInt(tris));
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
@@ -2087,6 +2138,8 @@ function wireInput() {
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));
   pal.value = app.palette;
   pal.onchange = () => setPalette(pal.value);
+  // blurred after a change, so a focused select does not swallow the number keys
+  $('unitsel').onchange = (e) => { setUnitChoice(e.target.value); e.target.blur(); };
   // 'change', not 'input': a picker drag fires input continuously, and each
   // recolour re-uploads the model
   $('partcolour').onchange = (e) => setPartColour(e.target.value);

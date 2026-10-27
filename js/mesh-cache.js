@@ -15,7 +15,9 @@
 // sRGB (they were darkened), and faces that ran out of memory now mesh.
 // 3: open solids with planar missing faces are closed, and every body
 // carries its b-rep status (kind) (converter 0.0.23-progress7).
-export const CACHE_VERSION = 3;
+// 4: the b-rep faces (the faces section), the file's declared unit
+// (sourceUnits) and the angular deflection are kept.
+export const CACHE_VERSION = 4;
 
 // Keys written under an older CACHE_VERSION: never read again, so dropped.
 export const staleKeys = (entries) => entries.map((e) => e.key).filter((k) => !k.startsWith(`v${CACHE_VERSION}|`));

@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { BODY_KINDS, encodeCadmesh, hashName, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { sourceUnits } from './js/source-units.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadmesh]
@@ -110,13 +111,18 @@ async function main() {
   };
   const occt = await createRequire(import.meta.url)(occtJs)({ locateFile: (p) => join(occtDir, p), onProgress });
   const t0 = Date.now();
-  const result = occt.ReadFile(format, readFileSync(args.input), args.params);
+  const bytes = readFileSync(args.input);
+  // the unit the file declares, read before the converter sees the bytes
+  const declared = sourceUnits(bytes, format);
+  const result = occt.ReadFile(format, bytes, args.params);
   const t1 = Date.now();
   if (!result || !result.success) {
     process.stderr.write(`FAIL: OpenCascade could not import ${args.input}\n`);
     return 1;
   }
   const model = occtResultToModel(result);
+  model.sourceUnits = declared;
+  model.angularDeflection = args.params.angularDeflection;
   // the statuses are reported (and digested for compare.sh) even when
   // --no-kind leaves them out of the header
   // the converter's own strings, not the filtered kind, so a status the JS
@@ -137,7 +143,8 @@ async function main() {
   const tris = result.meshes.reduce((s, m) => s + m.index.array.length / 3, 0);
   const mb = (n) => (n / 1e6).toFixed(1);
   process.stdout.write(`OK ${out}: ${meshes} bodies, ${tris} triangles, ${mb(file.length)} MB`
-    + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s\n`);
+    + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s`
+    + `, declared unit ${declared || 'not recorded'}\n`);
   // the b-rep status of each body, as the converter found it
   const kinds = {};
   for (const k of statuses) if (k) kinds[k] = (kinds[k] || 0) + 1;

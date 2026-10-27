@@ -12,18 +12,29 @@
 // Header JSON:
 //   { units, bbox:{min,max}, vertexCount, indexCount,
 //     sections:{ position, normal, color, id, index : {offset, byteLength} },
-//     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox, kind? }],
-//     root:{ name, meshes:[i...], children:[...] } }
+//     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox, kind?,
+//               faceStart?, faceCount? }],
+//     root:{ name, meshes:[i...], children:[...] },
+//     sourceUnits?, angularDeflection? }
 // kind (optional; absent from files converted before it existed) is the
 // body's status taken from the b-rep by the converter, not from the mesh:
 // "closed", "capped" (closed by planar faces the converter added where the
 // file left a hole), "sheet" (flat, zero thickness: a pad, a label) or "open".
+// sourceUnits: the length unit the source file DECLARES (js/source-units.js:
+// 'mm', 'in', ...; 'mixed' when its shapes disagree); absent = unknown, never
+// mm. The geometry itself is always in `units` (mm: OpenCascade converts).
+// angularDeflection: the tessellation's angle in radians.
 //
 // Per-vertex sections (vertexCount entries):
 //   position float32x3 · normal snorm16x4 (w=0) · color unorm8x4 · id unorm8x4
 // id is (mesh index + 1) as little-endian RGBA bytes, so a pick pass writes it
 // straight to an RGBA8 target and the read-back bytes ARE the id (0 = nothing).
 // index: uint32 triangle list, absolute vertex indices.
+//
+// Optional sections (absent from older files, which older viewers ignore):
+//   faces  uint32 pairs (first triangle, triangle count), one per b-rep face,
+//          in GLOBAL triangle numbers; count 0 for a face that was not meshed.
+//          A mesh's faces are faceStart .. faceStart + faceCount - 1.
 //
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
@@ -32,6 +43,8 @@ export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
 
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
+// name -> element type; written only when the model carries them
+const OPTIONAL = { faces: Uint32Array };
 // the b-rep statuses the converter reports: BodyKind in
 // occt-progress/progress.patch is the source; this list follows it
 export const BODY_KINDS = ['closed', 'capped', 'sheet', 'open'];
@@ -48,14 +61,22 @@ export function bytesToId(b0, b1, b2, b3) {
 
 // model: { units, meshes:[{name, color:[r,g,b]|null, positions:Float32Array,
 //          normals:Float32Array|null, colors:Uint8Array(rgba per vertex)|null,
-//          indices:Uint32Array (local to the mesh)}], root }
+//          indices:Uint32Array (local to the mesh),
+//          faces?:Uint32Array (first, count) pairs in the mesh's own triangle
+//          numbers}], root, sourceUnits?, angularDeflection? }
+// The faces section is written only when every mesh carries faces.
 export function encodeCadmesh(model) {
   let vertexCount = 0;
   let indexCount = 0;
+  let faceCount = 0;
+  const withFaces = model.meshes.length > 0 && model.meshes.every((m) => m.faces instanceof Uint32Array);
   for (const m of model.meshes) {
     vertexCount += m.positions.length / 3;
     indexCount += m.indices.length;
+    if (withFaces) faceCount += m.faces.length / 2;
   }
+  const faces = withFaces ? new Uint32Array(faceCount * 2) : null;
+  let f0 = 0;
   const position = new Float32Array(vertexCount * 3);
   const normal = new Int16Array(vertexCount * 4);
   const color = new Uint8Array(vertexCount * 4);
@@ -99,6 +120,11 @@ export function encodeCadmesh(model) {
       id[o] = idb[0]; id[o + 1] = idb[1]; id[o + 2] = idb[2]; id[o + 3] = idb[3];
     }
     for (let i = 0; i < ni; i++) index[i0 + i] = m.indices[i] + v0;
+    const nf = withFaces ? m.faces.length / 2 : 0;
+    for (let f = 0; f < nf; f++) {
+      faces[(f0 + f) * 2] = m.faces[f * 2] + i0 / 3;
+      faces[(f0 + f) * 2 + 1] = m.faces[f * 2 + 1];
+    }
     for (let k = 0; k < 3; k++) {
       if (nv && mMin[k] < bbMin[k]) bbMin[k] = mMin[k];
       if (nv && mMax[k] > bbMax[k]) bbMax[k] = mMax[k];
@@ -109,15 +135,18 @@ export function encodeCadmesh(model) {
       vtxStart: v0, vtxCount: nv, idxStart: i0, idxCount: ni,
       bbox: nv ? { min: mMin, max: mMax } : null,
       ...(m.kind ? { kind: m.kind } : {}),
+      ...(withFaces ? { faceStart: f0, faceCount: nf } : {}),
     });
     v0 += nv;
     i0 += ni;
+    f0 += nf;
   });
 
-  const arrays = { position, normal, color, id, index };
+  const arrays = { position, normal, color, id, index, ...(faces ? { faces } : {}) };
+  const names = [...SECTIONS, ...Object.keys(OPTIONAL).filter((s) => arrays[s])];
   const sections = {};
   let off = 0;
-  for (const s of SECTIONS) {
+  for (const s of names) {
     sections[s] = { offset: off, byteLength: arrays[s].byteLength };
     off = align8(off + arrays[s].byteLength);
   }
@@ -126,6 +155,8 @@ export function encodeCadmesh(model) {
     bbox: vertexCount ? { min: bbMin, max: bbMax } : null,
     vertexCount, indexCount, sections, meshes: metas,
     root: model.root || { name: 'model', meshes: metas.map((_, i) => i), children: [] },
+    ...(typeof model.sourceUnits === 'string' ? { sourceUnits: model.sourceUnits } : {}),
+    ...(model.angularDeflection > 0 ? { angularDeflection: model.angularDeflection } : {}),
   };
   const json = new TextEncoder().encode(JSON.stringify(header));
   const dataStart = align8(12 + json.byteLength);
@@ -135,7 +166,7 @@ export function encodeCadmesh(model) {
   dv.setUint32(4, VERSION, true);
   dv.setUint32(8, json.byteLength, true);
   new Uint8Array(out, 12, json.byteLength).set(json);
-  for (const s of SECTIONS) {
+  for (const s of names) {
     new Uint8Array(out, dataStart + sections[s].offset, sections[s].byteLength)
       .set(new Uint8Array(arrays[s].buffer, arrays[s].byteOffset, arrays[s].byteLength));
   }
@@ -182,7 +213,8 @@ export function deflateCadmesh(buf) {
 }
 
 // Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,
-//           id:Uint8Array, index:Uint32Array } as views into buf (no copies).
+//           id:Uint8Array, index:Uint32Array, faces:Uint32Array|null } as views
+// into buf (no copies). An optional section the file lacks is null.
 export function decodeCadmesh(buf) {
   if (buf.byteLength < 12) throw new Error('cadmesh: file too short');
   const dv = new DataView(buf);
@@ -209,12 +241,26 @@ export function decodeCadmesh(buf) {
     id: view('id', Uint8Array),
     index: view('index', Uint32Array),
   };
+  for (const [s, Ctor] of Object.entries(OPTIONAL)) out[s] = header.sections[s] ? view(s, Ctor) : null;
   // An index past the vertex data draws nothing on WebGL2 (INVALID_OPERATION,
   // no error shown) and garbage on WebGPU: refuse it here, loudly.
   const vc = header.vertexCount;
   const idx = out.index;
   for (let i = 0; i < idx.length; i++) {
     if (idx[i] >= vc) throw new Error(`cadmesh: index ${i} names vertex ${idx[i]} of ${vc}`);
+  }
+  // each face's triangles lie inside its own mesh
+  if (out.faces) {
+    const fc = out.faces;
+    for (const [mi, m] of header.meshes.entries()) {
+      const t0 = m.idxStart / 3;
+      const t1 = (m.idxStart + m.idxCount) / 3;
+      for (let f = m.faceStart; f < m.faceStart + m.faceCount; f++) {
+        if (fc[f * 2 + 1] && (fc[f * 2] < t0 || fc[f * 2] + fc[f * 2 + 1] > t1)) {
+          throw new Error(`cadmesh: face ${f} (triangles ${fc[f * 2]} + ${fc[f * 2 + 1]}) is outside mesh ${mi}`);
+        }
+      }
+    }
   }
   return out;
 }
@@ -236,6 +282,15 @@ function validateHeader(h) {
     const sec = h.sections && h.sections[s];
     if (!sec || !ok(sec.offset) || sec.byteLength !== len || sec.offset % 8) bad(`section ${s} does not match the header counts`);
   }
+  const fsec = h.sections.faces;
+  if (fsec !== undefined && (!fsec || !ok(fsec.offset) || fsec.offset % 8 || !ok(fsec.byteLength) || fsec.byteLength % 8)) {
+    bad('section faces is not whole (first, count) pairs');
+  }
+  const faceTotal = fsec ? fsec.byteLength / 8 : 0;
+  if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
+  if (h.angularDeflection !== undefined && !(Number.isFinite(h.angularDeflection) && h.angularDeflection > 0)) {
+    bad('angularDeflection is not a positive number');
+  }
   if (!Array.isArray(h.meshes)) bad('header has no mesh list');
   const n = h.meshes.length;
   for (const [i, m] of h.meshes.entries()) {
@@ -245,6 +300,9 @@ function validateHeader(h) {
     }
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
     if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
+    if (fsec && (!ok(m.faceStart) || !ok(m.faceCount) || m.faceStart + m.faceCount > faceTotal)) {
+      bad(`mesh ${i} face range is outside the faces section`);
+    }
   }
   const seen = new Set();
   const walk = (node, depth) => {
@@ -306,7 +364,14 @@ export function occtResultToModel(result, units = 'millimeter') {
     // a status this code does not know is dropped, so an advisory field never
     // fails a conversion (the strings come from BodyKind in progress.patch)
     const kind = BODY_KINDS.includes(m.brep_kind) ? m.brep_kind : null;
-    return { name: m.name, color: m.color || null, positions, normals, colors, indices, kind };
+    // the b-rep faces, kept: brep_faces' first/last are inclusive triangle
+    // numbers in this mesh (last < first: the face was not meshed)
+    const fpairs = new Uint32Array(faces.length * 2);
+    faces.forEach((f, i) => {
+      fpairs[i * 2] = f.last < f.first ? 0 : f.first;
+      fpairs[i * 2 + 1] = f.last < f.first ? 0 : f.last - f.first + 1;
+    });
+    return { name: m.name, color: m.color || null, positions, normals, colors, indices, kind, faces: m.brep_faces ? fpairs : null };
   });
   const conv = (n) => ({ name: n.name || '', meshes: n.meshes || [], children: (n.children || []).map(conv) });
   const root = conv(result.root);

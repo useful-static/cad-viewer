@@ -98,6 +98,8 @@
   #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
+  #info[hidden], #infounits[hidden] { display:none; }
+  #unitsel { padding:1px 4px; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);
     border-radius:4px; font:inherit; min-width:0; }
@@ -296,7 +298,11 @@
     </div></div>
 </div></header>
 <aside id="parts" aria-label="Parts">
-  <div id="info"></div>
+  <div id="info" hidden><div id="infovals"></div>
+    <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
+      <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the unit the file was drawn in, mm when it does not say (a choice other than Auto is remembered in this browser)">
+        <option value="auto">Auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
+      </select></div></div>
   <div id="colours"><label for="palette">Colours</label>
     <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select>
     <input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">

@@ -81,7 +81,11 @@ URL parameters:
   touch screen a tap names what it picked.
 - **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
   (View > Section): along the bottom of the view, X / Y / Z, a slider, the
-  cut's position in model units, and a flip.
+  cut's position, and a flip.
+- **Units.** The parts panel names the unit the file was drawn in (read
+  from a STEP or IGES file's own unit declarations; "not recorded" for an
+  older `.cadmesh`) and shows lengths in it on **Auto**, or in mm, cm, m or
+  in by choice, which the browser remembers.
   Cut solids read as solid: what you see of a part's inside through the cut
   is shaded flat, like a cut face.
 - **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
@@ -163,7 +167,9 @@ files load too.
   fallback order applies again) and the model re-uploaded, up to 3 attempts.
 - **`.cadmesh` sections.** The file's attribute sections (`float32x3`
   position, `snorm16x4` normal, `unorm8x4` colour and id, `uint32` index) are
-  8-byte aligned and upload to the GPU without conversion once inflated. The layout is
+  8-byte aligned and upload to the GPU without conversion once inflated.
+  Optional sections, which older viewers ignore, add each b-rep face's
+  triangles (`faces`); the header records the file's declared unit. The layout is
   documented at the top of [`js/cadmesh.js`](js/cadmesh.js).
 
 | File | Role |
@@ -176,6 +182,8 @@ files load too.
 | `js/step-worker.js` | in-browser STEP/IGES/BREP import |
 | `js/import-progress.js` | the conversion-time forecast, the time left and the progress bar |
 | `js/step-features.js` | counts a STEP file's records, faces and holes per face, for the forecast |
+| `js/source-units.js` | the length unit a STEP or IGES file declares |
+| `js/units.js` | formats every length, area, volume and mass in the display unit |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |
 | `js/converter-choice.js` | whether an import runs on the multi-core build |
@@ -189,8 +197,9 @@ files load too.
 
 ```sh
 npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes,
-                # test-converter-choice
-                # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion
+                # test-converter-choice, test-source-units, test-units
+                # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion,
+                # CADV_INCH_STEP=<an inch STEP file> to add a real inch file
 ```
 
 `tests/webgpu-offscreen.html?src=<.cadmesh>` drives the real WebGPU renderer

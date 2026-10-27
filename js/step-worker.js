@@ -26,6 +26,9 @@ onmessage = async (ev) => {
       throw new Error('the converter is not installed (run fetch-deps.sh)');
     }
     const fmt = await import('./cadmesh.js');
+    // the unit the file declares, read before the converter sees the bytes
+    const { sourceUnits } = await import('./source-units.js');
+    const declared = sourceUnits(buffer, format);
     // Our build of occt-import-js (occt-progress/) calls onProgress(phase,
     // fraction) from inside the import: 1 = reading the file (start / end
     // only), 2 = building the parts, 3 = meshing. The stock npm build never
@@ -39,10 +42,13 @@ onmessage = async (ev) => {
     });
     post(`converting ${format.toUpperCase()} (${(buffer.byteLength / 1e6).toFixed(1)} MB)`, true);
     const t0 = performance.now();
-    const result = occt.ReadFile(format, new Uint8Array(buffer), params || fmt.DEFAULT_TESSELLATION);
+    const tess = params || fmt.DEFAULT_TESSELLATION;
+    const result = occt.ReadFile(format, new Uint8Array(buffer), tess);
     const t1 = performance.now();
     post('packing mesh');
     const model = fmt.occtResultToModel(result);
+    model.sourceUnits = declared;
+    model.angularDeflection = tess.angularDeflection;
     const out = fmt.encodeCadmesh(model);
     postMessage({ type: 'done', buffer: out, ms: Math.round(t1 - t0), unmeshedFaces: model.unmeshedFaces }, [out]);
   } catch (e) {

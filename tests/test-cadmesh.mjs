@@ -213,6 +213,45 @@ test('decode rejects an unknown body kind', () => {
   assert.throws(() => decodeCadmesh(encodeCadmesh(model)), /kind "watertight"/);
 });
 
+test('occt mapping keeps the b-rep faces; the faces section is in global triangle numbers', () => {
+  const root = { name: 'r', meshes: [0, 1], children: [] };
+  // mesh b: an unmeshed face (last < first) between two real ones
+  const model = occtResultToModel(occt([om('a', null, [{ first: 0, last: 1 }]),
+    om('b', null, [{ first: 0, last: 0 }, { first: 1, last: 0 }, { first: 1, last: 1 }])], root));
+  const m = decodeCadmesh(encodeCadmesh(model));
+  assert.ok(m.faces, 'faces section present');
+  assert.deepEqual([...m.faces], [0, 2, 2, 1, 2, 0, 3, 1], 'b starts at triangle 2; the unmeshed face has count 0');
+  assert.deepEqual(m.header.meshes.map((x) => [x.faceStart, x.faceCount]), [[0, 1], [1, 3]]);
+  assert.equal(m.header.sections.faces.offset % 8, 0);
+});
+
+test('a model without faces writes no faces section, and decodes it as null', () => {
+  const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }));
+  assert.equal(m.faces, null);
+  assert.equal(m.header.sections.faces, undefined);
+  assert.equal(m.header.meshes[0].faceStart, undefined);
+});
+
+test('decode rejects a face outside its mesh, and a face range outside the section', () => {
+  const two = () => ({ meshes: [{ ...quad('a', 0), faces: new Uint32Array([0, 2]) }, { ...quad('b', 2), faces: new Uint32Array([0, 1]) }] });
+  assert.doesNotThrow(() => decodeCadmesh(encodeCadmesh(two())));
+  const over = two();
+  over.meshes[0].faces = new Uint32Array([1, 2]); // triangles 1-2: the second is mesh b's
+  assert.throws(() => decodeCadmesh(encodeCadmesh(over)), /face 0 .* outside mesh 0/);
+  assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh(two()), '"faceStart":1,"faceCount":1', '"faceStart":1,"faceCount":2')), /face range is outside/);
+});
+
+test('the declared unit and the angular deflection reach the header; absent stays absent', () => {
+  const h = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)], sourceUnits: 'in', angularDeflection: 0.5 })).header;
+  assert.equal(h.sourceUnits, 'in');
+  assert.equal(h.angularDeflection, 0.5);
+  assert.equal(h.units, 'millimeter', 'the geometry stays in mm');
+  const none = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)], sourceUnits: null })).header;
+  assert.equal('sourceUnits' in none, false, 'unknown is absent, never mm');
+  assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh({ meshes: [quad('a', 0)], angularDeflection: 0.5 }),
+    '"angularDeflection":0.5', '"angularDeflection":0e0')), /angularDeflection/);
+});
+
 test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
 });
