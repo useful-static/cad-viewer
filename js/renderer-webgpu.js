@@ -11,9 +11,15 @@ struct U {
   params : vec4f,   // x stateW, y stateH, z clip on
   hi : vec4f,
   up : vec4f,       // world up axis: the sky and fill directions
+  px : vec4f,       // edges: x, y target px; z width px; w extra px for the hovered body
+  hover : vec4f,    // the hovered body's id bytes (0 = none)
+  cull : vec4f,     // edges: x focal px, y min radius px, z on
+  fill : vec4f,     // the cut fill's colour
 };
 @group(0) @binding(0) var<uniform> u : U;
 @group(0) @binding(1) var stateTex : texture_2d<f32>;
+// the body table, by id: [2 id] explode direction, [2 id + 1] centre, radius
+@group(0) @binding(2) var<storage, read> bodies : array<vec4f>;
 
 struct VIn {
   @location(0) pos : vec3f,
@@ -27,6 +33,7 @@ struct VOut {
   @location(1) nrm : vec3f,
   @location(2) col : vec3f,
   @location(3) @interpolate(flat) idc : vec4f,
+  @location(4) dash : f32, // edges: px along the segment, for the hidden edges' dashes
 };
 
 @vertex fn vs(v : VIn) -> VOut {
@@ -80,14 +87,128 @@ fn clipped(p : vec3f) -> bool {
   if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }
   else if (u.hi.a > 0.5) { c = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.7) * 0.55; }
   if (st.b > 0.5) { c = c + vec3f(0.12); }
-  return vec4f(c, 1.0);
+  // X-ray (params.w = 0.25): premultiplied, blended one / one-minus-src-alpha
+  let a = select(1.0, u.params.w, u.params.w > 0.0);
+  return vec4f(c * a, a);
+}
+
+// The cut fill, as FS_FILL in renderer-webgl.js: a flat fill where a CLOSED
+// body (state alpha) shows its inside through the cut
+@fragment fn fsFill(i : VOut) -> @location(0) vec4f {
+  let st = stateOf(meshId(i.idc));
+  if (clipped(i.wpos) || st.g > 0.5 || st.a < 0.5 || u.params.z < 0.5) { discard; }
+  if (dot(i.nrm, normalize(u.eye.xyz - i.wpos * u.eye.w)) >= 0.0) { discard; }
+  return vec4f(u.fill.rgb, 1.0);
 }
 
 @fragment fn fsPick(i : VOut) -> @location(0) vec4f {
   if (clipped(i.wpos) || stateOf(meshId(i.idc)).g > 0.5) { discard; }
   return i.idc;
 }
+
+// Edges, as in renderer-webgl.js: one instance per edge, a quad of 4
+// corners expanded in screen space, clipped to the near plane before the
+// divide (reverse-Z keeps z <= w), collapsed when both ends are behind it.
+// A silhouette candidate (vsSil) is kept only where its two triangles'
+// normals face opposite ways from the eye, tested at the midpoint.
+// Each edge pass has its own small uniforms (group 1): the colour mode, the
+// dash period and the paper colours.
+struct P {
+  mode : vec4f,   // x: 0 face colour darkened, 1 paper by state, 2 face colour lightened; y dash period px (0 solid)
+  plain : vec4f,
+  sel : vec4f,
+  faded : vec4f,
+};
+@group(1) @binding(0) var<uniform> pu : P;
+struct EIn {
+  @location(0) corner : vec2f,
+  @location(1) p0 : vec3f,
+  @location(2) p1 : vec3f,
+  @location(3) idc : vec4f,
+  @location(4) col : vec4f,
+};
+struct SIn {
+  @location(0) corner : vec2f,
+  @location(1) p0 : vec3f,
+  @location(2) p1 : vec3f,
+  @location(3) idc : vec4f,
+  @location(4) col : vec4f,
+  @location(5) n1 : vec4f,
+  @location(6) n2 : vec4f,
+};
+const GONE = vec4f(2.0, 2.0, 2.0, 1.0);
+@vertex fn vsEdge(e : EIn) -> VOut {
+  return edgeOut(e.corner, e.p0, e.p1, e.idc, e.col);
+}
+@vertex fn vsSil(e : SIn) -> VOut {
+  let mv = u.eye.xyz - 0.5 * (e.p0 + e.p1) * u.eye.w;
+  if (dot(e.n1.xyz, mv) * dot(e.n2.xyz, mv) > 0.0) {
+    var o : VOut;
+    o.clipPos = GONE;
+    o.idc = e.idc;
+    return o;
+  }
+  return edgeOut(e.corner, e.p0, e.p1, e.idc, e.col);
+}
+fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> VOut {
+  var o : VOut;
+  o.wpos = mix(p0, p1, corner.x);
+  o.nrm = vec3f(0.0);
+  o.col = col.rgb;
+  o.idc = idc;
+  o.dash = 0.0;
+  // a body whose projected radius is under cull.y px draws no edges (as in
+  // renderer-webgl.js): radius * focal px / w, perspective and ortho alike
+  if (u.cull.z > 0.5) {
+    let cr = bodies[meshId(idc) * 2u + 1u];
+    let cc = u.viewProj * vec4f(cr.xyz, 1.0);
+    if (cc.w > 0.0 && cr.w * u.cull.x < u.cull.y * cc.w) { o.clipPos = GONE; return o; }
+  }
+  let e = EIn(corner, p0, p1, idc, col);
+  var c0 = u.viewProj * vec4f(e.p0, 1.0);
+  var c1 = u.viewProj * vec4f(e.p1, 1.0);
+  let d0 = c0.w - c0.z;
+  let d1 = c1.w - c1.z;
+  if (d0 < 0.0 && d1 < 0.0) { o.clipPos = GONE; return o; }
+  if (d0 < 0.0) { c0 = mix(c0, c1, d0 / (d0 - d1)); }
+  if (d1 < 0.0) { c1 = mix(c1, c0, d1 / (d1 - d0)); }
+  let hpx = u.px.xy * 0.5;
+  let s0 = c0.xy / c0.w * hpx;
+  let s1 = c1.xy / c1.w * hpx;
+  var dir = s1 - s0;
+  let len = length(dir);
+  dir = select(vec2f(1.0, 0.0), dir / len, len > 1e-6);
+  let nrm = vec2f(-dir.y, dir.x);
+  let b = round(e.idc * 255.0);
+  let w = u.px.z + select(0.0, u.px.w, all(b == u.hover));
+  let c = select(c1, c0, e.corner.x < 0.5);
+  // half the width across, and half past each end, so joints close
+  let off = (nrm * e.corner.y + dir * (e.corner.x * 2.0 - 1.0)) * (w * 0.5) / hpx;
+  o.dash = e.corner.x * len;
+  o.clipPos = vec4f(c.xy + off * c.w, c.z, c.w);
+  return o;
+}
+
+// The edge colour by pu.mode.x (as FS_EDGE in renderer-webgl.js)
+@fragment fn fsEdge(i : VOut) -> @location(0) vec4f {
+  let st = stateOf(meshId(i.idc));
+  if (clipped(i.wpos) || st.g > 0.5) { discard; }
+  if (pu.mode.y > 0.0 && (i.dash % pu.mode.y) > 0.5 * pu.mode.y) { discard; }
+  var c = i.col;
+  if (pu.mode.x > 0.5 && pu.mode.x < 1.5) {
+    c = select(select(pu.plain.rgb, pu.faded.rgb, u.hi.a > 0.5 && st.b < 0.5), pu.sel.rgb, st.r > 0.5);
+  } else {
+    if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }
+    else if (u.hi.a > 0.5) { c = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.7) * 0.55; }
+    if (st.b > 0.5) { c = c + vec3f(0.12); }
+    c = select(c * 0.45, mix(c, vec3f(1.0), 0.5), pu.mode.x > 1.5);
+  }
+  return vec4f(c, 1.0);
+}
 `;
+
+const EDGE_STRIDE = 32; // p0 f32x3, p1 f32x3, id u8x4, colour u8x4
+const SIL_STRIDE = 48;  // an edge instance, then two normals snorm16x4
 
 const MSAA = 4;
 const INIT_TIMEOUT_MS = 6000;
@@ -170,19 +291,75 @@ export class WebGPURenderer {
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
+    // the body table; one empty body until a model's arrives
+    this.bodyBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.bodiesFor = null;
     const layout = device.createPipelineLayout({ bindGroupLayouts: [this.bgl] });
-    const mk = (fs, format, samples) => device.createRenderPipeline({
+    const mk = (fs, format, samples, extra = {}, target = {}) => device.createRenderPipeline({
       layout,
       vertex: { module: mod, entryPoint: 'vs', buffers: vbufs },
-      fragment: { module: mod, entryPoint: fs, targets: [{ format }] },
+      fragment: { module: mod, entryPoint: fs, targets: [{ format, ...target }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'greater' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'greater', ...extra },
       multisample: { count: samples },
     });
-    this.shadePipe = mk('fsShade', this.format, MSAA);
-    this.pickPipe = mk('fsPick', 'rgba8unorm', 1);
+    // The faces are always pushed back a little, so their own boundary edges
+    // win the depth test along them: NEGATIVE, since reverse-Z puts far at 0.
+    // The pick pass has the same bias, so it sees the shaded pass's depths.
+    const bias = { depthBias: -2, depthBiasSlopeScale: -1 };
+    this.shadePipe = mk('fsShade', this.format, MSAA, bias);
+    this.pickPipe = mk('fsPick', 'rgba8unorm', 1, bias);
+    // the hidden-line styles' depth-only faces, and X-ray's blended ones
+    this.depthPipe = mk('fsShade', this.format, MSAA, bias, { writeMask: 0 });
+    const blendOver = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+    this.xrayPipe = mk('fsShade', this.format, MSAA, { ...bias, depthWriteEnabled: false }, { blend: blendOver });
+    // the cut fill: the same bias, so its depths equal the depth-only pass's
+    this.fillPipe = mk('fsFill', this.format, MSAA, { ...bias, depthWriteEnabled: false, depthCompare: 'greater-equal' });
+    // Edge passes: their own uniforms in group 1, one buffer per pass slot
+    this.passBgl = device.createBindGroupLayout({
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
+    });
+    const edgeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bgl, this.passBgl] });
+    this.passSlots = [0, 1, 2, 3].map(() => {
+      const buf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      return { buf, bind: device.createBindGroup({ layout: this.passBgl, entries: [{ binding: 0, resource: { buffer: buf } }] }) };
+    });
+    const inst = [{ shaderLocation: 1, offset: 0, format: 'float32x3' }, { shaderLocation: 2, offset: 12, format: 'float32x3' },
+      { shaderLocation: 3, offset: 24, format: 'unorm8x4' }, { shaderLocation: 4, offset: 28, format: 'unorm8x4' }];
+    const silInst = [...inst, { shaderLocation: 5, offset: 32, format: 'snorm16x4' }, { shaderLocation: 6, offset: 40, format: 'snorm16x4' }];
+    // one pipeline per (depth test, boundary or silhouette), made when first used
+    this.edgePipes = new Map();
+    this.edgePipe = (depth, sil) => {
+      const key = `${depth}|${sil}`;
+      if (!this.edgePipes.has(key)) {
+        this.edgePipes.set(key, device.createRenderPipeline({
+          layout: edgeLayout,
+          vertex: {
+            module: mod, entryPoint: sil ? 'vsSil' : 'vsEdge', buffers: [
+              { arrayStride: 8, stepMode: 'vertex', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
+              { arrayStride: sil ? SIL_STRIDE : EDGE_STRIDE, stepMode: 'instance', attributes: sil ? silInst : inst },
+            ],
+          },
+          fragment: { module: mod, entryPoint: 'fsEdge', targets: [{ format: this.format }] },
+          primitive: { topology: 'triangle-strip', cullMode: 'none' },
+          // reverse-Z: a visible edge is >= the face, a hidden one is behind it (less)
+          depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: { lequal: 'greater-equal', greater: 'less', always: 'always' }[depth] },
+          multisample: { count: MSAA },
+        }));
+      }
+      return this.edgePipes.get(key);
+    };
+    this.canDrawEdges = true;
+    this.silBuf = null;
+    this.silCount = 0;
+    this.cornerBuf = device.createBuffer({ size: 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(this.cornerBuf, 0, new Float32Array([0, -1, 0, 1, 1, -1, 1, 1]));
+    this.edgeBuf = null;
+    this.edgeCount = 0;
+    this.edgesFor = null; // the mesh the edge instances were built for
     this.ubo = device.createBuffer({ size: 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.readBuf = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     this.size = [0, 0];
@@ -254,10 +431,27 @@ export class WebGPURenderer {
     this.device.queue.writeTexture({ texture: this.stateTex }, bytes, { bytesPerRow: width * 4 }, [width, height]);
     this.stateW = width;
     this.stateH = height;
+    this._rebind();
+  }
+
+  _rebind() {
     this.bind = this.device.createBindGroup({
       layout: this.bgl,
-      entries: [{ binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.stateTex.createView() }],
+      entries: [{ binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.stateTex.createView() },
+        { binding: 2, resource: { buffer: this.bodyBuf } }],
     });
+  }
+
+  // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`.
+  setBodies(mesh, table) {
+    if (this.lost) return;
+    if (table.byteLength > this.device.limits.maxStorageBufferBindingSize) return; // no cull, rather than no model
+    const b = this.device.createBuffer({ size: Math.max(64, table.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(b, 0, table);
+    this.bodyBuf.destroy();
+    this.bodyBuf = b;
+    this.bodiesFor = mesh;
+    this._rebind();
   }
 
   resize(w, h) {
@@ -285,11 +479,60 @@ export class WebGPURenderer {
     f.set([frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1], 16);
     f.set([frame.light[0], frame.light[1], frame.light[2], 0], 20);
     f.set(frame.clip || [0, 0, 0, 0], 24);
-    f.set([this.stateW, this.stateH, frame.clip ? 1 : 0, 0], 28);
+    f.set([this.stateW, this.stateH, frame.clip ? 1 : 0, frame.style && frame.style.faces === 'xray' ? 0.25 : 0], 28);
     f.set(frame.highlight, 32);
     const up = frame.up || [0, 1, 0];
     f.set([up[0], up[1], up[2], 0], 36);
+    const e = frame.edges || { widthPx: 0, hoverPx: 0 };
+    f.set([this.canvas.width, this.canvas.height, e.widthPx, e.hoverPx], 40);
+    const h = frame.hoverId || 0;
+    f.set([h & 255, (h >>> 8) & 255, (h >>> 16) & 255, (h >>> 24) & 255], 44);
+    const cull = !!(frame.edges && frame.edges.minPx && this.bodiesFor === this.drawn);
+    f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, 0], 48);
+    const fill = frame.fill || [0, 0, 0];
+    f.set([fill[0], fill[1], fill[2], 1], 52);
     this.device.queue.writeBuffer(this.ubo, 0, f);
+  }
+
+  // The edge instances (EDGE_STRIDE bytes each) for `mesh`, queued like an
+  // upload; drawn only while `mesh` is the drawn model. null data drops them.
+  // Rejects when the GPU cannot hold them, keeping the previous ones.
+  // silData: the silhouette candidates' instances (SIL_STRIDE bytes each), or
+  // null; they are drawn only in the outline styles.
+  uploadEdges(mesh, data, silData = null) {
+    return this._enqueue(async () => {
+      const d = this.device;
+      if (this.lost) return;
+      const made = [];
+      const mk = async (x) => {
+        if (!x || !x.byteLength) return null;
+        if (x.byteLength > d.limits.maxBufferSize) throw new Error('the edges are over this GPU\'s buffer limit');
+        d.pushErrorScope('out-of-memory');
+        d.pushErrorScope('validation');
+        const b = d.createBuffer({ size: x.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true });
+        made.push(b);
+        new Uint8Array(b.getMappedRange()).set(new Uint8Array(x));
+        b.unmap();
+        const [v, o] = await Promise.all([d.popErrorScope(), d.popErrorScope()]);
+        if (v || o) throw new Error(`GPU could not hold the edges: ${(v || o).message}`);
+        return b;
+      };
+      let b, s;
+      try {
+        b = await mk(data);
+        s = await mk(silData);
+      } catch (e) {
+        for (const x of made) x.destroy();
+        throw e;
+      }
+      if (this.edgeBuf) this.edgeBuf.destroy();
+      if (this.silBuf) this.silBuf.destroy();
+      this.edgeBuf = b;
+      this.silBuf = s;
+      this.edgeCount = b ? data.byteLength / EDGE_STRIDE : 0;
+      this.silCount = s ? silData.byteLength / SIL_STRIDE : 0;
+      this.edgesFor = b || s ? mesh : null;
+    });
   }
 
   _encodeDraw(pass, pipe) {
@@ -313,7 +556,35 @@ export class WebGPURenderer {
       }],
       depthStencilAttachment: { view: this.depthMs.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
-    if (this.vbs && this.drawCount && frame.drawModel !== false) this._encodeDraw(pass, this.shadePipe);
+    if (this.vbs && this.drawCount && frame.drawModel !== false) {
+      const edges = frame.edges && (this.edgeCount || this.silCount) && this.edgesFor === this.drawn;
+      // faces: shaded, depth only (the hidden-line styles), none (Wire), or
+      // blended at a quarter without depth (X-ray)
+      const faces = (frame.style && frame.style.faces) || 'shade';
+      const fp = { shade: this.shadePipe, depth: this.depthPipe, xray: this.xrayPipe }[faces];
+      if (fp) this._encodeDraw(pass, fp);
+      if (faces === 'depth' && frame.clip && frame.fill) this._encodeDraw(pass, this.fillPipe);
+      if (edges) {
+        const passes = (frame.edgePasses || [{ depth: 'lequal', mode: 0 }]).slice(0, this.passSlots.length);
+        const outline = frame.style && frame.style.outline && this.silCount;
+        passes.forEach((ps, k) => {
+          const c = ps.colours || {};
+          const z = [0, 0, 0];
+          const pf = new Float32Array([ps.mode || 0, ps.dash || 0, 0, 0, ...(c.plain || z), 1, ...(c.selected || z), 1, ...(c.faded || z), 1]);
+          this.device.queue.writeBuffer(this.passSlots[k].buf, 0, pf);
+          const draw = (buf, count, sil) => {
+            pass.setPipeline(this.edgePipe(ps.depth || 'lequal', sil));
+            pass.setBindGroup(0, this.bind);
+            pass.setBindGroup(1, this.passSlots[k].bind);
+            pass.setVertexBuffer(0, this.cornerBuf);
+            pass.setVertexBuffer(1, buf);
+            pass.draw(4, count);
+          };
+          if (this.edgeCount) draw(this.edgeBuf, this.edgeCount, false);
+          if (outline) draw(this.silBuf, this.silCount, true);
+        });
+      }
+    }
     pass.end();
     this.device.queue.submit([enc.finish()]);
   }
@@ -331,6 +602,14 @@ export class WebGPURenderer {
       this.ib = null;
       this.drawCount = 0;
       this.drawn = null;
+      if (this.edgeBuf) this.edgeBuf.destroy();
+      if (this.silBuf) this.silBuf.destroy();
+      this.edgeBuf = null;
+      this.silBuf = null;
+      this.edgeCount = 0;
+      this.silCount = 0;
+      this.edgesFor = null;
+      this.bodiesFor = null;
     });
   }
 

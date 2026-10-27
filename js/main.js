@@ -9,6 +9,9 @@ import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, 
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
+import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
+import { decodeView, encodeView } from './view-link.js';
+import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
@@ -57,6 +60,21 @@ const app = {
     return DISPLAY_UNITS.includes(u) ? u : 'auto';
   })(),
   baseMesh: null,
+  // the face boundaries drawn over the shaded faces (the display styles,
+  // feature 7, will set this; on until then)
+  showEdges: new URLSearchParams(location.search).get('edges') !== '0', // ?edges=0: off, for a control
+  edgeMinPx: 6, // EDGE_MIN_BODY_PX; a test sets 0 to see the cull's control
+  // the display style chosen in the select (js/styles.js), remembered in this
+  // browser; null until a choice, when the file type's default applies
+  // (?style=<id> picks one for this page only, for tests and screenshots)
+  styleChoice: (() => {
+    let s = new URLSearchParams(location.search).get('style');
+    if (s) return s;
+    try { s = localStorage.getItem('cadv.style'); } catch { /* storage off */ }
+    return s;
+  })(),
+  isMeshFile: false, // a mesh format (feature 14): Shaded by default
+  showSilhouettes: true, // the outline styles' silhouettes; a test turns them off for a control
   // colours picked for single parts of the loaded model: body index -> [r, g, b],
   // remembered in this browser under the model's key (modelKey)
   overrides: new Map(),
@@ -89,6 +107,8 @@ function saveOverrides() {
   } catch { /* storage off or full: the colours last while the model is open */ }
 }
 window.__cadv = app;
+app.redraw = () => viewChanged(); // for tests that change a display flag
+app.refreshState = () => pushState(); // for tests that change a body's facts
 
 // The model as drawn in the current colour scheme and part colours: the
 // decoded model itself for the file's colours with nothing overridden, else a
@@ -310,6 +330,8 @@ function gpuSync() {
         // a model the UI already shows (recovery re-upload): its state texture
         // goes in before any pick queued behind this job can run
         if (want === app.mesh) pushState();
+        // its edges, when they are known already (a recolour, a recovery)
+        await syncEdges(cur, want);
         queueFrame();
         return;
       } catch (e) {
@@ -321,6 +343,39 @@ function gpuSync() {
   });
   gpuChain = run.catch(() => {});
   return run;
+}
+
+// The drawn mesh's edge instances onto renderer r. Built once per mesh (a
+// recolour makes a new mesh, whose instances carry the new colours). Never
+// throws: edges the GPU cannot hold are left out, and the model stays.
+const edgeData = new WeakMap();
+async function syncEdges(r, mesh) {
+  const v = mesh.edgeInfo?.value;
+  if (!r.canDrawEdges || !v || r.edgesFor === mesh) return;
+  // the body table, for the cull of bodies too small to show edges
+  if (r.bodiesFor !== mesh) r.setBodies(mesh, bodyTable(mesh.header));
+  let data = edgeData.get(mesh);
+  if (!data) {
+    // the silhouettes too, so a change to an outline style needs no upload
+    data = { edges: edgeInstances(mesh, v.edges),
+      sil: v.silhouettes && v.silhouettes.length ? silhouetteInstances(mesh, v.silhouettes, v.silhouetteNormals) : null };
+    edgeData.set(mesh, data);
+  }
+  try {
+    await r.uploadEdges(mesh, data.edges, data.sil);
+  } catch (e) {
+    app.edgeError = String(e.message || e);
+  }
+}
+
+// After the edge list arrives (the worker answers after the model is shown):
+// upload it in the GPU queue's turn, so it never races a model upload.
+function refreshEdges() {
+  gpuChain = gpuChain.then(async () => {
+    const r = app.renderer;
+    if (r.drawn && r.drawn === app.mesh) await syncEdges(r, r.drawn);
+    queueFrame();
+  }).catch(() => {});
 }
 
 // A lost GPU device / WebGL context takes every buffer with it: make a new
@@ -410,6 +465,33 @@ async function recoverRenderer(why) {
 
 // ---------- camera ----------
 
+// Edge width in CSS px, and how much wider the hovered body's edges are
+const EDGE_PX = 1.5;
+const EDGE_HOVER_PX = 1;
+// (app.edgeMinPx: a body under that projected radius, CSS px, draws no
+// edges; they would only darken it)
+const pxScale = (r) => (r.canvas.clientWidth ? r.canvas.width / r.canvas.clientWidth : 1);
+
+// A style's part of the frame: the background, which faces pass, and the edge
+// passes (each a depth test, a colour mode, a dash period, the paper colours)
+const PAPER_RGB = rgb(PAPER);
+const FILL_RGB = rgb(CUT_FILL);
+const PAPER_COLS = (k) => ({ plain: rgb(PAPER_EDGES.plain[k]), selected: rgb(PAPER_EDGES.selected[k]), faded: rgb(PAPER_EDGES.faded[k]) });
+const DASH_PX = 6; // the hidden edges: 3 px drawn, 3 px gap
+function styleFrame(s, scale) {
+  const visible = { depth: 'lequal', mode: 1, colours: PAPER_COLS(0) };
+  const passes = {
+    edges: [{ depth: 'lequal', mode: 0 }],
+    hidden: [visible],
+    // the hidden edges first, so a visible edge wins where they cross
+    hiddengrey: [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: PAPER_COLS(1) }, visible],
+    wire: [{ ...visible, depth: 'always' }],
+    xray: [{ depth: 'always', mode: 2 }],
+  }[s.id] || null;
+  return { background: s.paper ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
+    fill: s.faces === 'depth' ? FILL_RGB : null };
+}
+
 function frameState() {
   const c = app.cam;
   const r = app.renderer;
@@ -431,7 +513,15 @@ function frameState() {
   // direction to the viewer (ortho: one view vector for every pixel)
   const eye4 = c.ortho ? [d[0], d[1], d[2], 0] : [eye[0], eye[1], eye[2], 1];
   return {
-    viewProj: multiply(proj, view), eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0], background: BG,
+    viewProj: multiply(proj, view), eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
+    ...styleFrame(currentStyle(), pxScale(r)),
+    // the face boundaries over the shaded faces, in device px: the canvas's
+    // own scale, not devicePixelRatio, which the canvas size caps
+    edges: app.showEdges && currentStyle().edges ? { widthPx: EDGE_PX * pxScale(r), hoverPx: EDGE_HOVER_PX * pxScale(r), minPx: app.edgeMinPx * pxScale(r) } : null,
+    // device px per model unit at w = 1: the projection's y scale times half
+    // the height (a body's projected radius is radius * focalPx / w)
+    focalPx: proj[5] * h / 2,
+    hoverId: app.hover || 0,
     // the GPU holds a model the UI does not show (a superseded load mid-hand-
     // back): its ids do not match the state texture, so draw background only
     drawModel: r.drawn === app.mesh,
@@ -527,11 +617,109 @@ function viewKey(digit) {
   }
   // name the result where the hovered part's name goes, so 9's is never a
   // guess; the next hover replaces it
-  const hov = $('hover');
-  hov.textContent = name;
-  clearTimeout(viewNameTimer);
-  viewNameTimer = setTimeout(() => { if (hov.textContent === name) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, 1500);
+  flashHover(name);
   announce(`${name} view`);
+}
+
+// A short note where the hovered part's name goes, for 1.5 s (or until the
+// next hover replaces it)
+function flashHover(text) {
+  const hov = $('hover');
+  hov.textContent = text;
+  clearTimeout(viewNameTimer);
+  viewNameTimer = setTimeout(() => { if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, 1500);
+}
+
+// ---------- view links (js/view-link.js) ----------
+
+// the view as js/view-link.js encodes it
+function currentView() {
+  const c = app.cam;
+  return {
+    cam: { target: c.target, dist: c.dist, q: c.q || quatFromView(c.yaw, c.pitch, c.up), ortho: !!c.ortho, up: c.up },
+    style: app.styleChoice && styleById(app.styleChoice) ? app.styleChoice : null,
+    section: app.section, hidden: [...app.hidden], selected: [...app.selected],
+  };
+}
+
+// a decoded view onto the loaded model; ids past its bodies are dropped
+function applyView(v) {
+  if (!app.header) return;
+  const n = app.header.meshes.length;
+  const ids = (a) => (a || []).filter((i) => i >= 1 && i <= n);
+  if (v.cam) {
+    const c = app.cam;
+    c.target = v.cam.target.slice();
+    c.dist = v.cam.dist;
+    c.q = v.cam.q.slice();
+    c.ortho = v.cam.ortho;
+    c.up = v.cam.up;
+  }
+  if (v.style && styleById(v.style)) setStyle(v.style, false);
+  if (v.section) Object.assign(app.section, v.section, { last: v.section.axis });
+  if (v.hidden) { app.hidden = new Set(ids(v.hidden)); syncTreeChecks(); }
+  select(ids(v.selected), false);
+  updateButtons();
+  viewChanged();
+}
+
+// Copy a link to this model at this view. A model opened from this device has
+// no URL: the link then holds the view alone, and the note says so.
+async function shareView() {
+  if (!app.header) return;
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = '';
+  if (app.sourceUrl) u.searchParams.set('src', app.sourceUrl);
+  for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
+  u.hash = `view=${encodeView(currentView())}`;
+  const link = u.toString();
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(link);
+    copied = true;
+  } catch { /* no clipboard (not a secure context, or refused) */ }
+  if (!copied) window.prompt('Copy this link to the view:', link);
+  app.lastViewLink = link;
+  const note = app.sourceUrl ? 'View link copied'
+    : 'View link copied: it holds the view, not the file (opened from this device)';
+  flashHover(note);
+  announce(note);
+}
+
+// the styles built so far; the rest join the select as they are
+const BUILT_STYLES = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
+const currentStyle = () => {
+  const id = styleFor(app.styleChoice, app.isMeshFile);
+  return styleById(BUILT_STYLES.includes(id) ? id : defaultStyle(app.isMeshFile));
+};
+
+// remember: only a choice made in the select is kept (E is not)
+function setStyle(id, remember) {
+  if (!BUILT_STYLES.includes(id)) return;
+  app.styleChoice = id;
+  if (remember) {
+    try { localStorage.setItem('cadv.style', id); } catch { /* storage off */ }
+  }
+  $('style').value = id;
+  syncStyleBg();
+  queueFrame();
+}
+
+// the paper styles' overlay palette (#hover, notices): dark on a light chip
+function syncStyleBg() {
+  if (currentStyle().paper) $('stage').dataset.bg = 'paper';
+  else delete $('stage').dataset.bg;
+}
+
+// E: Shaded <-> Shaded + edges; elsewhere it says why nothing happened
+function edgesKey() {
+  const next = toggleEdges(currentStyle().id);
+  if (!next) { flashHover('E switches edges in the Shaded styles'); return; }
+  setStyle(next, false);
+  const s = styleById(next);
+  flashHover(s.label);
+  announce(`${s.label} style`);
 }
 
 function setView(v) {
@@ -836,6 +1024,9 @@ function updateButtons() {
   $('secopt').hidden = !on;
   for (const b of document.querySelectorAll('[data-axis]')) b.setAttribute('aria-pressed', String(b.dataset.axis === app.section.axis));
   $('secpos').disabled = !on;
+  // the slider follows the state (a view link sets it without the slider)
+  const sv = String(Math.round(app.section.t * 1000));
+  if ($('secpos').value !== sv) $('secpos').value = sv;
   $('secflip').disabled = !on;
   $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
   syncOptbar();
@@ -862,6 +1053,9 @@ function pushState() {
   for (const id of app.selected) bytes[id * 4] = 255;
   for (const id of app.hidden) bytes[id * 4 + 1] = 255;
   if (app.hover) bytes[app.hover * 4 + 2] = 255;
+  // a: the body is closed (the facts), for the cut fill in the paper styles
+  const closed = app.baseMesh?.edgeInfo?.value?.facts?.closed;
+  if (closed) closed.forEach((c, i) => { if (c) bytes[(i + 1) * 4 + 3] = 255; });
   app.renderer.setState(bytes, STATE_W, H);
   queueFrame();
 }
@@ -1036,6 +1230,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
+  // one holder, shared by every palette copy made from base (they spread it)
+  base.edgeInfo = { value: null, ready: null };
   // part colours belong to the model they were picked on: this model's own
   const key = modelKeyOf(base.header);
   const overrides = loadOverrides(key, base.header.meshes.length);
@@ -1067,9 +1263,12 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sourceName = name;
+  // the URL it came from, for a view link (null: a local file, which a link cannot carry)
+  app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   app.lastStepBuffer = stepBuf;
   app.unmeshedFaces = unmeshedFaces;
   $('export').disabled = !stepBuf;
+  $('sharelink').disabled = false;
   app.selected.clear();
   app.hidden.clear();
   app.visUndo = [];
@@ -1080,6 +1279,11 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   pushState();
   buildTree();
   setView('iso');
+  // a view link (#view=…) applies to the model the page opened with
+  if (app.pendingView && app.sourceUrl === app.pendingView.src) {
+    applyView(app.pendingView.view);
+    app.pendingView = null;
+  }
   const tris = mesh.header.indexCount / 3;
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
     uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
@@ -1089,6 +1293,51 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   $('model').title = $('model').textContent; // the narrow footer truncates it
   showInfo();
   setStatus('ready', readyText()); // announced with the change into ready
+  // the facts' closed flags go into the state texture too (the cut fill)
+  base.edgeInfo.ready = edgesOf(base).then((v) => { if (app.baseMesh === base) pushState(); refreshEdges(); return v; });
+}
+
+// Past this many silhouette candidates a coarse-pointer device (a phone,
+// a tablet) leaves them out; js/edges.js's SILHOUETTE_CAP elsewhere
+const COARSE_SILHOUETTE_CAP = 500_000;
+const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+
+// The edge list and body facts of a loaded model: from the file when it
+// carries them, else built by a worker from copies of its arrays. Resolves
+// to base.edgeInfo.value ({ edges, silhouettes, silhouetteNormals,
+// silhouettesOmitted, facts, source, ms }), or null when the build failed.
+function edgesOf(base) {
+  const info = base.edgeInfo;
+  const cap = coarseOnly() ? COARSE_SILHOUETTE_CAP : 0;
+  if (base.edges && base.header.facts) {
+    const over = cap && base.silhouettes && base.silhouettes.length / 2 > cap;
+    info.value = { edges: base.edges, silhouettes: over ? null : base.silhouettes,
+      silhouetteNormals: over ? null : base.silhouetteNormals,
+      silhouettesOmitted: over ? base.silhouettes.length / 2 : (base.header.silhouettesOmitted || 0),
+      facts: base.header.facts, source: 'file', ms: 0 };
+    return Promise.resolve(info.value);
+  }
+  return new Promise((resolve) => {
+    let w;
+    try {
+      w = new Worker(new URL('./edges-worker.js', import.meta.url), { type: 'module' });
+    } catch (e) {
+      info.error = `no module worker: ${e.message || e}`;
+      resolve(null); // no edges, which nothing needs yet
+      return;
+    }
+    const done = (v) => { w.terminate(); info.value = v; resolve(v); };
+    w.onmessage = (ev) => {
+      if (!ev.data.ok) info.error = ev.data.error;
+      done(ev.data.ok ? { ...ev.data.result, source: 'worker', ms: Math.round(ev.data.ms) } : null);
+    };
+    w.onerror = (e) => { info.error = `worker failed: ${e.message || 'could not start'}`; done(null); };
+    // copies: the model's own buffers stay with the page and the GPU upload
+    const position = base.position.slice();
+    const index = base.index.slice();
+    w.postMessage({ position, index, meshes: base.header.meshes, silhouetteCap: cap || undefined },
+      [position.buffer, index.buffer]);
+  });
 }
 
 // "ready", or with faces the conversion could not mesh, what is missing
@@ -1349,6 +1598,7 @@ function fetchFailedText(url, name, e) {
 
 async function loadUrl(url) {
   const seq = beginLoad();
+  app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
   const tf = performance.now();
@@ -2138,12 +2388,19 @@ function wireInput() {
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));
   pal.value = app.palette;
   pal.onchange = () => setPalette(pal.value);
+  const sty = $('style');
+  for (const s of STYLES) if (BUILT_STYLES.includes(s.id)) sty.add(new Option(s.label, s.id));
+  sty.value = currentStyle().id;
+  syncStyleBg();
+  // blurred after a change, so a focused select does not swallow the number keys
+  sty.onchange = () => { setStyle(sty.value, true); sty.blur(); };
   // blurred after a change, so a focused select does not swallow the number keys
   $('unitsel').onchange = (e) => { setUnitChoice(e.target.value); e.target.blur(); };
   // 'change', not 'input': a picker drag fires input continuously, and each
   // recolour re-uploads the model
   $('partcolour').onchange = (e) => setPartColour(e.target.value);
   $('partreset').onclick = () => resetPartColour();
+  $('sharelink').onclick = () => shareView();
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;
@@ -2196,7 +2453,7 @@ function wireInput() {
     // not turn the shortcuts off.
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const act = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
-      i: () => $('isolate').click(), a: () => $('showall').click() }[k];
+      i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey() }[k];
     if (!act) return;
     act();
   });
@@ -2215,6 +2472,12 @@ async function main() {
   queueFrame();
   refreshCacheBar();
   const src = params.get('src');
+  // #view=…: the view a shared link names, applied when its model has loaded
+  const viewHash = () => (location.hash.startsWith('#view=') ? decodeURIComponent(location.hash.slice(6)) : null);
+  if (src && viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
+  window.addEventListener('hashchange', () => {
+    if (viewHash() && app.header && app.sourceUrl === src) applyView(decodeView(viewHash()));
+  });
   if (src) await startLoad(() => loadUrl(src));
   else setStatus('idle', IDLE_MSG);
 }
@@ -2248,6 +2511,11 @@ async function selftest() {
       const c = app.renderer.canvas;
       const id = await app.pickAt(c.width >> 1, c.height >> 1);
       Object.assign(out, { stats: app.stats, frames: app.frameCount, pickId: id, pickName: id ? meshLabel(id) : null });
+      // the edge list: from the file, or how long the worker took to build it
+      const e = await app.baseMesh?.edgeInfo?.ready;
+      out.edges = e ? { source: e.source, ms: e.ms, boundary: e.edges.length / 2,
+        silhouettes: e.silhouettes ? e.silhouettes.length / 2 : 0, omitted: e.silhouettesOmitted,
+        closed: e.facts.closed.filter(Boolean).length } : { error: app.baseMesh?.edgeInfo?.error || 'none' };
       // ?bench=N: orbit the camera one step per animation frame for N frames
       // (each step redraws the whole model) and report the frame intervals.
       // Frames run on the display's vsync, so a GPU that keeps up reads as the

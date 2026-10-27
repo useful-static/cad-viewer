@@ -66,7 +66,7 @@ URL parameters:
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
   shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
-  A show all, Esc clear. Number keys set the view, on the digit row or the
+  A show all, E edges, Esc clear. Number keys set the view, on the digit row or the
   numpad: 1 front, 3 right, 7 top, 0 iso, 9 the opposite view, 5 Ortho on
   or off. Toggles report their state, and load results and
   errors are announced through a live region.
@@ -82,12 +82,24 @@ URL parameters:
 - **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
   (View > Section): along the bottom of the view, X / Y / Z, a slider, the
   cut's position, and a flip.
+  Cut solids read as solid: what you see of a part's inside through the cut
+  is shaded flat, like a cut face.
 - **Units.** The parts panel names the unit the file was drawn in (read
   from a STEP or IGES file's own unit declarations; "not recorded" for an
   older `.cadmesh`) and shows lengths in it on **Auto**, or in mm, cm, m or
   in by choice, which the browser remembers.
-  Cut solids read as solid: what you see of a part's inside through the cut
-  is shaded flat, like a cut face.
+- **Edges and display styles.** The b-rep face boundaries are drawn over
+  the shaded faces (parts under 6 px on screen draw none). View > **Style**:
+  Shaded, Shaded + edges (the default for CAD files), Hidden line, Hidden
+  grey (hidden edges dashed and lighter), Wire, or X-ray (translucent
+  faces). The last four also draw the outlines of curved faces, and the
+  hidden-line styles fill cut solids flat grey while a section is on (an
+  open surface is not filled). **E** switches Shaded and Shaded + edges.
+  The choice in the menu is remembered in the browser.
+- **Share a view.** File > **Copy view link** copies a link that opens the
+  model at the same view: camera, projection, up axis, style, section,
+  hidden and selected parts (`?src=<model URL>#view=…`). A model opened from
+  your device has no URL, so its link holds the view alone.
 - **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
   named colours), as the file gives them. STEP carries colour from AP214 on;
   an AP203 file, a common default export, has none, and gets one muted colour
@@ -184,6 +196,9 @@ files load too.
 | `js/step-features.js` | counts a STEP file's records, faces and holes per face, for the forecast |
 | `js/source-units.js` | the length unit a STEP or IGES file declares |
 | `js/units.js` | formats every length, area, volume and mass in the display unit |
+| `js/edges.js`, `js/edges-worker.js` | the edge list (face boundaries; silhouette candidates inside curved faces) and each body's closed / area / volume facts, built by the converter or, for an older `.cadmesh`, in a worker |
+| `js/styles.js` | the display styles, their defaults and the paper edge colours |
+| `js/view-link.js` | a view as a URL hash and back |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |
 | `js/converter-choice.js` | whether an import runs on the multi-core build |
@@ -197,7 +212,8 @@ files load too.
 
 ```sh
 npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes,
-                # test-converter-choice, test-source-units, test-units
+                # test-converter-choice, test-source-units, test-units, test-edges,
+                # test-styles, test-view-link
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion,
                 # CADV_INCH_STEP=<an inch STEP file> to add a real inch file
 ```

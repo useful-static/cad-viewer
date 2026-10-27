@@ -17,6 +17,7 @@ import {
 import { gunzipSync, gzipSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const align8 = (n) => (n + 7) & ~7;
 let passed = 0;
 let failed = 0;
 const skipped = [];
@@ -252,6 +253,25 @@ test('the declared unit and the angular deflection reach the header; absent stay
     '"angularDeflection":0.5', '"angularDeflection":0e0')), /angularDeflection/);
 });
 
+test('encode builds the edge sections and facts; decode validates them', () => {
+  const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }));
+  assert.equal(m.edges.length / 2, 4, 'a quad: four boundary edges');
+  assert.equal(m.silhouettes.length, 0);
+  assert.equal(m.silhouetteNormals.length, 0);
+  assert.deepEqual(m.header.facts.closed, [false]);
+  assert.equal(m.header.facts.area[0], 1);
+  const none = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edges: false }));
+  assert.equal(none.edges, null);
+  assert.equal(none.header.facts, undefined);
+  // an edge past the vertex data, and facts that do not cover every mesh
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  const h = decodeCadmesh(buf).header;
+  new Uint32Array(buf, align8(12 + new DataView(buf).getUint32(8, true)) + h.sections.edges.offset, 1)[0] = 99;
+  assert.throws(() => decodeCadmesh(buf), /edges entry 0 names vertex 99 of 4/);
+  assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh({ meshes: [quad('a', 0)] }), '"closed":[false]', '"closed":[0]    ')),
+    /facts are not one/);
+});
+
 test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
 });
@@ -335,6 +355,9 @@ if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
       assert.equal(file[0], 0x1f, 'stp2mesh writes gzip by default');
       const m = decodeCadmesh(gunzipSync(file).buffer);
       assert.ok(m.header.meshes.length > 0 && m.header.indexCount > 0, 'non-empty mesh');
+      assert.ok(m.faces && m.edges && m.edges.length > 0, 'faces and edges sections');
+      assert.equal(m.header.facts.closed.length, m.header.meshes.length, 'one fact per body');
+      assert.match(log, /\nedges: \d+ boundary/);
       writeFileSync(join(dir, 'ok'), '');
     } finally {
       rmSync(dir, { recursive: true, force: true });

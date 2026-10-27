@@ -145,6 +145,10 @@
   #pdetail { color:var(--dim); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   /* above the options bar (main.js sets --optbar-h to its height) */
   #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
+  /* the paper styles (Hidden line, Hidden grey, Wire): dark text on a light
+     chip, since the dark view's grey with a black shadow is 2.75:1 on paper */
+  #stage[data-bg="paper"] #hover { color:#222; text-shadow:none; }
+  #stage[data-bg="paper"] #hover:not(:empty) { background:rgba(255,255,255,0.9); padding:1px 6px; border-radius:4px; box-shadow:0 0 0 1px #d0d0cc; }
   footer { grid-column: 1 / 3; display:flex; gap:12px; padding:3px 10px; background:var(--panel); border-top:1px solid var(--line); font-size:12px; color:var(--dim); }
   #status[data-state=error] { color:#ff7b7b; }
   #status[data-state=ready] { color:#9fd8a6; }
@@ -280,7 +284,7 @@
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model">Save</button>
     <div class="menu-panel" id="filepanel" aria-label="Save">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
@@ -290,6 +294,7 @@
       <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
       <button id="section" aria-pressed="false" title="Cut the model with a plane; its controls show along the bottom of the view">Section</button>
+      <select id="style" autocomplete="off" aria-label="Display style" aria-keyshortcuts="E" title="Display style. E switches the edges on and off in the Shaded styles (a choice is remembered in this browser)"></select>
     </div></div>
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
@@ -310,7 +315,7 @@
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
-    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit</span>
+    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
     <span class="keys">parts list: ↑ ↓ move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>

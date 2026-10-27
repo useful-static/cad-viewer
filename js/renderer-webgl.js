@@ -38,7 +38,7 @@ precision highp float;
 precision mediump float;
 #endif
 uniform sampler2D uState;
-uniform vec4 uParams;   // x stateW, y stateH, z clip on, w unused
+uniform vec4 uParams;   // x stateW, y stateH, z clip on, w face alpha (X-ray 0.25; 0 = 1)
 uniform vec4 uLight;
 uniform vec4 uUp;       // world up axis: the sky and fill directions
 uniform vec4 uHi;
@@ -94,7 +94,23 @@ void main() {
   if (st.r > 0.5) c = mix(c, uHi.rgb, 0.5) + vec3(0.06);
   else if (uHi.a > 0.5) c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.7) * 0.55;
   if (st.b > 0.5) c = c + vec3(0.12);
-  gl_FragColor = vec4(c, 1.0);
+  // X-ray: premultiplied, blended one / one-minus-src-alpha
+  float a = uParams.w > 0.0 ? uParams.w : 1.0;
+  gl_FragColor = vec4(c * a, a);
+}`;
+
+// The cut fill (the hidden-line styles, a section on): over the depth-only
+// faces, at their depth, a flat fill where a CLOSED body (state alpha) shows
+// its inside through the cut (its normal facing away from the eye). An open
+// sheet seen from behind is not filled.
+const FS_FILL = FS_COMMON + `
+uniform vec4 uFill;
+void main() {
+  if (clipped()) discard;
+  vec4 st = stateOf();
+  if (st.g > 0.5 || st.a < 0.5 || uParams.z < 0.5) discard;
+  if (dot(vNrm, normalize(vView)) >= 0.0) discard;
+  gl_FragColor = vec4(uFill.rgb, 1.0);
 }`;
 
 const FS_PICK = FS_COMMON + `
@@ -104,6 +120,124 @@ void main() {
   gl_FragColor = vId;
 }`;
 
+// Edges: one instance per edge, a quad of 4 corners (aCorner: x picks the
+// end, y the side), expanded in screen space to uPx.z device px (uPx.w more
+// for the hovered body, whose id bytes are uHoverId: the state texture is
+// fragment-only). The segment is clipped to the near plane before the divide
+// (WebGL keeps z >= -w; uNear gives d = w * x + z * y, inside when d >= 0),
+// and collapsed when both ends are behind it. A silhouette candidate (uSil.x
+// on) carries its two triangles' normals and is kept only where they face
+// opposite ways from the eye, tested once at the midpoint so the four
+// corners agree.
+const VS_EDGE = `
+attribute vec2 aCorner;
+attribute vec3 aP0;
+attribute vec3 aP1;
+attribute vec4 aEId;
+attribute vec4 aECol;
+attribute vec4 aN1;
+attribute vec4 aN2;
+uniform vec4 uSil;
+varying float vDash;
+uniform mat4 uViewProj;
+uniform vec4 uClipV;
+uniform vec4 uEyeV;
+uniform vec4 uPx;
+uniform vec4 uHoverId;
+uniform vec4 uNear;
+uniform sampler2D uBodies; // the body table: texel 2 id + 1 = centre, radius
+uniform vec4 uBodyTex;     // x width, y height of the body table
+uniform vec4 uCull;        // x focal px, y min radius px, z on
+varying float vClip;
+varying vec3 vView;
+varying vec3 vNrm;
+varying vec3 vCol;
+varying vec4 vId;
+void main() {
+  vec4 b = floor(aEId * 255.0 + 0.5);
+  // a body whose projected radius is under uCull.y px draws no edges: they
+  // would only darken it. radius px = radius * focal px / w, in perspective
+  // (w = depth) and ortho (w = 1) alike. Behind the eye: left to the clip.
+  if (uCull.z > 0.5) {
+    float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
+    vec4 cr = texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
+    vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
+    if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      vClip = 0.0; vView = vec3(0.0); vNrm = vec3(0.0); vCol = vec3(0.0); vId = aEId; vDash = 0.0;
+      return;
+    }
+  }
+  if (uSil.x > 0.5) {
+    vec3 mv = uEyeV.xyz - 0.5 * (aP0 + aP1) * uEyeV.w;
+    if (dot(aN1.xyz, mv) * dot(aN2.xyz, mv) > 0.0) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      vClip = 0.0; vView = vec3(0.0); vNrm = vec3(0.0); vCol = vec3(0.0); vId = aEId; vDash = 0.0;
+      return;
+    }
+  }
+  vec3 p = mix(aP0, aP1, aCorner.x);
+  vClip = dot(uClipV.xyz, p) - uClipV.w;
+  vView = normalize(uEyeV.xyz - p * uEyeV.w);
+  vNrm = vec3(0.0);
+  vCol = aECol.rgb;
+  vId = aEId;
+  vec4 c0 = uViewProj * vec4(aP0, 1.0);
+  vec4 c1 = uViewProj * vec4(aP1, 1.0);
+  float d0 = c0.w * uNear.x + c0.z * uNear.y;
+  float d1 = c1.w * uNear.x + c1.z * uNear.y;
+  vDash = 0.0;
+  if (d0 < 0.0 && d1 < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (d0 < 0.0) c0 = mix(c0, c1, d0 / (d0 - d1));
+  if (d1 < 0.0) c1 = mix(c1, c0, d1 / (d1 - d0));
+  vec2 hpx = uPx.xy * 0.5; // ("half" is reserved in GLSL ES 1.00)
+  vec2 s0 = c0.xy / c0.w * hpx;
+  vec2 s1 = c1.xy / c1.w * hpx;
+  vec2 dir = s1 - s0;
+  float len = length(dir);
+  dir = len > 1e-6 ? dir / len : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  float w = uPx.z + (b == uHoverId ? uPx.w : 0.0);
+  vec4 c = aCorner.x < 0.5 ? c0 : c1;
+  // half the width across, and half past each end, so joints close
+  vec2 off = (nrm * aCorner.y + dir * (aCorner.x * 2.0 - 1.0)) * (w * 0.5) / hpx;
+  // px along the segment from the (clipped) first end, for the dashes
+  vDash = aCorner.x * len;
+  gl_Position = vec4(c.xy + off * c.w, c.z, c.w);
+}`;
+
+// The edge colour (uEdgeMode.x): 0 the face colour with the dark view's
+// state mapping, darkened (Shaded + edges); 1 the paper colours by state
+// (selected, faded while a selection exists, else plain; the hovered body
+// un-faded); 2 the face colour lightened (X-ray). uEdgeMode.y: the dash
+// period in px (0: solid), for the hidden edges.
+const FS_EDGE = FS_COMMON + `
+uniform vec4 uEdgeMode;
+uniform vec4 uPaperPlain;
+uniform vec4 uPaperSel;
+uniform vec4 uPaperFaded;
+varying float vDash;
+void main() {
+  if (clipped()) discard;
+  vec4 st = stateOf();
+  if (st.g > 0.5) discard;
+  if (uEdgeMode.y > 0.0 && mod(vDash, uEdgeMode.y) > 0.5 * uEdgeMode.y) discard;
+  vec3 c;
+  if (uEdgeMode.x > 0.5 && uEdgeMode.x < 1.5) {
+    c = st.r > 0.5 ? uPaperSel.rgb : (uHi.a > 0.5 && st.b < 0.5 ? uPaperFaded.rgb : uPaperPlain.rgb);
+  } else {
+    c = vCol;
+    if (st.r > 0.5) c = mix(c, uHi.rgb, 0.5) + vec3(0.06);
+    else if (uHi.a > 0.5) c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.7) * 0.55;
+    if (st.b > 0.5) c = c + vec3(0.12);
+    c = uEdgeMode.x > 1.5 ? mix(c, vec3(1.0), 0.5) : c * 0.45;
+  }
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+const EDGE_STRIDE = 32; // p0 f32x3, p1 f32x3, id u8x4, colour u8x4
+const SIL_STRIDE = 48;  // an edge instance, then two normals snorm16x4
+
 function compile(gl, type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
@@ -112,15 +246,19 @@ function compile(gl, type, src) {
   return s;
 }
 
-function program(gl, fs) {
+const UNIFORMS = ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN', 'uPx', 'uHoverId', 'uNear',
+  'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill'];
+const BODY_TEX_W = 1024;
+
+function program(gl, fs, vs = VS, attrs = ['aPos', 'aNrm', 'aCol', 'aId']) {
   const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
   gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
-  ['aPos', 'aNrm', 'aCol', 'aId'].forEach((a, i) => gl.bindAttribLocation(p, i, a));
+  attrs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`link: ${gl.getProgramInfoLog(p)}`);
   const u = {};
-  for (const n of ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN']) u[n] = gl.getUniformLocation(p, n);
+  for (const n of UNIFORMS) u[n] = gl.getUniformLocation(p, n);
   return { p, u };
 }
 
@@ -142,6 +280,32 @@ export class WebGLRenderer {
     this.uintIndex = version === 2 || !!gl.getExtension('OES_element_index_uint');
     this.shade = program(gl, FS_SHADE);
     this.pickProg = program(gl, FS_PICK);
+    this.fillProg = program(gl, FS_FILL);
+    // Edges need instancing: native on WebGL2, ANGLE_instanced_arrays on
+    // WebGL1. Without it (rare) no edges are drawn (canDrawEdges false).
+    const ia = version === 2 ? null : gl.getExtension('ANGLE_instanced_arrays');
+    this.instancing = version === 2
+      ? { divisor: (i, d) => gl.vertexAttribDivisor(i, d), draw: (m, f, c, n) => gl.drawArraysInstanced(m, f, c, n) }
+      : ia ? { divisor: (i, d) => ia.vertexAttribDivisorANGLE(i, d), draw: (m, f, c, n) => ia.drawArraysInstancedANGLE(m, f, c, n) } : null;
+    this.edgeProg = this.instancing
+      ? program(gl, FS_EDGE, VS_EDGE, ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2']) : null;
+    this.canDrawEdges = !!this.edgeProg;
+    this.cornerBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, -1, 0, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    this.edgeBuf = null;
+    this.edgeCount = 0;
+    this.silBuf = null;
+    this.silCount = 0;
+    this.edgesFor = null; // the mesh the edge instances were built for
+    // The body table, a float texture read in the vertex shader: WebGL2
+    // always; WebGL1 with OES_texture_float and vertex texture units.
+    // Without it nothing is culled.
+    this.bodyTexOk = version === 2
+      || (!!gl.getExtension('OES_texture_float') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0);
+    this.bodyTex = null;
+    this.bodySize = [1, 1];
+    this.bodiesFor = null;
     this.buffers = [];
     this.stateTex = gl.createTexture();
     this.stateW = 1;
@@ -233,9 +397,147 @@ export class WebGLRenderer {
     this.drawn = mesh;
   }
 
+  // The edge instances (EDGE_STRIDE bytes each) for `mesh`; drawn only while
+  // `mesh` is the drawn model. null data drops them. Throws when the GPU
+  // cannot hold them, keeping the previous ones.
+  // silData: the silhouette candidates' instances (SIL_STRIDE bytes each), or
+  // null; they are drawn only in the outline styles.
+  uploadEdges(mesh, data, silData = null) {
+    const gl = this.gl;
+    if (!this.canDrawEdges || gl.isContextLost()) return;
+    for (let i = 0; i < 32 && gl.getError() !== gl.NO_ERROR; i++);
+    const made = [];
+    const mk = (d, what) => {
+      if (!d || !d.byteLength) return null;
+      const b = gl.createBuffer();
+      made.push(b);
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, d, gl.STATIC_DRAW);
+      this._checkAlloc(what);
+      return b;
+    };
+    let b, s;
+    try {
+      b = mk(data, 'edges');
+      s = mk(silData, 'outline edges');
+    } catch (e) {
+      for (const x of made) gl.deleteBuffer(x);
+      throw e;
+    }
+    if (this.edgeBuf) gl.deleteBuffer(this.edgeBuf);
+    if (this.silBuf) gl.deleteBuffer(this.silBuf);
+    this.edgeBuf = b;
+    this.silBuf = s;
+    this.edgeCount = b ? data.byteLength / EDGE_STRIDE : 0;
+    this.silCount = s ? silData.byteLength / SIL_STRIDE : 0;
+    this.edgesFor = b || s ? mesh : null;
+  }
+
+  // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`.
+  setBodies(mesh, table) {
+    const gl = this.gl;
+    if (!this.bodyTexOk || gl.isContextLost()) return;
+    const texels = table.length / 4;
+    const w = Math.min(BODY_TEX_W, texels);
+    const h = Math.ceil(texels / w);
+    const data = new Float32Array(w * h * 4);
+    data.set(table);
+    if (!this.bodyTex) this.bodyTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, this.version === 2 ? gl.RGBA32F : gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, data);
+    // a float texture with the default mipmap filter is incomplete
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.bodySize = [w, h];
+    this.bodiesFor = mesh;
+  }
+
+  // The edge passes (frame.edgePasses, one per depth test: { depth: 'lequal'
+  // | 'greater' | 'always', mode, dash, colours }), each drawing the boundary
+  // edges and, in the outline styles (frame.style.outline), the silhouettes.
+  _drawEdges(frame) {
+    const gl = this.gl;
+    const p = this.edgeProg;
+    const inst = this.instancing;
+    gl.useProgram(p.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    inst.divisor(0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.stateTex);
+    const u = p.u;
+    gl.uniformMatrix4fv(u.uViewProj, false, frame.viewProj);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform4f(u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 0);
+    gl.uniform4fv(u.uClipV, frame.clip || [0, 0, 0, 0]);
+    gl.uniform4f(u.uEyeV, frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1);
+    gl.uniform4fv(u.uHi, frame.highlight);
+    const e = frame.edges;
+    gl.uniform4f(u.uPx, this.canvas.width, this.canvas.height, e.widthPx, e.hoverPx);
+    const h = frame.hoverId || 0;
+    gl.uniform4f(u.uHoverId, h & 255, (h >>> 8) & 255, (h >>> 16) & 255, (h >>> 24) & 255);
+    gl.uniform4f(u.uNear, 1, 1, 0, 0); // WebGL clip space: inside while z + w >= 0
+    const cull = !!(e.minPx && this.bodyTex && this.bodiesFor === this.drawn);
+    if (cull) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    // with no table, the unused sampler points at the state texture, so no
+    // unit is left without a texture
+    gl.uniform1i(u.uBodies, cull ? 1 : 0);
+    gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
+    gl.uniform4f(u.uCull, frame.focalPx || 0, e.minPx || 0, cull ? 1 : 0, 0);
+    gl.depthMask(false);
+    const DEPTH = { lequal: gl.LEQUAL, greater: gl.GREATER, always: gl.ALWAYS };
+    const col = (c) => c || [0, 0, 0];
+    const bind = (buf, stride, sil) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      const attr = [[1, 3, gl.FLOAT, false, 0], [2, 3, gl.FLOAT, false, 12], [3, 4, gl.UNSIGNED_BYTE, true, 24], [4, 4, gl.UNSIGNED_BYTE, true, 28]];
+      if (sil) attr.push([5, 4, gl.SHORT, true, 32], [6, 4, gl.SHORT, true, 40]);
+      for (const [i, n, t, norm, off] of attr) {
+        gl.enableVertexAttribArray(i);
+        gl.vertexAttribPointer(i, n, t, norm, stride, off);
+        inst.divisor(i, 1);
+      }
+      if (!sil) for (const i of [5, 6]) { gl.disableVertexAttribArray(i); inst.divisor(i, 0); }
+      gl.uniform4f(u.uSil, sil ? 1 : 0, 0, 0, 0);
+    };
+    const passes = frame.edgePasses || [{ depth: 'lequal', mode: 0 }];
+    const outline = frame.style && frame.style.outline && this.silCount;
+    for (const ps of passes) {
+      gl.depthFunc(DEPTH[ps.depth] || gl.LEQUAL);
+      gl.uniform4f(u.uEdgeMode, ps.mode || 0, ps.dash || 0, 0, 0);
+      const c = ps.colours || {};
+      gl.uniform4f(u.uPaperPlain, ...col(c.plain), 1);
+      gl.uniform4f(u.uPaperSel, ...col(c.selected), 1);
+      gl.uniform4f(u.uPaperFaded, ...col(c.faded), 1);
+      if (this.edgeCount) { bind(this.edgeBuf, EDGE_STRIDE, false); inst.draw(gl.TRIANGLE_STRIP, 0, 4, this.edgeCount); }
+      if (outline) { bind(this.silBuf, SIL_STRIDE, true); inst.draw(gl.TRIANGLE_STRIP, 0, 4, this.silCount); }
+    }
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    // the face passes set attributes 0-3 again, but never their divisors, and
+    // never use attributes 4-6
+    for (let i = 1; i <= 6; i++) inst.divisor(i, 0);
+    for (const i of [4, 5, 6]) gl.disableVertexAttribArray(i);
+  }
+
   // Drop the model: nothing drawn, picks answer background for no mesh.
   async clear() {
     const gl = this.gl;
+    if (this.edgeBuf) gl.deleteBuffer(this.edgeBuf);
+    if (this.silBuf) gl.deleteBuffer(this.silBuf);
+    this.edgeBuf = null;
+    this.silBuf = null;
+    this.edgeCount = 0;
+    this.silCount = 0;
+    this.edgesFor = null;
+    this.bodiesFor = null;
     for (const b of this.buffers) gl.deleteBuffer(b);
     this.buffers = [];
     this.vb = null;
@@ -320,8 +622,41 @@ export class WebGLRenderer {
     gl.clearColor(frame.background[0], frame.background[1], frame.background[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.vb || frame.drawModel === false) return;
-    this._bind(this.shade, frame);
-    this._draw();
+    const edges = frame.edges && (this.edgeCount || this.silCount) && this.edgesFor === this.drawn;
+    const faces = (frame.style && frame.style.faces) || 'shade';
+    // The faces are always pushed back a little, so their own boundary edges
+    // win the depth test along them; always, and in the pick pass too, so a
+    // frame with and without edges, and a pick, see the same face depths.
+    // 'depth' (the hidden-line styles) writes their depth only; 'none' (Wire)
+    // draws none; 'xray' blends them at a quarter, writing no depth.
+    if (faces !== 'none') {
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(1, 1);
+      if (faces === 'depth') gl.colorMask(false, false, false, false);
+      if (faces === 'xray') {
+        gl.depthMask(false);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      }
+      this._bind(this.shade, frame);
+      this.gl.uniform4f(this.shade.u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, faces === 'xray' ? 0.25 : 1);
+      this._draw();
+      gl.colorMask(true, true, true, true);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+      // the cut fill: the same bias, so its depths equal the depth-only pass's
+      if (faces === 'depth' && frame.clip && frame.fill) {
+        this._bind(this.fillProg, frame);
+        gl.uniform4f(this.fillProg.u.uFill, frame.fill[0], frame.fill[1], frame.fill[2], 1);
+        gl.depthMask(false);
+        gl.depthFunc(gl.LEQUAL);
+        this._draw();
+        gl.depthMask(true);
+        gl.depthFunc(gl.LESS);
+      }
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
+    if (edges) this._drawEdges(frame);
   }
 
   _ensurePickFbo() {
@@ -383,7 +718,10 @@ export class WebGLRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this._bind(this.pickProg, frame);
+    gl.enable(gl.POLYGON_OFFSET_FILL); // the shaded pass's face depths
+    gl.polygonOffset(1, 1);
     this._draw();
+    gl.disable(gl.POLYGON_OFFSET_FILL);
     const px = new Uint8Array(4);
     gl.readPixels(x, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     gl.disable(gl.SCISSOR_TEST);

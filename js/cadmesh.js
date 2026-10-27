@@ -35,16 +35,26 @@
 //   faces  uint32 pairs (first triangle, triangle count), one per b-rep face,
 //          in GLOBAL triangle numbers; count 0 for a face that was not meshed.
 //          A mesh's faces are faceStart .. faceStart + faceCount - 1.
+//   edges  uint32 vertex pairs: the unique b-rep face boundaries (js/edges.js)
+//   silhouettes, silhouetteNormals
+//          uint32 vertex pairs, and per pair the normals of its two
+//          triangles as snorm16x4 x 2 (w = 0): the edges inside curved faces,
+//          drawn where they are on the outline. Absent when there were more
+//          than SILHOUETTE_CAP (the header's silhouettesOmitted says how many).
+// Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³] }, one
+// entry per mesh; volume is |signed volume|, meaningful for closed bodies.
 //
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
+
+import { buildEdges } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
 
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
 // name -> element type; written only when the model carries them
-const OPTIONAL = { faces: Uint32Array };
+const OPTIONAL = { faces: Uint32Array, edges: Uint32Array, silhouettes: Uint32Array, silhouetteNormals: Int16Array };
 // the b-rep statuses the converter reports: BodyKind in
 // occt-progress/progress.patch is the source; this list follows it
 export const BODY_KINDS = ['closed', 'capped', 'sheet', 'open'];
@@ -64,8 +74,9 @@ export function bytesToId(b0, b1, b2, b3) {
 //          indices:Uint32Array (local to the mesh),
 //          faces?:Uint32Array (first, count) pairs in the mesh's own triangle
 //          numbers}], root, sourceUnits?, angularDeflection? }
-// The faces section is written only when every mesh carries faces.
-export function encodeCadmesh(model) {
+// The faces section is written only when every mesh carries faces. The edge
+// list and the body facts are built here (opts.edges = false leaves them out).
+export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
   let vertexCount = 0;
   let indexCount = 0;
   let faceCount = 0;
@@ -143,6 +154,15 @@ export function encodeCadmesh(model) {
   });
 
   const arrays = { position, normal, color, id, index, ...(faces ? { faces } : {}) };
+  let edgeInfo = null;
+  if (withEdges && vertexCount) {
+    edgeInfo = buildEdges({ position, index, meshes: metas });
+    arrays.edges = edgeInfo.edges;
+    if (edgeInfo.silhouettes) {
+      arrays.silhouettes = edgeInfo.silhouettes;
+      arrays.silhouetteNormals = edgeInfo.silhouetteNormals;
+    }
+  }
   const names = [...SECTIONS, ...Object.keys(OPTIONAL).filter((s) => arrays[s])];
   const sections = {};
   let off = 0;
@@ -157,6 +177,8 @@ export function encodeCadmesh(model) {
     root: model.root || { name: 'model', meshes: metas.map((_, i) => i), children: [] },
     ...(typeof model.sourceUnits === 'string' ? { sourceUnits: model.sourceUnits } : {}),
     ...(model.angularDeflection > 0 ? { angularDeflection: model.angularDeflection } : {}),
+    ...(edgeInfo ? { facts: roundFacts(edgeInfo.facts) } : {}),
+    ...(edgeInfo?.silhouettesOmitted ? { silhouettesOmitted: edgeInfo.silhouettesOmitted } : {}),
   };
   const json = new TextEncoder().encode(JSON.stringify(header));
   const dataStart = align8(12 + json.byteLength);
@@ -249,6 +271,13 @@ export function decodeCadmesh(buf) {
   for (let i = 0; i < idx.length; i++) {
     if (idx[i] >= vc) throw new Error(`cadmesh: index ${i} names vertex ${idx[i]} of ${vc}`);
   }
+  for (const s of ['edges', 'silhouettes']) {
+    const e = out[s];
+    if (!e) continue;
+    for (let i = 0; i < e.length; i++) {
+      if (e[i] >= vc) throw new Error(`cadmesh: ${s} entry ${i} names vertex ${e[i]} of ${vc}`);
+    }
+  }
   // each face's triangles lie inside its own mesh
   if (out.faces) {
     const fc = out.faces;
@@ -287,6 +316,24 @@ function validateHeader(h) {
     bad('section faces is not whole (first, count) pairs');
   }
   const faceTotal = fsec ? fsec.byteLength / 8 : 0;
+  // the edge sections: whole vertex pairs, and two normals per silhouette pair
+  for (const s of ['edges', 'silhouettes', 'silhouetteNormals']) {
+    const sec = h.sections[s];
+    if (sec !== undefined && (!sec || !ok(sec.offset) || sec.offset % 8 || !ok(sec.byteLength) || sec.byteLength % 8)) {
+      bad(`section ${s} is not whole pairs`);
+    }
+  }
+  const sil = h.sections.silhouettes;
+  const siln = h.sections.silhouetteNormals;
+  if (!!sil !== !!siln || (sil && siln.byteLength !== sil.byteLength * 2)) bad('silhouette normals do not match the silhouette edges');
+  if (h.facts !== undefined) {
+    const f = h.facts;
+    const list = (a, test) => Array.isArray(a) && a.length === (h.meshes || []).length && a.every(test);
+    const num = (x) => Number.isFinite(x) && x >= 0;
+    if (!f || !list(f.closed, (x) => typeof x === 'boolean') || !list(f.area, num) || !list(f.volume, num)) {
+      bad('facts are not one closed / area / volume per mesh');
+    }
+  }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
   if (h.angularDeflection !== undefined && !(Number.isFinite(h.angularDeflection) && h.angularDeflection > 0)) {
     bad('angularDeflection is not a positive number');
@@ -317,6 +364,10 @@ function validateHeader(h) {
   };
   walk(h.root, 0);
 }
+
+// seven significant digits: a float32's worth, in a short JSON number
+const sig7 = (x) => Number(x.toPrecision(7));
+const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7) });
 
 export function computeNormals(positions, indices) {
   const n = new Float32Array(positions.length);

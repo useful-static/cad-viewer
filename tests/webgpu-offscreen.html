@@ -74,6 +74,8 @@ async function run() {
   const fakeCtx = { configure() {}, getCurrentTexture: () => target };
   const canvas = { width: W, height: H };
   const r = new WebGPURenderer(canvas, adapter, device, fakeCtx);
+  const gpuErrors = [];
+  r.onerror = (m) => gpuErrors.push(m);
   await r.upload(mesh);
   r.setState(new Uint8Array(1024 * 4), 1024, 1);
 
@@ -98,7 +100,7 @@ async function run() {
   enc.copyTextureToBuffer({ texture: target }, { buffer: rb, bytesPerRow: bpr }, [W, H]);
   device.queue.submit([enc.finish()]);
   await rb.mapAsync(GPUMapMode.READ);
-  const px = new Uint8Array(rb.getMappedRange());
+  const px = new Uint8Array(rb.getMappedRange()).slice();
   const bg = BG.map((v) => Math.round(v * 255));
   const lit = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) {
@@ -177,12 +179,119 @@ async function run() {
   const litHits = litIds.filter((id) => id > 0).length;
   const darkHits = darkIds.filter((id) => id > 0).length;
   const pickId = litIds.find((id) => id > 0) || 0;
+  // Edges: the face boundaries drawn over the same frame change pixels, and
+  // darken them (an edge is its face's colour darkened). Without the edge
+  // pipeline, or with it drawing nothing, no pixel changes.
+  const { bodyTable, buildEdges, edgeInstances } = await import('../js/edges.js');
+  const el = buildEdges({ position: mesh.position, index: mesh.index, meshes: mesh.header.meshes });
+  await r.uploadEdges(mesh, edgeInstances(mesh, el.edges));
+  r.render({ ...frame, edges: { widthPx: 1.5, hoverPx: 1 }, hoverId: 0 });
+  const enc2 = device.createCommandEncoder();
+  enc2.copyTextureToBuffer({ texture: target }, { buffer: rb, bytesPerRow: bpr }, [W, H]);
+  device.queue.submit([enc2.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  const px2 = new Uint8Array(rb.getMappedRange());
+  let changed = 0, darker = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const o = y * bpr + x * 4;
+      const a = px[o] + px[o + 1] + px[o + 2], e = px2[o] + px2[o + 1] + px2[o + 2];
+      // over the model only: an outline edge over the background may be lighter than it
+      if (!lit[y * W + x]) continue;
+      if (px[o] !== px2[o] || px[o + 1] !== px2[o + 1] || px[o + 2] !== px2[o + 2]) { changed++; if (e < a) darker++; }
+    }
+  }
+  rb.unmap();
+  // The 6 px cull reads the body table: with a threshold no body reaches,
+  // the edge pass must change no pixel at all (the faces are biased in
+  // every frame, so the frame equals the first one)
+  r.setBodies(mesh, bodyTable(mesh.header));
+  r.render({ ...frame, edges: { widthPx: 1.5, hoverPx: 1, minPx: 1e9 }, focalPx: H / 2 / Math.tan(Math.PI / 8), hoverId: 0 });
+  const enc3 = device.createCommandEncoder();
+  enc3.copyTextureToBuffer({ texture: target }, { buffer: rb, bytesPerRow: bpr }, [W, H]);
+  device.queue.submit([enc3.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  const px3 = new Uint8Array(rb.getMappedRange());
+  let culledChanged = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const o = y * bpr + x * 4;
+      if (!lit[y * W + x]) continue;
+      if (Math.abs(px[o] - px3[o]) + Math.abs(px[o + 1] - px3[o + 1]) + Math.abs(px[o + 2] - px3[o + 2]) > 3) culledChanged++;
+    }
+  }
+  rb.unmap();
+  // The paper and outline styles on WebGPU: Hidden grey on paper (faces
+  // depth-only, hidden edges dashed, then visible ones, silhouettes too) must
+  // leave no face colour, the paper as background and dark edges; X-ray
+  // (blended faces, lightened edges) must draw without a GPU error.
+  const { silhouetteInstances } = await import('../js/edges.js');
+  const { PAPER, PAPER_EDGES, rgb } = await import('../js/styles.js');
+  await r.uploadEdges(mesh, edgeInstances(mesh, el.edges), silhouetteInstances(mesh, el.silhouettes, el.silhouetteNormals));
+  const cols = (k) => ({ plain: rgb(PAPER_EDGES.plain[k]), selected: rgb(PAPER_EDGES.selected[k]), faded: rgb(PAPER_EDGES.faded[k]) });
+  const styleErrors = [];
+  const styled = async (extra) => {
+    device.pushErrorScope('validation');
+    // no selection (highlight alpha 0): this file's base frame greys everything
+    r.render({ ...frame, highlight: [frame.highlight[0], frame.highlight[1], frame.highlight[2], 0],
+      edges: { widthPx: 1.5, hoverPx: 1, minPx: 0 }, focalPx: H / 2 / Math.tan(Math.PI / 8), hoverId: 0, ...extra });
+    const ve = await device.popErrorScope();
+    if (ve) styleErrors.push(ve.message.slice(0, 300));
+    const e = device.createCommandEncoder();
+    e.copyTextureToBuffer({ texture: target }, { buffer: rb, bytesPerRow: bpr }, [W, H]);
+    device.queue.submit([e.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const q = new Uint8Array(rb.getMappedRange()).slice();
+    rb.unmap();
+    let paper = 0, dark = 0, coloured = 0;
+    const pp = rgb(PAPER).map((v) => Math.round(v * 255));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const o = y * bpr + x * 4;
+        const c = [q[o], q[o + 1], q[o + 2]];
+        if (Math.abs(c[0] - pp[0]) <= 6 && Math.abs(c[1] - pp[1]) <= 6 && Math.abs(c[2] - pp[2]) <= 6) paper++;
+        else if (Math.max(...c) < 70) dark++;
+        if (Math.max(...c) - Math.min(...c) > 24) coloured++;
+      }
+    }
+    let fill = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const o = y * bpr + x * 4;
+        if (Math.abs(q[o] - 0xb8) <= 4 && Math.abs(q[o + 1] - 0xb8) <= 4 && Math.abs(q[o + 2] - 0xb2) <= 4) fill++;
+      }
+    }
+    return { paper: +(paper / (W * H)).toFixed(3), dark: +(dark / (W * H)).toFixed(4), coloured: +(coloured / (W * H)).toFixed(4),
+      fill: +(fill / (W * H)).toFixed(4) };
+  };
+  const hg = await styled({ background: rgb(PAPER), style: { faces: 'depth', outline: true },
+    edgePasses: [{ depth: 'greater', mode: 1, dash: 6, colours: cols(1) }, { depth: 'lequal', mode: 1, colours: cols(0) }] });
+  const xr = await styled({ style: { faces: 'xray', outline: true }, edgePasses: [{ depth: 'always', mode: 2 }] });
+  // the cut fill: Hidden line, cut at the middle of z, every body closed
+  // (state alpha 255) and then every body open (alpha 0)
+  const { CUT_FILL } = await import('../js/styles.js');
+  const hl = { background: rgb(PAPER), style: { faces: 'depth', outline: true }, fill: rgb(CUT_FILL),
+    clip: [0, 0, 1, (b.min[2] + b.max[2]) / 2], edgePasses: [{ depth: 'lequal', mode: 1, colours: cols(0) }] };
+  const nIds = mesh.header.meshes.length + 1;
+  const closedState = new Uint8Array(1024 * 4);
+  for (let i = 1; i < nIds && i < 1024; i++) closedState[i * 4 + 3] = 255;
+  r.setState(closedState, 1024, 1);
+  const cutClosed = await styled(hl);
+  r.setState(new Uint8Array(1024 * 4), 1024, 1);
+  const cutOpen = await styled(hl);
+  const fillOk = cutClosed.fill > 0.001 && cutOpen.fill === 0;
+  const stylesOk = fillOk && hg.paper > 0.5 && hg.dark > 0 && hg.coloured < 0.01 && xr.coloured > 0.01 && !gpuErrors.length && !styleErrors.length;
+  out.styles = { hiddenGrey: hg, xray: xr, cutFillClosed: cutClosed.fill, cutFillOpen: cutOpen.fill, errors: styleErrors };
+  const edgesOk = stylesOk && r.edgeCount === el.edges.length / 2 && changed > 0 && darker >= 0.9 * changed
+    && culledChanged === 0 && !gpuErrors.length;
+  out.edges = { boundary: el.edges.length / 2, held: r.edgeCount, changedPx: changed, darkerPx: darker,
+    changedWhenAllCulled: culledChanged, gpuErrors };
   Object.assign(out, {
     status: 'ready', format, adapter: r.adapterInfo, litFraction: +(litCount / (W * H)).toFixed(3),
     litPicks: `${litHits}/${litIds.length}`, backgroundPicks: `${darkHits}/${darkIds.length}`,
     distinctBodies: new Set(litIds.filter((id) => id > 0)).size,
     concurrentOk,
-    pickId: litIds.length && litHits === litIds.length && darkHits === 0 && concurrentOk && rayOk ? pickId : 0,
+    pickId: litIds.length && litHits === litIds.length && darkHits === 0 && concurrentOk && rayOk && edgesOk ? pickId : 0,
     pickName: pickId ? mesh.header.meshes[pickId - 1].name : null,
     stats: { meshes: mesh.header.meshes.length, triangles: mesh.header.indexCount / 3 },
   });

@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "deps": "./fetch-deps.sh",
-    "test": "node tests/test-cadmesh.mjs && node tests/test-camera.mjs && node tests/test-import-progress.mjs && node tests/test-mesh-cache.mjs && node tests/test-palettes.mjs && node tests/test-converter-choice.mjs && node tests/test-source-units.mjs && node tests/test-units.mjs",
+    "test": "node tests/test-cadmesh.mjs && node tests/test-camera.mjs && node tests/test-import-progress.mjs && node tests/test-mesh-cache.mjs && node tests/test-palettes.mjs && node tests/test-converter-choice.mjs && node tests/test-source-units.mjs && node tests/test-units.mjs && node tests/test-edges.mjs && node tests/test-styles.mjs && node tests/test-view-link.mjs",
     "convert": "node stp2mesh.mjs"
   },
   "engines": {

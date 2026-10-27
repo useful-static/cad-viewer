@@ -17,7 +17,8 @@
 // carries its b-rep status (kind) (converter 0.0.23-progress7).
 // 4: the b-rep faces (the faces section), the file's declared unit
 // (sourceUnits) and the angular deflection are kept.
-export const CACHE_VERSION = 4;
+// 5: the edge list (edges, silhouettes) and the body facts.
+export const CACHE_VERSION = 5;
 
 // Keys written under an older CACHE_VERSION: never read again, so dropped.
 export const staleKeys = (entries) => entries.map((e) => e.key).filter((k) => !k.startsWith(`v${CACHE_VERSION}|`));

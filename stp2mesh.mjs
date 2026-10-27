@@ -145,6 +145,13 @@ async function main() {
   process.stdout.write(`OK ${out}: ${meshes} bodies, ${tris} triangles, ${mb(file.length)} MB`
     + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s`
     + `, declared unit ${declared || 'not recorded'}\n`);
+  // the edge list and body facts encodeCadmesh built
+  const h = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, new DataView(buf).getUint32(8, true))));
+  const sec = (s) => (h.sections[s] ? h.sections[s].byteLength / 8 : 0);
+  if (h.facts) {
+    process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`
+      + `; ${h.facts.closed.filter(Boolean).length} of ${h.facts.closed.length} bodies closed\n`);
+  }
   // the b-rep status of each body, as the converter found it
   const kinds = {};
   for (const k of statuses) if (k) kinds[k] = (kinds[k] || 0) + 1;
