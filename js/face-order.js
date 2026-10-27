@@ -45,6 +45,9 @@ export function sheetsLast(index, meshes) {
 // triangles (20 mm by 0.1 mm), whose depth is interpolated with an error
 // that grows with the face's tilt. On the ALL-H3-CC board, at a 36 mm view,
 // solids at 1 slope + 16 units still covered a pad that lies exactly on the
-// board; 2 slope did not, nor did 4 or 8. 4 is twice the least that worked.
-export const BIAS_SOLID = [4, 4];
+// board; 2 slope did not. More costs something: a solid pushed back further
+// lets edges just behind its face show through it (with the sheets hidden,
+// slope 4 changed 1.9% of that view, 2 changed 1.2%, the units barely
+// mattered; ui-checks.py sheet-bleed holds the line).
+export const BIAS_SOLID = [2, 1];
 export const BIAS_SHEET = [1, 1];
