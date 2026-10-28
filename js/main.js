@@ -890,9 +890,10 @@ function placeOpen(narrow) {
   // a model list goes where Open… goes (moved only when it must: a move
   // takes the focus from it)
   if (lbl.nextElementSibling !== $('modellist')) lbl.after($('modellist'));
-  btn.textContent = narrow ? 'File' : 'Save';
-  btn.title = narrow ? 'Open a file, or save the converted model' : 'Save the converted model';
-  panel.setAttribute('aria-label', btn.textContent);
+  // "File" at every width: it holds Copy view link too, which a menu named
+  // Save hid on the desktop (live end-to-end review); refold sets the title
+  btn.textContent = 'File';
+  panel.setAttribute('aria-label', 'File');
 }
 
 // a folded menu with nothing it could do is disabled, like its items
@@ -926,11 +927,13 @@ function refold(keep = focusNow()) {
   placeOpen(narrow);
   for (const id of MENUS) $(id).classList.toggle('folded', narrow && id === 'filemenu');
   tb.classList.add('measuring');
-  // the model list is a step of its own, after Save and before View: it
-  // folds into Save's panel (it stood outside every group, so the wide row
-  // could not shed it: review r16 L3), and at 1280 px it still fits beside
-  // a folded Save (966 px used of 1280, the list 156 px)
-  for (const id of [...FOLD_ORDER.slice(0, 2), 'modellist', ...FOLD_ORDER.slice(2)]) {
+  // the model list is a step of its own, after View and before Show: it
+  // folds into File's panel (it stood outside every group, so the wide row
+  // could not shed it: review r16 L3). On a page given a list the list is
+  // how a visitor finds the other models, so View folds first: before View
+  // it folded on a 1024 px tablet whose row had room for it once View had
+  // (live end-to-end review). At 1280 px it fits beside a folded File.
+  for (const id of [...FOLD_ORDER.slice(0, 3), 'modellist', ...FOLD_ORDER.slice(3)]) {
     if (toolbarFits(tb)) break;
     if (id === 'modellist') {
       if (!narrow && !$('modellist').hidden) $('filepanel').prepend($('modellist'));
@@ -944,12 +947,13 @@ function refold(keep = focusNow()) {
   MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
   // a Save menu holding the model list is the File menu
   // (its tooltip and panel name too: they still said "Save the converted model")
-  if (!narrow) {
-    const btn = $('filemenu').querySelector('.menu-btn');
-    const file = $('filepanel').contains($('modellist'));
-    btn.textContent = file ? 'File' : 'Save';
-    btn.title = file ? 'Open a model from the list, or save the converted model' : 'Save the converted model';
-    $('filepanel').setAttribute('aria-label', btn.textContent);
+  {
+    // the tooltip names what the panel holds
+    const holds = [narrow ? 'open a file' : null,
+      $('filepanel').contains($('modellist')) && !$('modellist').hidden ? 'open a model from the list' : null,
+      'save the converted model', 'copy a link to this view'].filter(Boolean);
+    const t = holds.join(', ').replace(/, ([^,]*)$/, ', or $1');
+    $('filemenu').querySelector('.menu-btn').title = t[0].toUpperCase() + t.slice(1);
   }
   syncMenuButtons();
   refoldFocus(keep, narrow);
@@ -1230,6 +1234,24 @@ function blurAfterPick(sel) {
   sel.addEventListener('change', () => { if (!typing) sel.blur(); });
 }
 
+// The model shown, by its name: the model list's name for it when it is one
+// of the list's (a product name, as a shop's list gives it), else its file
+// name; in the footer and the tab's title. The board was never named: the
+// title was the viewer's and the footer the file's (live end-to-end review).
+const BASE_TITLE = document.title;
+const SHORT_TITLE = BASE_TITLE.split(' — ')[0]; // "CAD viewer"
+function showModelName() {
+  if (!app.header || !app.stats) return;
+  const sel = $('modellist');
+  const cur = app.sourceUrl ? listedNow() : null;
+  const entry = cur && [...sel.options].find((o) => o.value && o.value === cur);
+  const label = entry ? entry.textContent : app.sourceName;
+  const s = app.stats;
+  $('model').textContent = `${label} · ${s.meshes} bodies · ${fmtInt(s.triangles)} triangles`;
+  $('model').title = entry ? `${$('model').textContent} (${app.sourceName})` : $('model').textContent; // the narrow footer truncates it
+  document.title = `${label} — ${SHORT_TITLE}`;
+}
+
 // ---------- model lists (?list=, js/model-list.js) ----------
 // The models a site offers, by name, in a drop-down beside Open…; picking
 // one opens it as ?src= would (and puts it in ?src=, so a reload or a view
@@ -1249,6 +1271,7 @@ function fillModelList(entries) {
   sel.hidden = entries.length === 0;
   syncModelList();
   refold();
+  showModelName(); // a model shown before the list came is named from it now
 }
 
 // the drop-down names the model on screen: its entry, or "Open from list…"
@@ -1259,6 +1282,8 @@ function syncModelList() {
   const cur = listedNow();
   const i = [...sel.options].findIndex((o) => o.value && o.value === cur);
   sel.selectedIndex = i >= 0 ? i : sel.options.length - 1;
+  // the whole name on hover, where the list's width cuts it
+  sel.title = i >= 0 ? sel.options[i].textContent : 'Open another model from the list this page was given';
 }
 
 // The model the list stands for: the one being opened from a URL while a
@@ -1603,6 +1628,7 @@ function dropModel(msg) {
   updateButtons();
   $('hover').textContent = '';
   $('model').textContent = '';
+  document.title = BASE_TITLE;
   $('model').title = '';
   showInfo();
   gpuSync().catch(() => {});
@@ -1732,8 +1758,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
     inflateMs: Math.round(inflateMs), fileBytes: buf.byteLength, fetchMs: app.fetchMs ?? null, unmeshedFaces,
     converter: conversion ? (conversion.threads ? 'multi-core' : 'one thread') : null };
-  $('model').textContent = `${name} · ${mesh.header.meshes.length} bodies · ${fmtInt(tris)} triangles`;
-  $('model').title = $('model').textContent; // the narrow footer truncates it
+  showModelName();
   showInfo();
   setStatus('ready', readyText()); // announced with the change into ready
   // the facts' closed flags go into the state texture too (the cut fill)

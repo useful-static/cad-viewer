@@ -58,7 +58,8 @@ URL parameters:
   the same part of the model framed.
 - **A toolbar that fits.** The toolbar stays one row at every size: where
   its controls do not fit, the view presets, Ortho, Z up and Section fold
-  into a **View** menu, then Save .cadmesh into a **Save** menu, then
+  into a **View** menu, then Save .cadmesh and Copy view link into a
+  **File** menu, then a model list's drop-down into File too, then
   Isolate / Hide / Show all / Undo into a **Show** menu. A tool's own
   controls are in an **options bar** along the bottom of the view while the
   tool is on, led by the tool's name as a toggle that turns it off.

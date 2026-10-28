@@ -21,6 +21,8 @@
 "sameAs":["https://github.com/useful-static/cad-viewer"],
 "publisher":{"@type":"Organization","name":"Useful Static","url":"https://known.name/"}}
 </script>
+<!-- (without one, every visit asked for /favicon.ico and got a 404) -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   * { box-sizing: border-box; }
@@ -105,7 +107,9 @@
   #info b { color:var(--dim); font-weight:500; }
   #info[hidden], #infounits[hidden] { display:none; }
   #unitsel { padding:1px 4px; }
-  #modellist { max-width:12em; text-overflow:ellipsis; }
+  /* (16em: a product name of about 28 characters whole; at 12em names were
+     cut. The fold step sheds it into File where the row is short) */
+  #modellist { max-width:16em; text-overflow:ellipsis; }
   #modellist[hidden] { display:none; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);
@@ -312,8 +316,8 @@
        then Show). In the narrow
        layout this one is File: main.js moves Open… into it and it is
        always folded. -->
-  <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model">Save</button>
-    <div class="menu-panel" id="filepanel" aria-label="Save">
+  <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
+    <div class="menu-panel" id="filepanel" aria-label="File">
       <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button>
     </div></div>
   <span class="sep"></span>

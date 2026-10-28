@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- an isometric cube in the viewer's accent: its icon (index.html <link rel="icon">) -->
+  <path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="#cc6a0e"/>
+  <path d="M16 2 29 9.5 16 17 3 9.5z" fill="#ffb366"/>
+  <path d="M16 17v13L3 22.5v-13z" fill="#ff8c1a"/>
+</svg>
