@@ -46,7 +46,9 @@
      (position:fixed, so the narrow layout's scrolling row does not clip it). */
   .menu, .menu-panel, .presets { display:contents; }
   .menu-btn { display:none; }
-  .menu-btn::after { content:'▾'; margin-left:5px; font-size:10px; opacity:.8; }
+  /* the arrow is drawn, not read: '/ ""' leaves it out of the button's name
+     ("View", not "View ▾"); a browser without the alt syntax keeps the first */
+  .menu-btn::after { content:'▾'; content:'▾' / ''; margin-left:5px; font-size:10px; opacity:.8; }
   .menu.folded { display:inline-flex; }
   .menu.folded > .menu-btn { display:inline-flex; align-items:center; }
   .menu.folded > .menu-panel { display:none; }
@@ -56,6 +58,8 @@
     border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   .menu.folded .presets { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; flex-basis:100%; }
   :is(#showmenu, #filemenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
+  /* Open… (a label) centred like the buttons under it; it sat at the left */
+  .menu.folded label.btn { justify-content:center; }
   #panelbtn .lbl { margin-left:5px; }
   /* Number-key hints: in the open View panel only (the row keeps its width),
      and not on a touch-only device (no keyboard to press them on) */
@@ -75,7 +79,8 @@
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
   @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
-     is on. Each row scrolls sideways where it is too narrow; its frame (.opt,
+     is on. Each row scrolls sideways where it is too narrow (wraps in the
+     narrow layout, below); its frame (.opt,
      not scrolling) carries the right-edge fade, as the header does for #tb. */
   #optbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-direction:column;
     background:var(--panel); border-top:1px solid var(--line); }
@@ -100,6 +105,8 @@
   #info b { color:var(--dim); font-weight:500; }
   #info[hidden], #infounits[hidden] { display:none; }
   #unitsel { padding:1px 4px; }
+  #modellist { max-width:12em; text-overflow:ellipsis; }
+  #modellist[hidden] { display:none; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);
     border-radius:4px; font:inherit; min-width:0; }
@@ -144,7 +151,10 @@
   @media (prefers-reduced-motion: reduce) { .pbar.busy #pfill { animation:none; width:100%; opacity:.5; } #pfill { transition:none; } }
   #pdetail { color:var(--dim); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   /* above the options bar (main.js sets --optbar-h to its height) */
-  #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
+  /* a long name with no space to break at wraps inside the view instead of
+     running past its right edge */
+  #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); max-width:calc(100% - 20px); overflow-wrap:anywhere;
+    color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
   /* the paper styles (Hidden line, Hidden grey, Wire): dark text on a light
      chip, since the dark view's grey with a black shadow is 2.75:1 on paper */
   #stage[data-bg="paper"] #hover { color:#222; text-shadow:none; }
@@ -212,6 +222,11 @@
     #tree .label { line-height:34px; }
     #treefilter { font-size:16px; min-height:40px; } /* iOS zooms into a field under 16 px */
     .help-touch { display:inline; }
+    /* 40 px wide too: the section's X / Y / Z (35 px), the ☰ (38 px), the
+       part colour swatch (32 x 24) and the help's summary line (17 px tall) */
+    .seg button, #panelbtn { min-width:40px; justify-content:center; }
+    #colours input[type=color] { width:44px; height:40px; }
+    .help summary { line-height:40px; margin-bottom:0; }
   }
   /* Below desktop widths Save appears once a STEP import makes it useful */
   @media (max-width: 1400px) {
@@ -245,6 +260,9 @@
     header .title, #export:disabled, #panelbtn .lbl { display:none; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
+    /* a 320 px phone with touch targets: the row was 329 px, Show 9 px past
+       the edge (review r18) */
+    @media (max-width: 340px) { #tb { gap:3px; padding:6px 4px; } .sep { margin:0; } }
     /* The parts panel slides out from the left OVER the 3D view (it shares
        the view's grid cell), so opening it never shrinks or reframes the view;
        a scrim dims the view and closes the panel when tapped. Closed, the
@@ -262,10 +280,19 @@
       opacity:0; pointer-events:none; transition:opacity .22s; }
     body.panel-open #scrim { opacity:1; pointer-events:auto; }
     @media (prefers-reduced-motion: reduce) { aside, body.panel-open aside, #scrim { transition:none; } }
+    /* An options row wraps here instead of scrolling: on a phone the
+       section's row was 500 px in 390, so the cut position and Flip lay past
+       the edge while the slider moved (review r18). The slider takes what
+       is left of its line. */
+    .opt-row { flex-wrap:wrap; }
+    #secpos { flex:1 1 110px; }
     /* narrow: one line; the model name truncates (wrapping it to a second
        line would cost the 3D view a row on every phone) */
     footer { grid-column:1; grid-row:3; flex-wrap:nowrap; }
-    #status { max-width:calc(100% - 64px); } /* room for the renderer badge */
+    /* room for the renderer badge (WEBGL2: 59 px) and the two 12 px gaps
+       beside the (then empty) model name; 64 px left the badge 9 px past
+       the screen's edge under a long status (measured, 390 and 768 px) */
+    #status { max-width:calc(100% - 92px); }
     /* the status (errors included) wraps; the model name gives way */
     #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
   }
@@ -277,9 +304,12 @@
   <!-- narrow layout: an icon, named by aria-label -->
   <button id="panelbtn" aria-expanded="false" aria-controls="parts" aria-label="Parts" title="Parts list"><span aria-hidden="true">☰</span><span class="lbl">Parts</span></button>
   <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz" hidden></label>
+  <!-- ?list=: the models a site offers, by name; beside Open… (main.js moves it with Open…) -->
+  <select id="modellist" autocomplete="off" hidden aria-label="Model" title="Open another model from the list this page was given"></select>
   <!-- A .menu shows its controls in the row where they fit, and folds them
        behind its button into a drop-down panel where they do not (main.js
-       measures the row and folds View, then Save, then Show). In the narrow
+       measures the row and folds the view presets, then Save, then View,
+       then Show). In the narrow
        layout this one is File: main.js moves Open… into it and it is
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model">Save</button>
@@ -288,10 +318,16 @@
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
-  <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis and section">View</button>
+  <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis, section and display style">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
+      <!-- the presets fold on their own first (Views ▾), so the row keeps
+           Ortho, Z up, Section and Style where it has room for those alone;
+           when the whole View group folds they are its panel's grid again -->
+      <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom">Views</button>
+        <div class="menu-panel" id="presetpanel" aria-label="Views">
       <span class="presets"><button data-view="iso" title="Iso view (0)" aria-keyshortcuts="0">Iso<kbd>0</kbd></button><button data-view="front" title="Front view (1)" aria-keyshortcuts="1">Front<kbd>1</kbd></button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right" title="Right view (3)" aria-keyshortcuts="3">Right<kbd>3</kbd></button><button data-view="top" title="Top view (7)" aria-keyshortcuts="7">Top<kbd>7</kbd></button><button data-view="bottom">Bottom</button></span>
       <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
+        </div></div>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
       <button id="section" aria-pressed="false" title="Cut the model with a plane; its controls show along the bottom of the view">Section</button>
       <select id="style" autocomplete="off" aria-label="Display style" aria-keyshortcuts="E" title="Display style. E switches the edges on and off in the Shaded styles (a choice is remembered in this browser)"></select>
@@ -317,7 +353,7 @@
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
-    <span class="keys">parts list: ↑ ↓ move · Enter select · Space show/hide · → ← open/close</span></details>
+    <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>

@@ -20,10 +20,15 @@ onmessage = async (ev) => {
     // what the file holds, for the page's time forecast (js/import-progress.js)
     const { stepFeatures } = await import('./step-features.js');
     postMessage({ type: 'features', features: stepFeatures(buffer) });
+    // A converter that cannot be loaded (offline, a dropped connection, or not
+    // on this site) is said as such, never as a crash, an out-of-memory or
+    // a "run fetch-deps.sh" to a visitor (review r23)
+    const unavailable = () => new Error('converter unavailable: it could not be downloaded (offline, or the connection dropped). '
+      + 'Reconnect and open the file again');
     try {
       importScripts(`${VENDOR}occt-import-js.js`);
     } catch (e) {
-      throw new Error('the converter is not installed (run fetch-deps.sh)');
+      throw unavailable();
     }
     const fmt = await import('./cadmesh.js');
     // the unit the file declares, read before the converter sees the bytes
@@ -33,13 +38,14 @@ onmessage = async (ev) => {
     // fraction) from inside the import: 1 = reading the file (start / end
     // only), 2 = building the parts, 3 = meshing. The stock npm build never
     // calls it, and the page then goes by its forecast alone.
+    // (its 12 MB WebAssembly is fetched here: a failed fetch is the same case)
     const occt = await self.occtimportjs({
       locateFile: (p) => VENDOR + p,
       // the multi-core build starts its threads from this script; left to
       // itself it would take this worker's own URL
       mainScriptUrlOrBlob: `${VENDOR}occt-import-js.js`,
       onProgress: (phase, fraction) => postMessage({ type: 'occt', phase, fraction }),
-    });
+    }).catch((e) => { throw /fetch|network|load|404/i.test(String(e && e.message ? e.message : e)) ? unavailable() : e; });
     post(`converting ${format.toUpperCase()} (${(buffer.byteLength / 1e6).toFixed(1)} MB)`, true);
     const t0 = performance.now();
     const tess = params || fmt.DEFAULT_TESSELLATION;

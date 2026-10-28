@@ -94,4 +94,7 @@ export function schemeColours(mesh, id, overrides = new Map()) {
 
 // '#rrggbb' <-> [r, g, b] in 0..1, for the colour picker
 export const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
-export const rgbToHex = (c) => '#' + c.map((x) => Math.round(x * 255).toString(16).padStart(2, '0')).join('');
+// red, green and blue only (an alpha would make the #value invalid), each
+// clamped to 0..1, so the colour picker never falls back to black
+export const rgbToHex = (c) => '#' + c.slice(0, 3)
+  .map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, '0')).join('');

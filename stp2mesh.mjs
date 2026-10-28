@@ -3,16 +3,17 @@
 // instantly. Same OpenCascade build (occt-import-js) and the same packing code
 // (js/cadmesh.js) as the in-browser import, so the two paths cannot disagree.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
 import { BODY_KINDS, encodeCadmesh, hashName, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep> [-o out.cadmesh]
+const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.cadmesh]
                     [--deflection R] [--absolute MM] [--angular RAD] [--occt DIR | --threads]
 
   -o FILE          output (default: input with .cadmesh)
@@ -67,6 +68,31 @@ function parseArgs(argv) {
 
 const FORMATS = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
 
+// The format a file's first bytes say (gzipped or not), or undefined: STEP
+// opens "ISO-10303-21;", BREP "DBRep_DrawableShape", IGES has "S" in column
+// 73 of its first line; a UTF-8 byte-order mark first is skipped (main.js
+// sniffCad reads the same)
+function sniffFile(path) {
+  // the first 64 KiB only (a gzip's head unpacks from them): the whole file
+  // was read and unpacked to look at 200 bytes (review r23)
+  let b;
+  try {
+    const fd = openSync(path, 'r');
+    try {
+      b = Buffer.alloc(65536);
+      b = b.subarray(0, readSync(fd, b, 0, b.length, 0));
+    } finally { closeSync(fd); }
+  } catch { return undefined; }
+  if (b[0] === 0x1f && b[1] === 0x8b) {
+    try { b = gunzipSync(b, { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
+  }
+  const head = b.subarray(0, 200).toString('latin1').replace(/^ï»¿/, '');
+  if (/^\s*ISO-10303-21\s*;/.test(head)) return 'step';
+  if (/^\s*DBRep_DrawableShape/.test(head)) return 'brep';
+  const line = head.split(/\r?\n/)[0];
+  return line.length >= 73 && line[72] === 'S' ? 'iges' : undefined;
+}
+
 async function main() {
   let args;
   try {
@@ -79,10 +105,25 @@ async function main() {
     process.stdout.write(USAGE);
     return args.help ? 0 : 2;
   }
-  const ext = (args.input.split('.').pop() || '').toLowerCase();
-  const format = FORMATS[ext];
+  // a gzipped file (part.stp.gz) is opened as the one inside it, as the
+  // viewer does (review r18)
+  const gz = /\.gz$/i.test(args.input);
+  const inner = gz ? args.input.replace(/\.gz$/i, '') : args.input;
+  // (the extension of the file NAME: a dotted directory is not one, r23)
+  const base = inner.split('/').pop();
+  const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
+  // a missing file or a directory said as such, not as an extension (r23)
+  let st = null;
+  try { st = statSync(args.input); } catch { /* reported below */ }
+  if (!st || !st.isFile()) {
+    process.stderr.write(`${args.input}: ${st ? 'not a file' : 'no such file'}\n`);
+    return 2;
+  }
+  // a name that says nothing: told by the bytes, as the viewer does (r22)
+  const format = FORMATS[ext] || sniffFile(args.input);
   if (!format) {
-    process.stderr.write(`unsupported extension .${ext} (want ${Object.keys(FORMATS).join(', ')})\n`);
+    process.stderr.write(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`
+      + ` (want ${Object.keys(FORMATS).join(', ')})\n`);
     return 2;
   }
   if (args.occt && args.threads) {
@@ -95,7 +136,9 @@ async function main() {
     process.stderr.write(`occt-import-js not found at ${occtJs}: run ${join(HERE, 'fetch-deps.sh')}\n`);
     return 3;
   }
-  const out = args.out || args.input.replace(/\.[^.]+$/, '') + '.cadmesh';
+  // (the extension dropped only when the name had a CAD one: a bare name in
+  // a dotted directory kept its directory)
+  const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
   // --progress: print OpenCascade's progress (our occt-progress build only;
   // the stock npm build never calls onProgress): each phase's start and end,
   // and every 10% of it, with the time since the import began
@@ -109,9 +152,18 @@ async function main() {
     const name = { 1: 'read', 2: 'transfer', 3: 'mesh' }[phase] || phase;
     process.stderr.write(`progress ${name} ${(fraction * 100).toFixed(1)}% at ${((Date.now() - tp) / 1000).toFixed(1)} s\n`);
   };
+  // The multi-core build sizes its thread pool from navigator.hardwareConcurrency,
+  // which Node has only from 21 (Node 20 threw "navigator is not defined")
+  if (args.threads && typeof globalThis.navigator === 'undefined') {
+    globalThis.navigator = { hardwareConcurrency: availableParallelism() };
+  }
   const occt = await createRequire(import.meta.url)(occtJs)({ locateFile: (p) => join(occtDir, p), onProgress });
   const t0 = Date.now();
-  const bytes = readFileSync(args.input);
+  const read = readFileSync(args.input);
+  const unpacked = read[0] === 0x1f && read[1] === 0x8b ? gunzipSync(read) : read;
+  // a UTF-8 byte-order mark first (some exporters write one): OpenCascade
+  // refuses it ("unexpected QUID, expecting STEP"), so it is dropped (r21)
+  const bytes = unpacked[0] === 0xef && unpacked[1] === 0xbb && unpacked[2] === 0xbf ? unpacked.subarray(3) : unpacked;
   // the unit the file declares, read before the converter sees the bytes
   const declared = sourceUnits(bytes, format);
   const result = occt.ReadFile(format, bytes, args.params);
@@ -121,6 +173,15 @@ async function main() {
     return 1;
   }
   const model = occtResultToModel(result);
+  // no faces (curves or points only): nothing to show, as the viewer refuses
+  // it, not an empty .cadmesh written as OK (review r22)
+  if (!model.meshes.some((m) => m.indices.length)) {
+    // (faces the converter could not mesh are not "no faces": r23)
+    process.stderr.write(model.unmeshedFaces
+      ? `FAIL: none of the ${model.unmeshedFaces} faces of ${args.input} could be meshed (the converter failed on them, or ran out of memory)\n`
+      : `FAIL: ${args.input} has no surfaces to show: it holds no faces (only curves or points, or nothing)\n`);
+    return 1;
+  }
   model.sourceUnits = declared;
   model.angularDeflection = args.params.angularDeflection;
   // the statuses are reported (and digested for compare.sh) even when

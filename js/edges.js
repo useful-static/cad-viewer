@@ -170,8 +170,12 @@ function body(pos, bits, index, m, edges, sil, silN) {
     tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len;
   }
 
-  // edges by vertex index: count, first and second triangle, direction
-  const esize = pow2(nt * 3);
+  // edges by vertex index: count, first and second triangle, direction.
+  // Every open-addressed table here holds at most 3 entries per triangle
+  // (no triangle shares an edge), so it gets 6 slots per triangle: never more
+  // than half full. A full table never ends its probe loop (a 512-triangle
+  // ribbon of one-triangle faces hung the boundary table at 2 per triangle).
+  const esize = pow2(nt * 6);
   const eA = new Int32Array(esize).fill(-1);
   const eB = new Int32Array(esize);
   const eCount = new Uint8Array(esize);
@@ -200,7 +204,7 @@ function body(pos, bits, index, m, edges, sil, silN) {
 
   // boundary copies joined by the weld, kept from the lowest triangle (the
   // triangles are visited in order, so the first copy seen is kept)
-  const bsize = pow2(nt * 2);
+  const bsize = pow2(nt * 6);
   const bA = new Int32Array(bsize).fill(-1);
   const bB = new Int32Array(bsize);
   let nsil = 0;
@@ -246,7 +250,7 @@ function body(pos, bits, index, m, edges, sil, silN) {
 // closed by the mesh alone: every welded edge of the non-degenerate
 // triangles used at least twice (more than twice is non-manifold, not open)
 function meshClosed(index, t0, nt, weld, v0, degenerate) {
-  const size = pow2(nt * 3);
+  const size = pow2(nt * 6); // at most half full, as in body()
   const kA = new Int32Array(size).fill(-1);
   const kB = new Int32Array(size);
   const cnt = new Uint8Array(size);

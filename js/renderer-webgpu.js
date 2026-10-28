@@ -179,8 +179,13 @@ fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> 
   let d0 = c0.w - c0.z;
   let d1 = c1.w - c1.z;
   if (d0 < 0.0 && d1 < 0.0) { o.clipPos = GONE; return o; }
-  if (d0 < 0.0) { c0 = mix(c0, c1, d0 / (d0 - d1)); }
-  if (d1 < 0.0) { c1 = mix(c1, c0, d1 / (d1 - d0)); }
+  // the world ends clipped by the same fraction, so the section test (wpos)
+  // is that of the point drawn, not of an end behind the eye
+  var q0 = p0;
+  var q1 = p1;
+  if (d0 < 0.0) { let t = d0 / (d0 - d1); c0 = mix(c0, c1, t); q0 = mix(p0, p1, t); }
+  if (d1 < 0.0) { let t = d1 / (d1 - d0); c1 = mix(c1, c0, t); q1 = mix(p1, p0, t); }
+  o.wpos = mix(q0, q1, corner.x);
   let hpx = u.px.xy * 0.5;
   let s0 = c0.xy / c0.w * hpx;
   let s1 = c1.xy / c1.w * hpx;
@@ -336,8 +341,17 @@ export class WebGPURenderer {
         fill: mk('fsFill', this.format, MSAA, { ...bias, depthWriteEnabled: false, depthCompare: 'greater-equal' }),
       };
     };
-    this.solidPipes = facePipes(BIAS_SOLID);
-    this.sheetPipes = facePipes(BIAS_SHEET);
+    // made again if the biases change (the tests' controls set them in the
+    // page; the pipelines fix a bias when made)
+    this.facePipes = () => {
+      const key = `${BIAS_SOLID}|${BIAS_SHEET}`;
+      if (key !== this.biasKey) {
+        this.solidPipes = facePipes(BIAS_SOLID);
+        this.sheetPipes = facePipes(BIAS_SHEET);
+        this.biasKey = key;
+      }
+    };
+    this.facePipes();
     // Edge passes: their own uniforms in group 1, one buffer per pass slot
     this.passBgl = device.createBindGroupLayout({
       entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
@@ -562,6 +576,7 @@ export class WebGPURenderer {
   // kind: shade | pick | depth | xray | fill. The solids, then the sheets,
   // each with its own pipeline's bias.
   _encodeDraw(pass, kind) {
+    this.facePipes();
     pass.setBindGroup(0, this.bind);
     this.vbs.forEach((b, i) => pass.setVertexBuffer(i, b));
     pass.setIndexBuffer(this.ib, 'uint32');

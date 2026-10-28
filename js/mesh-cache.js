@@ -130,6 +130,15 @@ export async function cacheList() {
   }
 }
 
+// Drops one entry (a saved conversion that no longer decodes, so the file is
+// converted again instead of failing on every open). Failures are ignored.
+export async function cacheDelete(key) {
+  if (!cacheAvailable()) return;
+  try {
+    await tx('readwrite', (meta, data) => { meta.delete(key); data.delete(key); });
+  } catch { /* the cache is an optimisation */ }
+}
+
 export async function cacheClear() {
   if (!cacheAvailable()) return;
   await tx('readwrite', (meta, data) => { meta.clear(); data.clear(); });

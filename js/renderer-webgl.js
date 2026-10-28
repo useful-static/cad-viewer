@@ -25,11 +25,14 @@ varying vec3 vView;
 varying vec3 vNrm;
 varying vec3 vCol;
 varying vec4 vId;
-#ifdef CULL
+#ifdef CULL_TEX
 uniform sampler2D uBodies; // the body table, as in VS_EDGE
 uniform vec4 uBodyTex;
-uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
 #endif
+#ifdef CULL_ATTR
+attribute vec4 aBody;      // this vertex's body: centre, radius (no table texture)
+#endif
+uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
 void main() {
   vClip = dot(uClipV.xyz, aPos) - uClipV.w;
   vView = normalize(uEyeV.xyz - aPos * uEyeV.w); // w = 0: ortho view direction
@@ -37,18 +40,20 @@ void main() {
   vCol = aCol.rgb;
   vId = aId;
   gl_Position = uViewProj * vec4(aPos, 1.0);
-#ifdef CULL
   // the paper styles: a body under uCull.y px (whose edges are culled) is
   // collapsed in the face and pick passes too, so it neither blanks the lines
   // behind it nor can be picked unseen
   if (uCull.w > 0.5) {
+#ifdef CULL_TEX
     vec4 b = floor(aId * 255.0 + 0.5);
     float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
     vec4 cr = texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
+#else
+    vec4 cr = aBody;
+#endif
     vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
     if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   }
-#endif
 }`;
 
 const FS_COMMON = `
@@ -165,8 +170,12 @@ uniform vec4 uEyeV;
 uniform vec4 uPx;
 uniform vec4 uHoverId;
 uniform vec4 uNear;
+#ifdef CULL_TEX
 uniform sampler2D uBodies; // the body table: texel 2 id + 1 = centre, radius
 uniform vec4 uBodyTex;     // x width, y height of the body table
+#else
+attribute vec4 aBody;      // the edge's body: centre, radius (no table texture)
+#endif
 uniform vec4 uCull;        // x focal px, y min radius px, z on
 varying float vClip;
 varying vec3 vView;
@@ -179,8 +188,12 @@ void main() {
   // would only darken it. radius px = radius * focal px / w, in perspective
   // (w = depth) and ortho (w = 1) alike. Behind the eye: left to the clip.
   if (uCull.z > 0.5) {
+#ifdef CULL_TEX
     float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
     vec4 cr = texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
+#else
+    vec4 cr = aBody;
+#endif
     vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
     if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -196,9 +209,6 @@ void main() {
       return;
     }
   }
-  vec3 p = mix(aP0, aP1, aCorner.x);
-  vClip = dot(uClipV.xyz, p) - uClipV.w;
-  vView = normalize(uEyeV.xyz - p * uEyeV.w);
   vNrm = vec3(0.0);
   vCol = aECol.rgb;
   vId = aEId;
@@ -207,9 +217,21 @@ void main() {
   float d0 = c0.w * uNear.x + c0.z * uNear.y;
   float d1 = c1.w * uNear.x + c1.z * uNear.y;
   vDash = 0.0;
-  if (d0 < 0.0 && d1 < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  if (d0 < 0.0) c0 = mix(c0, c1, d0 / (d0 - d1));
-  if (d1 < 0.0) c1 = mix(c1, c0, d1 / (d1 - d0));
+  if (d0 < 0.0 && d1 < 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    vClip = 0.0; vView = vec3(0.0);
+    return;
+  }
+  // the world ends clipped by the same fraction (clip space is linear in
+  // world space), so the section test and the view vector are those of the
+  // point drawn, not of an end behind the eye
+  vec3 q0 = aP0;
+  vec3 q1 = aP1;
+  if (d0 < 0.0) { float t = d0 / (d0 - d1); c0 = mix(c0, c1, t); q0 = mix(aP0, aP1, t); }
+  if (d1 < 0.0) { float t = d1 / (d1 - d0); c1 = mix(c1, c0, t); q1 = mix(aP1, aP0, t); }
+  vec3 p = mix(q0, q1, aCorner.x);
+  vClip = dot(uClipV.xyz, p) - uClipV.w;
+  vView = normalize(uEyeV.xyz - p * uEyeV.w);
   vec2 hpx = uPx.xy * 0.5; // ("half" is reserved in GLSL ES 1.00)
   vec2 s0 = c0.xy / c0.w * hpx;
   vec2 s1 = c1.xy / c1.w * hpx;
@@ -286,39 +308,52 @@ function program(gl, fs, vs = VS, attrs = ['aPos', 'aNrm', 'aCol', 'aId']) {
 
 export class WebGLRenderer {
   // version: 2 or 1. Throws if that context cannot be made.
-  static create(canvas, version) {
+  // opts.without: WebGL1 extensions to act as if missing ('instancing',
+  // 'float', 'vtf', 'uint'), so the fallbacks can be tested on a GPU that has
+  // them all.
+  static create(canvas, version, opts = {}) {
     const attrs = { antialias: true, alpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' };
     const gl = version === 2 ? canvas.getContext('webgl2', attrs)
       : (canvas.getContext('webgl', attrs) || canvas.getContext('experimental-webgl', attrs));
     if (!gl) throw new Error(`WebGL${version} context unavailable`);
-    return new WebGLRenderer(canvas, gl, version);
+    return new WebGLRenderer(canvas, gl, version, opts);
   }
 
-  constructor(canvas, gl, version) {
+  constructor(canvas, gl, version, { without = [] } = {}) {
     this.canvas = canvas;
     this.gl = gl;
     this.version = version;
     this.name = version === 2 ? 'webgl2' : 'webgl1';
-    this.uintIndex = version === 2 || !!gl.getExtension('OES_element_index_uint');
-    // The body table, a float texture read in the vertex shader: WebGL2
-    // always; WebGL1 with OES_texture_float and vertex texture units.
-    // Without it nothing is culled, and the face shaders are built without
-    // the cull (CULL), so they never sample a texture in the vertex stage.
-    this.bodyTexOk = version === 2
-      || (!!gl.getExtension('OES_texture_float') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0);
-    const vs = this.bodyTexOk ? `#define CULL\n${VS}` : VS;
-    this.shade = program(gl, FS_SHADE, vs);
-    this.pickProg = program(gl, FS_PICK, vs);
-    this.fillProg = program(gl, FS_FILL, vs);
-    // Edges need instancing: native on WebGL2, ANGLE_instanced_arrays on
-    // WebGL1. Without it (rare) no edges are drawn (canDrawEdges false).
-    const ia = version === 2 ? null : gl.getExtension('ANGLE_instanced_arrays');
+    const off = new Set(version === 2 ? [] : without);
+    const ext = (key, name) => (off.has(key) ? null : gl.getExtension(name));
+    this.uintIndex = version === 2 || !!ext('uint', 'OES_element_index_uint');
+    // The body table (each body's centre and radius, for the 6 px cull): a
+    // float texture read in the vertex shader on WebGL2, and on WebGL1 with
+    // OES_texture_float and vertex texture units (CULL_TEX). Without them it
+    // rides in a vertex attribute instead, aBody (CULL_ATTR): per vertex for
+    // the faces, per edge for the edges, so no shader samples a texture in
+    // the vertex stage where it cannot.
+    const vtf = !off.has('vtf') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0;
+    this.bodyTexOk = version === 2 || (!!ext('float', 'OES_texture_float') && vtf);
+    const cullDef = this.bodyTexOk ? '#define CULL_TEX\n' : '#define CULL_ATTR\n';
+    const faceAttrs = ['aPos', 'aNrm', 'aCol', 'aId', ...(this.bodyTexOk ? [] : ['aBody'])];
+    this.shade = program(gl, FS_SHADE, cullDef + VS, faceAttrs);
+    this.pickProg = program(gl, FS_PICK, cullDef + VS, faceAttrs);
+    this.fillProg = program(gl, FS_FILL, cullDef + VS, faceAttrs);
+    // Edges: instanced (native on WebGL2, ANGLE_instanced_arrays on WebGL1),
+    // or, without instancing, each edge written out as two triangles of six
+    // vertices carrying its corner (more memory, the same picture).
+    const ia = version === 2 ? null : ext('instancing', 'ANGLE_instanced_arrays');
     this.instancing = version === 2
       ? { divisor: (i, d) => gl.vertexAttribDivisor(i, d), draw: (m, f, c, n) => gl.drawArraysInstanced(m, f, c, n) }
       : ia ? { divisor: (i, d) => ia.vertexAttribDivisorANGLE(i, d), draw: (m, f, c, n) => ia.drawArraysInstancedANGLE(m, f, c, n) } : null;
-    this.edgeProg = this.instancing
-      ? program(gl, FS_EDGE, VS_EDGE, ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2']) : null;
-    this.canDrawEdges = !!this.edgeProg;
+    this.edgeProg = program(gl, FS_EDGE, cullDef + VS_EDGE,
+      ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2', ...(this.bodyTexOk ? [] : ['aBody'])]);
+    this.canDrawEdges = true;
+    this.edgeRaw = null;     // the instance data as given, to rebuild when the body table arrives
+    this.faceBodyBuf = null; // CULL_ATTR: each drawn vertex's body centre, radius
+    this.faceIds = null;     // the drawn vertices' id bytes, for faceBodyBuf
+    this.bodyTable = null;
     this.cornerBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, -1, 0, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
@@ -352,6 +387,7 @@ export class WebGLRenderer {
     this.drawn = null; // the mesh whose buffers are live
     this.onlost = null;
     this.onerror = null;
+    this.errorFrames = 0; // frames left to read getError for (after an upload)
     // A lost context takes every buffer, texture and program with it; the owner
     // rebuilds a renderer (main.js recoverRenderer) rather than this one.
     canvas.addEventListener('webglcontextlost', (e) => {
@@ -422,6 +458,14 @@ export class WebGLRenderer {
     this.drawCount = index.length;
     this.split = split;
     this.drawn = mesh;
+    this.errorFrames = 3;
+    // CULL_ATTR: the per-vertex body buffer follows the drawn vertices; made
+    // again by setBodies for this mesh
+    this.faceIds = id;
+    if (this.faceBodyBuf) gl.deleteBuffer(this.faceBodyBuf);
+    this.faceBodyBuf = null;
+    this.faceBodiesFor = null;
+    if (!this.bodyTexOk && this.bodyTable && this.bodiesFor === mesh) this._faceBodies();
   }
 
   // The edge instances (EDGE_STRIDE bytes each) for `mesh`; drawn only while
@@ -431,22 +475,27 @@ export class WebGLRenderer {
   // null; they are drawn only in the outline styles.
   uploadEdges(mesh, data, silData = null) {
     const gl = this.gl;
-    if (!this.canDrawEdges || gl.isContextLost()) return;
+    if (gl.isContextLost()) return;
     for (let i = 0; i < 32 && gl.getError() !== gl.NO_ERROR; i++);
+    // CULL_ATTR bakes each edge's body into its data: with the table not
+    // here yet, setBodies uploads these again
+    const baked = !this.bodyTexOk && !!this.bodyTable && this.bodiesFor === mesh;
     const made = [];
-    const mk = (d, what) => {
-      if (!d || !d.byteLength) return null;
+    const mk = (d, stride, what) => {
+      if (!d || !d.byteLength) return [null, null];
+      const lay = this._edgeLayout(stride);
+      const packed = this._packEdges(d, stride, lay);
       const b = gl.createBuffer();
       made.push(b);
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
-      gl.bufferData(gl.ARRAY_BUFFER, d, gl.STATIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, packed, gl.STATIC_DRAW);
       this._checkAlloc(what);
-      return b;
+      return [b, lay];
     };
-    let b, s;
+    let b, s, bl, sl;
     try {
-      b = mk(data, 'edges');
-      s = mk(silData, 'outline edges');
+      [b, bl] = mk(data, EDGE_STRIDE, 'edges');
+      [s, sl] = mk(silData, SIL_STRIDE, 'outline edges');
     } catch (e) {
       for (const x of made) gl.deleteBuffer(x);
       throw e;
@@ -455,18 +504,96 @@ export class WebGLRenderer {
     if (this.silBuf) gl.deleteBuffer(this.silBuf);
     this.edgeBuf = b;
     this.silBuf = s;
+    this.edgeLay = bl;
+    this.silLay = sl;
     this.edgeCount = b ? data.byteLength / EDGE_STRIDE : 0;
     this.silCount = s ? silData.byteLength / SIL_STRIDE : 0;
     this.edgesFor = b || s ? mesh : null;
+    this.errorFrames = 3;
+    this.edgeRaw = b || s ? { mesh, data, silData } : null;
+    this.edgeBodiesFor = baked ? mesh : null;
+  }
+
+  // How an edge buffer is laid out here: instanced, the instance data as
+  // given (+ its body when CULL_ATTR); without instancing, six vertices per
+  // edge, each its corner (2 floats) then the same.
+  _edgeLayout(stride) {
+    const expanded = !this.instancing;
+    const inst = expanded ? 8 : 0;
+    const body = this.bodyTexOk ? null : inst + stride;
+    return { expanded, inst, body, stride: inst + stride + (body === null ? 0 : 16), verts: expanded ? 6 : 1 };
+  }
+
+  _packEdges(data, stride, lay) {
+    if (!lay.expanded && lay.body === null) return data;
+    const n = data.byteLength / stride;
+    const src = new Uint8Array(data instanceof ArrayBuffer ? data : data.buffer, data.byteOffset || 0, data.byteLength);
+    const out = new ArrayBuffer(n * lay.verts * lay.stride);
+    const dst = new Uint8Array(out);
+    const f = new Float32Array(out);
+    const tbl = this.bodyTable;
+    // the strip's 4 corners as two triangles: (0,1,2) (2,1,3)
+    const CORNERS = [[0, -1], [0, 1], [1, -1], [1, -1], [0, 1], [1, 1]];
+    for (let e = 0; e < n; e++) {
+      const so = e * stride;
+      const id = src[so + 24] | (src[so + 25] << 8) | (src[so + 26] << 16);
+      for (let v = 0; v < lay.verts; v++) {
+        const o = (e * lay.verts + v) * lay.stride;
+        if (lay.expanded) { f[o / 4] = CORNERS[v][0]; f[o / 4 + 1] = CORNERS[v][1]; }
+        dst.set(src.subarray(so, so + stride), o + lay.inst);
+        if (lay.body !== null) {
+          const t = (2 * id + 1) * 4;
+          const bo = (o + lay.body) / 4;
+          if (tbl && t + 3 < tbl.length) { f[bo] = tbl[t]; f[bo + 1] = tbl[t + 1]; f[bo + 2] = tbl[t + 2]; f[bo + 3] = tbl[t + 3]; }
+          else f[bo + 3] = 1e30; // no table: never culled
+        }
+      }
+    }
+    return out;
+  }
+
+  // CULL_ATTR: each drawn vertex's body centre and radius, from its id bytes
+  _faceBodies() {
+    const gl = this.gl;
+    const ids = this.faceIds, tbl = this.bodyTable;
+    const n = ids.length / 4;
+    const a = new Float32Array(n * 4);
+    for (let v = 0; v < n; v++) {
+      const t = (2 * (ids[v * 4] | (ids[v * 4 + 1] << 8) | (ids[v * 4 + 2] << 16)) + 1) * 4;
+      if (t + 3 < tbl.length) a.set(tbl.subarray(t, t + 4), v * 4);
+      else a[v * 4 + 3] = 1e30;
+    }
+    if (!this.faceBodyBuf) this.faceBodyBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.faceBodyBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, a, gl.STATIC_DRAW);
+    this._checkAlloc('body cull data');
+    this.faceBodiesFor = this.drawn;
+  }
+
+  // Whether the 6 px cull can run now for the faces or the edges
+  _cullReady(kind) {
+    if (this.bodyTexOk) return !!(this.bodyTex && this.bodiesFor === this.drawn);
+    return (kind === 'faces' ? this.faceBodiesFor : this.edgeBodiesFor) === this.drawn && !!this.drawn;
   }
 
   // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`.
   setBodies(mesh, table) {
     const gl = this.gl;
-    if (!this.bodyTexOk || gl.isContextLost()) return;
+    if (gl.isContextLost()) return;
+    if (!this.bodyTexOk) {
+      this.bodyTable = table;
+      this.bodiesFor = mesh;
+      if (this.drawn === mesh && this.faceIds) this._faceBodies();
+      const raw = this.edgeRaw;
+      if (raw && raw.mesh === mesh && this.edgeBodiesFor !== mesh) this.uploadEdges(mesh, raw.data, raw.silData);
+      return;
+    }
     const texels = table.length / 4;
     const w = Math.min(BODY_TEX_W, texels);
     const h = Math.ceil(texels / w);
+    // past the GPU's texture size (about 2 M bodies on a 4096 limit) the
+    // table cannot be made: no cull, rather than no model (as WebGPU)
+    if (h > gl.getParameter(gl.MAX_TEXTURE_SIZE)) { this.bodiesFor = null; return; }
     const data = new Float32Array(w * h * 4);
     data.set(table);
     if (!this.bodyTex) this.bodyTex = gl.createTexture();
@@ -480,6 +607,7 @@ export class WebGLRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.bodySize = [w, h];
     this.bodiesFor = mesh;
+    this.errorFrames = 3;
   }
 
   // The edge passes (frame.edgePasses, one per depth test: { depth: 'lequal'
@@ -489,11 +617,10 @@ export class WebGLRenderer {
     const gl = this.gl;
     const p = this.edgeProg;
     const inst = this.instancing;
+    // with instancing, every attribute's divisor is set below; without it
+    // there are no divisors to set
+    const div = inst ? inst.divisor : () => {};
     gl.useProgram(p.p);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    inst.divisor(0, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.stateTex);
     const u = p.u;
@@ -508,31 +635,48 @@ export class WebGLRenderer {
     const h = frame.hoverId || 0;
     gl.uniform4f(u.uHoverId, h & 255, (h >>> 8) & 255, (h >>> 16) & 255, (h >>> 24) & 255);
     gl.uniform4f(u.uNear, 1, 1, 0, 0); // WebGL clip space: inside while z + w >= 0
-    const cull = !!(e.minPx && this.bodyTex && this.bodiesFor === this.drawn);
-    if (cull) {
+    const cull = !!(e.minPx && this._cullReady('edges'));
+    if (cull && this.bodyTexOk) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
     // with no table, the unused sampler points at the state texture, so no
-    // unit is left without a texture
-    gl.uniform1i(u.uBodies, cull ? 1 : 0);
+    // unit is left without a texture (null locations under CULL_ATTR: no-ops)
+    gl.uniform1i(u.uBodies, cull && this.bodyTexOk ? 1 : 0);
     gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
     gl.uniform4f(u.uCull, frame.focalPx || 0, e.minPx || 0, cull ? 1 : 0, 0);
     gl.depthMask(false);
     const DEPTH = { lequal: gl.LEQUAL, greater: gl.GREATER, always: gl.ALWAYS };
     const col = (c) => c || [0, 0, 0];
-    const bind = (buf, stride, sil) => {
+    const bind = (buf, lay, sil) => {
+      // the corner: its own 4-vertex buffer when instanced, else in the data
+      if (lay.expanded) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, lay.stride, 0);
+      } else {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerBuf);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      }
+      gl.enableVertexAttribArray(0);
+      div(0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      const attr = [[1, 3, gl.FLOAT, false, 0], [2, 3, gl.FLOAT, false, 12], [3, 4, gl.UNSIGNED_BYTE, true, 24], [4, 4, gl.UNSIGNED_BYTE, true, 28]];
-      if (sil) attr.push([5, 4, gl.SHORT, true, 32], [6, 4, gl.SHORT, true, 40]);
+      const step = lay.expanded ? 0 : 1;
+      const o = lay.inst;
+      const attr = [[1, 3, gl.FLOAT, false, o], [2, 3, gl.FLOAT, false, o + 12], [3, 4, gl.UNSIGNED_BYTE, true, o + 24], [4, 4, gl.UNSIGNED_BYTE, true, o + 28]];
+      if (sil) attr.push([5, 4, gl.SHORT, true, o + 32], [6, 4, gl.SHORT, true, o + 40]);
+      if (lay.body !== null) attr.push([7, 4, gl.FLOAT, false, lay.body]);
       for (const [i, n, t, norm, off] of attr) {
         gl.enableVertexAttribArray(i);
-        gl.vertexAttribPointer(i, n, t, norm, stride, off);
-        inst.divisor(i, 1);
+        gl.vertexAttribPointer(i, n, t, norm, lay.stride, off);
+        div(i, step);
       }
-      if (!sil) for (const i of [5, 6]) { gl.disableVertexAttribArray(i); inst.divisor(i, 0); }
+      if (!sil) for (const i of [5, 6]) { gl.disableVertexAttribArray(i); div(i, 0); }
       gl.uniform4f(u.uSil, sil ? 1 : 0, 0, 0, 0);
+    };
+    const draw = (lay, count) => {
+      if (lay.expanded) gl.drawArrays(gl.TRIANGLES, 0, count * 6);
+      else inst.draw(gl.TRIANGLE_STRIP, 0, 4, count);
     };
     const passes = frame.edgePasses || [{ depth: 'lequal', mode: 0 }];
     const outline = frame.style && frame.style.outline && this.silCount;
@@ -543,15 +687,15 @@ export class WebGLRenderer {
       gl.uniform4f(u.uPaperPlain, ...col(c.plain), 1);
       gl.uniform4f(u.uPaperSel, ...col(c.selected), 1);
       gl.uniform4f(u.uPaperFaded, ...col(c.faded), 1);
-      if (this.edgeCount) { bind(this.edgeBuf, EDGE_STRIDE, false); inst.draw(gl.TRIANGLE_STRIP, 0, 4, this.edgeCount); }
-      if (outline) { bind(this.silBuf, SIL_STRIDE, true); inst.draw(gl.TRIANGLE_STRIP, 0, 4, this.silCount); }
+      if (this.edgeCount) { bind(this.edgeBuf, this.edgeLay, false); draw(this.edgeLay, this.edgeCount); }
+      if (outline) { bind(this.silBuf, this.silLay, true); draw(this.silLay, this.silCount); }
     }
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
-    // the face passes set attributes 0-3 again, but never their divisors, and
-    // never use attributes 4-6
-    for (let i = 1; i <= 6; i++) inst.divisor(i, 0);
-    for (const i of [4, 5, 6]) gl.disableVertexAttribArray(i);
+    // the face passes set attributes 0-3 (and 4, CULL_ATTR's aBody) again,
+    // but never their divisors
+    for (let i = 1; i <= 7; i++) div(i, 0);
+    for (const i of [4, 5, 6, 7]) gl.disableVertexAttribArray(i);
   }
 
   // Drop the model: nothing drawn, picks answer background for no mesh.
@@ -564,7 +708,14 @@ export class WebGLRenderer {
     this.edgeCount = 0;
     this.silCount = 0;
     this.edgesFor = null;
+    this.edgeRaw = null;
+    this.edgeBodiesFor = null;
     this.bodiesFor = null;
+    this.bodyTable = null;
+    if (this.faceBodyBuf) gl.deleteBuffer(this.faceBodyBuf);
+    this.faceBodyBuf = null;
+    this.faceBodiesFor = null;
+    this.faceIds = null;
     for (const b of this.buffers) gl.deleteBuffer(b);
     this.buffers = [];
     this.vb = null;
@@ -636,13 +787,25 @@ export class WebGLRenderer {
     // the state texture so no unit is left empty. (Null locations in a
     // program built without CULL: no-ops.)
     const e = frame.edges;
-    const cull = !!(this.bodyTexOk && frame.cullFaces && e && e.minPx && this.bodyTex && this.bodiesFor === this.drawn);
-    if (cull) {
+    const cull = !!(frame.cullFaces && e && e.minPx && this._cullReady('faces'));
+    if (cull && this.bodyTexOk) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
-    gl.uniform1i(u.uBodies, cull ? 1 : 0);
+    if (!this.bodyTexOk) {
+      // CULL_ATTR: attribute 4 is aBody, from the per-vertex buffer once it
+      // is made; until then a constant body no cull ever reaches
+      if (this.faceBodyBuf && this.faceBodiesFor === this.drawn) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.faceBodyBuf);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0);
+      } else {
+        gl.disableVertexAttribArray(4);
+        gl.vertexAttrib4f(4, 0, 0, 0, 1e30);
+      }
+    }
+    gl.uniform1i(u.uBodies, cull && this.bodyTexOk ? 1 : 0);
     gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
     gl.uniform4f(u.uCull, frame.focalPx || 0, cull ? e.minPx : 0, 0, cull ? 1 : 0);
   }
@@ -703,6 +866,16 @@ export class WebGLRenderer {
       gl.disable(gl.POLYGON_OFFSET_FILL);
     }
     if (edges) this._drawEdges(frame);
+    // A draw-time error (as WebGPU's uncapturederror reports): read for a few
+    // frames after anything new reaches the GPU, not every frame (getError
+    // waits for the GPU)
+    if (this.errorFrames > 0) {
+      this.errorFrames--;
+      const err = gl.getError();
+      if (err !== gl.NO_ERROR && err !== gl.CONTEXT_LOST_WEBGL && !gl.isContextLost() && this.onerror) {
+        this.onerror(`WebGL error 0x${err.toString(16)} drawing the model`);
+      }
+    }
   }
 
   _ensurePickFbo() {

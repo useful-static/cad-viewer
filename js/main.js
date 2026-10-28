@@ -2,9 +2,10 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
-import { cacheAvailable, cacheClear, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
+import { fetchModelLists } from './model-list.js';
 import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -35,6 +36,9 @@ const app = {
   lastStepBuffer: null,
   loadSeq: 0,
   cancelTess: null,
+  stopEdges: null, // { base, stop }: the running edge worker, stopped when its model is replaced
+  listPending: null, // { url, seq }: a model of the model list being opened (listedNow)
+  fetchAbort: null, // the running download's AbortController (beginLoad aborts it)
   wanted: null,
   selected: new Set(),
   hidden: new Set(),
@@ -170,10 +174,33 @@ function showEmpty() {
 const panelOpen = () => document.body.classList.contains('panel-open')
   && getComputedStyle($('panelbtn')).display !== 'none';
 function setPanel(open, focusBack = false) {
+  app.filterOpened = false; // (keepFilter sets it after: the slide-out it opened itself)
   document.body.classList.toggle('panel-open', open);
   $('panelbtn').setAttribute('aria-expanded', String(open));
   // closed from inside (Esc): focus would otherwise sit in a hidden panel
   if (!open && focusBack && $('parts').contains(document.activeElement)) $('panelbtn').focus();
+}
+
+// Where the keyboard enters the parts panel: the parts list's tab stop, or
+// with no model (no tree) the panel's first control
+const partsStop = () => [$('tree').querySelector('.label[tabindex="0"]'),
+  ...$('parts').querySelectorAll('button, select, input, summary')].find((c) => c && !c.disabled && c.getClientRects().length);
+
+// Filter parts while typing: a browser that shrinks the page for the
+// on-screen keyboard took a tablet's window under 500 px tall, the sidebar
+// became the closed slide-out, the field lost the focus (to ☰), the keyboard
+// closed and the layout came back: nothing could be typed there (review r22).
+// The slide-out opens around the field instead. (Every other way the slide-out
+// closes moves the focus out of it first.) Returns whether it did.
+// It closes again once the window is wide (refold): left open, the next
+// narrow window (a tablet turned to portrait) showed it over the view, which
+// the user had never opened (review r23).
+function keepFilter(f) {
+  if (f !== $('treefilter') || f.hidden || !narrowLayout() || document.body.classList.contains('panel-open')) return false;
+  setPanel(true);
+  app.filterOpened = true;
+  f.focus();
+  return true;
 }
 
 // The progress card over the view, for a load in progress. frac is 0..1, or
@@ -225,7 +252,10 @@ async function makeRenderer() {
         const { WebGPURenderer } = await import('./renderer-webgpu.js');
         r = await WebGPURenderer.create(canvas);
       } else {
-        r = WebGLRenderer.create(canvas, name === 'webgl2' ? 2 : 1);
+        // ?gl-without=instancing,float,vtf,uint: act as a WebGL GPU without
+        // those (the fallbacks' tests; SwiftShader has them all)
+        const without = (params.get('gl-without') || '').split(',').filter(Boolean);
+        r = WebGLRenderer.create(canvas, name === 'webgl2' ? 2 : 1, { without });
       }
       app.attempts.push({ backend: name, ok: true });
       return r;
@@ -352,8 +382,13 @@ const edgeData = new WeakMap();
 async function syncEdges(r, mesh) {
   const v = mesh.edgeInfo?.value;
   if (!r.canDrawEdges || !v || r.edgesFor === mesh) return;
-  // the body table, for the cull of bodies too small to show edges
-  if (r.bodiesFor !== mesh) r.setBodies(mesh, bodyTable(mesh.header));
+  // the body table, for the cull of bodies too small to show edges. A table
+  // the GPU will not hold costs the cull, never the model: no throw from here
+  try {
+    if (r.bodiesFor !== mesh) r.setBodies(mesh, bodyTable(mesh.header));
+  } catch (e) {
+    app.edgeError = String(e.message || e);
+  }
   let data = edgeData.get(mesh);
   if (!data) {
     // the silhouettes too, so a change to an outline style needs no upload
@@ -527,9 +562,18 @@ function frameState() {
     focalPx: proj[5] * h / 2,
     hoverId: app.hover || 0,
     // the GPU holds a model the UI does not show (a superseded load mid-hand-
-    // back): its ids do not match the state texture, so draw background only
-    drawModel: r.drawn === app.mesh,
+    // back): its ids do not match the state texture, so draw background only.
+    // A colour copy of the shown model (a recolour still uploading: ~8 s for
+    // the rack on WebGPU over SwiftShader) is the same geometry and ids, so
+    // its old colours keep drawing meanwhile.
+    drawModel: sameModel(r.drawn, app.mesh),
   };
+}
+
+// the same geometry (and so the same body ids): a model, or a colour copy of
+// it (inScheme shares every array but the colours)
+function sameModel(a, b) {
+  return !!a && !!b && (a === b || (a.position === b.position && a.index === b.index));
 }
 
 function sectionPlane() {
@@ -641,7 +685,9 @@ function currentView() {
   const c = app.cam;
   return {
     cam: { target: c.target, dist: c.dist, q: c.q || quatFromView(c.yaw, c.pitch, c.up), ortho: !!c.ortho, up: c.up },
-    style: app.styleChoice && styleById(app.styleChoice) ? app.styleChoice : null,
+    // always the style shown, the default too: a link without one opens in
+    // the recipient's remembered style, not the view that was shared
+    style: currentStyle().id,
     section: app.section, hidden: [...app.hidden], selected: [...app.selected],
   };
 }
@@ -658,10 +704,20 @@ function applyView(v) {
     c.q = v.cam.q.slice();
     c.ortho = v.cam.ortho;
     c.up = v.cam.up;
+    // the radius this distance frames, the zoom's floor: a link zoomed onto
+    // a small part kept the whole model's, and the first wheel notch in (or
+    // a resize) jumped far out (review r16 M4)
+    const box = $('stage');
+    const aspect = box.clientWidth / Math.max(1, box.clientHeight);
+    c.viewRadius = Math.min(app.sphere.radius, c.dist / fitDistance(1, c.fov, aspect));
   }
   if (v.style && styleById(v.style)) setStyle(v.style, false);
+  // a link leaves out "section off" and "nothing hidden": a whole link (one
+  // with a camera) means those where it names none, or a link pasted into a
+  // tab keeps that tab's cut and hidden parts
   if (v.section) Object.assign(app.section, v.section, { last: v.section.axis });
-  if (v.hidden) { app.hidden = new Set(ids(v.hidden)); syncTreeChecks(); }
+  else if (v.cam) app.section.axis = 'off';
+  if (v.hidden || v.cam) { app.hidden = new Set(ids(v.hidden)); syncTreeChecks(); }
   select(ids(v.selected), false);
   updateButtons();
   viewChanged();
@@ -674,6 +730,8 @@ async function shareView() {
   const u = new URL(location.href);
   u.search = '';
   u.hash = '';
+  // the model lists too, in their order, so the link keeps the drop-down
+  for (const l of params.getAll('list')) u.searchParams.append('list', l);
   if (app.sourceUrl) u.searchParams.set('src', app.sourceUrl);
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
   u.hash = `view=${encodeView(currentView())}`;
@@ -795,18 +853,23 @@ function undoVisibility() {
 }
 
 // ---------- toolbar menus ----------
-// The View, Save and Show groups stand in the toolbar row where it has room
-// for them and fold behind a menu button where it has not, in that order
-// (FOLD_ORDER). Whether the row fits is MEASURED (one row on a wrapping
-// desktop toolbar, no sideways scroll on the narrow one), so a width
-// breakpoint cannot go stale as labels or fonts change. It is measured with
+// The view presets, the Save group, the rest of View and Show stand in the
+// toolbar row where it has room for them and fold behind a menu button where
+// it has not, in that order (FOLD_ORDER): the seven presets are the widest
+// and the least needed in the row (the number keys reach four of them), so
+// they go first, and the modes (Ortho, Z up, Section, Style) stay in view on
+// a laptop-width window. The presets are a menu inside View: once View folds
+// they are unfolded again, into its panel. Whether the row fits is MEASURED
+// (one row on a wrapping desktop toolbar, no sideways scroll on the narrow
+// one), so a width breakpoint cannot go stale as labels or fonts change.
+// It is measured with
 // Save .cadmesh counted as shown, so a load that enables it never refolds
 // the row. The toolbar holds only modes and actions; a tool's own controls
 // are in the options bar, so turning a tool on never refolds it either.
 // In the narrow layout the Save group is File: Open… moves into it, and it
 // is always folded.
 
-const FOLD_ORDER = ['viewmenu', 'filemenu', 'showmenu'];
+const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 const OVER_VIEW = '.card, #optbar, #fullscreen';
 const MENUS = FOLD_ORDER;
@@ -819,8 +882,14 @@ function placeOpen(narrow) {
   const menu = $('filemenu');
   const panel = $('filepanel');
   const btn = menu.querySelector('.menu-btn');
+  // (a move takes the focus: given back where it lands, r20)
+  const had = document.activeElement === lbl;
   if (narrow && lbl.parentElement !== panel) panel.prepend(lbl);
   else if (!narrow && lbl.parentElement === panel) menu.before(lbl);
+  if (had && document.activeElement !== lbl) focusBeside(lbl);
+  // a model list goes where Open… goes (moved only when it must: a move
+  // takes the focus from it)
+  if (lbl.nextElementSibling !== $('modellist')) lbl.after($('modellist'));
   btn.textContent = narrow ? 'File' : 'Save';
   btn.title = narrow ? 'Open a file, or save the converted model' : 'Save the converted model';
   panel.setAttribute('aria-label', btn.textContent);
@@ -829,7 +898,10 @@ function placeOpen(narrow) {
 // a folded menu with nothing it could do is disabled, like its items
 function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && !$('filepanel').contains($('open'));
+  // (Copy view link is in it too: a model opened from a URL has nothing to
+  // save, and its link is then the menu's one live item)
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled
+    && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
 function toolbarFits(tb) {
@@ -841,20 +913,69 @@ function toolbarFits(tb) {
   return tb.clientHeight <= row + pad + 2;
 }
 
-function refold() {
+// keep: the control that had the focus before the resize closed a menu (the
+// close may have moved it to the menu's button)
+// what has the focus, or what had it until the layout hid it
+const focusNow = () => (document.activeElement !== document.body ? document.activeElement : (app.lostFocus && app.lostFocus()) || document.body);
+
+function refold(keep = focusNow()) {
   const tb = $('tb');
   const was = MENUS.map((id) => $(id).classList.contains('folded'));
   const narrow = narrowLayout();
+  if (!narrow && app.filterOpened) setPanel(false); // the slide-out keepFilter opened
   placeOpen(narrow);
   for (const id of MENUS) $(id).classList.toggle('folded', narrow && id === 'filemenu');
   tb.classList.add('measuring');
-  for (const id of FOLD_ORDER) {
+  // the model list is a step of its own, after Save and before View: it
+  // folds into Save's panel (it stood outside every group, so the wide row
+  // could not shed it: review r16 L3), and at 1280 px it still fits beside
+  // a folded Save (966 px used of 1280, the list 156 px)
+  for (const id of [...FOLD_ORDER.slice(0, 2), 'modellist', ...FOLD_ORDER.slice(2)]) {
     if (toolbarFits(tb)) break;
+    if (id === 'modellist') {
+      if (!narrow && !$('modellist').hidden) $('filepanel').prepend($('modellist'));
+      continue;
+    }
     $(id).classList.add('folded');
   }
+  // a folded View holds the presets as its panel's grid, not a menu in a menu
+  if ($('viewmenu').classList.contains('folded')) $('presetmenu').classList.remove('folded');
   tb.classList.remove('measuring');
   MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
+  // a Save menu holding the model list is the File menu
+  // (its tooltip and panel name too: they still said "Save the converted model")
+  if (!narrow) {
+    const btn = $('filemenu').querySelector('.menu-btn');
+    const file = $('filepanel').contains($('modellist'));
+    btn.textContent = file ? 'File' : 'Save';
+    btn.title = file ? 'Open a model from the list, or save the converted model' : 'Save the converted model';
+    $('filepanel').setAttribute('aria-label', btn.textContent);
+  }
   syncMenuButtons();
+  refoldFocus(keep, narrow);
+}
+
+// A refold folds or unfolds what has the focus, and the focus watcher sees
+// only disabled / hidden: Hide folded into a closed Show menu, the View button
+// gone as View unfolds (a rotation with View open), a tree row in a sidebar
+// that became the closed slide-out, all dropped the focus to the page; a menu
+// a rotation unfolded left it on that menu's button, not on the item that was
+// focused and now stands in the row (review r21). The model list too: the
+// measuring moves it, and a move takes the focus.
+// So: the control itself where it is still shown, else the folded menu's
+// button (focusBeside), else ☰ for the parts panel.
+function refoldFocus(keep, narrow) {
+  if (!keep || keep === document.body || !keep.isConnected) return;
+  const inParts = $('parts').contains(keep);
+  if (!inParts && !$('tb').contains(keep)) return;
+  if (keepFilter(keep)) return;
+  // (a closing slide-out keeps visibility for its .22 s slide: hidden by layout)
+  const shown = usable(keep) && !(inParts && narrow && !document.body.classList.contains('panel-open'));
+  if (shown) { if (document.activeElement !== keep) keep.focus(); return; }
+  const a = document.activeElement;
+  if (a !== keep && a !== document.body && usable(a)) return; // already given a neighbour (a menu's button)
+  if (inParts) { if (usable($('panelbtn'))) $('panelbtn').focus(); return; }
+  focusBeside(keep);
 }
 
 function setMenu(menu, open, focusFirst = false) {
@@ -870,11 +991,122 @@ function setMenu(menu, open, focusFirst = false) {
     panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - panel.offsetWidth - 8))}px`;
     panel.style.maxHeight = `${innerHeight - top - 8}px`;
     panel.style.overflowY = 'auto';
-    if (focusFirst) panel.querySelector('button:not(:disabled), select, label.btn')?.focus();
+    // the first item SHOWN: in a folded View the presets' own menu button
+    // is there but not displayed, and focusing it did nothing
+    if (focusFirst) [...panel.querySelectorAll('button:not(:disabled), select, label.btn')].find((e) => e.getClientRects().length)?.focus();
   } else {
+    // closed with the focus inside (a resize or rotation refolds and closes
+    // it; the focus watcher sees only disabled / hidden): its button, or the
+    // focus fell to the page (review r20)
+    const had = menu.querySelector('.menu-panel').contains(document.activeElement);
     menu.classList.remove('open');
+    if (had && !usable(document.activeElement)) focusBeside(menu.querySelector('.menu-btn'));
   }
   btn.setAttribute('aria-expanded', String(open));
+}
+
+// Focus el, or where it cannot take the focus (disabled), the toolbar's next
+// button that can, else the one before it. Buttons only: a select (Style)
+// would take the letter shortcuts as type-ahead.
+const usable = (e) => !e.disabled && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+function focusBeside(el) {
+  const live = usable;
+  if (live(el)) { el.focus(); return; }
+  // ☰ gone as the window widens: what it opened is the sidebar now, so its
+  // list (the focus went to Open…, and a tree row → ☰ → row round trip of
+  // resizes ended there: review r22)
+  const ps = el === $('panelbtn') && !narrowLayout() && partsStop();
+  if (ps) { ps.focus(); return; }
+  // inside a folded menu's closed panel (Open… in the narrow File): its
+  // menu's button, not the next button along (View, skipping File: r20).
+  // A menu in a menu goes out to the first button shown: a view preset in a
+  // View folded around its Views menu, whose button is not shown there, to
+  // View's (the focus went on along the row to Show: r23)
+  for (let m = el.closest('.menu-panel')?.closest('.menu'); m; m = m.parentElement.closest('.menu')) {
+    const mb = m.querySelector(':scope > .menu-btn');
+    if (live(mb)) { mb.focus(); return; }
+  }
+  const all = [...$('tb').querySelectorAll('button, label.btn')];
+  const before = all.filter((e) => e.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const after = all.filter((e) => e !== el && !before.includes(e));
+  (after.find(live) || before.reverse().find(live))?.focus();
+}
+
+// The one net under all of them (review r19 L8): a focused control that
+// disables itself or is hidden (a card's Cancel or "Choose a file…" when the
+// card goes, a toolbar button its own action disables) drops the focus to the
+// page, and the next Tab starts over. Fixing that control by control left one
+// new case a round; this watches for it anywhere and gives the focus to the
+// nearest usable toolbar control. Not after a pointer press: there the user
+// put the focus where they meant to.
+// The control watched is the one that HAS the focus: one the focus left for
+// the page while still usable (a click on the footer or the view, a select
+// blurred after a pick) is forgotten, and so is one a pointer press disabled.
+// Remembered, a Hide clicked with the mouse took the focus long after, at the
+// next button any key enabled or disabled (A, Esc): the focus ring jumped to
+// Undo or Section, which the next Enter or Space pressed (review r20).
+// In the parts panel the focus stays in the panel: a Reset (hidden once used)
+// or a colour swatch Esc disabled sent it to the toolbar's Open…, a dozen Tabs
+// from where the user was; the row of a tree a new model replaced, to the new
+// tree's row (r20).
+function focusInPanel(f, wasInTree) {
+  const all = [...$('parts').querySelectorAll('button, summary, input[type=color], #tree .label[tabindex="0"]')];
+  const row = $('tree').querySelector('.label[tabindex="0"]');
+  if (!f.isConnected) return wasInTree && row && usable(row) ? (row.focus(), true) : false;
+  const before = all.filter((e) => e.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const after = all.filter((e) => e !== f && !before.includes(e));
+  const to = before.reverse().find(usable) || after.find(usable);
+  if (to) to.focus();
+  return !!to;
+}
+
+function keepFocus() {
+  let last = null;
+  let inTree = false;
+  let pointerAt = -1e9;
+  document.addEventListener('focusin', (e) => { last = e.target; inTree = $('tree').contains(last); });
+  // (read a task later: a row whose tree is being replaced blurs while it is
+  // still in the page)
+  document.addEventListener('focusout', (e) => {
+    const t = e.target;
+    // (also forgotten when a pointer press just came: iOS runs a tap's blur
+    // and click in one task, and with Reduce Motion the slide-out hid in it,
+    // so the filter stayed remembered and a later rotation reopened the
+    // slide-out around it: review r23)
+    if (!e.relatedTarget) setTimeout(() => { if (t === last && document.activeElement !== t && (usable(t) || performance.now() - pointerAt < 600)) last = null; });
+  });
+  document.addEventListener('pointerdown', () => { pointerAt = performance.now(); }, true);
+  // the control a layout change just hid while it had the focus (CSS hides
+  // ☰ as the window widens, and the browser drops the focus to the page
+  // before the resize is handled: review r22), for refold to put it back
+  app.lostFocus = () => (document.activeElement === document.body && last && last.isConnected && !usable(last)
+    && performance.now() - pointerAt > 600 ? last : null);
+  const lost = () => {
+    const f = last;
+    if (!f || f === document.body) return;
+    const a = document.activeElement;
+    if (a && a !== document.body && a !== f) return; // the focus went on somewhere
+    if (usable(f)) return;
+    if (performance.now() - pointerAt < 600) { last = null; return; }
+    // a row of a tree a load is replacing: wait for the new tree
+    if (inTree && !f.isConnected && !$('progress').hidden) return;
+    last = null;
+    if (keepFilter(f)) return;
+    if ((inTree || $('parts').contains(f)) && focusInPanel(f, inTree)) return;
+    focusBeside($('tb').contains(f) ? f : $('open').parentElement);
+  };
+  new MutationObserver(lost).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled', 'hidden'] });
+}
+
+// A resize or rotation that leaves the focused control outside the window
+// scrolls it back into view: the help's summary at the foot of the open
+// slide-out stayed below the window's edge after 390x844 -> 844x390 (r23).
+// Only at a resize: a control the user scrolled away from stays where it is.
+function showFocus() {
+  const a = document.activeElement;
+  if (!a || a === document.body || !a.getClientRects().length) return;
+  const r = a.getBoundingClientRect();
+  if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) a.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // Close every open menu (but `except`); returns whether one was open.
@@ -892,6 +1124,9 @@ function closeMenus(refocus = false, except = null) {
   return closed;
 }
 
+// presses that closed an open menu: the view's own handler skips their pick
+const dismissPresses = new WeakSet();
+
 function wireMenus() {
   for (const id of MENUS) {
     const m = $(id);
@@ -900,18 +1135,39 @@ function wireMenus() {
     btn.onclick = (e) => setMenu(m, !m.classList.contains('open'), e.detail === 0);
     // an action (Open… included) closes its menu; a toggle (Ortho, Z up)
     // leaves it open to show its new state
-    m.querySelector('.menu-panel').addEventListener('click', (e) => {
+    // A keyboard pick (Enter / Space: a click with no pointer, detail 0) made
+    // inside the panel gives the focus to the menu's button: closing the panel
+    // dropped it to the page, with no focus shown (review r18). Whether the
+    // focus was in the menu is read before the item acts: Hide disables
+    // itself, and the browser then moves the focus off it to the page.
+    const panel = m.querySelector('.menu-panel');
+    let focusIn = false;
+    panel.addEventListener('click', () => { focusIn = m.contains(document.activeElement); }, true);
+    panel.addEventListener('click', (e) => {
       const b = e.target.closest('button, label.btn');
-      if (b && m.classList.contains('folded') && !b.hasAttribute('aria-pressed')) setMenu(m, false);
+      if (!b) return;
+      const back = e.detail === 0 && focusIn;
+      // in the row: an item that disabled itself (Hide, Undo) gives the focus
+      // to its neighbour, not to the page (review r19)
+      if (!m.classList.contains('folded')) { if (back && b.disabled) focusBeside(b); return; }
+      if (b.hasAttribute('aria-pressed')) return;
+      setMenu(m, false);
+      // a menu left with nothing to do is disabled (Undo, Show's last live
+      // item): its neighbour then; the focus fell to the page and the next
+      // Tab went to the full-screen button, past the toolbar (review r19)
+      if (back) focusBeside(btn);
     });
     // Tab out of an open menu closes it
     m.addEventListener('focusout', (e) => { if (e.relatedTarget && !m.contains(e.relatedTarget)) setMenu(m, false); });
   }
+  // A press outside closes an open menu, and that press is spent on it: on the
+  // view it no longer also picks a part or clears the selection (review r22)
   document.addEventListener('pointerdown', (e) => {
-    if (!e.target.closest('.menu')) closeMenus();
+    // (the event itself is marked: a time window could pass on a long layout, r23)
+    if (!e.target.closest('.menu') && closeMenus() && $('stage').contains(e.target)) dismissPresses.add(e);
   }, true);
   $('tb').addEventListener('scroll', () => closeMenus());
-  addEventListener('resize', () => { closeMenus(); refold(); });
+  addEventListener('resize', () => { const f = focusNow(); closeMenus(); refold(f); showFocus(); });
   new ResizeObserver(() => refold()).observe(document.querySelector('header'));
   refold();
 }
@@ -952,6 +1208,149 @@ function setSection(axis, focus = false) {
   if (axis !== 'off' && was === 'off') $('secoff').focus();
   else if (axis === 'off') ($('viewmenu').classList.contains('folded') ? $('viewmenu').querySelector('.menu-btn') : $('section')).focus();
 }
+
+// A select is blurred after a choice picked from its list, so a focused
+// select does not swallow the number keys. Not after a choice TYPED into it:
+// a closed select changes on each letter (type-ahead), and blurred there the
+// next letter fell through to a shortcut ("hi" for Hidden line picked it,
+// then I isolated the selection).
+// A key that typed a letter, but not a Latin one (Cyrillic, Greek, …): the
+// shortcuts then go by the key's place, as QWERTY names it
+// (Latin by script, so "ğ" on Turkish F or "é" keeps its own place: r19)
+const nonLatinLetter = (k) => k.length === 1 && /\p{L}/u.test(k) && !/\p{Script=Latin}/u.test(k);
+
+// The inputs that take no typed text, so leave the shortcuts on (a focused
+// colour swatch or slider is not a text field)
+const NOT_TYPED = ['checkbox', 'radio', 'button', 'file', 'range', 'color'];
+
+function blurAfterPick(sel) {
+  let typing = false;
+  sel.addEventListener('keydown', () => { typing = true; });
+  for (const t of ['keyup', 'blur', 'pointerdown']) sel.addEventListener(t, () => { typing = false; });
+  sel.addEventListener('change', () => { if (!typing) sel.blur(); });
+}
+
+// ---------- model lists (?list=, js/model-list.js) ----------
+// The models a site offers, by name, in a drop-down beside Open…; picking
+// one opens it as ?src= would (and puts it in ?src=, so a reload or a view
+// link opens the same model).
+
+function fillModelList(entries) {
+  const sel = $('modellist');
+  sel.textContent = '';
+  for (const e of entries) sel.add(new Option(e.name, e.url));
+  // shown while the model on screen is not one of the list's (a file opened
+  // from the device): a blank select said nothing of what it was. Last, so
+  // the models keep their indices; disabled and hidden, so it cannot be picked
+  const none = new Option('Open from list…', '');
+  none.disabled = true;
+  none.hidden = true;
+  sel.add(none);
+  sel.hidden = entries.length === 0;
+  syncModelList();
+  refold();
+}
+
+// the drop-down names the model on screen: its entry, or "Open from list…"
+// when the model shown is not in the list (a file opened from the device)
+function syncModelList() {
+  const sel = $('modellist');
+  if (sel.hidden) return;
+  const cur = listedNow();
+  const i = [...sel.options].findIndex((o) => o.value && o.value === cur);
+  sel.selectedIndex = i >= 0 ? i : sel.options.length - 1;
+}
+
+// The model the list stands for: the one being opened from a URL while a
+// load runs (a pick, or the list's first), else the one on screen. Against
+// the model on screen alone, a pick of it during another's download did
+// nothing (and the pending one replaced it), and the list's first model
+// showed as no entry while it opened (review r17)
+// (pending: the list's own load, held from its start to its end and only
+// while no newer load has begun; read from the status line, a GPU error or a
+// recovery mid-download made it look settled: review r18)
+function listedNow() {
+  const p = app.listPending;
+  const u = p && p.seq === app.loadSeq ? p.url : app.sourceUrl;
+  try { return u ? new URL(u, location.href).href : null; } catch { return null; }
+}
+
+// Open a model of the list: the drop-down names it from the start
+function loadListed(url) {
+  const p = startLoad(() => loadUrl(url));
+  const mine = { url, seq: app.loadSeq };
+  app.listPending = mine;
+  syncModelList();
+  return p.finally(() => {
+    if (app.listPending === mine) app.listPending = null;
+    syncModelList();
+  });
+}
+
+let listPick = 0;
+// refocus: a keyboard pick made inside the narrow layout's File menu gives
+// the focus to File's button as the menu closes (it fell to the page)
+function openListed(url, refocus = false, keepMenu = false) {
+  const before = location.href;
+  const u = new URL(before);
+  u.searchParams.set('src', url);
+  u.hash = ''; // a view of the last model is not a view of this one
+  history.replaceState(null, '', u);
+  app.pendingView = null;
+  if (!keepMenu) closeMenus(refocus); // the narrow layout's File menu: the pick is made
+  const pick = ++listPick;
+  loadListed(url).then(() => {
+    // failed or cancelled, and no newer pick: the address and the drop-down
+    // name the model still shown, so the pick can be made again
+    if (pick !== listPick || app.sourceUrl === url) return;
+    if (location.href === u.href) history.replaceState(null, '', before);
+    syncModelList();
+  });
+}
+
+// A pointer pick opens at once. A keyboard change does not: a closed select
+// changes on each arrow, Home / End and type-ahead letter, and each would be
+// a download (or a conversion). It opens on Enter, on leaving the list, or
+// after a pause in the keys. Esc before then drops the choice (it opened the
+// model anyway: the 1 s pause, or in the File menu the blur as Esc closed
+// it). Enter gives the focus back like a pointer pick: left on the list,
+// the next letter (F to fit) picked a model by type-ahead and opened it.
+function wireModelList() {
+  const ml = $('modellist');
+  let typing = false;
+  let timer = 0;
+  // keepMenu: the focus moved on to another item of the open File menu (Tab
+  // from the list there): the menu stays open and the focus where it went
+  const go = (keyboard = false, keepMenu = false) => {
+    clearTimeout(timer);
+    timer = 0;
+    if (ml.value && ml.value !== listedNow()) openListed(ml.value, keyboard && document.activeElement === ml, keepMenu);
+  };
+  ml.addEventListener('keydown', (e) => {
+    typing = true;
+    // (Esc then goes on to the window's keydown, which closes the File menu)
+    if (e.key === 'Escape' && timer) { clearTimeout(timer); timer = 0; syncModelList(); }
+    if (e.key === 'Enter' && timer) { e.preventDefault(); go(true); ml.blur(); }
+    // Enter with nothing new chosen, in the File menu: done, the menu closes
+    // with the focus on its button (it stayed open, the focus on the page: r19)
+    else if (e.key === 'Enter' && ml.closest('.menu-panel')) { e.preventDefault(); closeMenus(true); }
+  });
+  for (const t of ['keyup', 'pointerdown']) ml.addEventListener(t, () => { typing = false; });
+  ml.addEventListener('blur', (e) => {
+    typing = false;
+    if (timer) go(false, !!e.relatedTarget && ml.closest('.menu-panel')?.contains(e.relatedTarget));
+  });
+  ml.addEventListener('change', () => {
+    if (!typing) { go(); ml.blur(); return; }
+    clearTimeout(timer);
+    // the pause opens the model and leaves the list as it is, in the File
+    // menu as in the row: closing it there lost the reader's place (r19)
+    timer = setTimeout(() => go(true, !!ml.closest('.menu-panel') && document.activeElement === ml), 1000);
+  });
+}
+
+// a list that could not be read, said where it shows: its entries are missing
+const listNote = (errors) => errors.map((e) => `model list ${e.url}: ${e.message}`).join('; ');
 
 // ---------- full screen ----------
 // The whole page, toolbar and parts panel included. The standard API, or
@@ -1036,6 +1435,9 @@ function updateButtons() {
   syncOptbar();
   const p = sectionPlane();
   $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(p[3] * (app.section.flip ? -1 : 1), 'section')} ${lenUnit()}` : '';
+  // a screen reader speaks the cut position, not the slider's 0-1000 step
+  if (p) $('secpos').setAttribute('aria-valuetext', $('secval').textContent);
+  else $('secpos').removeAttribute('aria-valuetext');
   // the part colour: on with a selection, showing the first selected body's
   // colour; Reset only while a selected body has a picked colour
   const sel = app.header ? [...app.selected] : [];
@@ -1075,6 +1477,9 @@ function beginLoad() {
   // settle a superseded tessellation (a terminated worker fires no events,
   // so its timer and promise would otherwise live forever)
   if (app.cancelTess) app.cancelTess();
+  // and a superseded download: one whose server never answers otherwise
+  // kept its load (and a model-list pick of it) waiting for ever (review r19)
+  if (app.fetchAbort) { app.fetchAbort.abort(); app.fetchAbort = null; }
   return app.loadSeq;
 }
 
@@ -1184,6 +1589,14 @@ function dropModel(msg) {
   app.viewGen++;
   app.lastStepBuffer = null;
   app.unmeshedFaces = 0;
+  // and what loadBuffer set for it: no link to a model not shown, no edge
+  // worker running on for it
+  if (app.stopEdges) { app.stopEdges.stop(); app.stopEdges = null; }
+  app.sourceUrl = null;
+  app.stats = null;
+  syncModelList();
+  $('sharelink').disabled = true;
+  syncMenuButtons();
   $('export').disabled = true;
   $('tree').textContent = '';
   $('treefilter').hidden = true;
@@ -1234,12 +1647,23 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
+  // a file with no surfaces (a STEP or IGES of curves or points only) is
+  // refused in plain words, the model on screen kept: it opened "ready" with
+  // 0 bodies, an empty tree and a blank view (review r22)
+  if (!base.header.indexCount) {
+    // (faces the converter could not mesh are not "no faces": r23)
+    const unmeshed = conversion && conversion.unmeshedFaces;
+    throw new Error(unmeshed
+      ? `none of the ${fmtInt(unmeshed)} faces of ${name} could be meshed: the converter failed on them, or this device ran out of memory`
+      : `${name} has no surfaces to show: it holds no faces (only curves or points, or nothing). Export the solids or surfaces from the CAD program`);
+  }
   // one holder, shared by every palette copy made from base (they spread it)
   base.edgeInfo = { value: null, ready: null };
   // part colours belong to the model they were picked on: this model's own
   const key = modelKeyOf(base.header);
   const overrides = loadOverrides(key, base.header.meshes.length);
   const mesh = inScheme(base, overrides);
+  const scheme = app.palette; // a scheme picked during the upload is drawn after it
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
@@ -1260,6 +1684,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     handBack(mesh);
     return;
   }
+  // the edge worker of the model this one replaces has no one to answer
+  if (app.stopEdges && app.stopEdges.base !== base) app.stopEdges.stop();
   app.mesh = mesh;
   app.baseMesh = base;
   app.overrides = overrides;
@@ -1269,10 +1695,19 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
+  // a model from the device is not the ?src a list pick left in the address:
+  // a reload would open that instead (review r16 L7)
+  if (!app.sourceUrl && new URLSearchParams(location.search).has('src')) {
+    const u = new URL(location.href);
+    u.searchParams.delete('src');
+    history.replaceState(null, '', u);
+  }
   app.lastStepBuffer = stepBuf;
   app.unmeshedFaces = unmeshedFaces;
   $('export').disabled = !stepBuf;
   $('sharelink').disabled = false;
+  syncModelList();
+  syncMenuButtons(); // a folded Save menu now has something in it
   app.selected.clear();
   app.hidden.clear();
   app.visUndo = [];
@@ -1283,8 +1718,12 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   pushState();
   buildTree();
   setView('iso');
-  // a view link (#view=…) applies to the model the page opened with
-  if (app.pendingView && app.sourceUrl === app.pendingView.src) {
+  // (recolour refuses while an upload is under way, so the pick waited here)
+  if (app.palette !== scheme) recolour();
+  // a view link (#view=…) applies to the model the page opened with; a link
+  // with no ?src (its model was opened from a device) to the next one opened
+  // from a device, never to a model list's first (review r16 M2)
+  if (app.pendingView && (app.pendingView.src ? app.sourceUrl === app.pendingView.src : !app.sourceUrl)) {
     applyView(app.pendingView.view);
     app.pendingView = null;
   }
@@ -1330,7 +1769,20 @@ function edgesOf(base) {
       resolve(null); // no edges, which nothing needs yet
       return;
     }
-    const done = (v) => { w.terminate(); info.value = v; resolve(v); };
+    let finished = false;
+    const done = (v) => {
+      if (finished) return;
+      finished = true;
+      w.terminate();
+      info.value = v;
+      if (app.stopEdges && app.stopEdges.base === base) app.stopEdges = null;
+      // said where it shows, or the edge styles silently draw none
+      if (!v && info.error && app.baseMesh === base && app.status === 'ready') setStatus('ready', `no edges for this model: ${info.error}`);
+      resolve(v);
+    };
+    // stopped when another model replaces this one on screen (loadBuffer):
+    // its worker and its copies of the arrays would otherwise run on
+    app.stopEdges = { base, stop: () => { info.error = 'stopped: another model was opened'; done(null); } };
     w.onmessage = (ev) => {
       if (!ev.data.ok) info.error = ev.data.error;
       done(ev.data.ok ? { ...ev.data.result, source: 'worker', ms: Math.round(ev.data.ms) } : null);
@@ -1347,9 +1799,23 @@ function edgesOf(base) {
 // "ready", or with faces the conversion could not mesh, what is missing
 const readyText = () => (app.unmeshedFaces
   ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
-  : 'ready');
+  : 'ready') + (app.listNote ? ` · ${app.listNote}` : '');
 
 const STEP_EXT = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
+
+// The CAD format a file's first bytes say ('stp', 'igs', 'brep'), or null: a
+// STEP file opens "ISO-10303-21;", a BREP "DBRep_DrawableShape", and an IGES
+// file's first line is an 80-column record with "S" in column 73
+function sniffCad(buf) {
+  const head = new TextDecoder('latin1').decode(new Uint8Array(buf, 0, Math.min(200, buf.byteLength)));
+  // (a UTF-8 byte-order mark first is read as Latin-1 "ï»¿": skipped, r20)
+  const text = head.replace(/^ï»¿/, '');
+  if (/^\s*ISO-10303-21\s*;/.test(text)) return 'stp';
+  if (/^\s*DBRep_DrawableShape/.test(text)) return 'brep';
+  const line = text.split(/\r?\n/)[0];
+  if (line.length >= 73 && line[72] === 'S') return 'igs';
+  return null;
+}
 
 // Keep a conversion in this browser, gzipped where the browser can (about a
 // sixth of the raw size), then update the panel's line. Never throws.
@@ -1376,25 +1842,56 @@ function extOf(name) {
   return m ? m[1].toLowerCase() : '';
 }
 
+// One gzip layer unpacked, with its step on the progress card (loadAny's
+// three paths each had their own, and one showed none: review r22). null:
+// a newer load took over meanwhile.
+async function unpackGz(buf, name, seq) {
+  setStatus('loading', `unpacking ${name}`);
+  showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
+  await nextPaint();
+  if (stale(seq)) return null;
+  const out = await gunzip(buf);
+  return stale(seq) ? null : out;
+}
+
 async function loadAny(buf, name, seq) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
   // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
   // to download): unpacked here, then opened as the file inside it
+  // (served with Content-Encoding: gzip, fetch has unpacked it already)
   const inner = name.replace(/\.gz$/i, '');
-  if (inner !== name && STEP_EXT[extOf(inner)] && isGzip(buf)) {
-    setStatus('loading', `unpacking ${name}`);
-    showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
-    await nextPaint();
-    if (stale(seq)) return;
-    buf = await gunzip(buf);
-    if (stale(seq)) return;
+  if (inner !== name && STEP_EXT[extOf(inner)]) {
+    if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
     name = inner;
+  }
+  // A name that says nothing (a URL with no extension) opened by what the
+  // bytes are: a STEP, IGES or BREP file starts in a way of its own; gzipped,
+  // it is unpacked first (review r19)
+  // (x.gz with nothing inside its name counts as saying nothing too, r20)
+  const said = extOf(name.replace(/\.gz$/i, ''));
+  if (!STEP_EXT[said] && said !== 'cadmesh' && !(/\.gz$/i.test(name) && said)) {
+    let body = buf;
+    if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
+    const kind = sniffCad(body);
+    const base = name.replace(/\.gz$/i, '');
+    // (the name changes only for what it turned out to be: an unknown x.gz
+    // is refused as "x.gz", not "x", r21)
+    if (kind) name = `${base}.${kind}`;
+    // unpacked once, whatever it is: a .cadmesh opens raw, anything else is
+    // refused below in plain words (it was inflated a second time first)
+    buf = body;
   }
   const ext = extOf(name);
   if (STEP_EXT[ext]) {
     const format = STEP_EXT[ext];
+    // a gzip under a plain .stp name (it reached the converter compressed)
+    // is unpacked; a UTF-8 byte-order mark first is dropped: OpenCascade
+    // refuses it ("unexpected QUID, expecting STEP"), as stp2mesh does (r21)
+    if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
+    const b3 = new Uint8Array(buf, 0, Math.min(3, buf.byteLength));
+    if (b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf) buf = buf.slice(3);
     // A conversion of these exact bytes saved in this browser skips
     // OpenCascade (js/mesh-cache.js: everything stays on this device). The
     // key is hashed before the worker takes the buffer (posting detaches it).
@@ -1406,8 +1903,17 @@ async function loadAny(buf, name, seq) {
       if (stale(seq)) return;
       if (hit) {
         announce(`${name} was converted before: opening the copy saved in this browser`);
-        await loadBuffer(hit, name, seq, hit);
-        return;
+        try {
+          await loadBuffer(hit, name, seq, hit);
+          return;
+        } catch (e) {
+          // a saved copy that no longer decodes is dropped and the file
+          // converted again; it failed on every open until Clear (r17)
+          if (!/^cadmesh:/.test(e.message || '')) throw e;
+          if (stale(seq)) return;
+          await cacheDelete(key);
+          announce(`the saved copy of ${name} could not be read: converting it again`);
+        }
       }
     }
     const conversion = await convert(buf, format, seq, name);
@@ -1415,8 +1921,10 @@ async function loadAny(buf, name, seq) {
     const out = conversion.buffer;
     // an incomplete conversion is shown (it is what the converter could do)
     // but never saved as if it were the model
-    if (key && !conversion.unmeshedFaces) saveConversion(key, out, name); // in the background: the model shows meanwhile
+    // (nor one loadBuffer refuses, such as a file with no surfaces: saved
+    // once it is shown, in the background, r22)
     await loadBuffer(out, name, seq, out, conversion);
+    if (key && !conversion.unmeshedFaces && !stale(seq)) saveConversion(key, out, name);
     return;
   }
   if (stale(seq)) return;
@@ -1425,7 +1933,17 @@ async function loadAny(buf, name, seq) {
   // refused in plain words, not as a .cadmesh decode error ("bad magic").
   const b = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
   const cadm = b.length === 4 && String.fromCharCode(...b) === 'CADM';
+  // a gzip of some other file (part.obj.gz) is refused by the name inside,
+  // not inflated and then failed as a .cadmesh ("bad magic", review r18)
+  const innerExt = /\.gz$/i.test(name) ? extOf(name.replace(/\.gz$/i, '')) : '';
+  if (innerExt && innerExt !== 'cadmesh' && !cadm) {
+    throw new Error(`${name} is not a file this viewer opens (.${innerExt}.gz): `
+      + 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, or one of them gzipped');
+  }
   if (!cadm && !isGzip(buf)) {
+    // a .cadmesh by name that is not one by its bytes is damaged, not of the
+    // wrong kind (it was told to open a .cadmesh file: review r22)
+    if (ext === 'cadmesh') throw new Error(`${name} is damaged or not a .cadmesh file inside: save it again from the viewer, or open the STEP it came from`);
     throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: `
       + 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file');
   }
@@ -1437,24 +1955,49 @@ async function loadAny(buf, name, seq) {
 const TESS_HINT = 'The file is converted in this tab, on this device. A large assembly can take a minute or more. '
   + 'The result is kept in this browser, so opening the same file again is instant; Save .cadmesh keeps a copy.';
 
+// A converter failure in plain words: the converter's own refusal (import
+// failed: …) as it is, anything else (out of memory, a crash) said as such,
+// with the engine's text kept in brackets (it was shown alone: review r22)
+const crashText = (msg) => (/^(import failed|converter unavailable)/.test(msg || '') ? msg
+  : `the conversion stopped: the converter crashed or this device ran out of memory (${msg}). `
+    + 'A smaller export, or a computer with more memory, may work');
+
 // On the multi-core converter where this device can take it
 // (js/converter-choice.js); if that fails, or leaves faces unmeshed, once more
 // on the single-threaded one, which needs less memory.
+// (a multi-core build that could not be loaded, remembered for the session:
+// a site that ships only the single-threaded one failed every file on it
+// first, review r23)
+let threadsUnavailable = false;
 async function convert(buf, format, seq, name) {
-  if (!useThreads(browserEnv())) return tessellate(buf, format, seq, name, false);
+  if (!useThreads(browserEnv()) || threadsUnavailable) return tessellate(buf, format, seq, name, false);
   let why;
+  let partial = null;
   try {
     const r = await tessellate(buf, format, seq, name, true);
     if (!r.unmeshedFaces) return r;
+    partial = r;
     why = `${fmtInt(r.unmeshedFaces)} face${r.unmeshedFaces > 1 ? 's' : ''} could not be meshed`;
   } catch (e) {
     if (stale(seq)) throw e; // cancelled or superseded: no second try
+    // a file the converter cannot read fails the same way on one thread:
+    // said at once, not after a second conversion (review r22)
+    if (/^import failed/.test(e.message || '')) throw e;
     why = e.message;
+    if (/^converter unavailable/.test(why)) threadsUnavailable = true;
   }
   if (stale(seq)) throw new Error('superseded by a newer load');
   console.warn(`multi-core conversion of ${name}: ${why}; converting again on one thread`);
-  announce('converting again on one thread, which needs less memory');
-  return tessellate(buf, format, seq, name, false);
+  announce(threadsUnavailable ? 'the multi-core converter is not available here: converting on one thread'
+    : 'converting again on one thread, which needs less memory');
+  try {
+    return await tessellate(buf, format, seq, name, false);
+  } catch (e) {
+    // the second try failing keeps the first's result with its missing faces
+    // (it was thrown away for the second's error: review r22)
+    if (partial && !stale(seq)) return partial;
+    throw e;
+  }
 }
 
 function tessellate(buf, format, seq, name, threads) {
@@ -1556,9 +2099,9 @@ function tessellate(buf, format, seq, name, threads) {
         show();
       }
       else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads });
-      else done(reject, new Error(m.message));
+      else done(reject, new Error(crashText(m.message)));
     };
-    w.onerror = (e) => done(reject, new Error(e.message || 'worker failed'));
+    w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
     show();
     // the multi-core try is sent a copy, so the bytes are still here for the
     // single-threaded one if it fails
@@ -1574,7 +2117,9 @@ function tessellate(buf, format, seq, name, threads) {
 const MODEL_EXT = /\.(?:stp|step|igs|iges|brep|cadmesh)(?:\.gz)?$/i;
 const fileName = (url) => {
   const [path, query = ''] = url.split('#')[0].split('?');
-  const tail = path.split('/').pop();
+  // decoded, so "my%20part.stp" shows and saves as "my part.stp" (r22)
+  let tail = path.split('/').pop();
+  try { tail = decodeURIComponent(tail); } catch { /* keep it raw */ }
   if (/\.[a-z0-9]+$/i.test(tail)) return tail;
   for (const kv of query.split('&')) {
     let v = kv.slice(kv.indexOf('=') + 1);
@@ -1610,9 +2155,12 @@ async function loadUrl(url) {
   const name = fileName(url);
   showProgress(`Downloading ${name}`, null, 'connecting…');
   let res;
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  app.fetchAbort = ac;
   try {
-    res = await fetch(url);
+    res = await fetch(url, ac ? { signal: ac.signal } : {});
   } catch (e) {
+    if (stale(seq)) return; // aborted: a newer load, or Cancel
     throw new Error(fetchFailedText(url, name, e));
   }
   if (stale(seq)) return;
@@ -1631,11 +2179,22 @@ async function loadUrl(url) {
     let got = 0;
     const rd = res.body.getReader();
     for (;;) {
-      const { done, value } = await rd.read();
+      let step;
+      try {
+        step = await rd.read();
+      } catch (e) {
+        if (stale(seq)) return; // aborted mid-body
+        throw e;
+      }
+      const { done, value } = step;
       if (done) break;
       if (stale(seq)) { rd.cancel(); return; }
       chunks.push(value);
       got += value.length;
+      if (got > MAX_FILE_BYTES) {
+        rd.cancel();
+        throw new Error(`${name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+      }
       // through setStatus, so a recovery that ends mid-fetch sees a load in
       // progress (app.status 'loading') and does not paint "ready" over it
       setStatus('loading', pct
@@ -1657,9 +2216,42 @@ async function loadUrl(url) {
   return loadAny(buf, name, seq);
 }
 
+// The file a drop carries, or null with the reason said: a link, text or a
+// page's image carries none; a folder is a file with no bytes to read; of
+// several, the first opens. One function for the startup drop and the wired
+// one (the startup one opened a folder, and said nothing of the rest: r23).
+function droppedFile(e) {
+  const dt = e.dataTransfer;
+  const files = dt ? dt.files : [];
+  const f = files[0];
+  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP or .cadmesh)'); return null; }
+  const item = dt.items && dt.items[0];
+  if (item && item.webkitGetAsEntry && item.webkitGetAsEntry()?.isDirectory) {
+    announce(`${f.name} is a folder: drop the model file in it`);
+    return null;
+  }
+  if (files.length > 1) announce(`opening ${f.name}; the viewer opens one file at a time (${files.length - 1} more not opened)`);
+  return f;
+}
+
+// A file from the device (Open…, a drop). One too big is refused before
+// anything starts: in loadFile the refusal came after the running load was
+// cancelled, so it also killed a conversion in progress (review r21)
+function openFile(f) {
+  if (f.size > MAX_FILE_BYTES) {
+    const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
+    announce(msg);
+    if (!PROGRESS_STATES.has(app.status)) setStatus(app.mesh ? 'ready' : 'error', app.mesh ? `${readyText()} · ${msg}` : msg);
+    return;
+  }
+  startLoad(() => loadFile(f));
+}
+
 async function loadFile(file) {
   const seq = beginLoad();
   app.fetchMs = null;
+  // the cap downloads and gzip have, for a file from the device too (r20)
+  if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
   setStatus('loading', `reading ${file.name}`);
   showProgress(`Opening ${file.name}`, null, `reading ${mb(file.size)} MB from disk`);
   announce(`loading ${file.name}`); // a new load is news even mid-load
@@ -1802,7 +2394,7 @@ function buildTree() {
       // own bodies (19 "COMPONENTn" rows would push every other part away);
       // a pick inside it opens it (revealRow)
       setOpen(depth < 2 && node.children.length > 0);
-      tw.onclick = () => setOpen(ul.hidden);
+      tw.onclick = () => { setOpen(ul.hidden); keepTabStop(); };
       label._setOpen = setOpen;
       label.setAttribute('aria-keyshortcuts', 'ArrowRight ArrowLeft');
     } else {
@@ -1883,6 +2475,19 @@ function filterTree(q) {
   };
   const top = $('tree').firstElementChild;
   if (top) walk(top, false);
+  keepTabStop();
+}
+
+// The tree's one tab stop on a row that is shown: the row last focused, or
+// when a filter or a collapsed branch hides it the first shown row (else Tab
+// skipped the whole tree)
+function keepTabStop() {
+  const root = $('tree');
+  const cur = root.querySelector('.label[tabindex="0"]');
+  if (cur && !cur.closest('[hidden]')) return;
+  const first = [...root.querySelectorAll('.label')].find((l) => !l.closest('[hidden]'));
+  if (cur) cur.tabIndex = -1;
+  if (first) first.tabIndex = 0;
 }
 
 // Bring a body's row into view after a pick in the scene: expand its
@@ -2064,7 +2669,7 @@ app.pickAt = async (x, y) => {
     // it drew; an answer about anything but the model the UI shows is null
     const res = await app.renderer.pick(x, y, frameState);
     if (gen !== app.viewGen) return null;
-    if (!res || !app.mesh || res.mesh !== app.mesh) return null;
+    if (!res || !app.mesh || !sameModel(res.mesh, app.mesh)) return null;
     return res.id <= app.mesh.header.meshes.length ? res.id : null;
   } catch (e) {
     console.warn('pick failed:', e);
@@ -2125,7 +2730,10 @@ function wireInput() {
     }
     stage.setPointerCapture(e.pointerId);
     const pan = e.button === 1 || e.button === 2 || e.shiftKey;
-    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId, type: e.pointerType };
+    // dismiss: this press closed an open menu (the capture listener, just
+    // before): it may still orbit, but a click does not pick
+    const dismiss = dismissPresses.has(e);
+    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId, type: e.pointerType, dismiss };
   });
   stage.addEventListener('pointercancel', endPointer);
   stage.addEventListener('lostpointercapture', endPointer);
@@ -2223,7 +2831,7 @@ function wireInput() {
     // a drag, or a pick dropped by a camera change, must not trigger the
     // dblclick fit of an older selection
     lastClick = Promise.resolve(false);
-    if (!d.moved && e.button === 0 && app.mesh) {
+    if (!d.moved && e.button === 0 && app.mesh && !d.dismiss) {
       const additive = e.ctrlKey || e.metaKey;
       app.hoverSeq++; // a click supersedes any pending hover answer
       lastClick = app.pickAt(...devicePx(e)).then((id) => {
@@ -2287,8 +2895,24 @@ function wireInput() {
     queueFrame();
   }).observe(stage);
   window.addEventListener('resize', queueFrame); // devicePixelRatio changes (browser zoom) keep the CSS size
-  $('panelbtn').onclick = () => setPanel(!panelOpen());
-  $('scrim').addEventListener('pointerdown', (e) => { e.preventDefault(); setPanel(false); });
+  // ☰ from the keyboard (Enter / Space, detail 0) moves the focus into the
+  // slide-out, to the parts list: left on ☰, the list was 7 Tabs away on a
+  // 390 px window and 11 on 844 x 390, past the whole toolbar (review r18).
+  // Esc there gives it back to ☰.
+  $('panelbtn').onclick = (e) => {
+    const open = !panelOpen();
+    setPanel(open);
+    // (no model, no tree: the slide-out's first control, else the focus stayed
+    // on ☰ and its controls were past File and View: review r19)
+    if (open && e.detail === 0) partsStop()?.focus();
+  };
+  // (focus back to ☰ if it was in the panel: left in the hidden panel it fell
+  // to the page, and the next Tab went to the full-screen button: r21)
+  // Closed on the click, not the press: closed at the press the scrim stopped
+  // catching the touch at once, and the tap's click went through to what lay
+  // under it (Cancel, discarding a conversion; full screen: review r22)
+  $('scrim').addEventListener('pointerdown', (e) => e.preventDefault());
+  $('scrim').addEventListener('click', (e) => { e.preventDefault(); setPanel(false, true); });
   // the Open… label is the file picker's only visible control: make it
   // reachable and operable from the keyboard
   const openLbl = $('open').parentElement;
@@ -2329,7 +2953,8 @@ function wireInput() {
   stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
   $('emptyopen').onclick = () => $('open').click();
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
-  // Esc in the filter clears it (and stays in the field); a second Esc leaves
+  // Esc in the filter clears it (and stays in the field); a second Esc closes
+  // the slide-out where there is one (the window's keydown)
   $('treefilter').addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ''; filterTree(''); }
   });
@@ -2345,13 +2970,13 @@ function wireInput() {
   window.addEventListener('drop', (e) => {
     e.preventDefault();
     stage.classList.remove('drop');
-    const f = e.dataTransfer.files[0];
-    if (f) startLoad(() => loadFile(f));
+    const f = droppedFile(e);
+    if (f) openFile(f);
   });
   $('open').onchange = (e) => {
     const f = e.target.files[0];
     e.target.value = ''; // so choosing the same file again fires change
-    if (f) startLoad(() => loadFile(f));
+    if (f) openFile(f);
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => fitTo(app.selected.size ? bboxOf([...app.selected]) : app.header && app.header.bbox);
@@ -2391,15 +3016,22 @@ function wireInput() {
   const pal = $('palette');
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));
   pal.value = app.palette;
+  blurAfterPick(pal);
+  // Undo's key as this OS names it (both work everywhere)
+  if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
+    $('undo').title = $('undo').title.replace('Ctrl+Z', '⌘Z');
+    for (const k of document.querySelectorAll('#help .keys')) k.textContent = k.textContent.replace('Ctrl+Z', '⌘Z');
+  }
   pal.onchange = () => setPalette(pal.value);
+  wireModelList();
   const sty = $('style');
   for (const s of STYLES) if (BUILT_STYLES.includes(s.id)) sty.add(new Option(s.label, s.id));
   sty.value = currentStyle().id;
   syncStyleBg();
-  // blurred after a change, so a focused select does not swallow the number keys
-  sty.onchange = () => { setStyle(sty.value, true); sty.blur(); };
-  // blurred after a change, so a focused select does not swallow the number keys
-  $('unitsel').onchange = (e) => { setUnitChoice(e.target.value); e.target.blur(); };
+  blurAfterPick(sty);
+  sty.onchange = () => setStyle(sty.value, true);
+  blurAfterPick($('unitsel'));
+  $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
   // 'change', not 'input': a picker drag fires input continuously, and each
   // recolour re-uploads the model
   $('partcolour').onchange = (e) => setPartColour(e.target.value);
@@ -2412,7 +3044,13 @@ function wireInput() {
     // CompressionStream saves the raw layout, which loads the same. A model
     // opened from the browser's saved conversions is gzipped already.
     const buf = app.lastStepBuffer;
-    const bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
+    let bytes;
+    try {
+      bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
+    } catch (e) {
+      setStatus(app.status, `could not save ${name}: ${e.message || e}`);
+      return;
+    }
     const a = document.createElement('a');
     const url = URL.createObjectURL(new Blob([bytes]));
     a.href = url;
@@ -2421,16 +3059,19 @@ function wireInput() {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
   $('cacheclear').onclick = async () => {
-    await cacheClear().catch(() => {});
+    const err = await cacheClear().then(() => null, (e) => e);
     await refreshCacheBar();
-    announce('saved conversions cleared');
+    announce(err ? `could not clear the saved conversions: ${err.message || err}` : 'saved conversions cleared');
   };
   window.addEventListener('keydown', (e) => {
     // leave browser shortcuts (Ctrl/Cmd/Alt+key) and typing in fields alone
     // ...except Ctrl/Cmd+Z, which undoes a visibility change (outside text fields)
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    // (Z by the key's place on a layout that types no Latin letter, as the
+    // letter shortcuts below: review r17)
+    const zKey = e.key.toLowerCase() === 'z' || (nonLatinLetter(e.key) && e.code === 'KeyZ');
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && zKey) {
       const t0 = e.target;
-      const field = (t0.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t0.type))
+      const field = (t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type))
         || t0.tagName === 'TEXTAREA' || t0.isContentEditable;
       if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
       return;
@@ -2441,24 +3082,52 @@ function wireInput() {
     const t = e.target;
     // Esc closes an open toolbar menu first, wherever focus is
     if (e.key === 'Escape' && closeMenus(true)) { e.preventDefault(); return; }
-    const typed = (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range'].includes(t.type))
+    const typed = (t.tagName === 'INPUT' && !NOT_TYPED.includes(t.type))
       || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
+    // ...but Esc in the slide-out's field (an empty Filter parts: a filled one
+    // clears first, in its own handler) closes the slide-out, as from its tree
+    if (typed && e.key === 'Escape' && panelOpen() && $('parts').contains(t)) { e.preventDefault(); setPanel(false, true); return; }
     if (typed) return;
     // number keys: the digit row by the character typed (AZERTY types a
     // digit with Shift), the numpad by its key code (whatever NumLock says)
-    const digit = /^[0-9]$/.test(e.key) ? e.key : /^Numpad[0-9]$/.test(e.code) ? e.code.slice(6) : null;
-    if (digit !== null && digit in VIEW_KEYS) {
+    // A digit row that types other digits (Persian, Arabic-Indic) goes by the
+    // key's place (review r19)
+    // With NumLock off a numpad key types End, PageUp, an arrow…: a view key
+    // then only where no control has the focus (End on the section slider
+    // jumped to Front; PageUp in the tree: review r20)
+    // (controls that move by those keys: a slider, a select, the parts tree;
+    // a focused button, as after a click on a view preset, does not)
+    const navKey = e.key.length > 1;
+    // (t may be the window itself, for a key sent to it: not a Node)
+    const onControl = t.type === 'range' || t.tagName === 'SELECT' || (t instanceof Node && $('tree').contains(t));
+    const digit = /^[0-9]$/.test(e.key) ? e.key
+      : /^Numpad[0-9]$/.test(e.code) && !(navKey && onControl) ? e.code.slice(6)
+        : /^\p{Nd}$/u.test(e.key) && /^Digit[0-9]$/.test(e.code) ? e.code.slice(5) : null;
+    // ...unless a control used the key already (with NumLock off the numpad's
+    // 1 is End, 2 ↓, 8 ↑, which the parts tree moves by)
+    if (digit !== null && digit in VIEW_KEYS && !e.defaultPrevented) {
       e.preventDefault();
-      viewKey(digit);
+      // a held key acts once, as the letters: 5 toggled Ortho on and off (r19)
+      if (!e.repeat) viewKey(digit);
       return;
     }
     // then an open parts panel (the narrow layout's slide-out); the next Esc
     // clears the selection. Letters match in either case, so Caps Lock does
     // not turn the shortcuts off.
-    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    const act = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
-      i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey() }[k];
+    // A layout whose keys type no Latin letter (Cyrillic, Greek) goes by the
+    // key's place, as QWERTY names it.
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
+      i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey() };
+    let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // (a LETTER of another script only: punctuation on a Latin layout keeps
+    // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)
+    if (nonLatinLetter(k) && /^Key[A-Z]$/.test(e.code)) k = e.code.slice(3).toLowerCase();
+    const act = acts[k];
     if (!act) return;
+    // the key's own browser action (Quick Find on ' / Firefox, ...) is not run
+    // too, and a held key acts once: a repeat would toggle E on and off
+    e.preventDefault();
+    if (e.repeat) return;
     act();
   });
 }
@@ -2471,19 +3140,88 @@ async function main() {
   updateButtons();
   // on a short window the controls help starts folded: the parts list needs the room
   if (innerHeight < 640) $('help').open = false;
-  adoptRenderer(await makeRenderer());
+  // A file chosen or dropped while the GPU starts (Open… works from the
+  // first paint): kept and opened once the input is wired. It was ignored,
+  // and a drop made the browser leave the page for the file (review r21)
+  let early = null;
+  const keep = (f) => { if (f) { early = f; setStatus('init', `starting GPU, then opening ${f.name}`); } };
+  const over = (e) => e.preventDefault();
+  const drop = (e) => { e.preventDefault(); keep(droppedFile(e)); };
+  window.addEventListener('dragover', over);
+  window.addEventListener('drop', drop);
+  $('open').onchange = (e) => { keep(e.target.files[0]); e.target.value = ''; };
+  // (Open… from the keyboard too, as wireInput makes it: r22)
+  const openKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('open').click(); } };
+  const openLbl = $('open').parentElement;
+  openLbl.addEventListener('keydown', openKey);
+  try {
+    adoptRenderer(await makeRenderer());
+  } finally {
+    // (also when no GPU starts: left in place, a file chosen then turned the
+    // error into "starting GPU, then opening …" for ever: r22)
+    window.removeEventListener('dragover', over);
+    window.removeEventListener('drop', drop);
+    openLbl.removeEventListener('keydown', openKey);
+    if (!app.renderer) {
+      // no GPU: nothing can be shown, so nothing offers to open a file (the
+      // card's "Choose a file…" did nothing, a chosen file vanished), and a
+      // drop is caught (the browser left the page for it): review r23
+      $('open').onchange = null;
+      openLbl.hidden = true;
+      $('emptyopen').hidden = true;
+      window.addEventListener('dragover', over);
+      window.addEventListener('drop', (e) => { e.preventDefault(); announce('this browser has no GPU the viewer can use, so it cannot open a model'); });
+    }
+  }
   wireInput();
+  keepFocus();
   queueFrame();
   refreshCacheBar();
   const src = params.get('src');
   // #view=…: the view a shared link names, applied when its model has loaded
-  const viewHash = () => (location.hash.startsWith('#view=') ? decodeURIComponent(location.hash.slice(6)) : null);
-  if (src && viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
+  // (the model its own ?src names; with none, the next one opened from the
+  // device, never the model list's first). A bad escape (a hand-edited or cut
+  // link) is no view, never an error: decodeURIComponent throws on it, which
+  // here stopped the model loading
+  const viewHash = () => {
+    if (!location.hash.startsWith('#view=')) return null;
+    try { return decodeURIComponent(location.hash.slice(6)); } catch { return null; }
+  };
+  if (viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
   window.addEventListener('hashchange', () => {
-    if (viewHash() && app.header && app.sourceUrl === src) applyView(decodeView(viewHash()));
+    // (the model now in ?src=: a pick from the model list changes it)
+    const now = new URLSearchParams(location.search).get('src');
+    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl)) applyView(decodeView(viewHash()));
   });
-  if (src) await startLoad(() => loadUrl(src));
-  else setStatus('idle', IDLE_MSG);
+  // ?src opens at once; ?list= (one or more) is read beside it, never in its
+  // way. With no ?src the list's first model opens, unless the user opened
+  // something meanwhile.
+  const seq0 = app.loadSeq;
+  // (through loadListed, so a list read meanwhile names it while it opens and
+  // a pick of it does not start it again: review r19)
+  const opening = src ? loadListed(src) : null;
+  const lists = params.getAll('list');
+  if (!src) setStatus('idle', lists.length ? 'reading the model list…' : IDLE_MSG);
+  const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0) : null;
+  // the file the user chose while the GPU started: the newest ask, so it
+  // supersedes ?src (and the list's first model does not open after it)
+  if (early) openFile(early);
+  await Promise.all([opening, listed]);
+}
+
+// The model lists: fill the drop-down, open the first model when wanted (no
+// other load started), and say on the status line which lists could not be
+// read, or that they name no models
+async function readLists(lists, openFirst) {
+  const timed = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
+  const r = await fetchModelLists(lists, location.href, timed);
+  fillModelList(r.entries);
+  app.listNote = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
+  if (app.listNote) announce(app.listNote);
+  if (openFirst() && r.entries.length) {
+    await loadListed(r.entries[0].url);
+  } else if (app.status === 'ready') setStatus('ready', readyText());
+  else if (app.status === 'idle') setStatus(app.listNote && !r.entries.length ? 'error' : 'idle', app.listNote || IDLE_MSG);
 }
 
 // ?selftest=1: after loading, pick the canvas centre and publish one JSON line

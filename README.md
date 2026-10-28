@@ -31,6 +31,7 @@ URL parameters:
 | Parameter | Effect |
 |---|---|
 | `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start; a file on another site loads only if that site sends CORS headers (`Access-Control-Allow-Origin`), as GitHub raw files, most CDNs and CORS-enabled buckets do |
+| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. The names fill a drop-down beside Open…; picking one opens it into `?src=`. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
 | `backend=webgpu\|webgl2\|webgl1` | force one backend (default: try them in that order) |
 | `selftest=1` | after loading, pick the canvas centre and publish one JSON line in `<pre id="selftest">` (for automated checks) |
 
@@ -100,7 +101,9 @@ URL parameters:
 - **Share a view.** File > **Copy view link** copies a link that opens the
   model at the same view: camera, projection, up axis, style, section,
   hidden and selected parts (`?src=<model URL>#view=…`). A model opened from
-  your device has no URL, so its link holds the view alone.
+  your device has no URL, so its link holds the view alone, and opened, it
+  applies to the next model you open from your device. A link keeps the
+  page's model lists.
 - **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
   named colours), as the file gives them. STEP carries colour from AP214 on;
   an AP203 file, a common default export, has none, and gets one muted colour
@@ -200,6 +203,7 @@ files load too.
 | `js/edges.js`, `js/edges-worker.js` | the edge list (face boundaries; silhouette candidates inside curved faces) and each body's closed / area / volume facts, built by the converter or, for an older `.cadmesh`, in a worker |
 | `js/styles.js` | the display styles, their defaults and the paper edge colours |
 | `js/view-link.js` | a view as a URL hash and back |
+| `js/model-list.js` | `list=` files: parse, resolve, join in URL order, fetch with a size cap |
 | `js/face-order.js` | the faces' draw order: solids, then sheet bodies with less depth bias, so a sheet lying on a solid's face (a board's pads) shows |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |

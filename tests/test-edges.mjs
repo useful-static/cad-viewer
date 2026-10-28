@@ -4,6 +4,7 @@
 //   node tests/test-edges.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EDGE_STRIDE, SIL_STRIDE, bodyTable, buildEdges, edgeInstances, silhouetteInstances } from '../js/edges.js';
 import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
 
@@ -181,6 +182,38 @@ test('the body table: slot 0 empty, then each body\'s centre and half-diagonal',
   assert.deepEqual([...t.slice(12, 16)], [1, 1, 0.5, 1.5]);
   assert.deepEqual([...t.slice(20, 24)], [0, 0, 0, 0], 'no vertices: radius 0');
   assert.ok(Math.abs(t[31] - Math.sqrt(3)) < 1e-6);
+});
+
+// A body whose triangles share no edge has 3 boundary edges per triangle: the
+// hash tables must not fill (a full open-addressed table probes forever). Run
+// in a child process with a time limit, so a hang fails instead of stalling.
+test('one-triangle faces and a triangle soup finish: no hash table fills', () => {
+  const edgesUrl = new URL('../js/edges.js', import.meta.url).href;
+  const ribbon = `
+    import { buildEdges } from ${JSON.stringify(edgesUrl)};
+    const nt = 512, pts = [];
+    for (let i = 0; i < nt + 2; i++) pts.push([Math.floor(i / 2), i % 2, 0]);
+    const position = new Float32Array(nt * 9), index = new Uint32Array(nt * 3);
+    for (let t = 0; t < nt; t++) {
+      const tri = t % 2 ? [t, t + 2, t + 1] : [t, t + 1, t + 2];
+      tri.forEach((p, k) => { position.set(pts[p], (t * 3 + k) * 3); index[t * 3 + k] = t * 3 + k; });
+    }
+    const r = buildEdges({ position, index, meshes: [{ vtxStart: 0, vtxCount: nt * 3, idxStart: 0, idxCount: nt * 3, kind: 'sheet',
+      bbox: { min: [0, 0, 0], max: [nt / 2 + 1, 1, 0] } }] });
+    console.log(r.edges.length / 2);`;
+  const soup = `
+    import { buildEdges } from ${JSON.stringify(edgesUrl)};
+    const nt = 1000, position = new Float32Array(nt * 9);
+    for (let i = 0; i < nt * 9; i++) position[i] = i * 0.001 + 1;
+    const index = Uint32Array.from({ length: nt * 3 }, (_, i) => i);
+    const r = buildEdges({ position, index, meshes: [{ vtxStart: 0, vtxCount: nt * 3, idxStart: 0, idxCount: nt * 3,
+      bbox: { min: [0, 0, 0], max: [100, 100, 100] } }] });
+    console.log(r.edges.length / 2);`;
+  for (const [name, code, want] of [['ribbon', ribbon, 2 * 512 + 1], ['soup', soup, 3000]]) {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { timeout: 10000, encoding: 'utf8' });
+    assert.equal(r.signal, null, `${name}: still running after 10 s (killed)`);
+    assert.equal(Number(r.stdout.trim()), want, `${name}: ${r.stdout} ${r.stderr}`);
+  }
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

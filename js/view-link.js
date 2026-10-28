@@ -2,7 +2,8 @@
 //
 //   #view=c:tx,ty,tz,dist,qx,qy,qz,qw;p:o;u:z;s:hiddengrey;x:z,0.5,f;h:1-3,7;k:5
 //
-//   c  camera: target, distance, orientation quaternion (6 significant digits)
+//   c  camera: target (to a millionth of the distance), distance and
+//      orientation quaternion (6 significant digits)
 //   p  projection: o ortho (absent: perspective)
 //   u  up axis: z (absent: y)
 //   s  display style id (js/styles.js; absent: the viewer's own default)
@@ -13,6 +14,14 @@
 // edited by hand still opens the model.
 
 const num = (v) => Number(v.toPrecision(6));
+// The target to a step a millionth of the distance: its error must be small
+// beside what the view spans, not beside its own size (6 significant digits
+// of 100000 mm is 1 mm, 5% of a 20 mm wide view there)
+const near = (v, dist) => {
+  if (!(dist > 0) || !Number.isFinite(v)) return num(v);
+  const d = Math.min(12, Math.max(0, -Math.floor(Math.log10(dist * 1e-6))));
+  return Number(v.toFixed(d));
+};
 
 export function runs(ids) {
   const s = [...new Set(ids)].filter((i) => Number.isInteger(i) && i > 0).sort((a, b) => a - b);
@@ -42,7 +51,7 @@ export function parseRuns(s, max = 1e6) {
 export function encodeView(v) {
   const f = [];
   const c = v.cam;
-  f.push(`c:${[...c.target, c.dist, ...c.q].map(num).join(',')}`);
+  f.push(`c:${[...c.target.map((t) => near(t, c.dist)), num(c.dist), ...c.q.map(num)].join(',')}`);
   if (c.ortho) f.push('p:o');
   if (c.up === 'z') f.push('u:z');
   if (v.style) f.push(`s:${v.style}`);

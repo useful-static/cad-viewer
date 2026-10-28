@@ -20,11 +20,12 @@ test('runs and back', () => {
   assert.deepEqual(parseRuns('1-3,7,9-10'), [1, 2, 3, 7, 9, 10]);
   assert.equal(runs([]), '');
 });
-test('a view round-trips to 6 significant digits', () => {
+test('a view round-trips: the target to a millionth of the distance, the rest to 6 significant digits', () => {
   const s = encodeView(view);
-  assert.ok(s.startsWith('c:12.3457,-4,1e-7,1234.57,'), s);
+  // dist 1234.57: the target to 0.001
+  assert.ok(s.startsWith('c:12.346,-4,0,1234.57,'), s);
   const d = decodeView(s);
-  assert.deepEqual(d.cam.target, [12.3457, -4, 1e-7]);
+  assert.deepEqual(d.cam.target, [12.346, -4, 0]);
   assert.equal(d.cam.dist, 1234.57);
   assert.ok(d.cam.q.every((x, i) => Math.abs(x - view.cam.q[i]) < 1e-5));
   assert.equal(d.cam.ortho, true);
@@ -34,6 +35,16 @@ test('a view round-trips to 6 significant digits', () => {
   assert.deepEqual(d.hidden, [1, 2, 3, 7]);
   assert.deepEqual(d.selected, [5]);
 });
+test('far from the origin, the target keeps the precision the view needs (review r14)', () => {
+  // 100 m out, looked at from 10 mm: 6 significant digits would be 1 mm off
+  const far = { cam: { target: [100000.1234567, -250000.7654321, 3.3333333], dist: 10, q: [0, 0, 0, 1], ortho: false, up: 'y' } };
+  const d = decodeView(encodeView(far));
+  far.cam.target.forEach((t, i) => assert.ok(Math.abs(d.cam.target[i] - t) <= 10 * 1e-6, `${d.cam.target[i]} vs ${t}`));
+  // and a huge view keeps whole numbers, never more digits than it needs
+  const huge = decodeView(encodeView({ cam: { target: [1.5, 2.25, 3], dist: 1e9, q: [0, 0, 0, 1] } }));
+  assert.deepEqual(huge.cam.target, [2, 2, 3]);
+});
+
 test('defaults stay out of the link', () => {
   const s = encodeView({ cam: { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1], ortho: false, up: 'y' }, section: { axis: 'off' } });
   assert.equal(s, 'c:0,0,0,1,0,0,0,1');

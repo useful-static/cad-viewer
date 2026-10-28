@@ -207,16 +207,39 @@ export function isGzip(buf) {
 
 const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThrough(stream)).arrayBuffer();
 
-// gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz)
-export async function gunzip(buf) {
+// The most a file may be, downloaded or unpacked: about the largest buffer a
+// browser hands out. A few MB of gzip can inflate to many GB; past this it
+// stops and says why, instead of the tab being killed with no message.
+export const MAX_FILE_BYTES = 2 * 2 ** 30;
+
+// gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz),
+// counted as they come, at most `max`
+export async function gunzip(buf, max = MAX_FILE_BYTES) {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error('this file is gzip-compressed, and this browser cannot decompress (no DecompressionStream)');
   }
+  const rd = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const chunks = [];
+  let n = 0;
   try {
-    return await pipeBytes(buf, new DecompressionStream('gzip'));
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > max) {
+        await rd.cancel();
+        throw new RangeError(`it unpacks to over ${(max / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+      }
+      chunks.push(value);
+    }
   } catch (e) {
+    if (e instanceof RangeError) throw new Error(`the gzip file is too big: ${e.message}`);
     throw new Error(`the gzip data is corrupt or truncated (${e.message || e})`);
   }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.byteLength; }
+  return out.buffer;
 }
 
 // buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
@@ -245,7 +268,17 @@ export function decodeCadmesh(buf) {
   if (ver !== VERSION) throw new Error(`cadmesh: unsupported version ${ver}`);
   const jlen = dv.getUint32(8, true);
   if (12 + jlen > buf.byteLength) throw new Error('cadmesh: truncated header');
-  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, jlen)));
+  // a header that is not JSON, or JSON that is not an object, said as such,
+  // not as the engine's own words ("Cannot read properties of null")
+  let header;
+  try {
+    header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, jlen)));
+  } catch (e) {
+    throw new Error(`cadmesh: the header is not JSON (${e.message})`);
+  }
+  if (!header || typeof header !== 'object' || Array.isArray(header) || !header.sections || typeof header.sections !== 'object') {
+    throw new Error('cadmesh: the header is not a cadmesh header (no sections)');
+  }
   const dataStart = align8(12 + jlen);
   const view = (name, Ctor) => {
     const s = header.sections[name];
@@ -270,6 +303,15 @@ export function decodeCadmesh(buf) {
   const idx = out.index;
   for (let i = 0; i < idx.length; i++) {
     if (idx[i] >= vc) throw new Error(`cadmesh: index ${i} names vertex ${idx[i]} of ${vc}`);
+  }
+  // and a body's triangles name only its own vertices (the encoder writes no
+  // other kind): the edge list welds and tests closure per body, and one
+  // reaching into another body's vertices came out "closed" (cut-filled)
+  for (const [mi, m] of header.meshes.entries()) {
+    const lo = m.vtxStart, hi = m.vtxStart + m.vtxCount;
+    for (let i = m.idxStart; i < m.idxStart + m.idxCount; i++) {
+      if (idx[i] < lo || idx[i] >= hi) throw new Error(`cadmesh: mesh ${mi} index ${i} names vertex ${idx[i]}, outside its own ${lo}..${hi - 1}`);
+    }
   }
   for (const s of ['edges', 'silhouettes']) {
     const e = out[s];
@@ -347,6 +389,11 @@ function validateHeader(h) {
     }
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
     if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
+    // the UI maps a body's colour to #rrggbb: anything else threw there
+    if (m.color !== undefined && m.color !== null
+      && !(Array.isArray(m.color) && (m.color.length === 3 || m.color.length === 4) && m.color.every(Number.isFinite))) {
+      bad(`mesh ${i} colour is not 3 or 4 numbers`);
+    }
     if (fsec && (!ok(m.faceStart) || !ok(m.faceCount) || m.faceStart + m.faceCount > faceTotal)) {
       bad(`mesh ${i} face range is outside the faces section`);
     }
@@ -389,7 +436,14 @@ export function computeNormals(positions, indices) {
 // Per-face b-rep colours become per-vertex colours (OCCT meshes each face
 // with its own vertices, so a face's triangles own their vertex range).
 export function occtResultToModel(result, units = 'millimeter') {
-  if (!result || !result.success) throw new Error('STEP import failed (occt-import-js returned success=false)');
+  // (said for IGES and BREP too, naming no library, with what to try: r21)
+  if (!result || !result.success) {
+    // (OpenCascade reports running out of memory while reading the same way,
+    // so that is named too: a re-export alone would fail again, r23)
+    throw new Error('import failed: the converter could not read this file. It may be damaged or cut short, '
+      + 'not the format its name says, or too big for this device\'s memory; re-export it from the CAD program, '
+      + 'try another of its formats, or open it on a computer with more memory');
+  }
   const meshes = result.meshes.map((m) => {
     const positions = Float32Array.from(m.attributes.position.array);
     const normals = m.attributes.normal ? Float32Array.from(m.attributes.normal.array) : null;

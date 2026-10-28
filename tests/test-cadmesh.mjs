@@ -95,6 +95,20 @@ test('decode rejects a wrong magic and a truncated file', () => {
   assert.throws(() => decodeCadmesh(new ArrayBuffer(4)), /too short/);
 });
 
+test('decode says a header that is not JSON, or not an object, in its own words (review r16 L10)', () => {
+  const withHeader = (text) => {
+    const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+    const dv = new DataView(buf);
+    const jlen = dv.getUint32(8, true);
+    const b = new Uint8Array(buf, 12, jlen);
+    b.fill(0x20); // spaces, so the JSON's length is unchanged
+    b.set(new TextEncoder().encode(text));
+    return buf;
+  };
+  assert.throws(() => decodeCadmesh(withHeader('null')), /cadmesh: the header is not a cadmesh header/);
+  assert.throws(() => decodeCadmesh(withHeader('{"vertexCount": ')), /cadmesh: the header is not JSON/);
+});
+
 test('decode rejects a tree that names a mesh out of range (review r5)', () => {
   const root = { name: 'asm', meshes: [], children: [{ name: 'x', meshes: [5], children: [] }] };
   const buf = encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2), quad('c', 4)], root });
@@ -129,6 +143,23 @@ test('decode rejects a malformed bounding box (review r6)', () => {
   const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
   // "max" -> "mox": the header bbox loses its max corner
   assert.throws(() => decodeCadmesh(patchHeader(buf, '"max"', '"mox"')), /bounding box malformed/);
+});
+
+test('decode rejects a body colour that is not 3 or 4 numbers (review r14)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
+  // null -> "rd": the UI mapped it to #rrggbb and threw once the body was selected
+  assert.throws(() => decodeCadmesh(patchHeader(buf, '"color":null', '"color":"rd"')), /colour is not 3 or 4 numbers/);
+  const ok = encodeCadmesh({ meshes: [{ ...quad('a', 0), color: [1, 0.5, 0] }] });
+  assert.deepEqual(decodeCadmesh(ok).header.meshes[0].color, [1, 0.5, 0]);
+});
+
+test('decode rejects a body whose triangle names another body\'s vertex (review r15)', () => {
+  const buf = encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2)] });
+  // body b's first index (absolute 4) pointed at body a's vertex 0
+  const h = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, new DataView(buf).getUint32(8, true))));
+  const dataStart = align8(12 + new DataView(buf).getUint32(8, true));
+  new Uint32Array(buf, dataStart + h.sections.index.offset, h.indexCount)[h.meshes[1].idxStart] = 0;
+  assert.throws(() => decodeCadmesh(buf), /mesh 1 index 6 names vertex 0, outside its own 4\.\.7/);
 });
 
 test('decode rejects counts that disagree with the sections (review r6)', () => {
@@ -327,6 +358,13 @@ await atest('a gzipped file inflates to the same bytes; a raw one passes through
     assert.deepEqual(new Uint8Array(await inflateCadmesh(gz)), new Uint8Array(raw));
   }
   assert.equal(decodeCadmesh(await inflateCadmesh(await deflateCadmesh(raw))).header.meshes.length, 2);
+});
+
+await atest('a gzip that unpacks past the limit stops and says why (review r14)', async () => {
+  // 1 MB of zeros gzips to about 1 kB: a cap of 1000 bytes refuses it, the default does not
+  const gz = new Uint8Array(gzipSync(Buffer.alloc(1 << 20))).buffer;
+  await assert.rejects(gunzip(gz, 1000), /the gzip file is too big: it unpacks to over/);
+  assert.equal((await gunzip(gz)).byteLength, 1 << 20);
 });
 
 await atest('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {

@@ -100,6 +100,9 @@ test('file colours with a part colour copy the model, never write into it', () =
 test('hex and rgb convert both ways', () => {
   assert.deepEqual(hexToRgb('#ff8000').map((x) => Math.round(x * 255)), [255, 128, 0]);
   assert.equal(rgbToHex([1, 0.5, 0]), '#ff8000');
+  // an alpha is dropped and out-of-range values clamp: always a valid #rrggbb (review r15)
+  assert.equal(rgbToHex([0.2, 0.4, 0.6, 1]), '#336699');
+  assert.equal(rgbToHex([200, -1, 0.5]), '#ff0080');
 });
 test('an unknown scheme is refused', () => {
   assert.throws(() => bodyColours(header, 'nope'), /unknown colour scheme/);
