@@ -423,10 +423,11 @@ export function createMeasure(deps) {
       return { n: i + 1, d: h.diameter, at, through: h.rims > 1, depth: h.depth };
     });
     const posHead = list.length && shared ? `${first.split(',').map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
-    // per diameter: how many, and how far apart their centres spread
+    // per diameter as shown: how many, and how far apart their centres spread
+    // (keyed on the printed value: 0.508 and 0.511 mm read as two "0.51" lines)
     const groups = new Map();
     for (const h of list) {
-      const key = h.diameter.toFixed(3);
+      const key = deps.num(h.diameter);
       if (!groups.has(key)) groups.set(key, { d: h.diameter, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;
