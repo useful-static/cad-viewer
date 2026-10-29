@@ -47,6 +47,13 @@
      they then open from the menu's button as a panel under the toolbar
      (position:fixed, so the narrow layout's scrolling row does not clip it). */
   .menu, .menu-panel, .presets { display:contents; }
+  /* A control is one line at its own width, never squeezed, at any depth of
+     the row: an unfolded menu's controls are flex items of #tb through those
+     display:contents wrappers, which a `#tb > *` rule does not reach. Squeezed,
+     a label wrapped inside its button (800 × 500: "Z up" and "Show all" on two
+     lines, the row 57 px tall) while the row's measured width still fitted,
+     so refold never folded the menu. */
+  #tb :is(button, select, label.btn) { white-space:nowrap; flex-shrink:0; }
   .menu-btn { display:none; }
   /* the arrow is drawn, not read: '/ ""' leaves it out of the button's name
      ("View", not "View ▾"); a browser without the alt syntax keeps the first */
@@ -105,7 +112,44 @@
   #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
-  #info[hidden], #infounits[hidden] { display:none; }
+  #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden] { display:none; }
+  #inforef { margin-top:2px; }
+  /* Measure: an SVG layer and HTML labels over the view, projected each frame
+     (js/measure-ui.js); they take no pointer input */
+  #measvg, #measlabels { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
+  #measvg .mline { stroke:#ffd23f; stroke-width:2.5; filter:drop-shadow(0 0 1px #000); }
+  #measvg .mline.pend { stroke-dasharray:5 4; }
+  #measvg .mdot { fill:#ffd23f; stroke:#000; stroke-width:1; }
+  #measvg .msnap { fill:none; stroke:#ffd23f; stroke-width:2; }
+  #measvg .msnaptext, #measvg .mholetext { fill:#fff; font:12px sans-serif; paint-order:stroke; stroke:#000; stroke-width:3px; }
+  #measvg .mhole { fill:none; stroke:#5fd3ff; stroke-width:2; }
+  #measvg .mhole.pick { stroke:#ffd23f; stroke-width:3; }
+  .mlabel { position:absolute; transform:translate(-50%, -130%); background:rgba(20,24,30,.92); color:#fff; padding:2px 6px;
+    border-radius:4px; font-size:12px; white-space:nowrap; box-shadow:0 0 0 1px #ffd23f; }
+  .mlabel small { display:block; color:#c9d1db; font-size:10px; }
+  #stage[data-bg="paper"] .mlabel { background:rgba(255,255,255,.95); color:#111; }
+  #stage[data-bg="paper"] .mlabel small { color:#444; }
+  #stage[data-bg="paper"] #measvg .mline, #stage[data-bg="paper"] #measvg .mdot { stroke:#9a6b00; }
+  #measopt { position:relative; }
+  #measlist { position:absolute; bottom:100%; right:8px; max-height:50vh; overflow:auto; margin:0 0 4px; padding:4px; list-style:none;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  #measlist[hidden] { display:none; }
+  #measlist li { display:flex; gap:6px; align-items:center; padding:2px 4px; white-space:nowrap; }
+  #measlist li span { flex:1; }
+  #measure .ico { margin-right:4px; vertical-align:-2px; }
+  /* folded into View's panel (a 320 px phone): named there */
+  .menu.folded #measure .lbl { display:inline; }
+  .menu.folded #measure .ico { margin-right:4px; }
+  #holes { margin-top:6px; }
+  #holes[hidden] { display:none; }
+  #holes .holeshead { display:flex; gap:4px; align-items:center; }
+  #holes .holeshead b { flex:1; color:var(--fg); }
+  #holessum { margin:2px 0; padding-left:16px; }
+  #holes table { border-collapse:collapse; width:100%; font-size:11px; }
+  #holes td, #holes th { padding:1px 4px; text-align:left; border-bottom:1px solid var(--line); }
+  #holes tr.pick td { background:#3a4250; }
+  #holes tbody tr { cursor:pointer; }
+  #inforef button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
   #unitsel { padding:1px 4px; }
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
      names were cut, 3 of a board list's 8 at 1280 px. The fold step sheds it
@@ -262,7 +306,8 @@
     header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    header .title, #export:disabled, #panelbtn .lbl { display:none; }
+    header .title, #export:disabled, #panelbtn .lbl, #measure .lbl { display:none; }
+    #measure .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
     /* a 320 px phone with touch targets: the row was 329 px, Show 9 px past
@@ -300,6 +345,9 @@
     #status { max-width:calc(100% - 92px); }
     /* the status (errors included) wraps; the model name gives way */
     #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    /* the name, not the counts (the info panel has them): a phone cut the
+       board's name to make room for "· 2,833 bodies" */
+    #model .mstats { display:none; }
   }
 </style>
 </head>
@@ -323,6 +371,7 @@
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
+  <button id="measure" aria-pressed="false" aria-label="Measure" disabled title="Measure distances, angles and gaps between faces: points snap to corners, edges, their midpoints and hole centres (M)" aria-keyshortcuts="M"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 11.5l10-10 3 3-10 10z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M4.5 8.5l1.5 1.5M6.5 6.5l1 1M8.5 4.5l1.5 1.5M10.5 2.5l1 1" stroke="currentColor" stroke-width="1.2"/></svg><span class="lbl">Measure</span></button>
   <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis, section and display style">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
       <!-- the presets fold on their own first (Views ▾), so the row keeps
@@ -345,6 +394,18 @@
 </div></header>
 <aside id="parts" aria-label="Parts">
   <div id="info" hidden><div id="infovals"></div>
+    <!-- where positions are measured from: the model, or a part chosen with
+         "Measure from selection" (a board's PCB); outside #infovals, so a
+         refresh of the values never takes the focus from its buttons -->
+    <div id="inforef" hidden><b>measured from</b> <span id="refname"></span>
+      <button id="refset" class="mini" disabled title="Measure positions from the selected parts (e.g. select the board, then this): the position row and the heights above and below then refer to them">Measure from selection</button>
+      <button id="refclear" class="mini" hidden aria-label="Measure from the whole model again" title="Measure from the whole model again">×</button>
+      <button id="holesbtn" class="mini" disabled title="List the holes of the selected parts (select the board for its mounting holes): diameter, position from the reference's corner, and how far apart they lie">List holes</button></div>
+    <div id="holes" hidden><div class="holeshead"><b id="holestitle">Holes</b>
+      <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
+      <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
+      <ul id="holessum"></ul>
+      <table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th>depth</th></tr></thead><tbody id="holesrows"></tbody></table></div>
     <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
       <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the unit the file was drawn in, mm when it does not say (a choice other than Auto is remembered in this browser)">
         <option value="auto">Auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
@@ -355,15 +416,16 @@
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
-  <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom, drag to pan · tap: select · double-tap: zoom to selection</span>
+  <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges</span>
+    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops)</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
     <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view"></canvas><div id="hover"></div>
+<div id="stage"><canvas id="view"></canvas><svg id="measvg" aria-hidden="true"></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button>
   <!-- The options bar: the controls of the tools that are on, one row each
@@ -377,6 +439,14 @@
       <span id="secval" class="secval"></span>
       <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
     </div></div>
+    <div class="opt" id="measopt" hidden><div class="opt-row">
+      <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>
+      <span class="seg" id="measmode" role="group" aria-label="What to measure"><button data-mode="distance" aria-pressed="true" title="The distance between two points, and its X, Y and Z parts">Distance</button><button data-mode="angle" aria-pressed="false" title="The angle at the middle of three points">Angle</button><button data-mode="face" aria-pressed="false" title="The gap between two faces, the first one flat">Face</button></span>
+      <span id="measnote" class="secval"></span>
+      <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result">↶</button>
+      <button id="measclear" disabled title="Clear every result">Clear</button>
+      <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
+    </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
   </div>
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>

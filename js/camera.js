@@ -180,6 +180,26 @@ export function zoomBy(cam, f, modelRadius, aspect = 1) {
   cam.dist = Math.max(cam.viewRadius * 0.05 * k, Math.min(modelRadius * 50 * k, cam.dist * f));
 }
 
+// zoomBy toward a point of the view: (cx, cy) CSS px from the view's centre
+// (+x right, +y down), heightPx the view's CSS height. The point of the
+// target's plane under (cx, cy) stays under it, so the wheel and a pinch close
+// in on what is under the pointer or between the fingers, not on the centre
+// of the screen (feature review 2026-10-29). One px is the same length at the
+// target's depth in perspective and ortho (panBy), so one rule serves both;
+// at a zoom limit nothing moves.
+export function zoomAt(cam, f, modelRadius, aspect, cx, cy, heightPx) {
+  const d0 = cam.dist;
+  zoomBy(cam, f, modelRadius, aspect);
+  const d1 = cam.dist;
+  if (d1 === d0) return;
+  // the target moves toward the point by (1 - d1/d0) of its offset, measured
+  // in px at the old scale
+  const k = 1 - d1 / d0;
+  cam.dist = d0;
+  panBy(cam, -cx * k, -cy * k, heightPx);
+  cam.dist = d1;
+}
+
 // fitDistance's dependence on aspect alone: 1 for aspect >= 1, larger on a
 // narrow view (it is width-limited there).
 export function aspectScale(fov, aspect) {

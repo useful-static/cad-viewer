@@ -6,13 +6,15 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, gu
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
-import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
-import { decodeView, encodeView } from './view-link.js';
+import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
+import { aboveBelow, rangesFrom } from './datum.js';
+import { createMeasure } from './measure-ui.js';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
@@ -574,6 +576,21 @@ function frameState() {
   };
 }
 
+// The view as Measure needs it (js/measure-ui.js): the frame's matrices for
+// the stage's CSS size, and the camera's axes
+function measureView() {
+  const c = app.cam;
+  const box = $('stage');
+  const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
+  const eye = eyeOf(c, app.sphere);
+  const view = lookAt(eye, c.target, camUp(c));
+  const [near, far] = nearFar(c, app.sphere);
+  const tv = Math.tan(c.fov / 2);
+  const proj = c.ortho ? ortho(c.dist * tv * (w / h), c.dist * tv, near, far, false) : perspective(c.fov, w / h, near, far, false);
+  return { vp: multiply(proj, view), eye, dir: camDir(c), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]],
+    ortho: !!c.ortho, tanV: tv, w, h, target: c.target, dist: c.dist };
+}
+
 // the same geometry (and so the same body ids): a model, or a colour copy of
 // it (inScheme shares every array but the colours)
 function sameModel(a, b) {
@@ -673,13 +690,27 @@ function viewKey(digit) {
   announce(`${name} view`);
 }
 
-// A short note where the hovered part's name goes, for 1.5 s (or until the
-// next hover replaces it)
-function flashHover(text) {
+// A short note where the hovered part's name goes, for 1.5 s (or ms; or until
+// the next hover replaces it)
+function flashHover(text, ms = 1500) {
   const hov = $('hover');
   hov.textContent = text;
   clearTimeout(viewNameTimer);
-  viewNameTimer = setTimeout(() => { if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, 1500);
+  viewNameTimer = setTimeout(() => { if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, ms);
+}
+
+// The first model this browser shows on a touch-only screen: the gestures,
+// where they can be seen. Their help sits in the parts panel, which a phone
+// keeps closed, so a first visitor saw none of it (feature review
+// 2026-10-29). Once per browser; a note already showing (a view link's) wins.
+const TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
+function touchHintOnce() {
+  if (!coarseOnly() || $('hover').textContent) return;
+  try {
+    if (localStorage.getItem('cadv.touchHint')) return;
+    localStorage.setItem('cadv.touchHint', '1');
+  } catch { /* storage off: shown every time, which is harmless */ }
+  flashHover(TOUCH_HINT, 6000);
 }
 
 // ---------- view links (js/view-link.js) ----------
@@ -693,14 +724,16 @@ function currentView() {
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
     section: app.section, hidden: [...app.hidden], selected: [...app.selected],
+    keys: app.bodyKeys,
   };
 }
 
 // a decoded view onto the loaded model; ids past its bodies are dropped
 function applyView(v) {
   if (!app.header) return;
-  const n = app.header.meshes.length;
-  const ids = (a) => (a || []).filter((i) => i >= 1 && i <= n);
+  // the bodies it names: by id while the model is the one the link was made
+  // on, else the selection by name (js/view-link.js resolveBodies)
+  const bodies = resolveBodies(v, app.bodyKeys || app.header.meshes.map((m) => m.name));
   if (v.cam) {
     const c = app.cam;
     c.target = v.cam.target.slice();
@@ -721,10 +754,16 @@ function applyView(v) {
   // tab keeps that tab's cut and hidden parts
   if (v.section) Object.assign(app.section, v.section, { last: v.section.axis });
   else if (v.cam) app.section.axis = 'off';
-  if (v.hidden || v.cam) { app.hidden = new Set(ids(v.hidden)); syncTreeChecks(); }
-  select(ids(v.selected), false);
+  if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
+  select(bodies.selected, false);
   updateButtons();
   viewChanged();
+  if (bodies.changed) {
+    const note = `this model has changed since the link was made: ${v.selNames?.length
+      ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : 'its parts are not selected'}${v.hidden?.length ? ', hidden parts not applied' : ''}`;
+    flashHover(note);
+    announce(note);
+  }
 }
 
 // Copy a link to this model at this view. A model opened from this device has
@@ -808,6 +847,7 @@ function queueFrame() {
     resize();
     app.renderer.render(frameState());
     app.frameCount++;
+    if (app.measure) app.measure.draw(); // its layer follows the camera
   });
 }
 
@@ -904,6 +944,17 @@ function placeOpen(narrow) {
   panel.setAttribute('aria-label', 'File');
 }
 
+// Measure in the row after Fit, or (folded) first in View's panel; moved only
+// when it must, its focus kept (a move takes it)
+function placeMeasure(folded) {
+  const m = $('measure');
+  const had = document.activeElement === m;
+  if (folded && m.parentElement !== $('viewpanel')) $('viewpanel').prepend(m);
+  else if (!folded && m.previousElementSibling !== $('fit')) $('fit').after(m);
+  else return;
+  if (had && document.activeElement !== m) m.focus();
+}
+
 // a folded menu with nothing it could do is disabled, like its items
 function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
@@ -934,6 +985,8 @@ function refold(keep = focusNow()) {
   if (!narrow && app.filterOpened) setPanel(false); // the slide-out keepFilter opened
   placeOpen(narrow);
   for (const id of MENUS) $(id).classList.toggle('folded', narrow && id === 'filemenu');
+  // Measure stands in the row after Fit (back there before measuring)
+  placeMeasure(false);
   tb.classList.add('measuring');
   // the model list is a step of its own, after View and before Show: it
   // folds into File's panel (it stood outside every group, so the wide row
@@ -949,6 +1002,10 @@ function refold(keep = focusNow()) {
     }
     $(id).classList.add('folded');
   }
+  // the last step: a row that still does not fit (a 320 px phone with touch
+  // targets: 348 px) takes Measure into View's panel, as its first item (M
+  // still reaches it)
+  if (!toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
   // a folded View holds the presets as its panel's grid, not a menu in a menu
   if ($('viewmenu').classList.contains('folded')) $('presetmenu').classList.remove('folded');
   tb.classList.remove('measuring');
@@ -1256,7 +1313,16 @@ function showModelName() {
   const label = entry ? entry.textContent : app.sourceName;
   const s = app.stats;
   // (counted as the info panel counts: "1,391 bodies", and "1 body")
-  $('model').textContent = `${label} · ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'body' : 'bodies'} · ${fmtInt(s.triangles)} triangles`;
+  // the name and the counts in spans of their own: the narrow footer drops
+  // the counts (the info panel has them), so a phone shows the whole name
+  // (it read "Le Potato AML-S905X-CC · 2,833 bodies…": feature review 2026-10-29)
+  const nm = document.createElement('span');
+  nm.className = 'mname';
+  nm.textContent = label;
+  const st = document.createElement('span');
+  st.className = 'mstats';
+  st.textContent = ` · ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'body' : 'bodies'} · ${fmtInt(s.triangles)} triangles`;
+  $('model').replaceChildren(nm, st);
   $('model').title = entry ? `${$('model').textContent} (${app.sourceName})` : $('model').textContent; // the narrow footer truncates it
   document.title = `${label} — ${SHORT_TITLE}`;
 }
@@ -1288,6 +1354,7 @@ function fillModelList(entries) {
   if (app.header && app.cam.q === app.loadQ && orientFor(app.sourceUrl) !== app.cam.orient) {
     app.cam.orient = orientFor(app.sourceUrl);
     updateButtons();
+    showInfo(); // above / below are along the new up
     setView('iso');
     app.loadQ = app.cam.q;
   }
@@ -1474,6 +1541,9 @@ function updateButtons() {
   $('showall').disabled = !app.hidden.size;
   $('undo').disabled = !app.visUndo.length;
   $('fit').disabled = !has;
+  // (a button about to disable hands the focus on, as Hide's does)
+  if (!has && app.measure && app.measure.on) app.measure.setOn(false);
+  $('measure').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -1637,6 +1707,9 @@ function dropModel(msg) {
   app.wanted = null;
   app.sphere = { center: [0, 0, 0], radius: 1 };
   app.selected.clear();
+  app.ref = null;
+  app.holesFor = null;
+  if (app.measure) app.measure.reset();
   app.hidden.clear();
   app.visUndo = [];
   app.hover = 0;
@@ -1765,6 +1838,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   syncModelList();
   syncMenuButtons(); // a folded Save menu now has something in it
   app.selected.clear();
+  app.ref = null; // a part of the old model is no reference for this one
+  app.holesFor = null;
+  if (app.measure) app.measure.reset(); // nor are its measurements and holes
   app.hidden.clear();
   app.visUndo = [];
   app.hover = 0;
@@ -1793,6 +1869,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   showModelName();
   showInfo();
   setStatus('ready', readyText()); // announced with the change into ready
+  touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
   base.edgeInfo.ready = edgesOf(base).then((v) => { if (app.baseMesh === base) pushState(); refreshEdges(); return v; });
 }
@@ -2222,8 +2299,16 @@ async function loadUrl(url) {
   }
   if (stale(seq)) return;
   if (!res.ok) {
-    throw new Error(res.status === 404 ? `file not found (404): ${name}`
-      : `could not download ${name}: the server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
+    // the whole URL tried, not only the file's name: a site owner whose
+    // ?src= went wrong could not see where it pointed (feature review
+    // 2026-10-29). A relative ?src= is a URL of this page, so it resolves
+    // against the page, as every link does; a list's files resolve against
+    // the list. Given a list, the error says so.
+    const tried = res.url || new URL(url, location.href).href;
+    const relative = !/^[a-z][a-z0-9+.-]*:/i.test(url) && new URLSearchParams(location.search).has('list');
+    const hint = relative ? ' (a relative ?src= is read from this page\'s address, not from the model list: give the full URL)' : '';
+    throw new Error((res.status === 404 ? `file not found (404): ${tried}`
+      : `could not download ${tried}: the server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`) + hint);
   }
   // content-length is the size ON THE WIRE: with a content-encoding (gzip,
   // br) it is the compressed size and the decoded bytes overshoot it, so a
@@ -2359,6 +2444,7 @@ function labelMeshes() {
   };
   walk(app.header.root, '');
   app.meshLabel = labels;
+  app.bodyKeys = bodyKeys(labels); // a view link names its selection by these
 }
 
 const meshLabel = (id) => app.meshLabel[id - 1];
@@ -2652,11 +2738,45 @@ function setUnitChoice(u) {
 
 function showInfo() {
   syncUnitsRow();
+  syncRefRow();
   const el = $('infovals');
   el.innerHTML = '';
   fillInfo(el);
   // no renderer and no model: no blank box or double rule
   $('info').hidden = !el.childElementCount;
+}
+
+// "measured from": the whole model's corner, or the parts chosen with
+// Measure from selection; its buttons are never rebuilt (the focus stays)
+function syncRefRow() {
+  $('inforef').hidden = !app.header;
+  if (!app.header) return;
+  $('refname').textContent = app.ref ? app.ref.name : 'the whole model';
+  $('refset').disabled = !app.selected.size;
+  // (a button about to hide hands the focus on, as the toolbar's do)
+  if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
+  $('refclear').hidden = !app.ref;
+  // holes need the b-rep faces (a .cadmesh written before they were kept has none)
+  $('holesbtn').disabled = !app.selected.size || !(app.baseMesh && app.baseMesh.faces);
+  // an open hole table follows the reference and the display unit
+  if (app.holesFor && app.measure) showHoles(app.holesFor);
+}
+
+// The hole table of the parts `f.ids` ({ ids, name }), positions from the reference
+function showHoles(f) {
+  app.holesFor = f;
+  if (!f) { app.measure.showHoles(null); return; }
+  const ref = { ...(app.ref ? bboxOf(app.ref.ids) : app.header.bbox), name: app.ref ? app.ref.name : 'the whole model' };
+  app.measure.showHoles(f.ids, ref, f.name);
+}
+
+function setRef(on) {
+  if (on && app.selected.size) {
+    const ids = [...app.selected];
+    app.ref = { ids, name: app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) };
+  } else app.ref = null;
+  showInfo();
+  announce(app.ref ? `positions measured from ${app.ref.name}` : 'positions measured from the whole model');
 }
 
 function fillInfo(el) {
@@ -2697,6 +2817,17 @@ function fillInfo(el) {
   // "size (mm)" rather than "extent X × Y × Z (mm)": the longer label wrapped
   // the third value onto a line of its own in the 300 px panel
   add(`size (${lenUnit()})`, dims);
+  // where it is: from the reference's corner (js/datum.js), and how far it
+  // stands above and below a reference part (a board)
+  const ref = app.ref ? bboxOf(app.ref.ids) : app.header.bbox;
+  if (ids.length && b && ref) {
+    add(`position (${lenUnit()})`, rangesFrom(b, ref)
+      .map(([lo, hi], k) => `${'XYZ'[k]} ${lenNum(lo, 'size')} to ${lenNum(hi, 'size')}`).join(' · '));
+  }
+  if (app.ref && b && ref) {
+    const ab = aboveBelow(b, ref, orientUp(app.cam.orient));
+    add(`above / below it (${lenUnit()})`, `${lenNum(ab.above, 'size')} / ${lenNum(ab.below, 'size')}`);
+  }
   add('triangles', fmtInt(tris));
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
@@ -2741,6 +2872,21 @@ app.pickAt = async (x, y) => {
 
 function wireInput() {
   const stage = $('stage');
+  // Measure (js/measure-ui.js): this input feeds it while it is on
+  app.measure = createMeasure({
+    $, app, view: measureView, sectionPlane,
+    lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
+    num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
+    announce, flash: flashHover, queueFrame, syncOptbar,
+    coarse: () => matchMedia('(pointer: coarse)').matches,
+    // where hidden edges are drawn, everything drawn can be snapped
+    showsHidden: () => ['wire', 'xray', 'hiddengrey'].includes(currentStyle().id),
+  });
+  app.measureView = measureView; // (and for tests/ui-checks.py, which projects points with it)
+  const stageXY = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  // a finger covers what it aims at: on a touch screen, a held finger aims
+  // this far above itself
+  const AIM_LIFT = 48;
   // One gesture at a time: only the pointer that started it moves, ends or
   // clicks it. A second MOUSE/PEN pointer is ignored instead of hijacking the
   // first. A second FINGER turns a one-finger orbit into a pinch (zoom) +
@@ -2796,6 +2942,18 @@ function wireInput() {
     // before): it may still orbit, but a click does not pick
     const dismiss = dismissPresses.has(e);
     drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId, type: e.pointerType, dismiss };
+    // Measure on a touch screen: a finger held still 300 ms (inside the tap
+    // slop) aims -- the snap marker shows above it as it slides, and lifting
+    // places the point; moving sooner orbits as ever
+    if (e.pointerType === 'touch' && app.measure.on) {
+      const d = drag;
+      d.aimTimer = setTimeout(() => {
+        if (drag !== d || d.moved) return;
+        d.aim = true;
+        const [x, y] = stageXY(e);
+        app.measure.hover(x, y - AIM_LIFT);
+      }, 300);
+    }
   });
   stage.addEventListener('pointercancel', endPointer);
   stage.addEventListener('lostpointercapture', endPointer);
@@ -2809,6 +2967,8 @@ function wireInput() {
   let hoverXY = null;
   let hoverBusy = false;
   let hoverAgain = false;
+  let measXY = null;
+  let measRaf = 0;
   const setHover = (id) => {
     if (id === app.hover) return;
     app.hover = id;
@@ -2831,6 +2991,7 @@ function wireInput() {
     });
   };
   stage.addEventListener('pointerleave', () => {
+    if (app.measure.on) app.measure.hover(null);
     hoverXY = null;
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
     app.hoverSeq++;
@@ -2845,7 +3006,11 @@ function wireInput() {
         const a0 = ia === e.pointerId ? prev : touches.get(ia);
         const b0 = ib === e.pointerId ? prev : touches.get(ib);
         const st = pinchStep(a0, b0, touches.get(ia), touches.get(ib));
-        zoomBy(app.cam, st.scale, app.sphere.radius, app.stageAspect);
+        // zoomed about where the fingers were, then panned as they moved:
+        // the point between them stays between them
+        const r = stage.getBoundingClientRect();
+        zoomAt(app.cam, st.scale, app.sphere.radius, app.stageAspect,
+          (a0[0] + b0[0]) / 2 - (r.left + r.width / 2), (a0[1] + b0[1]) / 2 - (r.top + r.height / 2), stage.clientHeight);
         panBy(app.cam, st.dx, st.dy, stage.clientHeight);
         viewChanged();
         return;
@@ -2862,17 +3027,29 @@ function wireInput() {
         return;
       }
       hoverXY = devicePx(e);
+      // Measure's snap marker follows the pointer (one search per frame)
+      if (app.measure.on) {
+        measXY = stageXY(e);
+        if (!measRaf) measRaf = requestAnimationFrame(() => { measRaf = 0; if (measXY) app.measure.hover(...measXY); });
+      }
       const wait = 60 - (performance.now() - hoverT);
       if (wait <= 0) hoverPick();
       else if (!hoverTimer) hoverTimer = setTimeout(hoverPick, wait);
       return;
     }
     if (e.pointerId !== drag.id) return;
+    // aiming a Measure point: the finger slides the marker, the view stays
+    if (drag.aim) {
+      const [x, y] = stageXY(e);
+      app.measure.hover(x, y - AIM_LIFT);
+      return;
+    }
     // A fingertip tap drifts 3-8 px: touch gets a 10 px slop, and until it is
     // passed the finger neither orbits nor stops being a tap.
     const slop = drag.type === 'touch' ? 10 : 3;
     if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > slop) drag.moved = true;
     if (!drag.moved) return;
+    if (drag.aimTimer) { clearTimeout(drag.aimTimer); drag.aimTimer = 0; }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX;
     drag.y = e.clientY;
@@ -2889,10 +3066,21 @@ function wireInput() {
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag;
     drag = null;
+    if (d.aimTimer) clearTimeout(d.aimTimer);
     // resolves true only when this gesture was a click whose pick applied:
     // a drag, or a pick dropped by a camera change, must not trigger the
     // dblclick fit of an older selection
     lastClick = Promise.resolve(false);
+    // Measure: a click or tap places a point (never selects); a held finger
+    // places where it aimed. Double-click and double-tap zoom are off meanwhile.
+    if (app.measure.on && !d.moved && (e.button === 0 || d.type === 'touch') && app.mesh && !d.dismiss) {
+      const [x, y] = stageXY(e);
+      app.measure.place(x, d.aim ? y - AIM_LIFT : y);
+      if (d.type === 'touch') app.measure.hover(null);
+      lastType = d.type;
+      lastTap = null;
+      return;
+    }
     if (!d.moved && e.button === 0 && app.mesh && !d.dismiss) {
       const additive = e.ctrlKey || e.metaKey;
       app.hoverSeq++; // a click supersedes any pending hover answer
@@ -2929,14 +3117,17 @@ function wireInput() {
     if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
   });
   stage.addEventListener('dblclick', (e) => {
-    if (lastType === 'touch' || e.target.closest(OVER_VIEW)) return; // a double-tap / a card's or the bar's own clicks
+    if (lastType === 'touch' || e.target.closest(OVER_VIEW) || app.measure.on) return; // a double-tap / a card's or the bar's own clicks / measuring
     fitAfterClick();
   });
   stage.addEventListener('wheel', (e) => {
     if (e.target.closest(OVER_VIEW)) return; // a card scrolls (a long error), the bar scrolls sideways; the view stays put
     e.preventDefault();
-    // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch)
-    zoomBy(app.cam, Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015)), app.sphere.radius, app.stageAspect);
+    // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch);
+    // toward the pointer
+    const r = stage.getBoundingClientRect();
+    zoomAt(app.cam, Math.exp(e.deltaY * ([0.0015, 0.05, 0.15][e.deltaMode] ?? 0.0015)), app.sphere.radius, app.stageAspect,
+      e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2), stage.clientHeight);
     viewChanged();
   }, { passive: false });
   // The stage changes size with the window, a phone rotating, or the parts
@@ -3051,6 +3242,7 @@ function wireInput() {
     app.userOrient = app.cam.orient.startsWith('+z') ? DEFAULT_ORIENT : Z_UP_ORIENT;
     app.cam.orient = app.userOrient;
     updateButtons();
+    showInfo(); // above / below are along the new up
     setView('iso');
   };
   $('undo').onclick = undoVisibility;
@@ -3101,6 +3293,13 @@ function wireInput() {
   sty.onchange = () => setStyle(sty.value, true);
   blurAfterPick($('unitsel'));
   $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
+  $('refset').onclick = () => setRef(true);
+  $('refclear').onclick = () => setRef(false);
+  $('holesbtn').onclick = () => {
+    const ids = [...app.selected];
+    showHoles({ ids, name: app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) });
+  };
+  $('holesclose').onclick = () => { showHoles(null); $('holesbtn').focus(); };
   // 'change', not 'input': a picker drag fires input continuously, and each
   // recolour re-uploads the model
   $('partcolour').onchange = (e) => setPartColour(e.target.value);
@@ -3185,8 +3384,11 @@ function wireInput() {
     // not turn the shortcuts off.
     // A layout whose keys type no Latin letter (Cyrillic, Greek) goes by the
     // key's place, as QWERTY names it.
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : select([], false)), h: () => $('hide').click(),
-      i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey() };
+    // Esc: the panel, then Measure's results list, its half-made point, Measure
+    // itself, then the selection
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.measure.escape() || select([], false)),
+      h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
+      m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     // (a LETTER of another script only: punctuation on a Latin layout keeps
     // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)

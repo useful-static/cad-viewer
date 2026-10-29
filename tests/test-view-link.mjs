@@ -2,7 +2,7 @@
 // The shareable view (js/view-link.js).   node tests/test-view-link.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { decodeView, encodeView, parseRuns, runs } from '../js/view-link.js';
+import { MAX_NAMED, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
 
 let passed = 0;
 let failed = 0;
@@ -76,6 +76,43 @@ test('a hand-edited or broken link drops what it cannot read, never throws', () 
 test('a quaternion is renormalised', () => {
   const d = decodeView('c:0,0,0,10,0,0,0,2');
   assert.deepEqual(d.cam.q, [0, 0, 0, 1]);
+});
+
+// ---- bodies by name (feature review 2026-10-29): a link outlives a regenerated or revised model ----
+const labels = ['PCB', 'HDMI › SOLID', 'USB, A; "x": 1 › SOLID', 'HDMI › SOLID', 'Ä 板'];
+test('every body gets its own key, repeats numbered', () => {
+  assert.deepEqual(bodyKeys(labels), ['PCB', 'HDMI › SOLID', 'USB, A; "x": 1 › SOLID', 'HDMI › SOLID #2', 'Ä 板']);
+});
+test('names survive the hash, including , ; : and non-ASCII, and a decode of the whole hash', () => {
+  const keys = bodyKeys(labels);
+  const s = encodeView({ ...view, selected: [3, 4, 5], keys });
+  // the page decodes the whole hash once (main.js viewHash)
+  const d = decodeView(decodeURIComponent(s));
+  assert.equal(d.model, modelPrint(keys));
+  assert.deepEqual(d.selNames, [keys[2], keys[3], keys[4]]);
+  assert.deepEqual(d.selected, [3, 4, 5]);
+});
+test('same model: the ids are used (hidden too)', () => {
+  const keys = bodyKeys(labels);
+  const d = decodeView(encodeView({ ...view, hidden: [1], selected: [4], keys }));
+  assert.deepEqual(resolveBodies(d, keys), { hidden: [1], selected: [4], changed: false });
+});
+test('a changed model: the selection by name, the hidden ids dropped (ids alone would pick the wrong part)', () => {
+  const before = bodyKeys(labels);
+  const d = decodeView(encodeView({ ...view, hidden: [1], selected: [4], keys: before }));
+  // the regenerated file put a body in front: id 4 is now the other HDMI body
+  const after = bodyKeys(['Board outline', ...labels]);
+  assert.equal(after[3], 'USB, A; "x": 1 › SOLID', 'the arm: id 4 names another body now');
+  // (the second HDMI body keeps its key, and is found at its new id)
+  assert.deepEqual(resolveBodies(d, after), { hidden: [], selected: [5], changed: true });
+});
+test('an older link (no fingerprint) keeps its ids; too many selected leaves the names out', () => {
+  const keys = bodyKeys(labels);
+  assert.deepEqual(resolveBodies(decodeView('k:2;h:1'), keys), { hidden: [1], selected: [2], changed: false });
+  const many = Array.from({ length: MAX_NAMED + 1 }, (_, i) => `p${i}`);
+  const s = encodeView({ ...view, selected: many.map((_, i) => i + 1), keys: many });
+  assert.ok(s.includes(';m:') && !s.includes(';n:'), s);
+  assert.deepEqual(decodeView('n:@@,!!').selNames, []);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

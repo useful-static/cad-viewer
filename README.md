@@ -45,32 +45,35 @@ URL parameters:
   skipped.
 - **Navigation.** Orbit (drag) turns freely about every axis: over the top,
   upside down, round and round, with no stop at the poles. Pan (shift- or
-  right-drag) and zoom (wheel). The Iso / Front / Back / Left / Right / Top /
+  right-drag) and zoom (wheel, toward the point under the pointer). The Iso / Front / Back / Left / Right / Top /
   Bottom views each set a level, upright view again. Fit; perspective or
   orthographic; Y-up or Z-up.
-- **Touch.** One finger orbits; two fingers pinch to zoom and drag to pan; tap
-  selects; double-tap zooms to the selection. Controls are finger-sized
-  wherever a touch screen is present.
+- **Touch.** One finger orbits; two fingers pinch to zoom (toward the point
+  between them) and drag to pan; tap selects; double-tap zooms to the
+  selection. Controls are finger-sized wherever a touch screen is present.
+  The first model a phone shows names these gestures for a few seconds, once.
 - **Phones and narrow windows.** Under 700 px wide, in portrait, or on a
   short touch screen (a landscape phone), the 3D view takes the whole screen.
   The parts panel slides out from the left over the view (**☰** in the
   toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
   Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
-  the same part of the model framed.
+  the same part of the model framed. The footer names the model in full and
+  leaves the counts to the parts panel.
 - **A toolbar that fits.** The toolbar stays one row at every size: where
   its controls do not fit, the view presets fold first, into a **Views**
   menu, then Save .cadmesh and Copy view link into a **File** menu, then
   Ortho, Z up, Section and Style (with the presets) into a **View** menu,
   then a model list's drop-down into File too, then Isolate / Hide /
-  Show all / Undo into a **Show** menu. A tool's own
+  Show all / Undo into a **Show** menu, and on the narrowest phones Measure
+  into View. No control shrinks or wraps its label to fit. A tool's own
   controls are in an **options bar** along the bottom of the view while the
   tool is on, led by the tool's name as a toggle that turns it off.
 - **Full screen.** A button at the top right of the view takes the whole
   screen, toolbar and parts panel included, where the browser allows it.
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
-  shows or hides, → ← open and close. Shortcuts: F fit, I isolate, H hide,
-  A show all, E edges, Esc clear. Number keys set the view, on the digit row or the
+  shows or hides, → ← open and close. Shortcuts: F fit, M measure, I isolate,
+  H hide, A show all, E edges, Esc clear. Number keys set the view, on the digit row or the
   numpad: 1 front, 3 right, 7 top, 0 iso, 9 the opposite view, 5 Ortho on
   or off. Toggles report their state, and load results and
   errors are announced through a live region.
@@ -83,7 +86,23 @@ URL parameters:
   (Ctrl/Cmd+Z) for each; double-click
   zooms to the selection; hovering names the body under the cursor, and on a
   touch screen a tap names what it picked.
-- **Inspect.** Selection extent (X × Y × Z) and triangle count. Section plane
+- **Measure.** **Measure** (M) puts its tools in the options bar:
+  **Distance** (two points: the length and its X, Y and Z parts), **Angle**
+  (three points) and **Face** (the gap between two faces, the first flat).
+  Points snap to corners, edge midpoints, hole centres (with the hole's
+  diameter) and points on edges, and only to what you can see (except in
+  Wire, X-ray and Hidden grey, which draw hidden edges); else to the surface
+  under the pointer. On a touch screen a tap places a point, and a finger
+  held still aims, its marker just above it. Results stay on the model as
+  lines and labels, with a list to copy or remove them; Esc stops.
+- **Holes.** **List holes** (with a part selected: the board) lists its
+  holes: diameter, position from the reference's corner, through-hole
+  depth, and for each size how many and how far apart they lie; they are
+  numbered on the model, and the table copies as CSV.
+- **Inspect.** Selection extent (X × Y × Z), its position (each axis's
+  extent from a reference's corner: the whole model, or the parts chosen
+  with **Measure from selection**, such as the board, which also gives how far
+  things stand above and below it), and triangle count. Section plane
   (View > Section): along the bottom of the view, X / Y / Z, a slider, the
   cut's position, and a flip.
   Cut solids read as solid: what you see of a part's inside through the cut
@@ -108,7 +127,8 @@ URL parameters:
   hidden and selected parts (`?src=<model URL>#view=…`). A model opened from
   your device has no URL, so its link holds the view alone, and opened, it
   applies to the next model you open from your device. A link keeps the
-  page's model lists.
+  page's model lists. It also names the selected parts, so a link made
+  before the model's file was revised still selects them.
 - **Colour.** File colours per body and per b-rep face (STEP `COLOUR_RGB` and
   named colours), as the file gives them. STEP carries colour from AP214 on;
   an AP203 file, a common default export, has none, and gets one muted colour
@@ -207,7 +227,9 @@ files load too.
 | `js/units.js` | formats every length, area, volume and mass in the display unit |
 | `js/edges.js`, `js/edges-worker.js` | the edge list (face boundaries; silhouette candidates inside curved faces) and each body's closed / area / volume facts, built by the converter or, for an older `.cadmesh`, in a worker |
 | `js/styles.js` | the display styles, their defaults and the paper edge colours |
-| `js/view-link.js` | a view as a URL hash and back |
+| `js/view-link.js` | a view as a URL hash and back; parts by number, and by name when the model changed |
+| `js/datum.js` | the selection's extent from a reference's corner, and how far it reaches above and below it |
+| `js/measure-geom.js`, `js/raycast.js`, `js/measure-ui.js` | Measure and the hole table: a body's corners, edges, circles and holes from the b-rep faces; the ray caster (a BVH for big bodies); the snap search, modes, results and their layer over the view |
 | `js/model-list.js` | `list=` files: parse, resolve, join in URL order, fetch with a size cap |
 | `js/orient.js` | an orientation (`up:+z,front:-y`): parse, and the rotation the view presets are taken in |
 | `js/face-order.js` | the faces' draw order: solids, then sheet bodies with less depth bias, so a sheet lying on a solid's face (a board's pads) shows |
@@ -225,7 +247,7 @@ files load too.
 ```sh
 npm test        # tests/test-cadmesh.mjs, test-camera, test-import-progress, test-mesh-cache, test-palettes,
                 # test-converter-choice, test-source-units, test-units, test-edges,
-                # test-styles, test-view-link, test-face-order
+                # test-styles, test-view-link, test-face-order, test-datum, test-measure
                 # set CADV_STEP_FIXTURE=<file.stp> to add a real conversion,
                 # CADV_INCH_STEP=<an inch STEP file> to add a real inch file
 ```

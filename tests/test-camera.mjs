@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy,
+  camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy,
 } from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 
@@ -323,6 +323,59 @@ test('a cam with no q orbits from its yaw/pitch (the first drag before any prese
   const c = cam({ yaw: 0.7, pitch: 0.45 });
   orbitBy(c, 0, 0);
   assert.ok(near(camDir(c), camDir(cam({ yaw: 0.7, pitch: 0.45 })), 1e-9));
+});
+
+// ---- zoomAt: the wheel and the pinch zoom toward the pointer (feature review 2026-10-29) ----
+// Where a world point lands, in CSS px from the view's centre, through the
+// same view and projection matrices main.js draws with (column-major).
+function screenPx(c, sphere, p, w, h) {
+  const view = lookAt(eyeOf(c, sphere), c.target, camUp(c));
+  const [n, f] = nearFar(c, sphere);
+  const proj = c.ortho
+    ? ortho(c.dist * Math.tan(c.fov / 2) * (w / h), c.dist * Math.tan(c.fov / 2), n, f, false)
+    : perspective(c.fov, w / h, n, f, false);
+  const mul = (m, v) => [0, 1, 2, 3].map((r) => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2] + m[12 + r] * v[3]);
+  const cl = mul(proj, mul(view, [...p, 1]));
+  return [(cl[0] / cl[3]) * w / 2, -(cl[1] / cl[3]) * h / 2];
+}
+// the point of the target's plane under (cx, cy)
+function underPx(c, cx, cy, h) {
+  const s = (2 * c.dist * Math.tan(c.fov / 2)) / h;
+  const r = screenRight(c), u = screenUp(c);
+  return [0, 1, 2].map((k) => c.target[k] + (cx * r[k] - cy * u[k]) * s);
+}
+for (const ortho_ of [false, true]) {
+  const sphere = { center: [0, 0, 0], radius: 50 };
+  const w = 800, h = 500, aspect = w / h;
+  test(`zoomAt keeps the point under the pointer there (${ortho_ ? 'ortho' : 'perspective'})`, () => {
+    for (const [cx, cy, f] of [[250, -120, 0.8], [-300, 180, 0.6], [120, 90, 1.25], [0, 0, 0.7]]) {
+      const c = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z', ortho: ortho_, viewRadius: 50 });
+      const p = underPx(c, cx, cy, h);
+      const before = screenPx(c, sphere, p, w, h);
+      // (to 1e-3 px: the projection's float rounding is ~1e-5 px)
+      assert.ok(Math.abs(before[0] - cx) < 1e-3 && Math.abs(before[1] - cy) < 1e-3, `setup: ${before}`);
+      const d0 = c.dist;
+      zoomAt(c, f, sphere.radius, aspect, cx, cy, h);
+      assert.ok(Math.abs(c.dist - d0 * f) < 1e-9, 'the distance scales as zoomBy does');
+      const after = screenPx(c, sphere, p, w, h);
+      assert.ok(Math.hypot(after[0] - cx, after[1] - cy) < 1e-3, `(${cx}, ${cy}) x${f}: now at ${after.map((v) => v.toFixed(3))}`);
+    }
+  });
+  test(`zoomBy alone moves an off-centre point (the arm zoomAt must beat, ${ortho_ ? 'ortho' : 'perspective'})`, () => {
+    const c = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z', ortho: ortho_, viewRadius: 50 });
+    const p = underPx(c, 250, -120, h);
+    zoomBy(c, 0.6, sphere.radius, aspect);
+    const after = screenPx(c, sphere, p, w, h);
+    assert.ok(Math.hypot(after[0] - 250, after[1] + 120) > 50, `moved only to ${after}`);
+  });
+}
+test('zoomAt at a zoom limit moves nothing', () => {
+  const c = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z', viewRadius: 50 });
+  c.dist = 50 * 0.05; // the closest zoomBy allows at aspect 1
+  const t = [...c.target];
+  zoomAt(c, 0.5, 50, 1, 200, 100, 500);
+  assert.deepEqual(c.target, t);
+  assert.equal(c.dist, 50 * 0.05);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

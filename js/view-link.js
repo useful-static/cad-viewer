@@ -10,6 +10,12 @@
 //   s  display style id (js/styles.js; absent: the viewer's own default)
 //   x  section: axis, position 0..1, f when flipped (absent: off)
 //   h  hidden bodies, k selected bodies: ids as runs ("1-3,7")
+//   m  the model's body names, fingerprinted (8 hex): ids mean the bodies
+//      they meant only while it matches
+//   n  the selected bodies by name (at most MAX_NAMED), each its key
+//      (bodyKeys) as base64url: a link made before the model's file was
+//      regenerated or revised, whose ids now name other bodies, still selects
+//      the part it pointed at (feature review 2026-10-29)
 //
 // Pure, no DOM. Unknown or malformed fields are dropped, never thrown: a link
 // edited by hand still opens the model.
@@ -51,6 +57,52 @@ export function parseRuns(s, max = 1e6) {
   return out;
 }
 
+export const MAX_NAMED = 32;
+
+// A body's key: its label, numbered from its second repeat ("A › SOLID #2"),
+// so every body of a model has its own
+export function bodyKeys(labels) {
+  const seen = new Map();
+  return labels.map((l) => {
+    const k = (seen.get(l) || 0) + 1;
+    seen.set(l, k);
+    return k === 1 ? l : `${l} #${k}`;
+  });
+}
+
+// FNV-1a over the keys in body order, 8 hex digits
+export function modelPrint(keys) {
+  let h = 0x811c9dc5;
+  const bytes = new TextEncoder().encode(keys.join('\n'));
+  for (const b of bytes) { h ^= b; h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+
+// base64url of UTF-8: no ',' ';' ':' '%', so it survives the page decoding
+// the whole hash once
+const b64u = (s) => {
+  let bin = '';
+  for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+const unb64u = (s) => {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+};
+
+// The bodies a decoded view names, for this model: its ids while the model's
+// fingerprint matches the link's (or the link has none: an older link), else
+// the selection found by name, and no hidden bodies (they cannot be told
+// apart by id any more). -> { hidden, selected, changed }
+export function resolveBodies(v, keys) {
+  const n = keys.length;
+  const ok = (a) => (a || []).filter((i) => i >= 1 && i <= n);
+  if (!v.model || v.model === modelPrint(keys)) return { hidden: ok(v.hidden), selected: ok(v.selected), changed: false };
+  const at = new Map(keys.map((k, i) => [k, i + 1]));
+  const selected = (v.selNames || []).map((k) => at.get(k)).filter(Boolean);
+  return { hidden: [], selected, changed: true };
+}
+
 export function encodeView(v) {
   const f = [];
   const c = v.cam;
@@ -62,10 +114,16 @@ export function encodeView(v) {
   if (v.section && v.section.axis !== 'off') f.push(`x:${v.section.axis},${num(v.section.t)}${v.section.flip ? ',f' : ''}`);
   if (v.hidden && v.hidden.length) f.push(`h:${runs(v.hidden)}`);
   if (v.selected && v.selected.length) f.push(`k:${runs(v.selected)}`);
+  // v.keys: the model's body keys (bodyKeys), when the caller has them
+  if (v.keys && v.keys.length) {
+    f.push(`m:${modelPrint(v.keys)}`);
+    const sel = [...new Set(v.selected || [])].filter((i) => i >= 1 && i <= v.keys.length).sort((a, b) => a - b);
+    if (sel.length && sel.length <= MAX_NAMED) f.push(`n:${sel.map((i) => b64u(v.keys[i - 1])).join(',')}`);
+  }
   return f.join(';');
 }
 
-// -> { cam?: { target, dist, q, ortho, orient }, style?, section?, hidden?, selected? }
+// -> { cam?: { target, dist, q, ortho, orient }, style?, section?, hidden?, selected?, model?, selNames? }
 export function decodeView(s) {
   const out = {};
   for (const field of String(s || '').split(';')) {
@@ -88,6 +146,12 @@ export function decodeView(s) {
       if (['x', 'y', 'z'].includes(axis) && tn >= 0 && tn <= 1) out.section = { axis, t: tn, flip: f === 'f' };
     } else if (k === 'h') out.hidden = parseRuns(val);
     else if (k === 'k') out.selected = parseRuns(val);
+    else if (k === 'm' && /^[0-9a-f]{8}$/.test(val)) out.model = val;
+    else if (k === 'n') {
+      out.selNames = val.split(',').slice(0, MAX_NAMED).flatMap((s) => {
+        try { return /^[A-Za-z0-9_-]+$/.test(s) ? [unb64u(s)] : []; } catch { return []; }
+      });
+    }
   }
   if (out.cam) {
     out.cam.ortho = !!out.ortho;
