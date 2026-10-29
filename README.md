@@ -102,6 +102,10 @@ URL parameters:
   holes: diameter, position from the reference's corner, through-hole
   depth, and for each size how many and how far apart they lie; they are
   numbered on the model, and the table copies as CSV.
+- **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a
+  product page: no toolbar or panels, just Fit, full screen and **Open in
+  cad.place ↗** over the view. Until a visitor clicks or taps it, it leaves
+  the page's scrolling alone; Esc gives the scroll wheel back.
 - **Inspect.** Selection extent (X × Y × Z), its position (each axis's
   extent from a reference's corner: the whole model, or the parts chosen
   with **Measure from selection**, such as the board, which also gives how far

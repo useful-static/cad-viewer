@@ -117,6 +117,16 @@
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden] { display:none; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc); }
+  /* ?embed=1: the 3D view alone, its few controls over it; until a click or
+     tap makes it active it takes no wheel or drag from the page around it */
+  body.embed { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
+  body.embed header, body.embed #parts, body.embed footer, body.embed #scrim { display:none !important; }
+  body.embed #stage { grid-column:1 / -1; grid-row:1 / -1; }
+  body.embed:not(.active) #stage { touch-action:pan-x pan-y pinch-zoom; cursor:pointer; }
+  #embedbar { position:absolute; top:8px; left:8px; display:flex; gap:6px; z-index:2; }
+  #embedbar[hidden], #embedhint[hidden] { display:none; }
+  #embedhint { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); background:rgba(20,24,30,.85); color:var(--fg);
+    padding:4px 10px; border-radius:12px; font-size:12px; pointer-events:none; white-space:nowrap; }
   /* Measure: an SVG layer and HTML labels over the view, projected each frame
      (js/measure-ui.js); they take no pointer input */
   #measvg, #measlabels { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
@@ -430,6 +440,9 @@
 <div id="scrim" aria-hidden="true"></div>
 <div id="stage"><canvas id="view"></canvas><svg id="measvg" aria-hidden="true"></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
+  <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
+  <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
+  <div id="embedhint" hidden>Click to turn and zoom the model</div>
   <button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's

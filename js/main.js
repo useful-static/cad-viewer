@@ -709,7 +709,7 @@ function flashHover(text, ms = 1500) {
 // 2026-10-29). Once per browser; a note already showing (a view link's) wins.
 const TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
 function touchHintOnce() {
-  if (!coarseOnly() || $('hover').textContent) return;
+  if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
   try {
     if (localStorage.getItem('cadv.touchHint')) return;
     localStorage.setItem('cadv.touchHint', '1');
@@ -772,8 +772,8 @@ function applyView(v) {
 
 // Copy a link to this model at this view. A model opened from this device has
 // no URL: the link then holds the view alone, and the note says so.
-async function shareView() {
-  if (!app.header) return;
+// A link to this model at this view, in the full viewer (never ?embed=)
+function viewLink() {
   const u = new URL(location.href);
   u.search = '';
   u.hash = '';
@@ -782,7 +782,12 @@ async function shareView() {
   if (app.sourceUrl) u.searchParams.set('src', app.sourceUrl);
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
   u.hash = `view=${encodeView(currentView())}`;
-  const link = u.toString();
+  return u.toString();
+}
+
+async function shareView() {
+  if (!app.header) return;
+  const link = viewLink();
   let copied = false;
   try {
     await navigator.clipboard.writeText(link);
@@ -794,6 +799,33 @@ async function shareView() {
     : 'View link copied: it holds the view, not the file (opened from this device)';
   flashHover(note);
   announce(note);
+}
+
+// ---------- ?embed=1 ----------
+// The model alone in another site's page: no toolbar, parts panel or footer;
+// Fit, full screen and "Open in cad.place ↗" (the full viewer at this view)
+// over the view. Until a click or tap makes it active it takes nothing from
+// the page around it: the wheel and a finger's drag scroll the page, and a
+// hint says how to start; Esc gives the wheel back.
+app.embed = new URLSearchParams(location.search).get('embed') === '1';
+app.embedActive = !app.embed;
+function setupEmbed() {
+  if (!app.embed) return;
+  document.body.classList.add('embed');
+  $('embedbar').hidden = false;
+  $('embedhint').hidden = false;
+  $('embedfit').onclick = () => fitTo(app.header && app.header.bbox);
+  // the link is made when it is about to be followed, so it holds the view now
+  const fresh = () => { $('embedopen').href = app.header ? viewLink() : location.href.replace(/([?&])embed=1&?/, '$1'); };
+  for (const ev of ['pointerenter', 'focus', 'pointerdown']) $('embedopen').addEventListener(ev, fresh);
+  fresh();
+}
+function setEmbedActive(on) {
+  if (!app.embed || app.embedActive === on) return;
+  app.embedActive = on;
+  document.body.classList.toggle('active', on);
+  $('embedhint').hidden = on;
+  announce(on ? 'the model now turns and zooms with the pointer; Esc gives the page its wheel back' : 'the page scrolls again');
 }
 
 // the styles built so far; the rest join the select as they are
@@ -929,7 +961,7 @@ function undoVisibility() {
 
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
-const OVER_VIEW = '.card, #optbar, #fullscreen';
+const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar';
 const MENUS = FOLD_ORDER;
 
 const narrowLayout = () => getComputedStyle($('tb')).flexWrap === 'nowrap';
@@ -3002,7 +3034,9 @@ function wireInput() {
   const releaseTouch = (id) => {
     if (touches.delete(id) && pinch && pinch.ids.includes(id)) startPinch();
   };
+  let embedPress = null;
   const endPointer = (e) => {
+    if (embedPress && e.pointerId === embedPress.id) embedPress = null; // the page took it (a scroll)
     if (drag && e.pointerId === drag.id) drag = null;
     releaseTouch(e.pointerId);
   };
@@ -3012,6 +3046,9 @@ function wireInput() {
     // view: a press on them is theirs. Capturing it for an orbit retargeted
     // the click to the view, so "Choose a file…" and Cancel never received it.
     if (e.target.closest(OVER_VIEW)) return;
+    // embedded and not yet active: no capture, no gesture; a press that
+    // lifts where it went down (a click, a tap) makes it active
+    if (app.embed && !app.embedActive) { embedPress = { id: e.pointerId, x: e.clientX, y: e.clientY }; return; }
     if (e.pointerType === 'touch') {
       touches.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
@@ -3156,6 +3193,12 @@ function wireInput() {
     viewChanged();
   });
   stage.addEventListener('pointerup', (e) => {
+    if (embedPress && e.pointerId === embedPress.id) {
+      const still = Math.hypot(e.clientX - embedPress.x, e.clientY - embedPress.y) < 10;
+      embedPress = null;
+      if (still) setEmbedActive(true);
+      return;
+    }
     releaseTouch(e.pointerId);
     if (!drag || e.pointerId !== drag.id) return;
     const d = drag;
@@ -3211,11 +3254,13 @@ function wireInput() {
     if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
   });
   stage.addEventListener('dblclick', (e) => {
-    if (lastType === 'touch' || e.target.closest(OVER_VIEW) || app.measure.on) return; // a double-tap / a card's or the bar's own clicks / measuring
+    if (lastType === 'touch' || e.target.closest(OVER_VIEW) || app.measure.on || !app.embedActive) return; // a double-tap / a card's or the bar's own clicks / measuring
     fitAfterClick();
   });
   stage.addEventListener('wheel', (e) => {
     if (e.target.closest(OVER_VIEW)) return; // a card scrolls (a long error), the bar scrolls sideways; the view stays put
+    // embedded and not active: the page scrolls (not prevented); the hint shows
+    if (app.embed && !app.embedActive) { $('embedhint').hidden = false; return; }
     e.preventDefault();
     // per unit of deltaY: pixels (0), lines (1, ~3 per notch), pages (2, ~1 per notch);
     // toward the pointer
@@ -3496,7 +3541,8 @@ function wireInput() {
     // key's place, as QWERTY names it.
     // Esc: the panel, then Measure's results list, its half-made point, Measure
     // itself, then the selection
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.measure.escape() || select([], false)),
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.measure.escape()
+        || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -3518,6 +3564,7 @@ function wireInput() {
 async function main() {
   setStatus('init', 'starting GPU');
   $('export').disabled = true; // a browser may restore the last page's state
+  setupEmbed(); // ?embed=1: before the first layout, so it never shows the toolbar
   updateButtons();
   // on a short window the controls help starts folded: the parts list needs the room
   if (innerHeight < 640) $('help').open = false;
