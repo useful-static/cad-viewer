@@ -96,6 +96,20 @@ await test('fetch: a list nobody answers (or CORS refuses) says so', async () =>
   const r = await fetchModelLists(['https://other.example/l.json'], L, async () => { throw new TypeError('Failed to fetch'); });
   assert.match(r.errors[0].message, /CORS/);
 });
+await test('an entry may carry step, page, author, license, labels and style; URLs resolve against the list', () => {
+  const [e] = parseModelList(JSON.stringify({ 'a.cadmesh.gz': {
+    name: 'A', step: 'a.stp.gz', page: '/products/a/', author: ' Maker ', license: 'CC-BY-4.0',
+    labels: { 'HDMI_1_3': 'HDMI', 'J1': ' ' }, style: 'edges', other: 'ignored' } }), L);
+  assert.deepEqual(e, { url: 'https://site.example/api/a.cadmesh.gz', name: 'A', step: 'https://site.example/api/a.stp.gz',
+    page: 'https://site.example/products/a/', author: 'Maker', license: 'CC-BY-4.0', labels: { HDMI_1_3: 'HDMI' }, style: 'edges' });
+});
+await test('a wrong extra field refuses the list, naming the file and the field', () => {
+  for (const [v, re] of [[{ step: 'javascript:alert(1)' }, /"a": its step .* not an http/], [{ page: 3 }, /its page must be a URL/],
+    [{ labels: ['x'] }, /its labels must be/], [{ labels: { a: 1 } }, /its labels must be/], [{ style: 'fancy' }, /its style must be one of/],
+    [{ author: 'x'.repeat(201) }, /its author must be text/]]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', ...v } }), L), re);
+  }
+});
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

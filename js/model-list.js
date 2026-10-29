@@ -17,7 +17,9 @@
 //   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
 //     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
 //
-// Other fields are left for later; anything else is refused with the reason.
+// It may also carry step, page, author, license, labels and style (extras,
+// below); a field it does not know is ignored, a known one that is wrong is
+// refused with the reason.
 // JavaScript orders an object's integer-like keys ("10", "2") first, by
 // number: a list whose files are named so can be an array of pairs instead,
 // [["10", "Ten"], ["2", "Two"]], which keeps its order whatever the names.
@@ -66,8 +68,51 @@ export function parseModelList(text, listUrl) {
         throw new Error(`"${file}": its orient: ${e.message}`);
       }
     }
+    if (v && typeof v === 'object') Object.assign(entry, extras(file, v, listUrl));
     return entry;
   });
+}
+
+// An entry's other fields, all optional, each checked (a wrong one refuses the
+// list, naming the file and the field, as orient does):
+//   step     the source CAD file the model was converted from: File >
+//            Download STEP (a URL, resolved against the list's)
+//   page     the model's own page (a product page): the info panel links it
+//   author, license   who made it and on what terms: the info panel says so
+//   labels   { "<a part's name>": "<what to call it>" }: names the parts show
+//            in the tree, on hover and in the info panel (the file's own name
+//            stays in the tooltip)
+//   style    the display style it opens in when this browser has no choice of
+//            its own (js/styles.js ids)
+export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
+function extras(file, v, listUrl) {
+  const out = {};
+  const bad = (field, why) => new Error(`"${file}": its ${field} ${why}`);
+  for (const field of ['step', 'page']) {
+    if (v[field] === undefined) continue;
+    if (typeof v[field] !== 'string' || !v[field].trim()) throw bad(field, 'must be a URL');
+    let u;
+    try { u = new URL(v[field], listUrl); } catch { throw bad(field, `"${v[field]}" is not a URL`); }
+    if (!/^https?:$/.test(u.protocol)) throw bad(field, `"${v[field]}" is not an http(s) URL`);
+    out[field] = u.href;
+  }
+  for (const field of ['author', 'license']) {
+    if (v[field] === undefined) continue;
+    if (typeof v[field] !== 'string' || v[field].length > 200) throw bad(field, 'must be text of at most 200 characters');
+    if (v[field].trim()) out[field] = v[field].trim();
+  }
+  if (v.labels !== undefined) {
+    const l = v.labels;
+    if (!l || typeof l !== 'object' || Array.isArray(l) || Object.values(l).some((s) => typeof s !== 'string')) {
+      throw bad('labels', 'must be an object of part name -> label (text)');
+    }
+    out.labels = Object.fromEntries(Object.entries(l).filter(([, s]) => s.trim()).map(([k, s]) => [k, s.trim()]));
+  }
+  if (v.style !== undefined) {
+    if (!STYLE_IDS.includes(v.style)) throw bad('style', `must be one of ${STYLE_IDS.join(', ')}`);
+    out.style = v.style;
+  }
+  return out;
 }
 
 // Lists joined in order: a file named again later keeps its first entry.

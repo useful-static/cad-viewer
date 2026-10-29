@@ -798,8 +798,10 @@ async function shareView() {
 
 // the styles built so far; the rest join the select as they are
 const BUILT_STYLES = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
+// (the select's choice, else the model list's style for the model, else the
+// file type's default)
 const currentStyle = () => {
-  const id = styleFor(app.styleChoice, app.isMeshFile);
+  const id = styleFor(app.styleChoice || (app.header && listEntry(app.sourceUrl)?.style) || null, app.isMeshFile);
   return styleById(BUILT_STYLES.includes(id) ? id : defaultStyle(app.isMeshFile));
 };
 
@@ -968,7 +970,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -977,7 +979,7 @@ function toolbarFits(tb) {
   const cs = getComputedStyle(tb);
   const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
   let row = 0;
-  for (const el of tb.querySelectorAll('button, select, label.btn, input')) row = Math.max(row, el.offsetHeight);
+  for (const el of tb.querySelectorAll('button, select, label.btn, a.btn, input')) row = Math.max(row, el.offsetHeight);
   return tb.clientHeight <= row + pad + 2;
 }
 
@@ -1070,7 +1072,7 @@ function setMenu(menu, open, focusFirst = false) {
     panel.style.overflowY = 'auto';
     // the first item SHOWN: in a folded View the presets' own menu button
     // is there but not displayed, and focusing it did nothing
-    if (focusFirst) [...panel.querySelectorAll('button:not(:disabled), select, label.btn')].find((e) => e.getClientRects().length)?.focus();
+    if (focusFirst) [...panel.querySelectorAll('button:not(:disabled), select, label.btn, a.btn')].find((e) => e.getClientRects().length)?.focus();
   } else {
     // closed with the focus inside (a resize or rotation refolds and closes
     // it; the focus watcher sees only disabled / hidden): its button, or the
@@ -1103,7 +1105,7 @@ function focusBeside(el) {
     const mb = m.querySelector(':scope > .menu-btn');
     if (live(mb)) { mb.focus(); return; }
   }
-  const all = [...$('tb').querySelectorAll('button, label.btn')];
+  const all = [...$('tb').querySelectorAll('button, label.btn, a.btn')];
   const before = all.filter((e) => e.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
   const after = all.filter((e) => e !== el && !before.includes(e));
   (after.find(live) || before.reverse().find(live))?.focus();
@@ -1221,7 +1223,7 @@ function wireMenus() {
     let focusIn = false;
     panel.addEventListener('click', () => { focusIn = m.contains(document.activeElement); }, true);
     panel.addEventListener('click', (e) => {
-      const b = e.target.closest('button, label.btn');
+      const b = e.target.closest('button, label.btn, a.btn');
       if (!b) return;
       const back = e.detail === 0 && focusIn;
       // in the row: an item that disabled itself (Hide, Undo) gives the focus
@@ -1367,6 +1369,7 @@ function fillModelList(entries) {
   syncModelList();
   refold();
   showModelName(); // a model shown before the list came is named from it now
+  if (app.header) applyListEntry(); // ...and given what its entry says
   // and turned as its entry says, if the view is still the one it opened at
   // (the camera's orientation untouched: a pan or a zoom is not kept, an orbit,
   // a preset or a view link is)
@@ -1386,8 +1389,48 @@ function fillModelList(entries) {
 function orientFor(src) {
   let url = null;
   try { url = src ? new URL(src, location.href).href : null; } catch { /* no URL */ }
-  const e = url && (app.listEntries || []).find((x) => x.url === url);
+  const e = listEntry(src);
   return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
+}
+
+// The model list's entry for a model URL (js/model-list.js), or null
+function listEntry(src) {
+  let url = null;
+  try { url = src ? new URL(src, location.href).href : null; } catch { /* no URL */ }
+  return (url && (app.listEntries || []).find((x) => x.url === url)) || null;
+}
+
+// What the list says of the model on screen: its step, page, author,
+// license, labels, style; the info panel, File and the tree show them. Run
+// on a load and when a list arrives after its model opened.
+function applyListEntry() {
+  const e = app.header ? listEntry(app.sourceUrl) : null;
+  // Download STEP: the entry's source file, else the file itself when the
+  // model was opened from a STEP / IGES / BREP URL
+  const src = e && e.step ? e.step
+    : app.sourceUrl && /\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i.test(new URL(app.sourceUrl, location.href).pathname) ? new URL(app.sourceUrl, location.href).href : null;
+  const a = $('download');
+  a.hidden = !src;
+  if (src) {
+    a.href = src;
+    const ext = (new URL(src).pathname.match(/\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i) || [])[1] || 'stp';
+    a.textContent = `Download ${{ stp: 'STEP', step: 'STEP', igs: 'IGES', iges: 'IGES', brep: 'BREP', brp: 'BREP' }[ext.toLowerCase()]}`;
+    a.title = `The source CAD file this model was made from: ${src}`;
+  }
+  syncMenuButtons();
+  // its part labels, when they differ from what the tree shows
+  const labels = (e && e.labels) || null;
+  if (app.header && JSON.stringify(labels) !== JSON.stringify(app.partLabels || null)) {
+    app.partLabels = labels;
+    buildTree();
+  }
+  // its style, where this browser has no choice of its own
+  if (app.header) {
+    $('style').value = currentStyle().id;
+    syncStyleBg();
+    queueFrame();
+  }
+  showInfo();
 }
 
 // the drop-down names the model on screen: its entry, or "Open from list…"
@@ -1728,6 +1771,8 @@ function dropModel(msg) {
   app.selected.clear();
   app.ref = null;
   app.holesFor = null;
+  app.partLabels = null;
+  $('download').hidden = true;
   if (app.measure) app.measure.reset();
   app.hidden.clear();
   app.visUndo = [];
@@ -1867,6 +1912,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.viewGen++; // and neither may a click aimed at it
   $('hover').textContent = '';
   pushState();
+  // the model list's labels before the tree is built (it is built once)
+  app.partLabels = listEntry(app.sourceUrl)?.labels || null;
   buildTree();
   app.cam.orient = orientFor(app.sourceUrl);
   setView('iso');
@@ -1888,6 +1935,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   showModelName();
   showInfo();
   setStatus('ready', readyText()); // announced with the change into ready
+  applyListEntry(); // its step, page, author, license, style from the model list
   touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
   base.edgeInfo.ready = edgesOf(base).then((v) => { if (app.baseMesh === base) pushState(); refreshEdges(); return v; });
@@ -2462,15 +2510,23 @@ function labelMeshes() {
     for (const c of n.children) walk(c, nm);
   };
   walk(app.header.root, '');
-  app.meshLabel = labels;
-  app.bodyKeys = bodyKeys(labels); // a view link names its selection by these
+  // a view link names its selection by the file's own names, so a list's
+  // labels never change what an old link selects
+  app.bodyKeys = bodyKeys(labels);
+  // the model list's labels for its parts ("HDMI_1_3" -> "HDMI"), each piece
+  // of "owner › body" on its own
+  app.meshLabel = app.partLabels ? labels.map((l) => l.split(' › ').map(partLabel).join(' › ')) : labels;
 }
 
 const meshLabel = (id) => app.meshLabel[id - 1];
 
-// The name a tree node shows: its own, else its one body's, else "(unnamed)".
-const nodeName = (n) => n.name
-  || (n.meshes.length === 1 && !n.children.length ? app.header.meshes[n.meshes[0]].name : '') || '(unnamed)';
+// A name as the model list labels it (its entry's labels), else as is
+const partLabel = (s) => (app.partLabels && Object.hasOwn(app.partLabels, s) ? app.partLabels[s] : s);
+
+// The name a tree node shows: its own, else its one body's, else "(unnamed)";
+// as the model list labels it
+const nodeName = (n) => partLabel(n.name
+  || (n.meshes.length === 1 && !n.children.length ? app.header.meshes[n.meshes[0]].name : '') || '(unnamed)');
 
 // Repeated names among siblings get a number ("L000", "L000 #2", …): a row
 // that reads exactly like eleven others cannot be told apart.
@@ -2521,7 +2577,9 @@ function buildTree() {
     label.className = 'label';
     label.textContent = name;
     // the full name (the row truncates it) and the body count
-    label.title = `${label.textContent} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
+    // (and, for a part the model list labels, the file's own name)
+    const own = node.name || (node.meshes.length === 1 && !node.children.length ? app.header.meshes[node.meshes[0]].name : '');
+    label.title = `${label.textContent}${own && partLabel(own) !== own ? ` (${own} in the file)` : ''} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
     cb.setAttribute('aria-label', `Show ${label.textContent}`); // a screen reader names the part
     const cnt = document.createElement('span');
     cnt.className = 'cnt';
@@ -2799,16 +2857,33 @@ function setRef(on) {
 }
 
 function fillInfo(el) {
-  const add = (k, v) => {
+  const add = (k, ...v) => {
     const d = document.createElement('div');
     const a = document.createElement('b');
     a.textContent = k;
-    d.append(a, ` ${v}`);
+    d.append(a, ' ', ...v);
     el.append(d);
   };
   // the file, in full: the narrow footer truncates it, and its title tooltip
-  // never shows on a touch screen
-  if (app.header) add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} ${app.header.meshes.length === 1 ? 'body' : 'bodies'}`);
+  // never shows on a touch screen; and the site it came from (a model opened
+  // by URL), so a visitor knows whose model it is
+  if (app.header) {
+    let host = '';
+    try { host = app.sourceUrl ? new URL(app.sourceUrl, location.href).host : ''; } catch { /* no URL */ }
+    if (host === location.host) host = '';
+    add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} ${app.header.meshes.length === 1 ? 'body' : 'bodies'}${host ? ` · from ${host}` : ''}`);
+    // what the model list says of it: its page, who made it, on what terms
+    const e = listEntry(app.sourceUrl);
+    if (e && e.page) {
+      const l = document.createElement('a');
+      l.href = e.page;
+      l.target = '_blank';
+      l.rel = 'noopener';
+      l.textContent = `${new URL(e.page).host}${new URL(e.page).pathname.replace(/\/$/, '')} ↗`;
+      add('page', l);
+    }
+    if (e && (e.author || e.license)) add('model', [e.author && `by ${e.author}`, e.license].filter(Boolean).join(' · '));
+  }
   // the backend, and why any faster one was skipped -- with or without a model
   // (it explains a slow first load too): the badge's tooltip says so as well,
   // but a tooltip never shows on a touch screen or to the keyboard
