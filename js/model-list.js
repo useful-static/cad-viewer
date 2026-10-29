@@ -10,16 +10,26 @@
 //
 // A file is a URL, resolved against the list's own URL (so a list names the
 // files beside it by their bare names). A name may also be { "name": "…" },
-// room for more fields later; anything else is refused with the reason.
+// with an "orient" beside it: which of that file's axes is up and which faces
+// the viewer (js/orient.js), so files drawn in different frames open the same
+// way round:
+//
+//   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
+//     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
+//
+// Other fields are left for later; anything else is refused with the reason.
 // JavaScript orders an object's integer-like keys ("10", "2") first, by
 // number: a list whose files are named so can be an array of pairs instead,
 // [["10", "Ten"], ["2", "Two"]], which keeps its order whatever the names.
 // Like ?src=, a list on another site must be served with CORS.
 
+import { parseOrient } from './orient.js';
+
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
 
-// -> [{ url, name }] in the file's order. listUrl: the URL the list came
+// -> [{ url, name, orient? }] in the file's order (orient canonical, "+z-y").
+// listUrl: the URL the list came
 // from, which relative files resolve against. Throws a plain-words Error.
 export function parseModelList(text, listUrl) {
   let data;
@@ -48,7 +58,15 @@ export function parseModelList(text, listUrl) {
       throw new Error(`"${file}" is not a URL`);
     }
     if (!/^https?:$/.test(new URL(url).protocol)) throw new Error(`"${file}" is not an http(s) URL`);
-    return { url, name: name.trim() || file };
+    const entry = { url, name: name.trim() || file };
+    if (v && typeof v === 'object' && v.orient !== undefined) {
+      try {
+        entry.orient = parseOrient(v.orient);
+      } catch (e) {
+        throw new Error(`"${file}": its orient: ${e.message}`);
+      }
+    }
+    return entry;
   });
 }
 

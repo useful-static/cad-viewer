@@ -11,7 +11,7 @@ function test(name, fn) {
 }
 
 const view = {
-  cam: { target: [12.3456789, -4, 1e-7], dist: 1234.56789, q: [0.1, 0.2, 0.3, Math.sqrt(1 - 0.14)], ortho: true, up: 'z' },
+  cam: { target: [12.3456789, -4, 1e-7], dist: 1234.56789, q: [0.1, 0.2, 0.3, Math.sqrt(1 - 0.14)], ortho: true, orient: '+z-y' },
   style: 'hiddengrey', section: { axis: 'z', t: 0.4321, flip: true }, hidden: [7, 1, 2, 3, 3], selected: [5],
 };
 
@@ -29,7 +29,8 @@ test('a view round-trips: the target to a millionth of the distance, the rest to
   assert.equal(d.cam.dist, 1234.57);
   assert.ok(d.cam.q.every((x, i) => Math.abs(x - view.cam.q[i]) < 1e-5));
   assert.equal(d.cam.ortho, true);
-  assert.equal(d.cam.up, 'z');
+  assert.equal(d.cam.orient, '+z-y');
+  assert.ok(s.includes(';u:z;'), s); // Z up as the older links wrote it
   assert.equal(d.style, 'hiddengrey');
   assert.deepEqual(d.section, { axis: 'z', t: 0.4321, flip: true });
   assert.deepEqual(d.hidden, [1, 2, 3, 7]);
@@ -37,7 +38,7 @@ test('a view round-trips: the target to a millionth of the distance, the rest to
 });
 test('far from the origin, the target keeps the precision the view needs (review r14)', () => {
   // 100 m out, looked at from 10 mm: 6 significant digits would be 1 mm off
-  const far = { cam: { target: [100000.1234567, -250000.7654321, 3.3333333], dist: 10, q: [0, 0, 0, 1], ortho: false, up: 'y' } };
+  const far = { cam: { target: [100000.1234567, -250000.7654321, 3.3333333], dist: 10, q: [0, 0, 0, 1], ortho: false } };
   const d = decodeView(encodeView(far));
   far.cam.target.forEach((t, i) => assert.ok(Math.abs(d.cam.target[i] - t) <= 10 * 1e-6, `${d.cam.target[i]} vs ${t}`));
   // and a huge view keeps whole numbers, never more digits than it needs
@@ -46,12 +47,25 @@ test('far from the origin, the target keeps the precision the view needs (review
 });
 
 test('defaults stay out of the link', () => {
-  const s = encodeView({ cam: { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1], ortho: false, up: 'y' }, section: { axis: 'off' } });
+  const s = encodeView({ cam: { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1], ortho: false, orient: '+y+z' }, section: { axis: 'off' } });
   assert.equal(s, 'c:0,0,0,1,0,0,0,1');
   const d = decodeView(s);
   assert.equal(d.cam.ortho, false);
-  assert.equal(d.cam.up, 'y');
+  assert.equal(d.cam.orient, '+y+z');
   assert.equal(d.section, undefined);
+});
+test('any orientation round-trips; old u:z / u:y links still read; a bad one is the default', () => {
+  const cam = { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1] };
+  const s = encodeView({ cam: { ...cam, orient: '+z+x' } });
+  assert.ok(s.endsWith(';u:+z+x'), s);
+  assert.equal(decodeView(s).cam.orient, '+z+x');
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;u:z').cam.orient, '+z-y');
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;u:y').cam.orient, '+y+z');
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;u:+z+z').cam.orient, '+y+z');
+  // a link written by the page goes through URL.hash, which keeps "+"
+  const u = new URL('https://cad.place/');
+  u.hash = `view=${s}`;
+  assert.equal(decodeView(decodeURIComponent(u.hash.slice(6))).cam.orient, '+z+x');
 });
 test('a hand-edited or broken link drops what it cannot read, never throws', () => {
   assert.deepEqual(decodeView('c:1,2,3;s:Bad Style;x:w,2;zz:1;h:a-b,4'), { hidden: [4] });

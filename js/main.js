@@ -6,7 +6,8 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, gu
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
-import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomBy } from './camera.js';
+import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
@@ -45,7 +46,10 @@ const app = {
   hover: 0,
   hoverSeq: 0,
   viewGen: 0,
-  cam: { target: [0, 0, 0], dist: 1000, yaw: 0.7, pitch: 0.45, fov: Math.PI / 4, ortho: false, up: 'y', viewRadius: 500 },
+  cam: { target: [0, 0, 0], dist: 1000, yaw: 0.7, pitch: 0.45, fov: Math.PI / 4, ortho: false, orient: DEFAULT_ORIENT, viewRadius: 500 },
+  // the orientation chosen here (Z up), and the page's ?orient=: orientFor
+  userOrient: DEFAULT_ORIENT,
+  urlOrient: null,
   section: { axis: 'off', t: 0.5, flip: false, last: 'z' }, // last: the axis it turns on at
   frameQueued: false,
   frameCount: 0,
@@ -547,7 +551,7 @@ function frameState() {
   const right = [view[0], view[4], view[8]];
   const upv = [view[1], view[5], view[9]];
   const light = [0, 1, 2].map((k) => d[k] + upv[k] * 0.6 - right[k] * 0.4);
-  const up = c.up === 'z' ? [0, 0, 1] : [0, 1, 0];
+  const up = orientUp(c.orient);
   // eye.w = 1: a point (perspective: view vector = eye - p); w = 0: the
   // direction to the viewer (ortho: one view vector for every pixel)
   const eye4 = c.ortho ? [d[0], d[1], d[2], 0] : [eye[0], eye[1], eye[2], 1];
@@ -643,7 +647,7 @@ function nearestPreset(cam) {
   const d = camDir(cam);
   let best = 'front', bestDot = -2;
   for (const v of Object.keys(OPPOSITE)) {
-    const p = camDir({ q: quatFromView(VIEWS[v][0], VIEWS[v][1], cam.up) });
+    const p = camDir({ q: presetQuat(VIEWS[v][0], VIEWS[v][1], cam.orient) });
     const dot = d[0] * p[0] + d[1] * p[1] + d[2] * p[2];
     if (dot > bestDot) { bestDot = dot; best = v; }
   }
@@ -684,7 +688,7 @@ function flashHover(text) {
 function currentView() {
   const c = app.cam;
   return {
-    cam: { target: c.target, dist: c.dist, q: c.q || quatFromView(c.yaw, c.pitch, c.up), ortho: !!c.ortho, up: c.up },
+    cam: { target: c.target, dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient), ortho: !!c.ortho, orient: c.orient },
     // always the style shown, the default too: a link without one opens in
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
@@ -703,7 +707,7 @@ function applyView(v) {
     c.dist = v.cam.dist;
     c.q = v.cam.q.slice();
     c.ortho = v.cam.ortho;
-    c.up = v.cam.up;
+    c.orient = v.cam.orient;
     // the radius this distance frames, the zoom's floor: a link zoomed onto
     // a small part kept the whole model's, and the first wheel notch in (or
     // a resize) jumped far out (review r16 M4)
@@ -784,9 +788,13 @@ function edgesKey() {
   announce(`${s.label} style`);
 }
 
+// A preset's camera orientation, taken in the model's orientation
+// (js/orient.js): the preset in the viewer's own frame, turned into the file's
+const presetQuat = (yaw, pitch, orient) => qMul(orientQuat(orient), quatFromView(yaw, pitch, 'y'));
+
 function setView(v) {
   [app.cam.yaw, app.cam.pitch] = VIEWS[v];
-  app.cam.q = quatFromView(app.cam.yaw, app.cam.pitch, app.cam.up);
+  app.cam.q = presetQuat(app.cam.yaw, app.cam.pitch, app.cam.orient);
   fitTo(app.header && app.header.bbox);
 }
 
@@ -1259,6 +1267,7 @@ function showModelName() {
 // link opens the same model).
 
 function fillModelList(entries) {
+  app.listEntries = entries;
   const sel = $('modellist');
   sel.textContent = '';
   for (const e of entries) sel.add(new Option(e.name, e.url));
@@ -1273,6 +1282,26 @@ function fillModelList(entries) {
   syncModelList();
   refold();
   showModelName(); // a model shown before the list came is named from it now
+  // and turned as its entry says, if the view is still the one it opened at
+  // (the camera's orientation untouched: a pan or a zoom is not kept, an orbit,
+  // a preset or a view link is)
+  if (app.header && app.cam.q === app.loadQ && orientFor(app.sourceUrl) !== app.cam.orient) {
+    app.cam.orient = orientFor(app.sourceUrl);
+    updateButtons();
+    setView('iso');
+    app.loadQ = app.cam.q;
+  }
+}
+
+// The orientation a model opens in (js/orient.js): its list entry's, else
+// the page's ?orient= for a model opened from a URL, else the one chosen
+// here (the Z up toggle; the file's own frame at first). A file opened from
+// the device has no URL, so the page's ?orient= is not for it.
+function orientFor(src) {
+  let url = null;
+  try { url = src ? new URL(src, location.href).href : null; } catch { /* no URL */ }
+  const e = url && (app.listEntries || []).find((x) => x.url === url);
+  return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
 }
 
 // the drop-down names the model on screen: its entry, or "Open from list…"
@@ -1446,7 +1475,7 @@ function updateButtons() {
   $('undo').disabled = !app.visUndo.length;
   $('fit').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
-  $('up').setAttribute('aria-pressed', String(app.cam.up === 'z'));
+  $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
   const on = app.section.axis !== 'off';
   $('section').setAttribute('aria-pressed', String(on));
@@ -1744,7 +1773,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   $('hover').textContent = '';
   pushState();
   buildTree();
+  app.cam.orient = orientFor(app.sourceUrl);
   setView('iso');
+  app.loadQ = app.cam.q; // the view it opened at (fillModelList)
   // (recolour refuses while an upload is under way, so the pick waited here)
   if (app.palette !== scheme) recolour();
   // a view link (#view=…) applies to the model the page opened with; a link
@@ -3014,7 +3045,14 @@ function wireInput() {
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
-  $('up').onclick = () => { app.cam.up = app.cam.up === 'y' ? 'z' : 'y'; updateButtons(); setView('iso'); };
+  // Z up: the file's +z up and -y toward the viewer, or back to its own frame
+  // (y up); the choice holds for the next model that names no orientation
+  $('up').onclick = () => {
+    app.userOrient = app.cam.orient.startsWith('+z') ? DEFAULT_ORIENT : Z_UP_ORIENT;
+    app.cam.orient = app.userOrient;
+    updateButtons();
+    setView('iso');
+  };
   $('undo').onclick = undoVisibility;
   $('isolate').onclick = () => {
     if (!app.selected.size) return;
@@ -3209,6 +3247,10 @@ async function main() {
   queueFrame();
   refreshCacheBar();
   const src = params.get('src');
+  // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
+  // viewer, for a model this page opens from a URL that its list entry does
+  // not orient (orientFor). A bad one is no orientation, never an error.
+  app.urlOrient = orientOrNull(params.get('orient'));
   // #view=…: the view a shared link names, applied when its model has loaded
   // (the model its own ?src names; with none, the next one opened from the
   // device, never the model list's first). A bad escape (a hand-edited or cut

@@ -5,13 +5,16 @@
 //   c  camera: target (to a millionth of the distance), distance and
 //      orientation quaternion (6 significant digits)
 //   p  projection: o ortho (absent: perspective)
-//   u  up axis: z (absent: y)
+//   u  orientation (js/orient.js), canonical up then front: +z+x; z is
+//      +z-y (Z up, the older links' only value); absent: the file's own +y+z
 //   s  display style id (js/styles.js; absent: the viewer's own default)
 //   x  section: axis, position 0..1, f when flipped (absent: off)
 //   h  hidden bodies, k selected bodies: ids as runs ("1-3,7")
 //
 // Pure, no DOM. Unknown or malformed fields are dropped, never thrown: a link
 // edited by hand still opens the model.
+
+import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull } from './orient.js';
 
 const num = (v) => Number(v.toPrecision(6));
 // The target to a step a millionth of the distance: its error must be small
@@ -53,7 +56,8 @@ export function encodeView(v) {
   const c = v.cam;
   f.push(`c:${[...c.target.map((t) => near(t, c.dist)), num(c.dist), ...c.q.map(num)].join(',')}`);
   if (c.ortho) f.push('p:o');
-  if (c.up === 'z') f.push('u:z');
+  const o = c.orient || DEFAULT_ORIENT;
+  if (o !== DEFAULT_ORIENT) f.push(`u:${o === Z_UP_ORIENT ? 'z' : o}`);
   if (v.style) f.push(`s:${v.style}`);
   if (v.section && v.section.axis !== 'off') f.push(`x:${v.section.axis},${num(v.section.t)}${v.section.flip ? ',f' : ''}`);
   if (v.hidden && v.hidden.length) f.push(`h:${runs(v.hidden)}`);
@@ -61,7 +65,7 @@ export function encodeView(v) {
   return f.join(';');
 }
 
-// -> { cam?: { target, dist, q, ortho, up }, style?, section?, hidden?, selected? }
+// -> { cam?: { target, dist, q, ortho, orient }, style?, section?, hidden?, selected? }
 export function decodeView(s) {
   const out = {};
   for (const field of String(s || '').split(';')) {
@@ -76,7 +80,7 @@ export function decodeView(s) {
         out.cam = { target: n.slice(0, 3), dist: n[3], q: n.slice(4).map((x) => x / qlen) };
       }
     } else if (k === 'p') out.ortho = val === 'o';
-    else if (k === 'u') out.up = val === 'z' ? 'z' : 'y';
+    else if (k === 'u') out.orient = val === 'z' ? Z_UP_ORIENT : val === 'y' ? DEFAULT_ORIENT : orientOrNull(val);
     else if (k === 's' && /^[a-z]+$/.test(val)) out.style = val;
     else if (k === 'x') {
       const [axis, t, f] = val.split(',');
@@ -87,9 +91,9 @@ export function decodeView(s) {
   }
   if (out.cam) {
     out.cam.ortho = !!out.ortho;
-    out.cam.up = out.up || 'y';
+    out.cam.orient = out.orient || DEFAULT_ORIENT;
   }
   delete out.ortho;
-  delete out.up;
+  delete out.orient;
   return out;
 }

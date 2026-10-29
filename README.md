@@ -31,7 +31,8 @@ URL parameters:
 | Parameter | Effect |
 |---|---|
 | `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start; a file on another site loads only if that site sends CORS headers (`Access-Control-Allow-Origin`), as GitHub raw files, most CDNs and CORS-enabled buckets do |
-| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. The names fill a drop-down beside Open…; picking one opens it into `?src=`. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
+| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. A name may also be `{"name": "…", "orient": "up:+z,front:-y"}`, which opens that model turned that way (see `orient=`). The names fill a drop-down beside Open…; picking one opens it into `?src=`. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
+| `orient=up:+z,front:-y` | which of the file's axes is up and which faces the viewer in the Front view, whatever frame the file was drawn in: any two of `up`, `front` and `right`, each `+x` `-x` `+y` `-y` `+z` or `-z`, perpendicular (in a URL, `+` is written `%2B`). The view presets are taken in it and the model is fitted, so files drawn differently open the same way round. It applies to a model opened from a URL; a list entry's own `orient` wins, and a bad value is ignored |
 | `backend=webgpu\|webgl2\|webgl1` | force one backend (default: try them in that order) |
 | `selftest=1` | after loading, pick the canvas centre and publish one JSON line in `<pre id="selftest">` (for automated checks) |
 
@@ -207,6 +208,7 @@ files load too.
 | `js/styles.js` | the display styles, their defaults and the paper edge colours |
 | `js/view-link.js` | a view as a URL hash and back |
 | `js/model-list.js` | `list=` files: parse, resolve, join in URL order, fetch with a size cap |
+| `js/orient.js` | an orientation (`up:+z,front:-y`): parse, and the rotation the view presets are taken in |
 | `js/face-order.js` | the faces' draw order: solids, then sheet bodies with less depth bias, so a sheet lying on a solid's face (a board's pads) shows |
 | `js/mesh-cache.js` | the conversions kept in the browser (IndexedDB) |
 | `js/palettes.js` | the colour schemes |

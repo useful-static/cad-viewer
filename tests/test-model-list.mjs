@@ -25,6 +25,15 @@ await test('a name may be an object with a name; an empty name shows the file', 
   const e = parseModelList('{"a.cadmesh": {"name": "A"}, "b.cadmesh": "  "}', L);
   assert.deepEqual(e.map((x) => x.name), ['A', 'b.cadmesh']);
 });
+await test('an entry may carry an orient, kept canonical; a bad one refuses the list naming the file', () => {
+  const e = parseModelList('{"a.cadmesh": {"name": "A", "orient": "up:+z,front:-y"}, "b.cadmesh": {"name": "B", "orient": "right:+y,up:z"}, "c.cadmesh": "C"}', L);
+  assert.deepEqual(e.map((x) => x.orient), ['+z-y', '+z+x', undefined]);
+  assert.throws(() => parseModelList('{"a.cadmesh": {"name": "A", "orient": "up:+z,front:+z"}}', L), /"a.cadmesh": its orient: up and front must be different axes/);
+  assert.throws(() => parseModelList('[["a.cadmesh", {"name": "A", "orient": 5}]]', L), /"a.cadmesh": its orient/);
+  // a file named twice keeps its first entry, orient included
+  const j = joinModelLists([parseModelList('{"a.cadmesh": {"name": "A", "orient": "+z-y"}}', L), parseModelList('{"a.cadmesh": {"name": "A2", "orient": "+z+x"}}', L)]);
+  assert.deepEqual(j, [{ url: 'https://site.example/api/a.cadmesh', name: 'A', orient: '+z-y' }]);
+});
 await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('"a list"', L), /one JSON object/);
   assert.throws(() => parseModelList('[["a.cadmesh", "A"], ["b.cadmesh"]]', L), /entry 2 is not a \[file, name\] pair/);
