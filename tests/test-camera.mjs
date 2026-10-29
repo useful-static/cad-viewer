@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  camDir, camUp, eyeDist, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy,
+  camDir, camUp, eyeDist, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy,
 } from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 
@@ -369,6 +369,44 @@ for (const ortho_ of [false, true]) {
     assert.ok(Math.hypot(after[0] - 250, after[1] + 120) > 50, `moved only to ${after}`);
   });
 }
+// ---- fitBox: Fit frames the box as the view sees it, not its bounding sphere ----
+test('fitBox: every corner in view at once in perspective and ortho, any view and aspect; not loose', () => {
+  const board = { min: [10, 20, -2], max: [95, 76, 18] };
+  const sphere = sphereOf(board);
+  for (const [yaw, pitch] of [[0.7, 0.45], [0, 0], [0, Math.PI / 2 - 1e-4], [2.3, -0.8], [-Math.PI / 2, 1.0]]) {
+    for (const [w, h] of [[390, 700], [1280, 760], [800, 500]]) {
+      const f = fitBox(cam({ q: quatFromView(yaw, pitch, 'z'), up: 'z' }), board, Math.PI / 4, w / h);
+      // one distance serves both projections (a switch never cuts the model);
+      // the tighter of the two is at the margin
+      let tightest = 0;
+      for (const o of [false, true]) {
+        const c = cam({ q: quatFromView(yaw, pitch, 'z'), up: 'z', ortho: o });
+        c.target = f.target; c.dist = f.dist;
+        let worst = 0;
+        for (let i = 0; i < 8; i++) {
+          const p = [0, 1, 2].map((k) => ((i >> k) & 1 ? board.max[k] : board.min[k]));
+          const [x, y] = screenPx(c, sphere, p, w, h);
+          worst = Math.max(worst, Math.abs(x) / (w / 2), Math.abs(y) / (h / 2));
+        }
+        const tag = `yaw ${yaw.toFixed(2)} pitch ${pitch.toFixed(2)} ${w}x${h} ${o ? 'ortho' : 'persp'}`;
+        assert.ok(worst <= 1 + 1e-9, `${tag}: a corner outside, at ${worst.toFixed(4)}`);
+        tightest = Math.max(tightest, worst);
+      }
+      assert.ok(tightest > 1 / 1.05 - 1e-6, `yaw ${yaw} ${w}x${h}: loose in both, ${tightest.toFixed(4)}`);
+    }
+  }
+});
+test('fitBox never frames farther than the sphere fit', () => {
+  const board = { min: [0, 0, 0], max: [85, 56, 20] };
+  for (const [yaw, pitch] of [[0.7, 0.45], [-Math.PI / 2, 1.0], [0, 0]]) {
+    for (const a of [390 / 700, 1.6]) {
+      const c = cam({ q: quatFromView(yaw, pitch, 'z'), up: 'z' });
+      const f = fitBox(c, board, c.fov, a);
+      const s = fitDistance(sphereOf(board).radius, c.fov, a);
+      assert.ok(f.dist <= s + 1e-9, `yaw ${yaw} aspect ${a.toFixed(2)}: box ${f.dist.toFixed(1)} > sphere ${s.toFixed(1)}`);
+    }
+  }
+});
 test('zoomAt at a zoom limit moves nothing', () => {
   const c = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z', viewRadius: 50 });
   c.dist = 50 * 0.05; // the closest zoomBy allows at aspect 1

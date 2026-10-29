@@ -70,6 +70,27 @@ export function orientRoles(o) {
   return { up: name(up), front: name(front), right: name(cross(up, front)) };
 }
 
+// The Iso preset, in the viewer's frame: [yaw, pitch]. On a tall view (a
+// portrait phone, aspect under PORTRAIT) a model whose footprint is clearly
+// longer one way (by LONG) is looked at along that length, from its left end
+// (or its front, when it runs front to back), 57° down, so its long side runs
+// up the screen: a board then covers 0.59 of a 390 x 700 view, against 0.285
+// in the usual iso, which a phone fits by its width (measured with
+// js/camera.js fitBox). Every model long the same way turns the same way, so
+// a list's boards still open alike.
+export const ISO = [0.7, 0.45];
+export const PORTRAIT = 0.8;
+export const LONG = 1.2;
+export function isoView(o, bbox, aspect) {
+  if (!bbox || !(aspect < PORTRAIT)) return ISO;
+  const { right, front } = orientRoles(o);
+  const ext = (n) => { const k = 'xyz'.indexOf(n[1]); return bbox.max[k] - bbox.min[k]; };
+  const r = ext(right), f = ext(front);
+  if (r > LONG * f) return [-Math.PI / 2, 1.0];
+  if (f > LONG * r) return [0, 1.0];
+  return ISO;
+}
+
 // The model-frame vector the orientation puts up on screen (the lighting's sky)
 export const orientUp = (o) => vec(o.slice(0, 2));
 

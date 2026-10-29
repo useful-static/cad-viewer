@@ -46,8 +46,11 @@ URL parameters:
 - **Navigation.** Orbit (drag) turns freely about every axis: over the top,
   upside down, round and round, with no stop at the poles. Pan (shift- or
   right-drag) and zoom (wheel, toward the point under the pointer). The Iso / Front / Back / Left / Right / Top /
-  Bottom views each set a level, upright view again. Fit; perspective or
-  orthographic; Y-up or Z-up.
+  Bottom views each set a level, upright view again. Fit frames the model as
+  the view sees it. On a portrait phone, Iso looks along a long model from
+  its end, so a board's long side runs up the screen and it fills about twice
+  as much of it; every board turns the same way. Perspective or orthographic;
+  Y-up or Z-up.
 - **Touch.** One finger orbits; two fingers pinch to zoom (toward the point
   between them) and drag to pan; tap selects; double-tap zooms to the
   selection. Controls are finger-sized wherever a touch screen is present.

@@ -6,8 +6,8 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, gu
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
-import { camDir, camUp, eyeOf, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy } from './camera.js';
+import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
@@ -621,25 +621,29 @@ function fitTo(bbox) {
   if (!bbox) return;
   const c = app.cam;
   const s = sphereOf(bbox);
-  c.target = s.center;
+  // the zoom's limits follow the sphere: what is framed, whatever the view
   c.viewRadius = s.radius;
   const box = $('stage');
   const h = Math.max(1, box.clientHeight);
   const aspect = box.clientWidth / h;
-  // The options bar covers the bottom of the view: fit in the part above it
-  // (a narrower vertical angle, the same width), and centre there by moving
-  // the target down by half the bar, so the model sits above the bar.
-  const bar = Math.min(optbarHeight(), h - 1);
+  // The box as this view sees it (js/camera.js fitBox), not its bounding
+  // sphere: the portrait Iso of a board needs it. The options bar covers the
+  // bottom of the view: fit in the part above it (a narrower vertical angle,
+  // the same width), and centre there by moving the target down by half the
+  // bar, so the model sits above the bar.
+  const bar = Math.max(0, Math.min(optbarHeight(), h - 1));
+  const vis = h - bar;
+  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), box.clientWidth / vis);
+  c.dist = f.dist;
+  c.target = f.target;
   if (bar > 0) {
-    const vis = h - bar;
-    const fov = 2 * Math.atan(Math.tan(c.fov / 2) * vis / h);
-    c.dist = fitDistance(s.radius, fov, box.clientWidth / vis);
     const perPx = (2 * c.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
     const up = camUp(c);
-    c.target = s.center.map((v, k) => v - up[k] * (bar / 2) * perPx);
-  } else {
-    c.dist = fitDistance(s.radius, c.fov, aspect);
+    c.target = c.target.map((v, k) => v - up[k] * (bar / 2) * perPx);
   }
+  // what this fit framed, so the options bar coming or going can frame it
+  // again while the view is untouched (syncOptbar)
+  app.lastFit = { bbox, q: c.q, dist: c.dist, target: c.target.slice(), bar };
   // this fit is for the stage as it is NOW: the resize refit must measure
   // later aspect changes from here, or a layout change in the same task
   // (the parts drawer growing as a load fills the tree) is applied twice
@@ -831,8 +835,12 @@ function edgesKey() {
 // (js/orient.js): the preset in the viewer's own frame, turned into the file's
 const presetQuat = (yaw, pitch, orient) => qMul(orientQuat(orient), quatFromView(yaw, pitch, 'y'));
 
+// Iso on a tall view looks along a long model (js/orient.js isoView)
+const stageAspectNow = () => { const s = $('stage'); return s.clientWidth / Math.max(1, s.clientHeight); };
+const presetView = (v) => (v === 'iso' && app.header ? isoView(app.cam.orient, app.header.bbox, stageAspectNow()) : VIEWS[v]);
+
 function setView(v) {
-  [app.cam.yaw, app.cam.pitch] = VIEWS[v];
+  [app.cam.yaw, app.cam.pitch] = presetView(v);
   app.cam.q = presetQuat(app.cam.yaw, app.cam.pitch, app.cam.orient);
   fitTo(app.header && app.header.bbox);
 }
@@ -1253,6 +1261,17 @@ function syncOptbar() {
   bar.hidden = card || ![...bar.children].some((o) => !o.hidden);
   $('stage').style.setProperty('--optbar-h', `${optbarHeight()}px`);
   for (const o of bar.children) optFade(o);
+  // The bar came or grew over a view still as Fit left it: fit again, above
+  // the bar. A tight fit put a model's near corner under a bar that appeared
+  // later (Measure turned on), where no click can reach it. A bar that goes
+  // or shrinks covers nothing: the view stays (closing a tool must not move it).
+  if (!card && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
+}
+
+// the camera is where the last Fit put it (nothing has moved it since)
+function atLastFit() {
+  const f = app.lastFit, c = app.cam;
+  return !!f && !!app.header && c.q === f.q && c.dist === f.dist && c.target.every((v, k) => v === f.target[k]);
 }
 
 const optbarHeight = () => ($('optbar').hidden ? 0 : $('optbar').offsetHeight);
@@ -3136,6 +3155,22 @@ function wireInput() {
   app.stageAspect = stage.clientWidth / Math.max(1, stage.clientHeight);
   new ResizeObserver(() => {
     const a = stage.clientWidth / Math.max(1, stage.clientHeight);
+    // a phone turned between portrait and landscape while the view is still
+    // the one the model opened at: the Iso that suits the new shape
+    // (js/orient.js isoView), framed afresh
+    if (a > 0 && app.header && app.cam.q === app.loadQ && (a < PORTRAIT) !== (app.stageAspect < PORTRAIT)) {
+      setView('iso');
+      app.loadQ = app.cam.q;
+      queueFrame();
+      return;
+    }
+    // a view still as Fit left it is fitted again for the new shape: exact,
+    // where scaling the distance (below) holds a sphere's framing, not the box's
+    if (a > 0 && a !== app.stageAspect && atLastFit()) {
+      fitTo(app.lastFit.bbox);
+      queueFrame();
+      return;
+    }
     if (a > 0 && a !== app.stageAspect) {
       app.cam.dist = refitForAspect(app.cam.dist, app.cam.viewRadius, app.cam.fov, app.stageAspect, a);
       // the zoom limits scale with aspect by the same ratio as the refit, so

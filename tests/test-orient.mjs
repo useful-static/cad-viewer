@@ -3,7 +3,7 @@
 //   node tests/test-orient.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
+import { DEFAULT_ORIENT, ISO, PORTRAIT, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
 import { camDir, camUp, qMul, quatFromView } from '../js/camera.js';
 
 let passed = 0;
@@ -73,6 +73,25 @@ test('two files drawn differently, oriented to match, give the same picture', ()
   const toA = (w) => [w[1], -w[0], w[2]];
   close(toA(camDir(b)), camDir(a), 'eye');
   close(toA(camUp(b)), camUp(a), 'screen up');
+});
+
+// ---- the portrait Iso: a long model seen along its length on a tall view ----
+const board = { min: [0, 0, 0], max: [85, 56, 20] }; // long along x
+test('a wide or square view keeps the usual iso; so does a model without a long side', () => {
+  assert.deepEqual(isoView(Z_UP_ORIENT, board, 1.6), ISO);
+  assert.deepEqual(isoView(Z_UP_ORIENT, board, PORTRAIT), ISO);
+  assert.deepEqual(isoView(Z_UP_ORIENT, { min: [0, 0, 0], max: [50, 45, 9] }, 0.5), ISO);
+  assert.deepEqual(isoView(Z_UP_ORIENT, null, 0.5), ISO);
+});
+test('on a tall view a board long left to right is seen from its left end, steeply; long front to back, from the front', () => {
+  // Z up, front -y: right is +x, the board's long side
+  assert.deepEqual(isoView(Z_UP_ORIENT, board, 0.55), [-Math.PI / 2, 1.0]);
+  // the same board turned (front +x): its long side now runs front to back
+  assert.deepEqual(isoView(parseOrient('up:+z,front:+x'), board, 0.55), [0, 1.0]);
+  // seen that way, the long side runs up the screen: the view looks along x
+  const q = qMul(orientQuat(Z_UP_ORIENT), quatFromView(-Math.PI / 2, 1.0, 'y'));
+  const d = camDir({ q });
+  assert.ok(Math.abs(d[0]) > Math.abs(d[1]) && d[0] < 0, `eye toward ${d.map((v) => v.toFixed(2))}: from the -x end`);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

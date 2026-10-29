@@ -135,6 +135,36 @@ export function fitDistance(radius, fov, aspect) {
   return (radius / Math.sin(half)) * 1.05;
 }
 
+// Frame a box as this camera sees it: the target at the centre of the box's
+// projected extent, and the distance at which all eight corners fit the view
+// (half-angle fov/2 vertically, aspect × that horizontally), in perspective
+// and in ortho alike, so switching projection never cuts it. A sphere fit
+// frames the box's bounding sphere, which is no closer for an iso view of a
+// board (239.7 against 242.2) but leaves a board seen from its end, the
+// portrait view, a fifth of the width unused. -> { target, dist }
+export function fitBox(cam, bbox, fov, aspect, margin = 1.05) {
+  const d = camDir(cam), u = camUp(cam);
+  const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
+  const c = [0, 1, 2].map((k) => (bbox.min[k] + bbox.max[k]) / 2);
+  const pts = [];
+  for (let i = 0; i < 8; i++) {
+    const p = [0, 1, 2].map((k) => ((i >> k) & 1 ? bbox.max[k] : bbox.min[k]) - c[k]);
+    pts.push([p[0] * r[0] + p[1] * r[1] + p[2] * r[2], p[0] * u[0] + p[1] * u[1] + p[2] * u[2], p[0] * d[0] + p[1] * d[1] + p[2] * d[2]]);
+  }
+  const mid = (j) => (Math.min(...pts.map((p) => p[j])) + Math.max(...pts.map((p) => p[j]))) / 2;
+  const cx = mid(0), cy = mid(1);
+  const tv = Math.tan(fov / 2), th = tv * (aspect > 0 ? aspect : 1);
+  let dist = 0;
+  for (const [x, y, z] of pts) {
+    const ax = Math.abs(x - cx) * margin, ay = Math.abs(y - cy) * margin;
+    // perspective: the corner at depth (dist - z) from the eye; ortho: the
+    // view's half-size is dist × the tangent
+    dist = Math.max(dist, z + ax / th, z + ay / tv, ax / th, ay / tv);
+  }
+  const target = [0, 1, 2].map((k) => c[k] + r[k] * cx + u[k] * cy);
+  return { target, dist: dist > 0 ? dist : 1 };
+}
+
 // Near/far planes that contain the whole model from wherever the eye is, after
 // any pan or zoom: bound the model by its bounding sphere (center, radius) and
 // measure from the eye, not from the orbit target. The near floor scales with
