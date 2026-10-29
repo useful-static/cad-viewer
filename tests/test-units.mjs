@@ -30,6 +30,16 @@ test('Auto: the declared unit, its nearest display unit, else mm', () => {
   assert.equal(autoUnit(null), 'mm');
   assert.equal(autoUnit(undefined), 'mm');
 });
+test('Auto: a model declared in metres but under a metre across is shown in mm', () => {
+  // a 123 mm board whose STEP declares metres read "0.123 × 0.072 × 0.012 m" (e2e review)
+  assert.equal(autoUnit('m', 123), 'mm');
+  assert.equal(autoUnit('m', 999.9), 'mm');
+  assert.equal(autoUnit('m', 5080), 'm'); // a rack: metres it says, metres it is
+  assert.equal(autoUnit('km', 50), 'mm');
+  assert.equal(autoUnit('in', 50), 'in'); // only metres: an inch file stays in inches
+  assert.equal(displayUnit('auto', 'm', 123), 'mm');
+  assert.equal(displayUnit('m', 'm', 123), 'm'); // an explicit choice still wins
+});
 test('an explicit choice wins over Auto; anything else is Auto', () => {
   assert.equal(displayUnit('cm', 'in'), 'cm');
   assert.equal(displayUnit('auto', 'in'), 'in');

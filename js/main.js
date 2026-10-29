@@ -1247,7 +1247,8 @@ function showModelName() {
   const entry = cur && [...sel.options].find((o) => o.value && o.value === cur);
   const label = entry ? entry.textContent : app.sourceName;
   const s = app.stats;
-  $('model').textContent = `${label} · ${s.meshes} bodies · ${fmtInt(s.triangles)} triangles`;
+  // (counted as the info panel counts: "1,391 bodies", and "1 body")
+  $('model').textContent = `${label} · ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'body' : 'bodies'} · ${fmtInt(s.triangles)} triangles`;
   $('model').title = entry ? `${$('model').textContent} (${app.sourceName})` : $('model').textContent; // the narrow footer truncates it
   document.title = `${label} — ${SHORT_TITLE}`;
 }
@@ -2580,7 +2581,12 @@ function select(ids, additive, name = null) {
 // is in mm (OpenCascade converts on import); a file whose header names
 // another unit is shown in that unit, unconverted.
 const geomMm = () => !app.header || app.header.units === 'millimeter';
-const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits);
+// (the model's largest extent, in mm, for Auto's choice: units.js autoUnit)
+const modelSizeMm = () => {
+  const b = app.header && app.header.bbox;
+  return b ? Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : Infinity;
+};
+const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, modelSizeMm());
 const lenUnit = () => (geomMm() ? curUnit() : app.header.units);
 const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : v.toFixed(1));
 
@@ -2599,7 +2605,7 @@ function syncUnitsRow() {
     : declared ? (UNIT_WORDS[declared] || declared) : 'not recorded';
   const sel = $('unitsel');
   sel.disabled = !geomMm();
-  sel.options[0].text = `Auto (${autoUnit(declared)})`;
+  sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
   sel.value = app.unitChoice;
 }
 
@@ -2632,7 +2638,7 @@ function fillInfo(el) {
   };
   // the file, in full: the narrow footer truncates it, and its title tooltip
   // never shows on a touch screen
-  if (app.header) add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} bodies`);
+  if (app.header) add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} ${app.header.meshes.length === 1 ? 'body' : 'bodies'}`);
   // the backend, and why any faster one was skipped -- with or without a model
   // (it explains a slow first load too): the badge's tooltip says so as well,
   // but a tooltip never shows on a touch screen or to the keyboard

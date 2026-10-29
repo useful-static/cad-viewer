@@ -107,9 +107,10 @@
   #info b { color:var(--dim); font-weight:500; }
   #info[hidden], #infounits[hidden] { display:none; }
   #unitsel { padding:1px 4px; }
-  /* (16em: a product name of about 28 characters whole; at 12em names were
-     cut. The fold step sheds it into File where the row is short) */
-  #modellist { max-width:16em; text-overflow:ellipsis; }
+  /* (22em: a product name of about 28 characters whole: at 12em and at 16em
+     names were cut, 3 of a board list's 8 at 1280 px. The fold step sheds it
+     into File where the row is short) */
+  #modellist { max-width:22em; text-overflow:ellipsis; }
   #modellist[hidden] { display:none; }
   #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);

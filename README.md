@@ -57,10 +57,11 @@ URL parameters:
   Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
   the same part of the model framed.
 - **A toolbar that fits.** The toolbar stays one row at every size: where
-  its controls do not fit, the view presets, Ortho, Z up and Section fold
-  into a **View** menu, then Save .cadmesh and Copy view link into a
-  **File** menu, then a model list's drop-down into File too, then
-  Isolate / Hide / Show all / Undo into a **Show** menu. A tool's own
+  its controls do not fit, the view presets fold first, into a **Views**
+  menu, then Save .cadmesh and Copy view link into a **File** menu, then
+  Ortho, Z up, Section and Style (with the presets) into a **View** menu,
+  then a model list's drop-down into File too, then Isolate / Hide /
+  Show all / Undo into a **Show** menu. A tool's own
   controls are in an **options bar** along the bottom of the view while the
   tool is on, led by the tool's name as a toggle that turns it off.
 - **Full screen.** A button at the top right of the view takes the whole
@@ -88,8 +89,9 @@ URL parameters:
   is shaded flat, like a cut face.
 - **Units.** The parts panel names the unit the file was drawn in (read
   from a STEP or IGES file's own unit declarations; "not recorded" for an
-  older `.cadmesh`) and shows lengths in it on **Auto**, or in mm, cm, m or
-  in by choice, which the browser remembers.
+  older `.cadmesh`) and shows lengths in it on **Auto** (in mm instead for
+  a model drawn in metres that is under a metre across), or in mm, cm, m
+  or in by choice, which the browser remembers.
 - **Edges and display styles.** The b-rep face boundaries are drawn over
   the shaded faces (parts under 6 px on screen draw none, and in the line
   styles are not drawn or picked at all). View > **Style**:

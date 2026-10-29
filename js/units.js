@@ -15,10 +15,17 @@ const DECIMALS = { mm: 2, cm: 3, m: 4, in: 3 };
 // the four; the nearest of them in the same system otherwise; mm when the
 // file says nothing (null) or its shapes disagree ('mixed').
 const AUTO = { mm: 'mm', cm: 'cm', m: 'm', in: 'in', ft: 'in', yd: 'in', mil: 'in', uin: 'in', um: 'mm', km: 'm' };
-export const autoUnit = (declared) => AUTO[declared] || 'mm';
+// sizeMm: the model's largest extent. A model declared in metres but under a
+// metre across is shown in mm: a 123 mm board in m read "0.123 × 0.072 ×
+// 0.012 m" and its small parts "0.000 m" (a board's STEP declares metres:
+// the live end-to-end review). Its declared unit is still named in the info.
+export const autoUnit = (declared, sizeMm = Infinity) => {
+  const u = AUTO[declared] || 'mm';
+  return u === 'm' && sizeMm < 1000 ? 'mm' : u;
+};
 
 // the unit in force: an explicit choice wins over Auto
-export const displayUnit = (choice, declared) => (DISPLAY_UNITS.includes(choice) ? choice : autoUnit(declared));
+export const displayUnit = (choice, declared, sizeMm) => (DISPLAY_UNITS.includes(choice) ? choice : autoUnit(declared, sizeMm));
 
 const sig4 = (x) => x.toLocaleString('en-US', { maximumSignificantDigits: 4 });
 

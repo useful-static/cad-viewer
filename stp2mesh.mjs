@@ -27,6 +27,10 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.
   --progress       print OpenCascade's progress to stderr (needs the occt-progress build)
   --no-kind        leave each body's b-rep status out of the header, so builds with and without
                    it can be compared byte for byte (occt-progress/compare.sh)
+  --no-edges       leave the edge sections out: the viewer then finds the edges in a worker
+                   after the model is shown (a 6.2 MB board file is 3.3 MB without them, and
+                   ready at the same moment: the edges came 0.18-0.20 s later, off the main
+                   thread, on a 1280 px WebGL2 run)
 `;
 
 function parseArgs(argv) {
@@ -59,6 +63,7 @@ function parseArgs(argv) {
     else if (k === '--threads') a.threads = true;
     else if (k === '--progress') a.progress = true;
     else if (k === '--no-kind') a.noKind = true;
+    else if (k === '--no-edges') a.noEdges = true;
     else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
     else if (!a.input) a.input = k;
     else throw new Error(`unexpected argument ${k}`);
@@ -194,7 +199,7 @@ async function main() {
     process.stderr.write(`WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
-  const buf = encodeCadmesh(model);
+  const buf = encodeCadmesh(model, { edges: !args.noEdges });
   if (model.unmeshedFaces) {
     process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }
