@@ -93,10 +93,11 @@ URL parameters:
   older `.cadmesh`) and shows lengths in it on **Auto** (in mm instead for
   a model drawn in metres that is under a metre across), or in mm, cm, m
   or in by choice, which the browser remembers.
-- **Edges and display styles.** The b-rep face boundaries are drawn over
-  the shaded faces (parts under 6 px on screen draw none, and in the line
-  styles are not drawn or picked at all). View > **Style**:
-  Shaded, Shaded + edges (the default for CAD files), Hidden line, Hidden
+- **Edges and display styles.** A model opens in Shaded. In Shaded + edges
+  the b-rep face boundaries are drawn over the shaded faces (parts under
+  6 px on screen draw none, and in the line styles are not drawn or picked
+  at all). View > **Style**:
+  Shaded (the default), Shaded + edges, Hidden line, Hidden
   grey (the selected or hovered parts' hidden edges dashed and lighter), Wire, or X-ray (translucent
   faces). The last four also draw the outlines of curved faces, and the
   hidden-line styles fill cut solids flat grey while a section is on (an

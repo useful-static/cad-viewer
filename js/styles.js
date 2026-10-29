@@ -24,9 +24,11 @@ export const STYLES = [
 
 export const styleById = (id) => STYLES.find((s) => s.id === id) || null;
 
-// Until a choice is made: Shaded + edges for a b-rep file (its edges are the
-// CAD program's), Shaded for a mesh file (its triangle edges are not).
-export const defaultStyle = (isMeshFile) => (isMeshFile ? 'shaded' : 'edges');
+// Until a choice is made: Shaded, for every file. (A b-rep file started in
+// Shaded + edges; its outlines, drawn over every part once the edge list was
+// built, made a board look worse, operator 2026-10-29.) E or the Style
+// select turns them on. The argument stays for callers that pass the type.
+export const defaultStyle = (_isMeshFile) => 'shaded';
 
 // The style in force: an explicit, known choice, else the per-type default.
 export const styleFor = (choice, isMeshFile) => (styleById(choice) ? choice : defaultStyle(isMeshFile));

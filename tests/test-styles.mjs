@@ -16,12 +16,13 @@ test('six styles; the paper ones are Hidden line, Hidden grey and Wire; outlines
   assert.deepEqual(STYLES.filter((s) => s.paper).map((s) => s.id), ['hidden', 'hiddengrey', 'wire']);
   assert.deepEqual(STYLES.filter((s) => s.outline).map((s) => s.id), ['hidden', 'hiddengrey', 'wire', 'xray']);
 });
-test('default: Shaded + edges for a b-rep file, Shaded for a mesh file; a known choice wins', () => {
-  assert.equal(defaultStyle(false), 'edges');
+test('default: Shaded for every file, b-rep or mesh; a known choice wins', () => {
+  assert.equal(defaultStyle(false), 'shaded');
   assert.equal(defaultStyle(true), 'shaded');
   assert.equal(styleFor('wire', false), 'wire');
+  assert.equal(styleFor('edges', false), 'edges');
   assert.equal(styleFor('nonsense', true), 'shaded');
-  assert.equal(styleFor(null, false), 'edges');
+  assert.equal(styleFor(null, false), 'shaded');
 });
 test('E switches Shaded and Shaded + edges only', () => {
   assert.equal(toggleEdges('shaded'), 'edges');
