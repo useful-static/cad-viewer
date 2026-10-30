@@ -935,6 +935,7 @@ function currentView() {
     // always the style shown, the default too: a link without one opens in
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
+    aspect: stageAspectNow(), // (a link opened on another shape is reframed)
     section: app.section, hidden: [...app.hidden], selected: [...app.selected],
     keys: app.bodyKeys,
     notes: app.measure ? app.measure.notes() : [],
@@ -942,7 +943,8 @@ function currentView() {
 }
 
 // a decoded view onto the loaded model; ids past its bodies are dropped
-function applyView(v) {
+// link: a view link being opened (its selected part is named on arrival)
+function applyView(v, link = false) {
   if (!app.header) return;
   // the bodies it names: by id while the model is the one the link was made
   // on, else the selection by name (js/view-link.js resolveBodies)
@@ -969,10 +971,34 @@ function applyView(v) {
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   select(bodies.selected, false);
+  // A view made on another shape (a desktop link opened on a phone): its
+  // selected parts framed afresh from the same side, with room around them,
+  // or with nothing selected, as far out as keeps all the link showed in
+  // view (its camera alone cut the part off at the edge of a narrow screen:
+  // UI organization review, features rank 1)
+  const a1 = stageAspectNow();
+  if (v.cam && v.aspect > 0 && Math.abs(a1 / v.aspect - 1) > 0.05) {
+    const c = app.cam;
+    const box = bodies.selected.length ? drawnBox(bodies.selected) : null;
+    if (box) {
+      const f = fitPose(box, c.q, 2.2);
+      c.target = f.target;
+      c.dist = f.dist;
+    } else c.dist *= Math.max(1, v.aspect / a1);
+    c.viewRadius = Math.min(app.sphere.radius, c.dist / fitDistance(1, c.fov, a1));
+  }
   // its notes (a link with none leaves the notes there are)
   if (v.notes && app.measure) app.measure.setNotes(v.notes);
   updateButtons();
   viewChanged();
+  // the part a link points at, named as it opens (on a phone the info panel
+  // is in the closed drawer)
+  if (link && bodies.selected.length && !bodies.changed) {
+    const ids = bodies.selected;
+    const name = ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} parts`;
+    flashHover(`linked: ${name}`, 4000);
+    announce(`the link points at ${name}`);
+  }
   if (bodies.changed) {
     const note = `this model has changed since the link was made: ${v.selNames?.length
       ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : 'its parts are not selected'}${v.hidden?.length ? ', hidden parts not applied' : ''}`;
@@ -1278,7 +1304,8 @@ function stepPose(s) {
       if (r.missing.length) app.tourMissing.push(...r.missing);
       ids = r.ids.length ? r.ids : null;
     }
-    const box = drawnBox(ids) || drawnBox(null);
+    // (a frame given as a box: the box itself)
+    const box = s.frame && s.frame.min ? { min: s.frame.min.slice(), max: s.frame.max.slice() } : drawnBox(ids) || drawnBox(null);
     if (!box) return null;
     if (s.from === 'outside') q = outsideQuat(box) || q;
     const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover());
@@ -1722,8 +1749,11 @@ async function tourVideo(tour) {
   draw();
   showTourStep(0);
   setTourPlaying(true);
-  // until it has played through (or the visitor stopped it)
-  while (app.tour === t && t.playing) await new Promise((ok) => setTimeout(ok, 100));
+  // until it has played through (or the visitor stopped it), and never past
+  // the tour's own length with room to spare (a stalled play must not record
+  // forever)
+  const limit = performance.now() + 1000 * (10 + 1.5 * tour.steps.reduce((s, x) => s + x.transition + x.hold, 0));
+  while (app.tour === t && t.playing && performance.now() < limit) await new Promise((ok) => setTimeout(ok, 100));
   cancelAnimationFrame(raf);
   rec.stop();
   await stopped;
@@ -3312,7 +3342,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // from a device, never to a model list's first (review r16 M2)
   // (with ?add= models still to come, after them: its ids are the scene's)
   if (app.pendingView && !app.addsPending && (app.pendingView.src ? app.sourceUrl === app.pendingView.src : !app.sourceUrl)) {
-    applyView(app.pendingView.view);
+    applyView(app.pendingView.view, true);
     app.pendingView = null;
   }
   const tris = mesh.header.indexCount / 3;
@@ -5725,7 +5755,7 @@ async function main() {
     // as first opened shows and Back returns to)
     const now = new URLSearchParams(location.search).get('src');
     const first = app.listEntries?.[0]?.url;
-    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()));
+    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()), true);
   });
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the user opened
@@ -5765,7 +5795,7 @@ async function main() {
       }
       app.addsPending = false;
       if (app.pendingView && app.header && app.pendingView.src === app.sourceUrl) {
-        applyView(app.pendingView.view);
+        applyView(app.pendingView.view, true);
         app.pendingView = null;
       }
     });

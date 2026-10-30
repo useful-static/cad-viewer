@@ -87,8 +87,14 @@ function parseStep(s, where, defaults, bad) {
     }
   }
   if (s.frame !== undefined) {
-    if (s.frame !== 'all' && !isNames(s.frame)) throw bad(at('frame'), '"all" or a list of part names');
-    out.frame = s.frame === 'all' ? 'all' : s.frame.map((x) => x.trim());
+    // "all", part names, or a box in the model's millimetres (a part the
+    // file gives no name of its own: a chip under a heatsink)
+    const f = s.frame;
+    if (f && typeof f === 'object' && !Array.isArray(f)) {
+      if (!isVec(f.min, 3) || !isVec(f.max, 3) || f.min.some((v, k) => v > f.max[k])) throw bad(at('frame'), 'a box needs "min": [x, y, z] and "max": [x, y, z], min ≤ max');
+      out.frame = { min: f.min.slice(), max: f.max.slice() };
+    } else if (f !== 'all' && !isNames(f)) throw bad(at('frame'), '"all", a list of part names, or { "min": [x, y, z], "max": [x, y, z] }');
+    else out.frame = f === 'all' ? 'all' : f.map((x) => x.trim());
   }
   if (s.from !== undefined) {
     // a preset, or the camera's orientation itself (a quaternion: the

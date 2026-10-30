@@ -132,6 +132,11 @@ test('from-orientation', () => {
   assert.deepEqual(t.steps[0].from, [0, 0, 0, 1]);
   assert.equal(t.steps[1].from, 'top');
   assert.equal(t.steps[2].from, 'outside');
+  // a frame as a box (a part with no name of its own)
+  const b = parseTour(JSON.stringify({ cadtour: 1, steps: [{ frame: { min: [0, 0, 1], max: [10, 5, 2] }, from: 'outside' }] }));
+  assert.deepEqual(b.steps[0].frame, { min: [0, 0, 1], max: [10, 5, 2] });
+  assert.deepEqual(tourNames(b), []);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, steps: [{ frame: { min: [5, 0, 0], max: [1, 1, 1] } }] })), /step 1 "frame"/);
   assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, steps: [{ from: [1, 2] }] })), /step 1 "from"/);
 });
 

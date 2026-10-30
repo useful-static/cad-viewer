@@ -111,6 +111,9 @@ export function encodeView(v) {
   const c = v.cam;
   f.push(`c:${[...c.target.map((t) => near(t, c.dist)), num(c.dist), ...c.q.map(num)].join(',')}`);
   if (c.ortho) f.push('p:o');
+  // the view's shape (width / height) when the link was made: opened on
+  // another shape (a desktop link on a phone), the view is reframed
+  if (v.aspect > 0) f.push(`w:${+v.aspect.toFixed(3)}`);
   const o = c.orient || DEFAULT_ORIENT;
   if (o !== DEFAULT_ORIENT) f.push(`u:${o === Z_UP_ORIENT ? 'z' : o}`);
   if (v.style) f.push(`s:${v.style}`);
@@ -145,6 +148,7 @@ export function decodeView(s) {
         out.cam = { target: n.slice(0, 3), dist: n[3], q: n.slice(4).map((x) => x / qlen) };
       }
     } else if (k === 'p') out.ortho = val === 'o';
+    else if (k === 'w') { const a = Number(val); if (a > 0.05 && a < 20) out.aspect = a; }
     else if (k === 'u') out.orient = val === 'z' ? Z_UP_ORIENT : val === 'y' ? DEFAULT_ORIENT : orientOrNull(val);
     else if (k === 's' && /^[a-z]+$/.test(val)) out.style = val;
     else if (k === 'x') {

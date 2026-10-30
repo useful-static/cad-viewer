@@ -123,5 +123,12 @@ test('an older link (no fingerprint) keeps its ids; too many selected leaves the
   assert.deepEqual(decodeView('n:@@,!!').selNames, []);
 });
 
+test('the view shape round-trips (a desktop link reframed on a phone); a wild one is dropped', () => {
+  const v = { cam: { target: [0, 0, 0], dist: 10, q: [0, 0, 0, 1] }, aspect: 1.6012 };
+  assert.equal(decodeView(encodeView(v)).aspect, 1.601);
+  assert.equal(decodeView(encodeView({ cam: v.cam })).aspect, undefined); // an older link: none
+  for (const w of ['0', '-1', '99', 'x']) assert.equal(decodeView(`c:0,0,0,10,0,0,0,1;w:${w}`).aspect, undefined);
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
