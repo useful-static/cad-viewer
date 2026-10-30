@@ -102,10 +102,12 @@ bool clipped() {
 }`;
 
 const FS_SHADE = FS_COMMON + `
+uniform vec4 uGhost; // x > 0: the ghost pass, only the HIDDEN bodies, greyed, at alpha x
 void main() {
   if (clipped()) discard;
   vec4 st = stateOf();
-  if (st.g > 0.5) discard;
+  if (uGhost.x > 0.0) { if (st.g < 0.5) discard; }
+  else if (st.g > 0.5) discard;
   vec3 v = normalize(vView);
   // a zero normal (degenerate or isolated vertex) would normalize to NaN
   vec3 n = dot(vNrm, vNrm) > 1e-12 ? normalize(vNrm) : v;
@@ -134,6 +136,7 @@ void main() {
   if (st.b > 0.5) c = c + vec3(0.12);
   // X-ray: premultiplied, blended one / one-minus-src-alpha
   float a = uParams.w > 0.0 ? uParams.w : 1.0;
+  if (uGhost.x > 0.0) { c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.6); a = uGhost.x; }
   gl_FragColor = vec4(c * a, a);
 }`;
 
@@ -315,7 +318,31 @@ function compile(gl, type, src) {
 }
 
 const UNIFORMS = ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN', 'uPx', 'uHoverId', 'uNear',
-  'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill', 'uXp'];
+  'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill', 'uXp', 'uGhost', 'uGc', 'uGx', 'uGy', 'uGa'];
+
+// The ground shadow (frame.ground): a quad centre + x * ax + y * ay over x, y
+// in [-1, 1] on the ground under the model, dark at the middle and fading to
+// nothing at the rim (uGa.x its strongest alpha); drawn before the faces with
+// no depth test or write, so the model always covers it
+const VS_GROUND = `
+attribute vec2 aXY;
+uniform mat4 uViewProj;
+uniform vec4 uGc;
+uniform vec4 uGx;
+uniform vec4 uGy;
+varying vec2 vXY;
+void main() {
+  vXY = aXY;
+  gl_Position = uViewProj * vec4(uGc.xyz + aXY.x * uGx.xyz + aXY.y * uGy.xyz, 1.0);
+}`;
+const FS_GROUND = `
+precision mediump float;
+uniform vec4 uGa;
+varying vec2 vXY;
+void main() {
+  float a = uGa.x * (1.0 - smoothstep(0.15, 1.0, length(vXY)));
+  gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+}`;
 const BODY_TEX_W = 1024;
 
 function program(gl, fs, vs = VS, attrs = ['aPos', 'aNrm', 'aCol', 'aId']) {
@@ -374,6 +401,11 @@ export class WebGLRenderer {
     this.edgeProg = program(gl, FS_EDGE, cullDef + VS_EDGE,
       ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2', ...(this.bodyTexOk ? [] : ['aBody'])]);
     this.canDrawEdges = true;
+    // the ground shadow: 4 corners as a strip, its own small program
+    this.groundProg = program(gl, FS_GROUND, VS_GROUND, ['aXY']);
+    this.groundBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.groundBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.edgeRaw = null;     // the instance data as given, to rebuild when the body table arrives
     this.faceBodyBuf = null; // CULL_ATTR: each drawn vertex's body centre, radius
     this.faceIds = null;     // the drawn vertices' id bytes, for faceBodyBuf
@@ -840,6 +872,32 @@ export class WebGLRenderer {
     gl.uniform4f(u.uCull, frame.focalPx || 0, cull ? e.minPx : 0, 0, cull ? 1 : 0);
   }
 
+  // the ground shadow, before the faces (see VS_GROUND)
+  _drawGround(frame) {
+    const gl = this.gl, g = frame.ground, p = this.groundProg;
+    gl.useProgram(p.p);
+    gl.uniformMatrix4fv(p.u.uViewProj, false, frame.viewProj);
+    gl.uniform4f(p.u.uGc, g.c[0], g.c[1], g.c[2], 0);
+    gl.uniform4f(p.u.uGx, g.ax[0], g.ax[1], g.ax[2], 0);
+    gl.uniform4f(p.u.uGy, g.ay[0], g.ay[1], g.ay[2], 0);
+    gl.uniform4f(p.u.uGa, g.alpha, 0, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.groundBuf);
+    // (attribute 0 only: the others a face draw left on are turned off here,
+    // and the face draw's _bind turns them on again)
+    for (let i = 1; i < 8; i++) gl.disableVertexAttribArray(i);
+    if (this.instancing) this.instancing.divisor(0, 0);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
   // The explode fraction to draw with: 0 unless the body table (which holds
   // the directions) is a texture and is the drawn mesh's. Without a table
   // texture (a WebGL1 with no vertex textures) Explode is not offered.
@@ -872,6 +930,7 @@ export class WebGLRenderer {
     if (!this.vb || frame.drawModel === false) return;
     const edges = frame.edges && (this.edgeCount || this.silCount) && this.edgesFor === this.drawn;
     const faces = (frame.style && frame.style.faces) || 'shade';
+    if (frame.ground) this._drawGround(frame);
     // The faces are always pushed back a little, so their own boundary edges
     // win the depth test along them; always, and in the pick pass too, so a
     // frame with and without edges, and a pick, see the same face depths.
@@ -887,10 +946,23 @@ export class WebGLRenderer {
       }
       this._bind(this.shade, frame);
       this.gl.uniform4f(this.shade.u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, faces === 'xray' ? 0.25 : 1);
+      gl.uniform4f(this.shade.u.uGhost, 0, 0, 0, 0);
       this._draw();
       gl.colorMask(true, true, true, true);
       gl.depthMask(true);
       gl.disable(gl.BLEND);
+      // the hidden parts as ghosts: over the shown faces, no depth written
+      if (frame.ghost) {
+        gl.depthMask(false);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.uniform4f(this.shade.u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 1);
+        gl.uniform4f(this.shade.u.uGhost, frame.ghost, 0, 0, 0);
+        this._draw();
+        gl.uniform4f(this.shade.u.uGhost, 0, 0, 0, 0);
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+      }
       // the cut fill: the same bias, so its depths equal the depth-only pass's
       if (faces === 'depth' && frame.clip && frame.fill) {
         this._bind(this.fillProg, frame);

@@ -1,0 +1,23 @@
+{
+  "name": "CAD viewer",
+  "short_name": "CAD viewer",
+  "description": "View STEP, IGES, BREP, mesh and DXF files in the browser. Files stay on your device.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1d2127",
+  "theme_color": "#1d2127",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }],
+  "file_handlers": [{
+    "action": "./",
+    "accept": {
+      "model/step": [".stp", ".step"],
+      "model/iges": [".igs", ".iges"],
+      "model/stl": [".stl"],
+      "model/obj": [".obj"],
+      "model/3mf": [".3mf"],
+      "model/gltf-binary": [".glb"],
+      "image/vnd.dxf": [".dxf"]
+    }
+  }]
+}

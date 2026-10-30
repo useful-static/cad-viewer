@@ -1,9 +1,10 @@
 # cad-viewer
 
 A static, dependency-free browser viewer for **STEP / IGES / BREP** CAD
-assemblies. It renders with **WebGPU** and falls back to **WebGL2**, then
-**WebGL1**. There is no build step and no CDN: serve the directory and open
-`index.html`.
+assemblies, mesh files (**STL, OBJ, PLY, OFF, 3MF, glTF / GLB**) and 2D
+**DXF** drawings. It renders with **WebGPU** and falls back to **WebGL2**,
+then **WebGL1**. There is no build step and no CDN: serve the directory and
+open `index.html`.
 
 **Live: https://cad.place/** — drop a file on the page.
 
@@ -125,6 +126,30 @@ URL parameters:
   gap between the selected parts (or the first model) and the other model,
   drawn as a distance; 0 means they touch or overlap. A link can open both:
   `?src=board.stp&add=case.stp&addat=0,0,1.6`.
+- **Mesh files.** STL (binary or ASCII), OBJ (drop its `.mtl` with it for
+  colours), PLY (vertex colours), OFF, 3MF (units, components, colours) and
+  glTF / GLB (drop a `.gltf`'s `.bin` with it) open like a STEP file and can
+  be saved as `.cadmesh`. Sharp edges stay sharp (normals are smoothed only
+  under a 30° crease). STL, OBJ, PLY and OFF store no unit: they are read as
+  mm.
+- **2D DXF.** A `.dxf` opens as a drawing on paper: zoom, pan, Fit, its
+  layers listed (hide one, or click one of its lines to select it), its size
+  in its own unit, Save picture. DWG is not read.
+- **Looks.** In the parts panel: **Light** draws the shaded styles on a light
+  background with a soft ground shadow; **Ghosts** draws hidden parts faintly;
+  **Turntable** (or `?turntable=1`) turns the model slowly while it is left
+  alone, and is not offered where the system asks for reduced motion;
+  **Level** keeps the model's up axis upright while you drag.
+- **Paint, instances, walk, install.** **Paint** paints a clicked face in the
+  swatch's colour. With one part selected, the info panel counts its copies in
+  the model and can select them all, and for a STEP file shows its part number
+  and description when the file has them. **Walk** moves through the model with W A
+  S D (Q E down and up) and looks around with a drag. The viewer installs as
+  an app and opens offline (a network-first service worker caches only its own
+  files).
+- **Zips, share links, print.** A `.zip` opens the model inside it. A GitHub
+  `blob` page, a GitLab one or a Dropbox `dl=0` link given as `?src=` opens the
+  file it shares. File > **Print…** prints the view with the model's name.
 - **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
   bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a

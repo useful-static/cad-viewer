@@ -87,6 +87,42 @@ export function orbitBy(cam, dx, dy, rate = 0.008) {
   cam.q = qNorm(q);
 }
 
+// The level orbit (an opt-in, feature review item 24): a drag turns the view
+// about the WORLD up axis and tilts it toward or away from it, stopping just
+// short of straight above or below, with no roll: the model's up stays up on
+// screen (orbitBy turns freely about the screen's axes, upside down allowed).
+// The tilt goes the way orbitBy's does for the same drag.
+const LEVEL_MAX = Math.PI / 2 - 0.02;
+export function levelOrbitBy(cam, up, dx, dy, rate = 0.008) {
+  if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
+  const d = camDir(cam);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  let elev = Math.asin(Math.max(-1, Math.min(1, dot(d, up))));
+  // the horizontal heading (from the screen's right when looking straight down)
+  let h = [d[0] - up[0] * dot(d, up), d[1] - up[1] * dot(d, up), d[2] - up[2] * dot(d, up)];
+  if (Math.hypot(...h) < 1e-6) { const r = qRotate(cam.q, [1, 0, 0]); h = cross(r, up); }
+  h = nrm(h);
+  // turn the heading about up
+  const a = -dx * rate;
+  const side = cross(up, h);
+  h = nrm([h[0] * Math.cos(a) + side[0] * Math.sin(a), h[1] * Math.cos(a) + side[1] * Math.sin(a), h[2] * Math.cos(a) + side[2] * Math.sin(a)]);
+  elev = Math.max(-LEVEL_MAX, Math.min(LEVEL_MAX, elev + dy * rate));
+  const z = nrm([h[0] * Math.cos(elev) + up[0] * Math.sin(elev), h[1] * Math.cos(elev) + up[1] * Math.sin(elev), h[2] * Math.cos(elev) + up[2] * Math.sin(elev)]);
+  const x = nrm(cross(up, z));
+  const y = cross(z, x);
+  cam.q = qNorm(qFromBasis(x, y, z));
+}
+
+// The turntable: the camera turned by `angle` (radians) about the WORLD axis
+// `up` through the orbit target, so the model seems to spin on its own up
+// axis however the view is tilted (orbitBy turns about the screen's axes)
+export function turnAbout(cam, up, angle) {
+  if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
+  cam.q = qNorm(qMul(qAxis(up, angle), cam.q));
+}
+
 // Unit vector from the orbit target to the eye.
 export function camDir(cam) {
   if (cam.q) return qRotate(cam.q, [0, 0, 1]);

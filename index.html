@@ -29,6 +29,7 @@
 <meta name="twitter:card" content="summary">
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   * { box-sizing: border-box; }
@@ -117,7 +118,10 @@
   #secpos { width:clamp(110px, 32vw, 360px); }
   #secval { min-width:11ch; cursor:text; text-decoration:underline dotted; text-underline-offset:3px; }
   #secin { width:9ch; font:inherit; background:#1b1f25; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
-  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  /* the parts list keeps room for about six rows however tall the info above
+     it grows (a long graphics line, a selection's rows); past that the panel
+     itself scrolls */
+  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; overflow-y:auto; }
   #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
@@ -207,7 +211,7 @@
      into File where the row is short) */
   #modellist { max-width:22em; text-overflow:ellipsis; }
   #modellist[hidden] { display:none; }
-  #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; }
+  #tree { list-style:none; margin:0; padding:4px 0; overflow:auto; flex:1; font-size:12px; min-height:140px; }
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:#1d2127; color:var(--fg); border:1px solid var(--line);
     border-radius:4px; font:inherit; min-width:0; }
   #treefilter[hidden] { display:none; }
@@ -224,6 +228,21 @@
   #stage { position:relative; min-width:0; min-height:0; overflow:hidden; touch-action:none; }
   #stage.drop { outline:2px dashed var(--acc); outline-offset:-6px; }
   #view { width:100%; height:100%; display:block; outline:none; }
+  /* a DXF drawing (2D mode): its own canvas over the 3D one, and the 3D-only
+     controls out of the way */
+  #view2d { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:default; }
+  #view2d[hidden] { display:none; }
+  /* File > Print: only the picture and the model's name on paper */
+  #printout { display:none; }
+  @media print {
+    body > *:not(#printout) { display:none !important; }
+    #printout { display:block !important; }
+    #printimg { max-width:100%; max-height:90vh; display:block; margin:0 auto; }
+    #printname { text-align:center; font:12px sans-serif; color:#000; }
+  }
+  body.mode2d #view { visibility:hidden; }
+  body.mode2d :is(#measure, #viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #looks, #colours, #scene) { display:none !important; }
+  #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid #0006; margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
@@ -284,6 +303,8 @@
   .help .keys { display:block; margin-top:4px; }
   #colours { display:flex; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   #colours select { flex:1; min-width:0; }
+  #looks { display:flex; flex-wrap:wrap; gap:4px; padding:6px 10px 0; }
+  #looks button { padding:1px 8px; font-size:11px; }
   #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
@@ -410,7 +431,7 @@
   <span class="title">CAD viewer</span>
   <!-- narrow layout: an icon, named by aria-label -->
   <button id="panelbtn" aria-expanded="false" aria-controls="parts" aria-label="Parts" title="Parts list"><span aria-hidden="true">☰</span><span class="lbl">Parts</span></button>
-  <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz" hidden></label>
+  <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin,.dxf,.zip" hidden></label>
   <!-- ?list=: the models a site offers, by name; beside Open… (main.js moves it with Open…) -->
   <select id="modellist" autocomplete="off" hidden aria-label="Model" title="Open another model from the list this page was given"></select>
   <!-- A .menu shows its controls in the row where they fit, and folds them
@@ -421,7 +442,7 @@
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
     <div class="menu-panel" id="filepanel" aria-label="File">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz" hidden><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
@@ -480,9 +501,19 @@
   <!-- the flat sheet bodies a board carries (pads, silkscreen, labels: the
        b-rep kind "sheet"), shown or hidden in one go -->
   <label id="sheetsrow" hidden title="Show or hide every flat sheet of the model at once: on a board its pads, silkscreen and labels (Undo steps back)"><input type="checkbox" id="sheets" checked autocomplete="off"> flat sheets (pads, labels) <span id="sheetscount"></span></label>
+  <!-- how the view looks, remembered in this browser (feature review item 22);
+       above the colours, so a swatch that disables hands the focus on to the
+       parts list, as before it -->
+  <div id="looks" role="group" aria-label="How the view looks">
+    <button id="lightbg" class="mini" aria-pressed="false" title="Draw Shaded, Shaded + edges and X-ray on a light background, with a soft shadow under the model (remembered in this browser)">Light</button>
+    <button id="ghost" class="mini" aria-pressed="false" title="Draw the hidden parts faintly, as ghosts, instead of not at all (remembered in this browser)">Ghosts</button>
+    <button id="turntable" class="mini" aria-pressed="false" title="Turn the model slowly while the view is left alone (not offered where the system asks for reduced motion)">Turntable</button>
+    <button id="walk" class="mini" aria-pressed="false" title="Walk through the model: W A S D move, Q E down and up, a drag looks around (Shift: faster)">Walk</button>
+    <button id="level" class="mini" aria-pressed="false" title="Keep the model's up axis upright while dragging (off: the view turns freely, upside down too; remembered in this browser)">Level</button></div>
   <div id="colours"><label for="palette">Colours</label>
     <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select>
     <input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">
+    <button id="paintbtn" aria-pressed="false" disabled title="Paint faces: while on, a click paints the face under it in the swatch's colour (Reset all, with nothing selected, clears them)">Paint</button>
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
@@ -495,7 +526,7 @@
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" role="img" aria-label="2D drawing" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
@@ -532,7 +563,7 @@
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>
     <h2>Open a CAD file</h2>
-    <p class="drop-hint">Drop a STEP, IGES, BREP or .cadmesh file here, or</p>
+    <p class="drop-hint">Drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, PLY, OFF, 3MF, glTF) or a 2D DXF here, or</p>
     <p class="drop-now">Drop to open</p>
     <button id="emptyopen" class="primary">Choose a file…</button>
     <p class="note">Your file is opened on this device and never uploaded.</p>
@@ -555,6 +586,8 @@
     <button id="pcancel">Cancel</button>
   </div>
 </div>
+<!-- File > Print: the view's picture alone on the printed page -->
+<div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname"></p></div>
 <footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span><span id="backend">…</span></footer>
 <script type="module" src="js/main.js"></script>
 </body>

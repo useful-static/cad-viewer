@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  camDir, camUp, eyeDist, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy,
+  camDir, camUp, eyeDist, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy,
 } from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 
@@ -414,6 +414,40 @@ test('zoomAt at a zoom limit moves nothing', () => {
   zoomAt(c, 0.5, 50, 1, 200, 100, 500);
   assert.deepEqual(c.target, t);
   assert.equal(c.dist, 50 * 0.05);
+});
+
+test('turnAbout spins about the world up axis: the tilt stays, a full turn returns', () => {
+  const c = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z' });
+  const d0 = camDir(c);
+  turnAbout(c, [0, 0, 1], Math.PI / 2);
+  const d1 = camDir(c);
+  // the height above the ground (z) is kept; the heading turned a quarter
+  assert.ok(Math.abs(d1[2] - d0[2]) < 1e-9, `z ${d0[2]} -> ${d1[2]}`);
+  assert.ok(Math.abs(d0[0] * d1[0] + d0[1] * d1[1]) < 1e-9, 'a quarter turn in the ground plane');
+  // and the screen's up still leans the same way out of the ground
+  assert.ok(Math.abs(camUp(c)[2] - camUp(cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z' }))[2]) < 1e-9);
+  turnAbout(c, [0, 0, 1], Math.PI * 1.5);
+  camDir(c).forEach((v, k) => assert.ok(Math.abs(v - d0[k]) < 1e-9, `after 2π: ${camDir(c)} vs ${d0}`));
+});
+
+test('levelOrbitBy: no roll, tilts as orbitBy does, stops short of the pole', () => {
+  const up = [0, 0, 1];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const free = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z' });
+  const lvl = cam({ q: quatFromView(0.7, 0.45, 'z'), up: 'z' });
+  orbitBy(free, 0, 10);
+  levelOrbitBy(lvl, up, 0, 10);
+  // the same tilt, the same way
+  assert.ok(Math.abs(dot(camDir(free), up) - dot(camDir(lvl), up)) < 1e-6, `${camDir(free)} vs ${camDir(lvl)}`);
+  // after any drag, the screen's right lies flat and its up leans up: no roll
+  for (const [dx, dy] of [[37, -12], [-200, 80], [5, 300]]) {
+    levelOrbitBy(lvl, up, dx, dy);
+    const right = [0, 1, 2].map((k) => camUp(lvl)[(k + 1) % 3] * camDir(lvl)[(k + 2) % 3] - camUp(lvl)[(k + 2) % 3] * camDir(lvl)[(k + 1) % 3]);
+    assert.ok(Math.abs(dot(right, up)) < 1e-9, `right ${right}`);
+    assert.ok(camUp(lvl)[2] > 0, `up ${camUp(lvl)}`);
+  }
+  // 300 px down is past the pole: it stops just short
+  assert.ok(dot(camDir(lvl), up) < Math.sin(Math.PI / 2 - 0.019) && dot(camDir(lvl), up) > 0.99);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

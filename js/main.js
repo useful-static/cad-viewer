@@ -2,11 +2,16 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { MESH_EXTS, meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
+import { onPaper, parseDXF } from './dxf.js';
+import { createDxfView } from './dxf-view.js';
+import { directUrl } from './open-url.js';
+import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
-import { camDir, camUp, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -127,8 +132,8 @@ app.refreshState = () => pushState(); // for tests that change a body's facts
 // The model as drawn in the current colour scheme and part colours: the
 // decoded model itself for the file's colours with nothing overridden, else a
 // copy that differs only in its colours.
-const inScheme = (base, overrides = app.overrides) => (app.palette === 'file' && overrides.size === 0
-  ? base : { ...base, color: schemeColours(base, app.palette, overrides) });
+const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || new Map()) => (app.palette === 'file' && overrides.size === 0 && !faces.size
+  ? base : { ...base, color: schemeColours(base, app.palette, overrides, faces) });
 
 // The ONE writer of the #announce live region. Every write takes a sequence
 // number; a write deferred to the next frame (to repeat the last text, which a
@@ -174,7 +179,7 @@ const mb = (n) => (n / 1e6).toFixed(1);
 function showEmpty() {
   const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering';
   // (an embed's poster stands in for it until the visitor asks for the model)
-  $('empty').hidden = !!app.mesh || busy || !$('poster').hidden;
+  $('empty').hidden = !!app.mesh || !!app.dxf || busy || !$('poster').hidden;
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
 }
@@ -674,7 +679,7 @@ function styleFrame(s, scale) {
     wire: [{ ...visible, depth: 'always' }],
     xray: [{ depth: 'always', mode: 2 }],
   }[s.id] || null;
-  return { background: s.paper ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
+  return { background: s.paper || app.lightBg ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
     fill: s.faces === 'depth' ? FILL_RGB : null,
     // a body too small to draw edges is collapsed in the face and pick passes too
     cullFaces: !!s.paper };
@@ -718,6 +723,9 @@ function frameState() {
     drawModel: sameModel(r.drawn, app.mesh),
     // Explode: the fraction of each body's direction (the body table) it moves
     explode: app.explode.on && app.explode.for === app.header ? app.explode.t : 0,
+    // the hidden parts drawn faintly (a style with faces only)
+    ghost: app.ghostHidden && app.hidden.size && currentStyle().faces !== 'none' ? GHOST_ALPHA : 0,
+    ground: groundShadow(),
   };
 }
 
@@ -953,6 +961,7 @@ function applyView(v) {
 
 // Copy a link to this model at this view. A model opened from this device has
 // no URL: the link then holds the view alone, and the note says so.
+app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
 // in their drawn colours, turned the way the model opens: Z up for STL and
 // 3MF (a printer's convention), Y up for GLB (glTF's)
@@ -998,7 +1007,21 @@ async function exportMesh(fmt) {
 // drawn once at that size and read back in the same task (before the browser
 // presents it), then given back its own size. Tiles (4x past the GPU's
 // limit) and a transparent background are not built yet.
-async function savePicture() {
+// print: the picture printed (File > Print) instead of saved
+async function savePicture(print = false) {
+  // a drawing: its canvas as it is drawn
+  if (app.dxf) {
+    const a = document.createElement('a');
+    const blob = await new Promise((res) => $('view2d').toBlob(res, 'image/png'));
+    if (!blob) return;
+    if (print) return printPng(blob);
+    a.href = URL.createObjectURL(blob);
+    a.download = `${app.dxf.name.replace(/\.[^.]+$/, '')}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    flashHover(`saved ${a.download}`, 3000);
+    return;
+  }
   if (!app.header || !app.renderer) return;
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
@@ -1033,6 +1056,7 @@ async function savePicture() {
   ctx.drawImage(img, 0, 0);
   app.measure.paint(ctx, img.width / cw, !!currentStyle().paper);
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
+  if (print) return printPng(png);
   const d = new Date();
   const two = (n) => String(n).padStart(2, '0');
   const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
@@ -1049,6 +1073,53 @@ async function savePicture() {
   const note = `saved ${name}, ${out.width} × ${out.height}`;
   flashHover(note, 3000);
   announce(note);
+}
+
+// The copies of body `id` (1-based ids, itself included): the same name, the
+// same triangle count and the same size to 1 µm (a copy turned is still the
+// same size on some axis order: the sizes are compared sorted)
+function sameParts(id) {
+  const ms = app.header.meshes;
+  const key = (m) => {
+    const s = m.bbox ? [0, 1, 2].map((k) => Math.round((m.bbox.max[k] - m.bbox.min[k]) * 1000)).sort((a, b) => a - b).join(',') : '';
+    return `${m.name}\u0000${m.idxCount}\u0000${s}`;
+  };
+  const want = key(ms[id - 1]);
+  const out = [];
+  ms.forEach((m, i) => { if (key(m) === want) out.push(i + 1); });
+  return out;
+}
+const instancesOf = (id) => sameParts(id).length;
+app.sameParts = sameParts; // (for tests)
+app.select = (ids) => select(ids, false); // (for tests: a selection as a click makes it)
+
+// Per-face paint (feature review item 24): Paint beside the part colour turns
+// it on; a click paints the clicked b-rep face in the swatch's colour (kept
+// while this model is open; Reset with nothing selected clears it too)
+app.faceOverrides = new Map();
+function setPaint(on) {
+  app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
+  $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
+  if (on && !app.paintFaces) flashHover('this model has no b-rep faces to paint');
+  else if (on) flashHover('Paint: click a face to paint it in the swatch\'s colour', 3000);
+  updateButtons();
+}
+function paintFace(f) {
+  app.faceOverrides.set(f, hexToRgb($('partcolour').value));
+  updateButtons();
+  recolour(`face painted`);
+}
+
+// File > Print (feature review item 24): the picture Save picture makes, alone
+// on the page (print CSS shows only #printimg), with the model's name under it
+async function printPng(png) {
+  const img = $('printimg');
+  if (img.src) URL.revokeObjectURL(img.src);
+  img.src = URL.createObjectURL(png);
+  await img.decode().catch(() => {});
+  $('printname').textContent = app.dxf ? app.dxf.name : app.sourceName || '';
+  app.lastPrint = { width: img.naturalWidth, height: img.naturalHeight }; // (for tests)
+  if (!app.noPrintDialog) window.print();
 }
 
 // Save drawing (SVG): the selected parts (else every one shown) at 1:1 in mm,
@@ -1100,12 +1171,14 @@ function viewLink() {
     }
   }
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
+  // (a drawing: its URL alone; the 3D view's camera does not apply to it)
+  if (app.dxf) { if (app.dxf.url) u.searchParams.set('src', app.dxf.url); return u.toString(); }
   u.hash = `view=${encodeView(currentView())}`;
   return u.toString();
 }
 
 async function shareView() {
-  if (!app.header) return;
+  if (!app.header && !(app.dxf && app.dxf.url)) return;
   const link = viewLink();
   let copied = false;
   try {
@@ -1170,8 +1243,160 @@ function setStyle(id, remember) {
 
 // the paper styles' overlay palette (#hover, notices): dark on a light chip
 function syncStyleBg() {
-  if (currentStyle().paper) $('stage').dataset.bg = 'paper';
+  if (currentStyle().paper || app.lightBg) $('stage').dataset.bg = 'paper';
   else delete $('stage').dataset.bg;
+}
+
+// ---------- looks (feature review item 22) ----------
+// light background (the shaded styles on paper), ghosted hidden parts, and
+// the turntable: the model turned slowly about its up axis while the view is
+// left alone for IDLE_MS. Never under prefers-reduced-motion (not offered).
+const GHOST_ALPHA = 0.15;
+const TURN_RAD_S = 0.35; // about 18 s a turn
+const IDLE_MS = 2500;
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function readLooks() {
+  try {
+    app.lightBg = localStorage.getItem('cadv.bg') === 'light';
+    app.ghostHidden = localStorage.getItem('cadv.ghost') === '1';
+    app.levelOrbit = localStorage.getItem('cadv.level') === '1';
+  } catch { /* storage off */ }
+  app.turntable = params.get('turntable') === '1' && !reducedMotion();
+  app.lastInput = performance.now();
+}
+function wireLooks() {
+  const press = () => {
+    $('lightbg').setAttribute('aria-pressed', String(!!app.lightBg));
+    $('ghost').setAttribute('aria-pressed', String(!!app.ghostHidden));
+    $('turntable').setAttribute('aria-pressed', String(!!app.turntable));
+    $('level').setAttribute('aria-pressed', String(!!app.levelOrbit));
+  };
+  press();
+  $('level').onclick = () => {
+    app.levelOrbit = !app.levelOrbit;
+    try { localStorage.setItem('cadv.level', app.levelOrbit ? '1' : '0'); } catch { /* storage off */ }
+    press();
+    announce(app.levelOrbit ? 'level orbit: the model\'s up stays up' : 'free orbit');
+  };
+  $('lightbg').onclick = () => {
+    app.lightBg = !app.lightBg;
+    try { localStorage.setItem('cadv.bg', app.lightBg ? 'light' : 'dark'); } catch { /* storage off */ }
+    press();
+    syncStyleBg();
+    queueFrame();
+  };
+  $('ghost').onclick = () => {
+    app.ghostHidden = !app.ghostHidden;
+    try { localStorage.setItem('cadv.ghost', app.ghostHidden ? '1' : '0'); } catch { /* storage off */ }
+    press();
+    queueFrame();
+  };
+  $('turntable').onclick = () => { app.turntable = !app.turntable && !reducedMotion(); press(); turn(); };
+  // any input is the visitor taking the view: the turntable waits
+  for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
+    window.addEventListener(t, () => { app.lastInput = performance.now(); }, { capture: true, passive: true });
+  }
+  const mq = matchMedia('(prefers-reduced-motion: reduce)');
+  const sync = () => {
+    $('turntable').hidden = mq.matches;
+    if (mq.matches) { app.turntable = false; press(); }
+  };
+  mq.addEventListener?.('change', sync);
+  sync();
+  turn();
+}
+// The ground shadow on the light background (the shaded styles): an ellipse
+// on the plane under the model's drawn box, along its up axis, a little wider
+// than its footprint, darkest under its middle; faded out as the eye comes
+// down to the ground, so it never shows from the side or below
+const GROUND_ALPHA = 0.3;
+app.groundShadow = () => groundShadow(); // (for tests/ui-checks.py)
+function groundShadow() {
+  if (!app.lightBg || !app.header || !['shade', 'xray'].includes(currentStyle().faces)) return null;
+  const b = drawnBox(null);
+  if (!b) return null;
+  const up = orientUp(app.cam.orient);
+  const k = up.findIndex((v) => v !== 0);
+  const s = Math.sign(up[k]);
+  const d = camDir(app.cam);
+  const above = d[0] * up[0] + d[1] * up[1] + d[2] * up[2];
+  const alpha = GROUND_ALPHA * Math.min(1, Math.max(0, (above - 0.05) * 2.5));
+  if (alpha < 0.01) return null;
+  const size = [0, 1, 2].map((j) => b.max[j] - b.min[j]);
+  const diag = Math.hypot(...size) || 1;
+  const c = [0, 1, 2].map((j) => (b.min[j] + b.max[j]) / 2);
+  c[k] = (s > 0 ? b.min[k] : b.max[k]) - s * 0.002 * diag; // just under the model
+  const [i, j] = [0, 1, 2].filter((x) => x !== k);
+  const ax = [0, 0, 0], ay = [0, 0, 0];
+  ax[i] = size[i] * 0.62 + 0.06 * diag;
+  ay[j] = size[j] * 0.62 + 0.06 * diag;
+  return { c, ax, ay, alpha };
+}
+
+// A drag's (or an arrow key's) orbit: free, or with Level on the model's up
+// axis kept upright on screen (js/camera.js levelOrbitBy)
+function orbit(c, dx, dy) {
+  // Walk: the view turns about the eye (looking around), not the model
+  const eye0 = app.walk ? [0, 1, 2].map((k) => c.target[k] + camDir(c)[k] * c.dist) : null;
+  if (app.levelOrbit || app.walk) levelOrbitBy(c, orientUp(c.orient), app.walk ? -dx : dx, app.walk ? -dy : dy);
+  else orbitBy(c, dx, dy);
+  if (eye0) { const d = camDir(c); c.target = [0, 1, 2].map((k) => eye0[k] - d[k] * c.dist); }
+}
+
+// Walk (feature review item 24): W A S D move forward, left, back, right, Q
+// and E down and up, a step of a fiftieth of the model's size (Shift: five);
+// the view keeps the model's up upright and a drag looks around
+const WALK_KEYS = { w: [0, 1], s: [0, -1], a: [-1, 0], d: [1, 0], q: [2, -1], e: [2, 1] };
+function walkKey(k, shift) {
+  const c = app.cam;
+  const m = WALK_KEYS[k];
+  if (!m || !app.header) return false;
+  const step = (app.sphereBase || app.sphere).radius * 0.04 * (shift ? 5 : 1);
+  const up = orientUp(c.orient);
+  const fwd = camDir(c).map((v) => -v);
+  // forward along the ground (walking does not climb where the view looks)
+  const dot = fwd[0] * up[0] + fwd[1] * up[1] + fwd[2] * up[2];
+  let g = fwd.map((v, i) => v - up[i] * dot);
+  const gl = Math.hypot(...g) || 1;
+  g = g.map((v) => v / gl);
+  const right = [g[1] * up[2] - g[2] * up[1], g[2] * up[0] - g[0] * up[2], g[0] * up[1] - g[1] * up[0]];
+  const dir = m[0] === 2 ? up.map((v) => v * m[1]) : m[0] ? right.map((v) => v * m[0]) : g.map((v) => v * m[1]);
+  c.target = c.target.map((v, i) => v + dir[i] * step);
+  viewChanged();
+  return true;
+}
+function setWalk(on) {
+  app.walk = on;
+  $('walk').setAttribute('aria-pressed', String(on));
+  if (on) {
+    // stand where the eye is: a near orbit distance, so a look-around turns in place
+    const c = app.cam, d = camDir(c);
+    if (c.ortho) { c.ortho = false; updateButtons(); } // (a walk has a viewpoint: perspective)
+    const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
+    c.dist = Math.max(1e-3, (app.sphereBase || app.sphere).radius * 0.05);
+    c.target = [0, 1, 2].map((k) => eye[k] - d[k] * c.dist);
+    levelOrbitBy(c, orientUp(c.orient), 0, 0);
+    viewChanged();
+  }
+  flashHover(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000);
+  announce(on ? 'walk on' : 'walk off');
+}
+
+// one animation frame of the turntable; runs only while it is on
+let turnLast = 0, turnRaf = 0;
+function turn() {
+  if (turnRaf || !app.turntable) return;
+  turnRaf = requestAnimationFrame((t) => {
+    turnRaf = 0;
+    if (!app.turntable) return;
+    const dt = turnLast ? Math.min(0.1, (t - turnLast) / 1000) : 0;
+    turnLast = t;
+    if (app.header && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
+      turnAbout(app.cam, orientUp(app.cam.orient), TURN_RAD_S * dt);
+      viewChanged();
+    }
+    turn();
+  });
 }
 
 // E: Shaded <-> Shaded + edges; elsewhere it says why nothing happened
@@ -1281,7 +1506,8 @@ function undoVisibility() {
 
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
-const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar';
+// (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
+const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d';
 const MENUS = FOLD_ORDER;
 
 const narrowLayout = () => getComputedStyle($('tb')).flexWrap === 'nowrap';
@@ -1484,7 +1710,9 @@ function focusBeside(el) {
 // from where the user was; the row of a tree a new model replaced, to the new
 // tree's row (r20).
 function focusInPanel(f, wasInTree) {
-  const all = [...$('parts').querySelectorAll('button, summary, input[type=color], #tree .label[tabindex="0"]')];
+  // (the looks row's toggles are settings, not a place to land: Tab still
+  // reaches them)
+  const all = [...$('parts').querySelectorAll('button, summary, input[type=color], #tree .label[tabindex="0"]')].filter((e) => !e.closest('#looks'));
   const row = $('tree').querySelector('.label[tabindex="0"]');
   if (!f.isConnected) return wasInTree && row && usable(row) ? (row.focus(), true) : false;
   const before = all.filter((e) => e.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -2127,7 +2355,7 @@ function updateButtons() {
   $('isolate').disabled = $('hide').disabled = !app.selected.size;
   $('showall').disabled = !app.hidden.size;
   $('undo').disabled = !app.visUndo.length;
-  $('fit').disabled = !has;
+  $('fit').disabled = !has && !app.dxf;
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has;
@@ -2138,7 +2366,8 @@ function updateButtons() {
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   $('exportmesh').disabled = !has;
   $('addmodelbtn').disabled = !has || !app.scene;
-  $('savepic').disabled = !has;
+  $('savepic').disabled = !has && !app.dxf;
+  $('printbtn').disabled = $('savepic').disabled;
   // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
   $('savedrawing').disabled = !has || !(app.baseMesh && app.baseMesh.faces);
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
@@ -2165,10 +2394,12 @@ function updateButtons() {
   // the part colour: on with a selection, showing the first selected body's
   // colour; Reset only while a selected body has a picked colour
   const sel = app.header ? [...app.selected] : [];
-  $('partcolour').disabled = !sel.length;
-  if (sel.length) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
+  // (Paint on: the swatch is the paint's colour, selection or not)
+  $('partcolour').disabled = !sel.length && !app.paintFaces;
+  if (sel.length && !app.paintFaces) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
+  $('paintbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
   const all = !sel.length;
-  $('partreset').disabled = all ? !app.overrides.size : !sel.some((id) => app.overrides.has(id - 1));
+  $('partreset').disabled = all ? !app.overrides.size && !app.faceOverrides.size : !sel.some((id) => app.overrides.has(id - 1));
   $('partreset').hidden = $('partreset').disabled; // shown only when there is something to reset
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
   $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
@@ -2266,8 +2497,9 @@ function resetPartColour() {
   if (app.selected.size) {
     for (const id of app.selected) if (app.overrides.delete(id - 1)) n++;
   } else {
-    n = app.overrides.size;
+    n = app.overrides.size + app.faceOverrides.size;
     app.overrides.clear();
+    app.faceOverrides.clear(); // and the painted faces
   }
   saveOverrides();
   updateButtons();
@@ -2298,6 +2530,13 @@ function handBack(mesh) {
 }
 
 function dropModel(msg) {
+  clearModel();
+  app.error = msg;
+  setStatus('error', msg);
+}
+
+// The 3D model gone from the UI and the GPU (a failed load; a DXF opened)
+function clearModel() {
   app.mesh = null;
   app.baseMesh = null;
   app.scene = null;
@@ -2339,8 +2578,6 @@ function dropModel(msg) {
   $('model').title = '';
   showInfo();
   gpuSync().catch(() => {});
-  app.error = msg;
-  setStatus('error', msg);
 }
 
 // Body ids travel as 3 bytes (shaders and pick read-back), so 2^24 - 1 bodies max.
@@ -2397,7 +2634,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // part colours belong to the model they were picked on: this model's own
   const key = modelKeyOf(base.header);
   const overrides = loadOverrides(key, base.header.meshes.length);
-  const mesh = inScheme(base, overrides);
+  const mesh = inScheme(base, overrides, new Map()); // (painted faces are the old model's)
   const scheme = app.palette; // a scheme picked during the upload is drawn after it
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
@@ -2421,9 +2658,13 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   }
   // the edge worker of the model this one replaces has no one to answer
   if (app.stopEdges && app.stopEdges.base !== base) app.stopEdges.stop();
+  leave2D(); // a 3D model replaces a drawing shown
   app.mesh = mesh;
   app.baseMesh = base;
   app.overrides = overrides;
+  app.faceOverrides = new Map();
+  if (app.paintFaces) setPaint(false);
+  app.stepMeta = app.stepMetaOf && app.stepMetaOf.seq === seq ? app.stepMetaOf.map : null;
   app.modelKey = key;
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
@@ -2842,6 +3083,13 @@ async function loadAny(buf, name, seq) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
+  // A mesh file (STL, OBJ, PLY, OFF, 3MF, glTF / GLB; gzipped too), or one
+  // whose bytes say so under a name that does not (a GLB, a PLY): read here
+  // into a .cadmesh (js/mesh-formats.js)
+  const meshName = name.replace(/\.gz$/i, '');
+  if (MESH_EXTS.includes(extOf(meshName)) || (!extOf(meshName) && !isGzip(buf) && meshFormatOf('', buf))) return loadMeshFile(buf, name, seq);
+  if (extOf(meshName) === 'dxf') return loadDxf(buf, name, seq);
+  if (extOf(name) === 'zip') return loadZip(buf, name, seq);
   // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
   // to download): unpacked here, then opened as the file inside it
   // (served with Content-Encoding: gzip, fetch has unpacked it already)
@@ -2876,6 +3124,9 @@ async function loadAny(buf, name, seq) {
     if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
     const b3 = new Uint8Array(buf, 0, Math.min(3, buf.byteLength));
     if (b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf) buf = buf.slice(3);
+    // the parts' ids and descriptions, from the STEP text itself (the
+    // converter keeps only names; js/step-meta.js), for the info panel
+    app.stepMetaOf = { seq, map: format === 'step' ? stepProducts(new TextDecoder('latin1').decode(buf)) : null };
     // A conversion of these exact bytes saved in this browser skips
     // OpenCascade (js/mesh-cache.js: everything stays on this device). The
     // key is hashed before the worker takes the buffer (posting detaches it).
@@ -2922,18 +3173,179 @@ async function loadAny(buf, name, seq) {
   // not inflated and then failed as a .cadmesh ("bad magic", review r18)
   const innerExt = /\.gz$/i.test(name) ? extOf(name.replace(/\.gz$/i, '')) : '';
   if (innerExt && innerExt !== 'cadmesh' && !cadm) {
-    throw new Error(`${name} is not a file this viewer opens (.${innerExt}.gz): `
-      + 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, or one of them gzipped');
+    throw new Error(`${name} is not a file this viewer opens (.${innerExt}.gz): ${OPENS}, or one of them gzipped`);
   }
   if (!cadm && !isGzip(buf)) {
     // a .cadmesh by name that is not one by its bytes is damaged, not of the
     // wrong kind (it was told to open a .cadmesh file: review r22)
     if (ext === 'cadmesh') throw new Error(`${name} is damaged or not a .cadmesh file inside: save it again from the viewer, or open the STEP it came from`);
-    throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: `
-      + 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file');
+    throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: ${OPENS}`);
   }
   await loadBuffer(buf, name, seq);
 }
+
+// A mesh file read into a .cadmesh, then opened as one: Save .cadmesh keeps
+// it. app.dropExtras: the other files dropped or picked with it (an OBJ's
+// .mtl, a .gltf's .bin), by lower-case name
+async function loadMeshFile(buf, name, seq) {
+  if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
+  name = name.replace(/\.gz$/i, '');
+  const format = meshFormatOf(name, buf);
+  if (!format) throw new Error(`${name} is not a file this viewer opens: ${OPENS}`);
+  setStatus('loading', `reading ${name}`);
+  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format.toUpperCase()} mesh`);
+  await nextPaint();
+  if (stale(seq)) return;
+  const extras = new Map();
+  for (const f of app.dropExtras || []) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
+  if (stale(seq)) return;
+  const model = await parseMesh(format, buf, name, extras);
+  if (stale(seq)) return;
+  const raw = encodeCadmesh(model);
+  return loadBuffer(raw, name, seq, raw);
+}
+// A zip (feature review item 24): the first model in it that the viewer
+// opens is opened, with its companions (an .mtl, a .bin) beside it
+async function loadZip(buf, name, seq) {
+  setStatus('loading', `unpacking ${name}`);
+  showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
+  await nextPaint();
+  if (stale(seq)) return;
+  const z = await unzip(buf);
+  const files = z.names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
+  const opens = (n) => { const e = extOf(n.replace(/\.gz$/i, '')); return !!STEP_EXT[e] || MESH_EXTS.includes(e) || e === 'cadmesh' || e === 'dxf'; };
+  const model = files.find(opens);
+  if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
+  const others = files.filter((n) => n !== model && opens(n)).length;
+  app.dropExtras = files.filter((n) => COMPANION.test(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
+  const inner = await z.get(model);
+  if (stale(seq)) return;
+  if (others) announce(`opening ${model} from ${name} (${others} more in it not opened)`);
+  return loadAny(inner, model.split('/').pop(), seq);
+}
+
+// ---------- 2D DXF (plan feature 23; js/dxf.js, js/dxf-view.js) ----------
+// A DXF opens in 2D mode: the 3D model goes, the drawing is drawn on its own
+// canvas (#view2d) on paper, the parts list lists its layers (a checkbox
+// shows or hides one, a click on its name selects it, as a click on one of
+// its lines does), and the 3D-only controls step aside (body.mode2d).
+async function loadDxf(buf, name, seq) {
+  if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
+  name = name.replace(/\.gz$/i, '');
+  setStatus('loading', `reading ${name}`);
+  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of DXF`);
+  await nextPaint();
+  if (stale(seq)) return;
+  const drawing = parseDXF(new TextDecoder().decode(buf));
+  if (!drawing.paths.length && !drawing.texts.length) throw new Error(`${name} has nothing in model space to draw (a DXF of paper-space layouts only is not drawn)`);
+  if (stale(seq)) return;
+  show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
+}
+
+function show2D(drawing, name, url) {
+  leave2D();
+  clearModel();
+  document.body.classList.add('mode2d');
+  const cv = $('view2d');
+  cv.hidden = false;
+  app.dxf = { drawing, name, url };
+  app.sourceName = name;
+  app.sourceUrl = url;
+  app.dxf.view = createDxfView(cv, drawing, {
+    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
+    onHover: (layer) => { $('hover').textContent = layer ? `layer ${layer}` : ''; },
+  });
+  buildLayerList();
+  $('model').textContent = name;
+  document.title = `${name} — ${SHORT_TITLE}`;
+  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} layers`);
+  $('sharelink').disabled = !url;
+  $('savepic').disabled = false;
+  $('printbtn').disabled = false;
+  syncMenuButtons();
+  showInfo();
+  setStatus('ready', `ready · 2D drawing${drawing.units ? '' : ' (its unit is not stored)'}`);
+  announce(`${name} opened: a 2D drawing, ${drawing.layers.length} layers`);
+}
+
+// out of 2D mode (a 3D model opened, or a new DXF replacing this one)
+function leave2D() {
+  if (!app.dxf) return;
+  app.dxf.view.destroy();
+  app.dxf = null;
+  document.body.classList.remove('mode2d');
+  $('view2d').hidden = true;
+  $('hover').textContent = '';
+}
+
+// the parts list as the drawing's layers: colour, name, line count, a box
+function buildLayerList() {
+  const tree = $('tree');
+  tree.textContent = '';
+  $('treefilter').hidden = true;
+  const d = app.dxf.drawing;
+  const count = new Map();
+  for (const p of d.paths) count.set(p.layer, (count.get(p.layer) || 0) + 1);
+  for (const t of d.texts) count.set(t.layer, (count.get(t.layer) || 0) + 1);
+  for (const l of d.layers) {
+    if (!count.get(l.name)) continue; // an empty layer: nothing to show or hide
+    const li = document.createElement('li');
+    li.dataset.layer = l.name;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const wrap = document.createElement('label');
+    wrap.className = 'cbwrap';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = app.dxf.view.layerOn(l.name);
+    cb.setAttribute('aria-label', `Show layer ${l.name}`);
+    cb.onchange = () => app.dxf.view.setLayerOn(l.name, cb.checked);
+    wrap.append(cb);
+    const lab = document.createElement('span');
+    lab.className = 'label';
+    lab.tabIndex = 0;
+    const sw = document.createElement('span');
+    sw.className = 'layer-swatch';
+    sw.style.background = onPaper(l.colour);
+    lab.append(sw, l.name);
+    lab.onclick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
+    lab.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); lab.onclick(); } };
+    const n = document.createElement('span');
+    n.className = 'count';
+    n.textContent = fmtInt(count.get(l.name));
+    row.append(wrap, lab, n);
+    li.append(row);
+    tree.append(li);
+  }
+  syncLayerRows();
+}
+function syncLayerRows() {
+  for (const li of $('tree').children) li.querySelector('.row').classList.toggle('sel', !!app.dxf && li.dataset.layer === app.dxf.view.selected);
+}
+
+// the info panel in 2D mode: the drawing's size, unit, layers and contents
+function fillInfo2D(el) {
+  const d = app.dxf.drawing;
+  const row = (k, v) => { const p = document.createElement('div'); const b = document.createElement('b'); b.textContent = k; p.append(b, ` ${v}`); el.append(p); };
+  row('file', `${app.dxf.name} · 2D drawing`);
+  const e = d.extents;
+  if (e) {
+    const u = d.units || 'units';
+    // in the drawing's own unit, to 6 significant figures
+    const n = (v) => String(Number(v.toPrecision(6)));
+    row(`size (${u})`, `${n(e.max[0] - e.min[0])} × ${n(e.max[1] - e.min[1])}`);
+  }
+  row('units', d.units ? `${d.units} ($INSUNITS ${d.insunits})` : 'not stored in the file');
+  row('layers', `${fmtInt(d.layers.length)}`);
+  row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  if (app.dxf.view.selected) {
+    const l = app.dxf.view.selected;
+    row('selection', `layer ${l}: ${fmtInt(d.paths.filter((p) => p.layer === l).length)} lines and shapes`);
+  }
+}
+
+// what Open… and a drop take, for the messages that say so
+const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB) or a 2D DXF';
 
 // The conversion runs in this tab, in one call; the card shows the step it is
 // on, the time so far, and what to expect.
@@ -3142,8 +3554,12 @@ async function loadUrl(url) {
   let res;
   const ac = typeof AbortController === 'function' ? new AbortController() : null;
   app.fetchAbort = ac;
+  // a host's share page (a GitHub blob, a Dropbox ?dl=0, a Drive file page)
+  // fetched as the file it shares (js/open-url.js); the address keeps the link
+  const direct = /^https?:/i.test(url) ? directUrl(url) : { url, from: null };
+  if (direct.from) announce(`${direct.from} link: opening the file it shares`);
   try {
-    res = await fetch(url, ac ? { signal: ac.signal } : {});
+    res = await fetch(direct.url, ac ? { signal: ac.signal } : {});
   } catch (e) {
     if (stale(seq)) return; // aborted: a newer load, or Cancel
     throw new Error(fetchFailedText(url, name, e));
@@ -3223,7 +3639,18 @@ function droppedFile(e) {
     announce(`${f.name} is a folder: drop the model file in it`);
     return null;
   }
-  if (files.length > 1) announce(`opening ${f.name}; the viewer opens one file at a time (${files.length - 1} more not opened)`);
+  return pickModelFile([...files]);
+}
+
+// Of several files dropped or picked together, the model (the first that is
+// not a companion: an .mtl, a .bin, a picture), the companions kept for it
+// in app.dropExtras (an OBJ's colours, a .gltf's buffers)
+const COMPANION = /\.(mtl|bin|png|jpe?g|webp|ktx2)$/i;
+function pickModelFile(files) {
+  const f = files.find((x) => !COMPANION.test(x.name)) || files[0];
+  app.dropExtras = files.filter((x) => x !== f && COMPANION.test(x.name));
+  const rest = files.length - 1 - app.dropExtras.length;
+  if (rest > 0) announce(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`);
   return f;
 }
 
@@ -3669,7 +4096,7 @@ function showInfo() {
   syncRefRow();
   const el = $('infovals');
   el.innerHTML = '';
-  fillInfo(el);
+  if (app.dxf) fillInfo2D(el); else fillInfo(el);
   syncMassRow();
   syncScene();
   // no renderer and no model: no blank box or double rule
@@ -3772,7 +4199,23 @@ function fillInfo(el) {
   else if (ids.length === 1) title = meshLabel(ids[0]);
   else if (ids.length > 1) title = `${ids.length} bodies`;
   const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
-  add('selection', title);
+  // instance count (feature review item 24): one part selected, how many
+  // copies of it the model holds (the same name, triangle count and size), on
+  // the selection's own line (a line more squeezed the parts list below)
+  const n = ids.length === 1 ? instancesOf(ids[0]) : 0;
+  if (n > 1) {
+    const sel = document.createElement('button');
+    sel.className = 'mini';
+    sel.textContent = `1 of ${fmtInt(n)}`;
+    sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
+    sel.setAttribute('aria-label', `one of ${n} copies: select all ${n}`);
+    sel.onclick = () => select(sameParts(ids[0]), false);
+    add('selection', `${title} `, sel);
+  } else add('selection', title);
+  // the part's id and description from the STEP file (js/step-meta.js), when
+  // it carries more than the name
+  const meta = ids.length === 1 && app.stepMeta && app.stepMeta.get(app.header.meshes[ids[0] - 1].name);
+  if (meta) add('part', [meta.id, meta.description].filter(Boolean).join(' · '));
   // "size (mm)" rather than "extent X × Y × Z (mm)": the longer label wrapped
   // the third value onto a line of its own in the 300 px panel
   add(`size (${lenUnit()})`, dims);
@@ -4053,7 +4496,7 @@ function wireInput() {
     if (drag.pan) {
       panBy(c, dx, dy, stage.clientHeight);
     } else {
-      orbitBy(c, dx, dy); // free about every axis: no pole clamp, upside down allowed
+      orbit(c, dx, dy); // free about every axis (no pole clamp, upside down allowed), or Level's
     }
     viewChanged();
   });
@@ -4081,6 +4524,14 @@ function wireInput() {
       if (d.type === 'touch') app.measure.hover(null);
       lastType = d.type;
       lastTap = null;
+      return;
+    }
+    // Paint (feature review item 24): a click paints the b-rep face under it
+    // in the swatch's colour, instead of selecting
+    if (!d.moved && e.button === 0 && app.mesh && !d.dismiss && app.paintFaces) {
+      const hit = app.measure.faceAt(...stageXY(e));
+      if (hit && hit.face >= 0) paintFace(hit.face);
+      else flashHover('no face there to paint');
       return;
     }
     if (!d.moved && e.button === 0 && app.mesh && !d.dismiss) {
@@ -4228,11 +4679,24 @@ function wireInput() {
   // File > Add model…: the picked file joins the scene
   $('addmodelbtn').onclick = () => { closeMenus(); $('addmodel').click(); };
   $('addmodel').addEventListener('change', () => {
-    const f = $('addmodel').files[0];
+    const files = [...$('addmodel').files];
     $('addmodel').value = '';
-    if (f && app.scene) startAdd(() => loadFile(f));
+    if (files.length && app.scene) { const f = pickModelFile(files); startAdd(() => loadFile(f)); }
   });
   $('clearbtn').onclick = () => runClearance();
+  $('paintbtn').onclick = () => setPaint(!app.paintFaces);
+  $('walk').onclick = () => setWalk(!app.walk);
+  // the installed app opened with a file (manifest.webmanifest file_handlers)
+  if ('launchQueue' in window) {
+    window.launchQueue.setConsumer(async (p) => {
+      if (p.files && p.files.length) openFile(pickModelFile(await Promise.all(p.files.map((h) => h.getFile()))));
+    });
+  }
+  // offline install (sw.js): not in an embed (another site's page), and only
+  // where a service worker may run
+  if ('serviceWorker' in navigator && !app.embed && window.isSecureContext && !params.has('nosw')) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* the viewer works without it */ });
+  }
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
   // the slide-out where there is one (the window's keydown)
@@ -4255,12 +4719,12 @@ function wireInput() {
     if (f) openFile(f);
   });
   $('open').onchange = (e) => {
-    const f = e.target.files[0];
+    const files = [...e.target.files];
     e.target.value = ''; // so choosing the same file again fires change
-    if (f) openFile(f);
+    if (files.length) openFile(pickModelFile(files));
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
-  $('fit').onclick = () => fitTo(drawnBox(app.selected.size ? [...app.selected] : null));
+  $('fit').onclick = () => (app.dxf ? app.dxf.view.fit() : fitTo(drawnBox(app.selected.size ? [...app.selected] : null)));
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
@@ -4294,6 +4758,7 @@ function wireInput() {
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
+  $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
@@ -4335,6 +4800,8 @@ function wireInput() {
   pal.onchange = () => setPalette(pal.value);
   wireModelList();
   wireHistory();
+  wireLooks();
+  syncStyleBg();
   const sty = $('style');
   for (const s of STYLES) if (BUILT_STYLES.includes(s.id)) sty.add(new Option(s.label, s.id));
   sty.value = currentStyle().id;
@@ -4447,7 +4914,7 @@ function wireInput() {
         e.preventDefault();
         if (zoom) zoomBy(app.cam, zoom, app.sphere.radius, app.stageAspect);
         else if (e.shiftKey) panBy(app.cam, arrow[0] * 24, arrow[1] * 24, $('stage').clientHeight);
-        else orbitBy(app.cam, arrow[0] * 18, arrow[1] * 18);
+        else orbit(app.cam, arrow[0] * 18, arrow[1] * 18);
         viewChanged();
         return;
       }
@@ -4459,7 +4926,7 @@ function wireInput() {
     // key's place, as QWERTY names it.
     // Esc: the panel, then Measure's results list, its half-made point, Measure
     // itself, then the selection
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.measure.escape()
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? app.dxf.view.select(null) : app.measure.escape()
         || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
@@ -4469,6 +4936,8 @@ function wireInput() {
     // (a LETTER of another script only: punctuation on a Latin layout keeps
     // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)
     if (nonLatinLetter(k) && /^Key[A-Z]$/.test(e.code)) k = e.code.slice(3).toLowerCase();
+    // Walk: its keys move (a held key keeps moving), before their usual meaning
+    if (app.walk && WALK_KEYS[k] && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); walkKey(k, e.shiftKey); return; }
     const act = acts[k];
     if (!act) return;
     // the key's own browser action (Quick Find on ' / Firefox, ...) is not run
@@ -4485,6 +4954,7 @@ async function main() {
   setStatus('init', 'starting GPU');
   $('export').disabled = true; // a browser may restore the last page's state
   setupEmbed(); // ?embed=1: before the first layout, so it never shows the toolbar
+  readLooks(); // the light background before the first frame
   updateButtons();
   // on a short window the controls help starts folded: the parts list needs the room
   if (innerHeight < 640) $('help').open = false;

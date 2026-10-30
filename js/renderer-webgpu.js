@@ -4,6 +4,26 @@
 
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
 
+// The ground shadow, as renderer-webgl.js's VS_GROUND / FS_GROUND: a quad
+// centre + x * ax + y * ay over x, y in [-1, 1], dark at the middle and
+// fading to nothing at the rim; g.a = its strongest alpha
+const GROUND_WGSL = /* wgsl */`
+struct G { viewProj : mat4x4f, c : vec4f, ax : vec4f, ay : vec4f, g : vec4f };
+@group(0) @binding(0) var<uniform> g : G;
+struct GOut { @builtin(position) p : vec4f, @location(0) xy : vec2f };
+@vertex fn vsGround(@builtin(vertex_index) i : u32) -> GOut {
+  let xy = vec2f(f32(i & 1u) * 2.0 - 1.0, f32((i >> 1u) & 1u) * 2.0 - 1.0);
+  var o : GOut;
+  o.p = g.viewProj * vec4f(g.c.xyz + xy.x * g.ax.xyz + xy.y * g.ay.xyz, 1.0);
+  o.xy = xy;
+  return o;
+}
+@fragment fn fsGround(i : GOut) -> @location(0) vec4f {
+  let r = length(i.xy);
+  let a = g.g.a * (1.0 - smoothstep(0.15, 1.0, r));
+  return vec4f(0.0, 0.0, 0.0, a);
+}`;
+
 const WGSL = /* wgsl */`
 struct U {
   viewProj : mat4x4f,
@@ -17,7 +37,7 @@ struct U {
   hover : vec4f,    // the hovered body's id bytes (0 = none)
   cull : vec4f,     // x focal px, y min radius px, z on for edges, w on for faces (the paper styles)
   fill : vec4f,     // the cut fill's colour
-  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none)
+  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none); y: the hidden parts' ghost alpha (0 = not drawn)
 };
 @group(0) @binding(0) var<uniform> u : U;
 @group(0) @binding(1) var stateTex : texture_2d<f32>;
@@ -82,6 +102,31 @@ fn clipped(p : vec3f) -> bool {
 @fragment fn fsShade(i : VOut, @builtin(front_facing) ff : bool) -> @location(0) vec4f {
   let st = stateOf(meshId(i.idc));
   if (clipped(i.wpos) || st.g > 0.5) { discard; }
+  var c = lit(i, ff);
+  // hi.a = 1 while anything is selected: the rest is greyed and darkened, so
+  // the selection stands out whatever colours the model itself uses
+  if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }
+  else if (u.hi.a > 0.5) { c = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.7) * 0.55; }
+  if (st.b > 0.5) { c = c + vec3f(0.12); }
+  // X-ray (params.w = 0.25): premultiplied, blended one / one-minus-src-alpha
+  let a = select(1.0, u.params.w, u.params.w > 0.0);
+  return vec4f(c * a, a);
+}
+
+// Ghosted hidden parts (xp.y = their alpha): only the HIDDEN bodies, greyed,
+// blended over the shown ones without writing depth; never picked
+@fragment fn fsGhost(i : VOut, @builtin(front_facing) ff : bool) -> @location(0) vec4f {
+  let st = stateOf(meshId(i.idc));
+  if (clipped(i.wpos) || st.g < 0.5) { discard; }
+  let c = lit(i, ff);
+  let g = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.6);
+  let a = u.xp.y;
+  return vec4f(g * a, a);
+}
+
+// the lit colour of a face fragment (the key, fill and sky lights; the cut
+// faces flat)
+fn lit(i : VOut, ff : bool) -> vec3f {
   let v = normalize(u.eye.xyz - i.wpos * u.eye.w); // w = 0: ortho view direction
   // a zero normal (degenerate or isolated vertex) would normalize to NaN
   var n = select(v, normalize(i.nrm), dot(i.nrm, i.nrm) > 1e-12);
@@ -103,14 +148,7 @@ fn clipped(p : vec3f) -> bool {
     let pn = normalize(u.clip.xyz);
     c = i.col * 0.8 * (0.35 + 0.5 * max(dot(pn, l), 0.0) + 0.15 * (0.5 + 0.5 * dot(pn, up)));
   }
-  // hi.a = 1 while anything is selected: the rest is greyed and darkened, so
-  // the selection stands out whatever colours the model itself uses
-  if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }
-  else if (u.hi.a > 0.5) { c = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.7) * 0.55; }
-  if (st.b > 0.5) { c = c + vec3f(0.12); }
-  // X-ray (params.w = 0.25): premultiplied, blended one / one-minus-src-alpha
-  let a = select(1.0, u.params.w, u.params.w > 0.0);
-  return vec4f(c * a, a);
+  return c;
 }
 
 // The cut fill, as FS_FILL in renderer-webgl.js: a flat fill where a CLOSED
@@ -347,6 +385,7 @@ export class WebGPURenderer {
         // the hidden-line styles' depth-only faces, and X-ray's blended ones
         depth: mk('fsShade', this.format, MSAA, bias, { writeMask: 0 }),
         xray: mk('fsShade', this.format, MSAA, { ...bias, depthWriteEnabled: false }, { blend: blendOver }),
+        ghost: mk('fsGhost', this.format, MSAA, { ...bias, depthWriteEnabled: false }, { blend: blendOver }),
         // the cut fill: the same bias, so its depths equal the depth-only pass's
         fill: mk('fsFill', this.format, MSAA, { ...bias, depthWriteEnabled: false, depthCompare: 'greater-equal' }),
       };
@@ -408,6 +447,20 @@ export class WebGPURenderer {
     this.readBuf = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     this.size = [0, 0];
     this.setState(new Uint8Array(4), 1, 1);
+    // The ground shadow (frame.ground): a soft dark ellipse on the ground
+    // under the model, drawn before the faces with no depth, so the model
+    // always covers it. Its own module, uniforms and pipeline.
+    const gmod = device.createShaderModule({ code: GROUND_WGSL });
+    this.groundUbo = device.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.groundPipe = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: gmod, entryPoint: 'vsGround' },
+      fragment: { module: gmod, entryPoint: 'fsGround', targets: [{ format: this.format, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } }] },
+      primitive: { topology: 'triangle-strip' },
+      depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'always' },
+      multisample: { count: MSAA },
+    });
+    this.groundBind = device.createBindGroup({ layout: this.groundPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.groundUbo } }] });
   }
 
   // Uploads and picks share ONE queue and run one at a time in call order: two
@@ -543,7 +596,7 @@ export class WebGPURenderer {
     f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, cull && frame.cullFaces ? 1 : 0], 48);
     const fill = frame.fill || [0, 0, 0];
     f.set([fill[0], fill[1], fill[2], 1], 52);
-    f.set([frame.explode || 0, 0, 0, 0], 56);
+    f.set([frame.explode || 0, frame.ghost || 0, 0, 0], 56);
     this.device.queue.writeBuffer(this.ubo, 0, f);
   }
 
@@ -620,12 +673,24 @@ export class WebGPURenderer {
       depthStencilAttachment: { view: this.depthMs.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
     if (this.vbs && this.drawCount && frame.drawModel !== false) {
+      if (frame.ground) {
+        const gr = frame.ground;
+        const gf = new Float32Array(32);
+        gf.set(frame.viewProj, 0);
+        gf.set([...gr.c, 0], 16); gf.set([...gr.ax, 0], 20); gf.set([...gr.ay, 0], 24); gf.set([0, 0, 0, gr.alpha], 28);
+        this.device.queue.writeBuffer(this.groundUbo, 0, gf);
+        pass.setPipeline(this.groundPipe);
+        pass.setBindGroup(0, this.groundBind);
+        pass.draw(4);
+      }
       const edges = frame.edges && (this.edgeCount || this.silCount) && this.edgesFor === this.drawn;
       // faces: shaded, depth only (the hidden-line styles), none (Wire), or
       // blended at a quarter without depth (X-ray)
       const faces = (frame.style && frame.style.faces) || 'shade';
       if (['shade', 'depth', 'xray'].includes(faces)) this._encodeDraw(pass, faces);
       if (faces === 'depth' && frame.clip && frame.fill) this._encodeDraw(pass, 'fill');
+      // the hidden parts as ghosts, over the shown faces, under the edges
+      if (frame.ghost && faces !== 'none') this._encodeDraw(pass, 'ghost');
       if (edges) {
         const passes = (frame.edgePasses || [{ depth: 'lequal', mode: 0 }]).slice(0, this.passSlots.length);
         const outline = frame.style && frame.style.outline && this.silCount;

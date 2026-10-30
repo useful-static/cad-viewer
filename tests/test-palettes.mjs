@@ -108,5 +108,16 @@ test('an unknown scheme is refused', () => {
   assert.throws(() => bodyColours(header, 'nope'), /unknown colour scheme/);
 });
 
+test('a painted face colours its triangles\' vertices, over the scheme', () => {
+  // one body of two faces: triangles 0 (verts 0,1,2) and 1 (verts 3,4,5)
+  const mesh = { header: { meshes: [{ name: 'a', vtxStart: 0, vtxCount: 6 }] },
+    color: new Uint8Array(24).fill(100), faces: new Uint32Array([0, 1, 1, 1]), index: new Uint32Array([0, 1, 2, 3, 4, 5]) };
+  const out = schemeColours(mesh, 'file', new Map(), new Map([[1, [1, 0, 0]]]));
+  assert.deepEqual([...out.slice(0, 4)], [100, 100, 100, 100], 'face 0 kept');
+  for (const v of [3, 4, 5]) assert.deepEqual([...out.slice(v * 4, v * 4 + 4)], [255, 0, 0, 255], `vertex ${v}`);
+  // no paint, no scheme: the file's own array, not a copy
+  assert.equal(schemeColours(mesh, 'file', new Map(), new Map()), mesh.color);
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -75,9 +75,11 @@ export function bodyColours(header, id) {
 // id is 'file' and nothing is overridden. mesh: a decoded .cadmesh
 // ({ header, color }). overrides: body index -> [r, g, b], colours the user
 // picked for single parts, which win over the scheme.
-export function schemeColours(mesh, id, overrides = new Map()) {
+// faces: per-face paint (feature review item 24), b-rep face index -> [r, g, b],
+// over the body colours (needs mesh.faces: (first triangle, count) pairs)
+export function schemeColours(mesh, id, overrides = new Map(), faces = new Map()) {
   const per = bodyColours(mesh.header, id);
-  if (!per && overrides.size === 0) return mesh.color;
+  if (!per && overrides.size === 0 && faces.size === 0) return mesh.color;
   const out = per ? new Uint8Array(mesh.color.length) : mesh.color.slice();
   const fill = (m, [r, g, b]) => {
     const R = Math.round(r * 255), G = Math.round(g * 255), B = Math.round(b * 255);
@@ -89,6 +91,19 @@ export function schemeColours(mesh, id, overrides = new Map()) {
     if (overrides.has(i)) fill(m, overrides.get(i));
     else if (per) fill(m, per[i]);
   });
+  // a painted face: the vertices of its triangles (a vertex it shares with a
+  // neighbouring face takes the paint too: the boundary blends)
+  if (faces.size && mesh.faces && mesh.index) {
+    for (const [f, [r, g, b]] of faces) {
+      const first = mesh.faces[f * 2], count = mesh.faces[f * 2 + 1];
+      if (first === undefined) continue;
+      const R = Math.round(r * 255), G = Math.round(g * 255), B = Math.round(b * 255);
+      for (let i = first * 3, end = (first + count) * 3; i < end; i++) {
+        const v = mesh.index[i];
+        out[4 * v] = R; out[4 * v + 1] = G; out[4 * v + 2] = B; out[4 * v + 3] = 255;
+      }
+    }
+  }
   return out;
 }
 
