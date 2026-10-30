@@ -494,6 +494,15 @@ async function parseGLTF(buf, format, base, files) {
     }
     return out;
   };
+  // each material's colour: baseColorFactor, times its base texture's average
+  // colour when it has one and the image can be decoded here
+  const matColour = await Promise.all((json.materials || []).map(async (mat) => {
+    const pbr = mat.pbrMetallicRoughness || {};
+    const f = pbr.baseColorFactor ? linearToSrgb(pbr.baseColorFactor) : null;
+    const tex = pbr.baseColorTexture ? await textureAverage(json, buffers, pbr.baseColorTexture.index, files) : null;
+    if (!tex) return f;
+    return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
+  }));
   const bodies = [];
   const nodeOf = (ni, parent, depth) => {
     const nd = json.nodes[ni];
@@ -517,11 +526,9 @@ async function parseGLTF(buf, format, base, files) {
         const idx = pr.indices !== undefined ? Array.from(acc(pr.indices)) : Array.from({ length: nv }, (_, i) => i);
         // a mirroring transform flips the winding back
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
-        const mat = pr.material !== undefined ? json.materials[pr.material] : null;
-        const f = mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorFactor;
         n.meshes.push(bodies.length);
         bodies.push({ name: me.primitives.length > 1 ? `${me.name || n.name} ${k + 1}` : (me.name || n.name), pos, tri: idx,
-          color: f ? linearToSrgb(f) : null });
+          color: pr.material !== undefined ? matColour[pr.material] || null : null });
       });
     }
     for (const c of nd.children || []) n.children.push(nodeOf(c, m, depth + 1));
@@ -533,6 +540,36 @@ async function parseGLTF(buf, format, base, files) {
   if (!meshes.length) throw new Error(`${base} has no triangles to show`);
   return { units: 'mm', meshes, root, sourceUnits: 'm' };
 }
+// A texture's average colour (sRGB, 0..1), or null where the image cannot be
+// decoded here (no createImageBitmap / OffscreenCanvas: Node, an old browser)
+// or is not found. The image is drawn at 32 x 32 and its pixels averaged,
+// weighted by alpha.
+async function textureAverage(json, buffers, ti, files) {
+  try {
+    if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return null;
+    const img = json.images && json.textures && json.textures[ti] && json.images[json.textures[ti].source];
+    if (!img) return null;
+    let blob;
+    if (img.bufferView !== undefined) {
+      const bv = json.bufferViews[img.bufferView];
+      blob = new Blob([new Uint8Array(buffers[bv.buffer], bv.byteOffset || 0, bv.byteLength)], { type: img.mimeType || 'image/png' });
+    } else if (img.uri && img.uri.startsWith('data:')) blob = await (await fetch(img.uri)).blob();
+    else if (img.uri) {
+      const f = files.get(decodeURIComponent(img.uri).split('/').pop().toLowerCase());
+      if (!f) return null;
+      blob = new Blob([f]);
+    } else return null;
+    const bmp = await createImageBitmap(blob);
+    const cv = new OffscreenCanvas(32, 32);
+    const cx = cv.getContext('2d');
+    cx.drawImage(bmp, 0, 0, 32, 32);
+    const px = cx.getImageData(0, 0, 32, 32).data;
+    let r = 0, g = 0, b = 0, w = 0;
+    for (let i = 0; i < px.length; i += 4) { const a = px[i + 3] / 255; r += px[i] * a; g += px[i + 1] * a; b += px[i + 2] * a; w += a; }
+    return w ? [r / w / 255, g / w / 255, b / w / 255] : null;
+  } catch { return null; }
+}
+
 const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 // column-major 4x4, as glTF stores matrices
 function mul4(a, b) {

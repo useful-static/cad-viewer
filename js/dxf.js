@@ -54,19 +54,32 @@ export function parseDXF(s) {
       i = j;
     }
   }
-  // header: $INSUNITS
-  let insunits = 0;
+  // header: $INSUNITS, $LTSCALE
+  let insunits = 0, ltscale = 1;
   if (sec.HEADER) {
-    for (let i = sec.HEADER[0]; i < sec.HEADER[1]; i++) if (ps[i][0] === 9 && ps[i][1].trim() === '$INSUNITS' && ps[i + 1]) insunits = Number(ps[i + 1][1]);
+    for (let i = sec.HEADER[0]; i < sec.HEADER[1]; i++) {
+      if (ps[i][0] !== 9 || !ps[i + 1]) continue;
+      if (ps[i][1].trim() === '$INSUNITS') insunits = Number(ps[i + 1][1]);
+      if (ps[i][1].trim() === '$LTSCALE') ltscale = Number(ps[i + 1][1]) || 1;
+    }
   }
-  // layers
+  // layers (colour, line type, line weight) and line types (dash patterns)
   const layers = new Map();
+  const ltypes = new Map(); // upper-case name -> [dash, gap, ...] in drawing units, or null (continuous)
   if (sec.TABLES) {
     for (const r of records(ps, ...sec.TABLES)) {
+      if (r.type === 'LTYPE') {
+        // 49: each element's length (+ dash, - gap, 0 dot); shapes and text in a
+        // pattern are not drawn (their space is kept)
+        const els = all(r, 49);
+        ltypes.set(get(r, 2, '').toUpperCase(), els.length ? els.map((x) => (x === 0 ? 0.0001 : Math.abs(x))) : null);
+        continue;
+      }
       if (r.type !== 'LAYER') continue;
       const aci = num(r, 62, 7);
       const tc = get(r, 420, null);
-      layers.set(get(r, 2, '0'), { name: get(r, 2, '0'), colour: tc !== null ? trueColour(Number(tc)) : aciColour(Math.abs(aci)), on: aci >= 0 && !(num(r, 70) & 1) });
+      layers.set(get(r, 2, '0'), { name: get(r, 2, '0'), colour: tc !== null ? trueColour(Number(tc)) : aciColour(Math.abs(aci)), on: aci >= 0 && !(num(r, 70) & 1),
+        ltype: get(r, 6, 'CONTINUOUS').toUpperCase(), weight: num(r, 370, -3) });
     }
   }
   if (!layers.has('0')) layers.set('0', { name: '0', colour: aciColour(7), on: true });
@@ -81,7 +94,7 @@ export function parseDXF(s) {
   }
   const out = { paths: [], texts: [] };
   const ents = sec.ENTITIES ? records(ps, ...sec.ENTITIES) : [];
-  emit(ents, IDENT, null, 0, { layers, blocks, out });
+  emit(ents, IDENT, null, 0, { layers, blocks, out, ltypes, ltscale });
   for (const p of out.paths) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true });
   const u = UNITS[insunits];
   return { units: u ? u[0] : null, mmPerUnit: u ? u[1] : null, insunits,
@@ -128,22 +141,35 @@ function emit(recs, M, byBlock, depth, ctx) {
     // an entity on layer 0 inside a block takes the insert's layer
     if (layer === '0' && byBlock && byBlock.layer) layer = byBlock.layer;
     const colour = colourOf(r, ctx, byBlock && byBlock.colour, layer);
+    // the line type (BYLAYER / BYBLOCK resolved) as a dash pattern in drawing
+    // units ($LTSCALE x the entity's 48 x the insert's scale), and the line
+    // weight in mm (370: 1/100 mm; -1 BYLAYER, -2 BYBLOCK, -3 the default)
+    const L = ctx.layers.get(layer) || {};
+    let lt = get(r, 6, 'BYLAYER').toUpperCase();
+    if (lt === 'BYLAYER') lt = L.ltype || 'CONTINUOUS';
+    else if (lt === 'BYBLOCK') lt = (byBlock && byBlock.ltype) || 'CONTINUOUS';
+    const pat = ctx.ltypes.get(lt);
+    const k = ctx.ltscale * num(r, 48, 1) * Math.hypot(M[0], M[1]);
+    let lw = num(r, 370, -1);
+    if (lw === -1) lw = L.weight ?? -3;
+    else if (lw === -2) lw = byBlock && byBlock.weight !== undefined ? byBlock.weight : -3;
+    const sty = { dash: pat ? pat.map((x) => x * k) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
     const O = mul(M, ocs(r));
     const path = (pts, closed = false, fill = false) => {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
-      ctx.out.paths.push({ layer, colour, pts: f, closed, fill });
+      ctx.out.paths.push({ layer, colour, ...sty,pts: f, closed, fill });
     };
     switch (r.type) {
       case 'LINE': {
         // LINE's points are in world coordinates, not its OCS
         const a = ap(M, num(r, 10), num(r, 20)), b = ap(M, num(r, 11), num(r, 21));
-        ctx.out.paths.push({ layer, colour, pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
+        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
         break;
       }
       case 'POINT': {
         const [x, y] = ap(M, num(r, 10), num(r, 20));
-        ctx.out.paths.push({ layer, colour, pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
+        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
         break;
       }
       case 'CIRCLE': path(arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI), true); break;
@@ -169,7 +195,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const [x, y] = ap(M, cx + mx * c - my * ratio * s, cy + my * c + mx * ratio * s);
           pts.push(x, y);
         }
-        ctx.out.paths.push({ layer, colour, pts: Float64Array.from(pts), closed: Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9, fill: false });
+        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.from(pts), closed: Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9, fill: false });
         break;
       }
       case 'LWPOLYLINE': {
@@ -195,7 +221,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const flags = num(r, 70);
         if (flags & (16 | 64)) break; // a 3D mesh or a polyface: not drawn in 2D
         const closed = (flags & 1) === 1;
-        if (flags & 8) { const W = mul(M, IDENT); ctx.out.paths.push({ layer, colour, pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
+        if (flags & 8) { const W = mul(M, IDENT); ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
         else path(bulgePts(xs, ys, bul, closed), closed);
         break;
       }
@@ -205,7 +231,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const W = M; // splines are in world coordinates
           const f = new Float64Array(pts.length);
           for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(W, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
-          ctx.out.paths.push({ layer, colour, pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
+          ctx.out.paths.push({ layer, colour, ...sty,pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
         }
         break;
       }
@@ -243,7 +269,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const cols = isDim ? 1 : Math.max(1, num(r, 70, 1)), rows = isDim ? 1 : Math.max(1, num(r, 71, 1));
         const dc = num(r, 44), dr = num(r, 45);
         const ix = isDim ? 0 : num(r, 10), iy = isDim ? 0 : num(r, 20);
-        const inner = { colour, layer };
+        const inner = { colour, layer, ltype: lt, weight: lw };
         for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
           const c = Math.cos(rot), s = Math.sin(rot);
           // insertion point, then rotation and scale, the array cell, the block base

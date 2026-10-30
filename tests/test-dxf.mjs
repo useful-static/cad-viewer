@@ -99,6 +99,26 @@ test('colours on paper: ACI 7 black, yellow darkened to 3:1', () => {
   assert.notEqual(y, '#ffff00');
   assert.equal(aciColour(250).r, 51);
 });
+test('line types and weights: BYLAYER pattern x $LTSCALE, the layer weight, an entity override', () => {
+  const L = [
+    [0, 'SECTION'], [2, 'HEADER'], [9, '$LTSCALE'], [40, 2], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LTYPE'],
+    [0, 'LTYPE'], [2, 'DASHED'], [70, 0], [73, 2], [40, 7.5], [49, 5], [49, -2.5],
+    [0, 'ENDTAB'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [2, 'DASH'], [70, 0], [62, 3], [6, 'DASHED'], [370, 50],
+    [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'DASH'], [10, 0], [20, 0], [11, 100], [21, 0],
+    [0, 'LINE'], [8, 'DASH'], [6, 'CONTINUOUS'], [370, 25], [10, 0], [20, 5], [11, 100], [21, 5],
+    [0, 'ENDSEC'], [0, 'EOF'],
+  ];
+  const d2 = parseDXF(dxf(L));
+  const [a, b] = d2.paths;
+  assert.deepEqual(a.dash, [10, 5], `dash ${a.dash}`);
+  assert.equal(a.weight, 0.5);
+  assert.equal(b.dash, null);
+  assert.equal(b.weight, 0.25);
+});
 test('not a DXF: refused in words', () => {
   assert.throws(() => parseDXF('AC1015 binary'), /not an ASCII DXF/);
 });

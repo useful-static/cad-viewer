@@ -130,11 +130,14 @@ URL parameters:
   colours), PLY (vertex colours), OFF, 3MF (units, components, colours) and
   glTF / GLB (drop a `.gltf`'s `.bin` with it) open like a STEP file and can
   be saved as `.cadmesh`. Sharp edges stay sharp (normals are smoothed only
-  under a 30° crease). STL, OBJ, PLY and OFF store no unit: they are read as
-  mm.
+  under a 30° crease). A textured glTF material shows its texture's average
+  colour. STL, OBJ, PLY and OFF store no unit: they are read as mm, and the
+  info panel's "this file is in" reads them again in cm, m or inches.
 - **2D DXF.** A `.dxf` opens as a drawing on paper: zoom, pan, Fit, its
-  layers listed (hide one, or click one of its lines to select it), its size
-  in its own unit, Save picture. DWG is not read.
+  layers listed (hide one, or click one of its lines to select it), line types
+  and weights, its size in its own unit, Save picture. **Measure** takes
+  distances with ΔX and ΔY, snapping to line ends, middles and circle
+  centres. DWG is not read.
 - **Looks.** In the parts panel: **Light** draws the shaded styles on a light
   background with a soft ground shadow; **Ghosts** draws hidden parts faintly;
   **Turntable** (or `?turntable=1`) turns the model slowly while it is left

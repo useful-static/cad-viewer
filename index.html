@@ -241,7 +241,7 @@
     #printname { text-align:center; font:12px sans-serif; color:#000; }
   }
   body.mode2d #view { visibility:hidden; }
-  body.mode2d :is(#measure, #viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #looks, #colours, #scene) { display:none !important; }
+  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #looks, #colours, #scene) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid #0006; margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
@@ -497,7 +497,11 @@
     <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
       <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the unit the file was drawn in, mm when it does not say (a choice other than Auto is remembered in this browser)">
         <option value="auto">Auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
-      </select></div></div>
+      </select>
+      <span id="meshunitrow" hidden>; this file is in
+      <select id="meshunit" autocomplete="off" aria-label="The unit this file is in" title="This mesh file stores no unit: it was read as mm. Pick the unit it was made in and it is read again at that size">
+        <option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
+      </select></span></div></div>
   <!-- the flat sheet bodies a board carries (pads, silkscreen, labels: the
        b-rep kind "sheet"), shown or hidden in one go -->
   <label id="sheetsrow" hidden title="Show or hide every flat sheet of the model at once: on a board its pads, silkscreen and labels (Undo steps back)"><input type="checkbox" id="sheets" checked autocomplete="off"> flat sheets (pads, labels) <span id="sheetscount"></span></label>

@@ -2358,7 +2358,7 @@ function updateButtons() {
   $('fit').disabled = !has && !app.dxf;
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
-  $('measure').disabled = !has;
+  $('measure').disabled = !has && !app.dxf;
   // Explode: only where the renderer's vertex shaders can read the directions
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !(app.renderer && app.renderer.canExplode);
@@ -2676,6 +2676,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   // the models in the view: this one alone (Add model… appends)
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
+  app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   $('clearval').textContent = '';
   // a model from the device is not the ?src a list pick left in the address:
   // a reload would open that instead (review r16 L7)
@@ -3199,10 +3200,39 @@ async function loadMeshFile(buf, name, seq) {
   const extras = new Map();
   for (const f of app.dropExtras || []) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
   if (stale(seq)) return;
-  const model = await parseMesh(format, buf, name, extras);
+  return meshFromSource({ buf, name, format, extras }, 'mm', seq);
+}
+
+// A mesh file's bytes as a model in `unit` (a file that stores none -- STL,
+// OBJ, PLY, OFF -- is read as mm until the units row's "file is in" says
+// otherwise: plan feature 14). app.meshSource keeps the bytes for that.
+async function meshFromSource(src, unit, seq) {
+  const model = await parseMesh(src.format, src.buf, src.name, src.extras);
   if (stale(seq)) return;
+  const unitless = !model.sourceUnits;
+  if (unitless && unit !== 'mm') {
+    const k = MM_PER[unit];
+    for (const m of model.meshes) for (let i = 0; i < m.positions.length; i++) m.positions[i] *= k;
+  }
+  if (unitless) model.sourceUnits = unit;
   const raw = encodeCadmesh(model);
-  return loadBuffer(raw, name, seq, raw);
+  await loadBuffer(raw, src.name, seq, raw);
+  // (a model added to a scene keeps the scene's units: no choice there)
+  if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
+    app.meshSource = unitless ? { ...src, unit } : null;
+    showInfo();
+  }
+}
+
+// the units row's "file is in": the same bytes read again in that unit
+function setMeshUnit(u) {
+  const src = app.meshSource;
+  if (!src || u === src.unit || !MM_PER[u]) return;
+  startLoad(() => {
+    const seq = beginLoad();
+    setStatus('loading', `reading ${src.name} in ${u}`);
+    return meshFromSource(src, u, seq).then(() => announce(`${src.name} read in ${u}`));
+  });
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
@@ -3253,8 +3283,11 @@ function show2D(drawing, name, url) {
   app.sourceUrl = url;
   app.dxf.view = createDxfView(cv, drawing, {
     onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
-    onHover: (layer) => { $('hover').textContent = layer ? `layer ${layer}` : ''; },
+    onHover: (what, snap) => { $('hover').textContent = !what ? '' : snap ? what : `layer ${what}`; },
+    onMeasure: (r) => { flashHover(r.text, 4000); announce(r.text); },
   });
+  $('measure').setAttribute('aria-pressed', 'false');
+  updateButtons(); // (clearModel ran them before app.dxf: Measure, Fit and Print come on for the drawing)
   buildLayerList();
   $('model').textContent = name;
   document.title = `${name} — ${SHORT_TITLE}`;
@@ -3266,6 +3299,19 @@ function show2D(drawing, name, url) {
   showInfo();
   setStatus('ready', `ready · 2D drawing${drawing.units ? '' : ' (its unit is not stored)'}`);
   announce(`${name} opened: a 2D drawing, ${drawing.layers.length} layers`);
+}
+
+// 2D Measure on or off: two clicks give a distance with ΔX and ΔY in the
+// drawing's unit, snapping to line ends, middles and circle centres; off
+// clears its results
+function toggle2DMeasure() {
+  if (!app.dxf) return;
+  const v = app.dxf.view, on = !v.measuring;
+  v.setMeasure(on);
+  if (!on) v.clearMeasure();
+  $('measure').setAttribute('aria-pressed', String(on));
+  flashHover(on ? 'Measure: click two points (they snap to line ends, middles and circle centres)' : 'measure off', 3000);
+  announce(on ? 'measure on' : 'measure off');
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)
@@ -4079,6 +4125,13 @@ function syncUnitsRow() {
   sel.disabled = !geomMm();
   sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
   sel.value = app.unitChoice;
+  // a mesh file that stores no unit: which unit it is in, chosen here
+  const src = app.meshSource;
+  $('meshunitrow').hidden = !src;
+  if (src) {
+    $('unitsrc').textContent = 'not stored in the file';
+    $('meshunit').value = src.unit;
+  }
 }
 
 function setUnitChoice(u) {
@@ -4310,6 +4363,9 @@ function wireInput() {
     beforeOn: () => { if (app.explode.on) { setExplode(false); flashHover('Explode off while measuring'); } },
   });
   app.measureView = measureView; // (and for tests/ui-checks.py, which projects points with it)
+  // a drawing open: Measure is the drawing's own (js/dxf-view.js)
+  const measure3d = $('measure').onclick;
+  $('measure').onclick = (e) => (app.dxf ? toggle2DMeasure() : measure3d(e));
   // The view is a tab stop (its arrows turn it), but a mouse press does not
   // focus it: the press blurs whatever had the focus, as it did when the
   // canvas took no focus at all (a click on the view leaves the page focused)
@@ -4810,6 +4866,7 @@ function wireInput() {
   sty.onchange = () => setStyle(sty.value, true);
   blurAfterPick($('unitsel'));
   $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
+  $('meshunit').onchange = (e) => setMeshUnit(e.target.value);
   // the material: remembered in this browser; a pick from the list is blurred
   // (the number keys then reach the view)
   try { const m = localStorage.getItem('cadv.material'); if (m && [...$('material').options].some((o) => o.value === m)) $('material').value = m; } catch { /* storage off */ }
@@ -4926,10 +4983,10 @@ function wireInput() {
     // key's place, as QWERTY names it.
     // Esc: the panel, then Measure's results list, its half-made point, Measure
     // itself, then the selection
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? app.dxf.view.select(null) : app.measure.escape()
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? (app.dxf.view.escapeMeasure() || (app.dxf.view.measuring ? (toggle2DMeasure(), true) : app.dxf.view.select(null))) : app.measure.escape()
         || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
-      m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
+      m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
       p: () => { if (!$('savepic').disabled) savePicture(); },
       x: () => { if (!$('explode').disabled && !$('explode').hidden) setExplode(!app.explode.on, true); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
