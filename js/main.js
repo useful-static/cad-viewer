@@ -17,6 +17,8 @@ import { aboveBelow, rangesFrom } from './datum.js';
 import { to3MF, toGLB, toSTL } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
+import { mergeModels, modelRanges } from './scene.js';
+import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { WebGLRenderer } from './renderer-webgl.js';
@@ -1089,6 +1091,14 @@ function viewLink() {
   // the model lists too, in their order, so the link keeps the drop-down
   for (const l of params.getAll('list')) u.searchParams.append('list', l);
   if (app.sourceUrl) u.searchParams.set('src', app.sourceUrl);
+  // the added models opened from a URL, and where they were moved to
+  if (app.sourceUrl && app.scene) {
+    for (const m of app.scene.slice(1)) {
+      if (!m.url) continue;
+      u.searchParams.append('add', m.url);
+      u.searchParams.append('addat', m.offset.map((o) => +o.toFixed(4)).join(','));
+    }
+  }
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
   u.hash = `view=${encodeView(currentView())}`;
   return u.toString();
@@ -1312,7 +1322,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('savedrawing').disabled && $('gallerybtn').hidden
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('savedrawing').disabled && $('addmodelbtn').disabled && $('gallerybtn').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -2103,6 +2113,7 @@ function updateButtons() {
   $('explode').disabled = !has;
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   $('exportmesh').disabled = !has;
+  $('addmodelbtn').disabled = !has || !app.scene;
   $('savepic').disabled = !has;
   // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
   $('savedrawing').disabled = !has || !(app.baseMesh && app.baseMesh.faces);
@@ -2265,6 +2276,7 @@ function handBack(mesh) {
 function dropModel(msg) {
   app.mesh = null;
   app.baseMesh = null;
+  app.scene = null;
   app.overrides = new Map();
   app.modelKey = '';
   app.header = null;
@@ -2354,6 +2366,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
       ? `none of the ${fmtInt(unmeshed)} faces of ${name} could be meshed: the converter failed on them, or this device ran out of memory`
       : `${name} has no surfaces to show: it holds no faces (only curves or points, or nothing). Export the solids or surfaces from the CAD program`);
   }
+  // File > Add model… (or ?add=): merged into the scene beside the shown model
+  if (app.adding && app.adding.seq === seq) return addToScene(base, name, seq);
   // one holder, shared by every palette copy made from base (they spread it)
   base.edgeInfo = { value: null, ready: null };
   // part colours belong to the model they were picked on: this model's own
@@ -2395,6 +2409,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
+  // the models in the view: this one alone (Add model… appends)
+  app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
+  $('clearval').textContent = '';
   // a model from the device is not the ?src a list pick left in the address:
   // a reload would open that instead (review r16 L7)
   if (!app.sourceUrl && new URLSearchParams(location.search).has('src')) {
@@ -2431,7 +2448,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // a view link (#view=…) applies to the model the page opened with; a link
   // with no ?src (its model was opened from a device) to the next one opened
   // from a device, never to a model list's first (review r16 M2)
-  if (app.pendingView && (app.pendingView.src ? app.sourceUrl === app.pendingView.src : !app.sourceUrl)) {
+  // (with ?add= models still to come, after them: its ids are the scene's)
+  if (app.pendingView && !app.addsPending && (app.pendingView.src ? app.sourceUrl === app.pendingView.src : !app.sourceUrl)) {
     applyView(app.pendingView.view);
     app.pendingView = null;
   }
@@ -2451,6 +2469,208 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     refreshEdges();
     return v;
   });
+}
+
+// ---------- more than one model (feature review item 18; js/scene.js) ----------
+// app.scene: [{ base (the model as decoded), name, url, offset [x,y,z] mm }],
+// the first the model opened, the rest added (File > Add model…, ?add=).
+// With more than one, app.baseMesh is their merge: one top-level tree node
+// per model, ids running on, so every body tool works across them. Moving an
+// added model merges again (its ids stay the same).
+
+// Start a load whose model joins the scene instead of replacing it
+function startAdd(fn) {
+  if (!app.scene) return Promise.resolve();
+  return startLoad(() => {
+    const p = fn();
+    app.adding = { seq: app.loadSeq }; // (fn's beginLoad numbered it; loadBuffer reads this later)
+    return p;
+  });
+}
+
+async function addToScene(base, name, seq) {
+  app.adding = null;
+  if (!app.scene || stale(seq)) return;
+  const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
+  // (named as its model list entry names it, when one does)
+  if (url && listEntry(url)?.name) name = listEntry(url).name;
+  if (app.scene.length === 1 && app.scene[0].url && listEntry(app.scene[0].url)?.name) app.scene[0].name = listEntry(app.scene[0].url).name;
+  const models = [...app.scene, { base, name, url, offset: app.addOffset ? app.addOffset.slice() : [0, 0, 0] }];
+  app.addOffset = null;
+  setStatus('loading', `adding ${name}`);
+  showProgress(`Adding ${name}`, null, `uploading ${fmtInt(base.header.indexCount / 3)} more triangles to the GPU`);
+  await nextPaint();
+  if (stale(seq)) return;
+  if (!(await showScene(models, { newTree: true }))) return;
+  setView('iso');
+  setStatus('ready', readyText());
+  announce(`${name} added: ${models.length} models in the view`);
+}
+
+// Draw `models` as the scene: merged, uploaded, then made the shown model.
+// newTree: the tree is built again (a model added); a move keeps the
+// selection, the hidden parts and the tree. Resolves false if superseded.
+async function showScene(models, { newTree = false } = {}) {
+  const merged = mergeModels(models);
+  merged.edgeInfo = { value: null, ready: null };
+  const mesh = inScheme(merged, app.overrides);
+  checkFits(app.renderer, mesh);
+  app.wanted = mesh;
+  try {
+    await gpuSync();
+  } catch (e) {
+    handBack(mesh);
+    throw e;
+  }
+  if (app.wanted !== mesh) return false; // a newer load or move took the GPU
+  if (app.stopEdges) app.stopEdges.stop();
+  app.scene = models;
+  app.mesh = mesh;
+  app.baseMesh = merged;
+  app.header = mesh.header;
+  // (part colours are kept by index: the first model's stay its own; a
+  // scene's are not saved, so its later indices never land on that model)
+  app.modelKey = '';
+  app.sphere = sphereOf(mesh.header.bbox);
+  app.sphereBase = app.sphere;
+  app.explode.on = false;
+  app.explode.for = null;
+  $('xpopt').hidden = true;
+  app.holesFor = null;
+  $('holes').hidden = true;
+  app.lastStepBuffer = null; // (Save .cadmesh writes one converted file, not a scene)
+  $('export').disabled = true;
+  app.hover = 0;
+  app.hoverSeq++;
+  app.viewGen++;
+  if (app.measure) app.measure.reset(); // its points were on bodies that may have moved
+  app.sourceName = models.map((m) => m.name).join(' + ');
+  if (newTree) {
+    app.selected.clear();
+    app.hidden.clear();
+    app.visUndo = [];
+    app.ref = null;
+    buildTree();
+    syncSheets();
+  }
+  pushState();
+  const tris = mesh.header.indexCount / 3;
+  if (app.stats) Object.assign(app.stats, { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount });
+  showModelName();
+  showInfo();
+  updateButtons();
+  queueFrame();
+  merged.edgeInfo.ready = edgesOf(merged).then((v) => {
+    if (app.baseMesh === merged) { pushState(); showInfo(); }
+    refreshEdges();
+    return v;
+  });
+  return true;
+}
+
+// The info panel's models: each by name, the added ones with their offset
+function syncScene() {
+  const many = !!app.scene && app.scene.length > 1 && !!app.header;
+  $('scene').hidden = !many;
+  if (!many) return;
+  const list = $('scenelist');
+  // rebuilt only when the models change (a typed offset keeps its focus)
+  const key = app.scene.map((m) => m.name).join('\n');
+  if (list.dataset.key === key) {
+    app.scene.forEach((m, i) => list.querySelectorAll('li')[i]?.querySelectorAll('input').forEach((inp, k) => {
+      if (document.activeElement !== inp) inp.value = String(+m.offset[k].toFixed(3));
+    }));
+    return;
+  }
+  list.dataset.key = key;
+  list.replaceChildren();
+  app.scene.forEach((m, i) => {
+    const li = document.createElement('li');
+    const nm = document.createElement('span');
+    nm.textContent = `${i + 1}. ${m.name}`;
+    nm.title = m.name;
+    li.append(nm);
+    if (i > 0) {
+      const at = document.createElement('div');
+      at.append('moved by ');
+      'XYZ'.split('').forEach((ax, k) => {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.step = 'any';
+        inp.value = String(m.offset[k]);
+        inp.setAttribute('aria-label', `${m.name}: move along ${ax} (mm)`);
+        inp.title = `Move ${m.name} along ${ax}, in mm from where its file puts it`;
+        inp.addEventListener('change', () => {
+          const v = Number(inp.value);
+          if (!Number.isFinite(v)) return;
+          moveModel(i, k, v);
+        });
+        at.append(`${ax} `, inp, ' ');
+      });
+      at.append('mm');
+      li.append(at);
+    }
+    list.append(li);
+  });
+}
+
+// Move added model i along axis k to v mm from where its file puts it
+let moveSeq = 0;
+async function moveModel(i, k, v) {
+  if (!app.scene || !app.scene[i] || i === 0) return;
+  const models = app.scene.map((m, j) => (j === i ? { ...m, offset: m.offset.map((o, a) => (a === k ? v : o)) } : m));
+  const mine = ++moveSeq;
+  try {
+    if (!(await showScene(models)) || mine !== moveSeq) return;
+    $('clearval').textContent = '';
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
+  } catch (e) {
+    setStatus('ready', `could not move ${models[i].name}: ${e.message || e}`);
+  }
+}
+
+// Clearance: the smallest gap between the selected parts (when they all lie
+// in one model; else the first model) and the other models' shown parts,
+// on the tessellation (js/clearance.js), drawn as a Measure distance
+async function runClearance() {
+  if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
+  if (app.explode.on) setExplode(false); // the gap is measured where the parts are
+  const ranges = modelRanges(app.scene);
+  const modelOf = (id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
+  const sel = [...app.selected];
+  const inOne = sel.length && sel.every((id) => modelOf(id) === modelOf(sel[0]));
+  const mA = inOne ? modelOf(sel[0]) : 0;
+  const shown = (id) => !app.hidden.has(id);
+  const A = (inOne ? sel : Array.from({ length: ranges[0].count }, (_, j) => j + 1)).filter(shown);
+  const B = [];
+  ranges.forEach((r, m) => { if (m !== mA) for (let id = r.first; id < r.first + r.count; id++) if (shown(id)) B.push(id); });
+  const tris = (ids) => ids.map((id) => { const m = app.header.meshes[id - 1]; return [m.idxStart / 3, m.idxCount / 3]; });
+  const what = inOne ? `the ${sel.length === 1 ? 'selected part' : `${fmtInt(sel.length)} selected parts`}` : app.scene[0].name;
+  if (!A.length || !B.length) { $('clearval').textContent = 'nothing shown to measure between'; return; }
+  $('clearval').textContent = `checking ${what}…`;
+  await nextPaint();
+  const t0 = performance.now();
+  const base = app.baseMesh;
+  const r = clearance(base.position, base.index, tris(A), tris(B));
+  if (app.baseMesh !== base || !r) return;
+  const ms = Math.round(performance.now() - t0);
+  // the bodies the two nearest triangles belong to
+  const bodyOf = (t) => {
+    const i = t * 3;
+    const k = app.header.meshes.findIndex((m) => i >= m.idxStart && i < m.idxStart + m.idxCount);
+    return k + 1;
+  };
+  const a = bodyOf(r.triA), b = bodyOf(r.triB);
+  // a part, and the model it is in (a board's parts are often just "SOLID")
+  const nm = (id) => `${app.header.meshes[id - 1].name || `part ${id}`} (${modelOf(id) + 1})`;
+  const text = r.distance === 0
+    ? `0: ${nm(a)} touches or overlaps ${nm(b)}`
+    : `${lenNum(r.distance, 'measure')} ${lenUnit()} from ${nm(a)} to ${nm(b)}`;
+  $('clearval').textContent = `clearance ${text}`;
+  $('clearval').title = `${what} against the other models' shown parts: ${fmtInt(r.pairs)} triangle pairs compared in ${ms} ms`;
+  if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
+  app.lastClearance = { distance: r.distance, a, b, ms, pairs: r.pairs, pa: r.pa, pb: r.pb }; // (for tests)
+  announce(`clearance ${text}`);
 }
 
 // Past this many silhouette candidates a coarse-pointer device (a phone,
@@ -3399,6 +3619,7 @@ function showInfo() {
   el.innerHTML = '';
   fillInfo(el);
   syncMassRow();
+  syncScene();
   // no renderer and no model: no blank box or double rule
   $('info').hidden = !el.childElementCount;
 }
@@ -3952,6 +4173,14 @@ function wireInput() {
   // only leaving the view itself ends the drag highlight
   stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
   $('emptyopen').onclick = () => $('open').click();
+  // File > Add model…: the picked file joins the scene
+  $('addmodelbtn').onclick = () => { closeMenus(); $('addmodel').click(); };
+  $('addmodel').addEventListener('change', () => {
+    const f = $('addmodel').files[0];
+    $('addmodel').value = '';
+    if (f && app.scene) startAdd(() => loadFile(f));
+  });
+  $('clearbtn').onclick = () => runClearance();
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
   // the slide-out where there is one (the window's keydown)
@@ -4285,6 +4514,27 @@ async function main() {
       loadListed(src);
     };
   } else if (src) opening = loadListed(src);
+  // ?add=<url> (repeatable, each with an optional ?addat=x,y,z in mm, in the
+  // same order): more models in the view once ?src has opened; a view link
+  // (#view=) waits for them, its part ids being the scene's
+  const adds = src && !poster ? params.getAll('add') : [];
+  if (adds.length) {
+    app.addsPending = true;
+    const ats = params.getAll('addat');
+    opening = opening.then(async () => {
+      for (const [i, u] of adds.entries()) {
+        if (!app.scene) break;
+        const at = (ats[i] || '').split(',').map(Number);
+        app.addOffset = at.length === 3 && at.every(Number.isFinite) ? at : null;
+        await startAdd(() => loadUrl(u));
+      }
+      app.addsPending = false;
+      if (app.pendingView && app.header && app.pendingView.src === app.sourceUrl) {
+        applyView(app.pendingView.view);
+        app.pendingView = null;
+      }
+    });
+  }
   const lists = params.getAll('list');
   if (!src) setStatus('idle', lists.length ? 'reading the model list…' : IDLE_MSG);
   const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0) : null;

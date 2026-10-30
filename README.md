@@ -119,6 +119,12 @@ URL parameters:
   for how far: by the assembly tree (subassemblies first, then their parts
   within them), or along X, Y or Z only. Clicking, the section and Fit work
   on the parts where they are drawn. Measure turns it off.
+- **Two models and clearance.** File > **Add model…** opens another model
+  into the view: a board in its case, or two boards side by side. Move it by
+  X / Y / Z in mm in the info panel, then **Clearance** gives the smallest
+  gap between the selected parts (or the first model) and the other model,
+  drawn as a distance; 0 means they touch or overlap. A link can open both:
+  `?src=board.stp&add=case.stp&addat=0,0,1.6`.
 - **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
   bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a

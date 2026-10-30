@@ -190,6 +190,11 @@
   #holes tr.pick td { background:#3a4250; }
   #holes tbody tr { cursor:pointer; }
   #inforef button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
+  #scene button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
+  #scenelist { list-style:none; margin:2px 0; padding:0; }
+  #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #scenelist input { width:4.2em; font:inherit; font-size:11px; }
+  #clearval { color:var(--fg, #ddd); }
   #unitsel { padding:1px 4px; }
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
      names were cut, 3 of a board list's 8 at 1280 px. The fold step sheds it
@@ -410,7 +415,7 @@
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
     <div class="menu-panel" id="filepanel" aria-label="File">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz" hidden><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
@@ -456,6 +461,12 @@
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
       <ul id="holessum"></ul>
       <table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th>depth</th></tr></thead><tbody id="holesrows"></tbody></table></div>
+    <!-- more than one model in the view (File > Add model…): each added one
+         moved by an offset, and the clearance between the models -->
+    <div id="scene" hidden><div class="holeshead"><b>models</b>
+      <button id="clearbtn" class="mini" title="The smallest gap between the selected parts (else the first model) and the other models' shown parts, drawn as a distance">Clearance</button></div>
+      <ul id="scenelist"></ul>
+      <div id="clearval" role="status"></div></div>
     <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
       <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the unit the file was drawn in, mm when it does not say (a choice other than Auto is remembered in this browser)">
         <option value="auto">Auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>

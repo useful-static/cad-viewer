@@ -599,5 +599,14 @@ export function createMeasure(deps) {
     // a body's measured geometry (mesh index), built once (js/drawing-svg.js)
     geometry: (mi) => { model(); return geomOf(mi, Infinity); },
     setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    // a distance found elsewhere (the clearance check): drawn and listed as
+    // Measure's own, replacing an earlier one of the same `sub`
+    addDistance(pa, pb, sub) {
+      st.results = st.results.filter((r) => r.sub !== sub);
+      const d = distance(pa, pb);
+      st.results.push({ mode: 'distance', pts: [pa.slice(), pb.slice()], main: deps.lenText(d.length), sub, value: d.length });
+      syncRow();
+      deps.queueFrame();
+    },
   };
 }
