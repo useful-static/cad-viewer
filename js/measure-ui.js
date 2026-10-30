@@ -317,6 +317,59 @@ export function createMeasure(deps) {
     labels.append(lab);
   }
 
+  // The results and the hole table's markers onto a 2D canvas, for a saved
+  // picture (main.js savePicture): as draw() places them, at s device px per
+  // CSS px; light chips on a light background (paper or white)
+  function paint(ctx, s, light = false) {
+    if (!app.header || (!st.results.length && !st.holes)) return;
+    const v = projector();
+    const P = (p) => { const q = v.toScreen(p); return q && [q[0] * s, q[1] * s]; };
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const r of st.results) {
+      const q = r.pts.map(P);
+      if (q.some((x) => !x)) continue;
+      ctx.strokeStyle = light ? '#9a6b00' : '#ffd23f';
+      ctx.lineWidth = 2.5 * s;
+      ctx.beginPath();
+      q.forEach((x, i) => (i ? ctx.lineTo(...x) : ctx.moveTo(...x)));
+      ctx.stroke();
+      ctx.fillStyle = light ? '#9a6b00' : '#ffd23f';
+      for (const x of q) { ctx.beginPath(); ctx.arc(x[0], x[1], 4 * s, 0, 2 * Math.PI); ctx.fill(); }
+      const at = r.mode === 'angle' ? q[1] : [(q[0][0] + q[q.length - 1][0]) / 2, (q[0][1] + q[q.length - 1][1]) / 2];
+      ctx.font = `${12 * s}px system-ui, sans-serif`;
+      const w = Math.max(ctx.measureText(r.main).width, r.sub ? ctx.measureText(r.sub).width * 0.85 : 0) + 12 * s;
+      const h = (r.sub ? 32 : 18) * s;
+      const x0 = at[0] - w / 2, y0 = at[1] - h - 8 * s;
+      ctx.fillStyle = light ? 'rgba(255,255,255,0.95)' : 'rgba(20,24,30,0.92)';
+      ctx.strokeStyle = light ? '#9a6b00' : '#ffd23f';
+      ctx.lineWidth = 1 * s;
+      ctx.fillRect(x0, y0, w, h);
+      ctx.strokeRect(x0, y0, w, h);
+      ctx.fillStyle = light ? '#111' : '#fff';
+      ctx.textBaseline = 'top';
+      ctx.fillText(r.main, x0 + 6 * s, y0 + 3 * s);
+      if (r.sub) {
+        ctx.font = `${10 * s}px system-ui, sans-serif`;
+        ctx.fillStyle = light ? '#444' : '#c9d1db';
+        ctx.fillText(r.sub, x0 + 6 * s, y0 + 18 * s);
+      }
+    }
+    if (st.holes) {
+      ctx.font = `${12 * s}px system-ui, sans-serif`;
+      st.holes.list.forEach((h, i) => {
+        const q = P(h.centre);
+        if (!q) return;
+        ctx.strokeStyle = i === st.holes.pick ? '#ffd23f' : '#5fd3ff';
+        ctx.lineWidth = 2 * s;
+        ctx.beginPath(); ctx.arc(q[0], q[1], 6 * s, 0, 2 * Math.PI); ctx.stroke();
+        ctx.fillStyle = light ? '#111' : '#fff';
+        ctx.fillText(String(i + 1), q[0] + 8 * s, q[1] - 18 * s);
+      });
+    }
+    ctx.restore();
+  }
+
   // ---- the options bar row ----
   function syncRow() {
     $('measopt').hidden = !st.on;
@@ -498,6 +551,6 @@ export function createMeasure(deps) {
     get on() { return st.on; }, get results() { return st.results; }, get pending() { return st.pending; },
     get snap() { return st.snap; },
     get holes() { return st.holes; },
-    setOn, hover, place, draw, escape, reset, undo, snapAt, faceAt, showHoles, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
   };
 }

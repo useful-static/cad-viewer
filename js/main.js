@@ -812,6 +812,65 @@ async function exportMesh(fmt) {
   announce(note);
 }
 
+// Save picture (P): the view as a PNG at twice its CSS size (capped by the
+// GPU's largest target and 16.7 Mpx), hover and selection left out, with
+// Measure's results and the hole table's markers drawn in. The canvas is
+// drawn once at that size and read back in the same task (before the browser
+// presents it), then given back its own size. Tiles (4x past the GPU's
+// limit) and a transparent background are not built yet.
+async function savePicture() {
+  if (!app.header || !app.renderer) return;
+  const r = app.renderer, box = $('stage');
+  const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
+  const lim = Math.min(r.maxCanvasSize || 4096, 8192);
+  const s = Math.min(2, lim / cw, lim / ch, Math.sqrt(16.7e6 / (cw * ch)));
+  const w = Math.max(1, Math.round(cw * s)), h = Math.max(1, Math.round(ch * s));
+  // hover and the selection's tint are of the moment, not of the model
+  const hov = app.hover;
+  const sel = [...app.selected];
+  app.hover = 0;
+  app.selected.clear();
+  pushState();
+  let shot = null;
+  try {
+    r.resize(w, h);
+    r.render(frameState());
+    shot = await new Promise((ok) => r.canvas.toBlob(ok, 'image/png'));
+  } finally {
+    app.hover = hov;
+    for (const id of sel) app.selected.add(id);
+    pushState();
+    resize(); // its own size again (r.requested differs now)
+    app.viewGen++;
+    queueFrame();
+  }
+  if (!shot) { flashHover('the picture could not be read from the GPU'); return; }
+  const img = await createImageBitmap(shot);
+  const out = document.createElement('canvas');
+  out.width = img.width;
+  out.height = img.height;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  app.measure.paint(ctx, img.width / cw, !!currentStyle().paper);
+  const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, '0');
+  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+  const url = URL.createObjectURL(png);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: cw, cssH: ch }; // (for tests)
+  const note = `saved ${name}, ${out.width} × ${out.height}`;
+  flashHover(note, 3000);
+  announce(note);
+}
+
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
   const u = new URL(location.href);
@@ -1042,7 +1101,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -1418,6 +1477,11 @@ function showModelName() {
   $('model').replaceChildren(nm, st);
   $('model').title = entry ? `${$('model').textContent} (${app.sourceName})` : $('model').textContent; // the narrow footer truncates it
   document.title = `${label} — ${SHORT_TITLE}`;
+  // the 3D view's name, for a screen reader: what it shows, and how to move it
+  const b = app.header.bbox;
+  const size = b ? `${[0, 1, 2].map((k) => lenNum(b.max[k] - b.min[k], 'size')).join(' by ')} ${lenUnit()}` : '';
+  $('view').setAttribute('aria-label', `3D view of ${label}${size ? `, ${size}` : ''}, ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'part' : 'parts'}. `
+    + 'Arrow keys turn it, Shift and the arrows pan, plus and minus zoom; 1, 3, 7 and 0 set the views.');
 }
 
 // ---------- model lists (?list=, js/model-list.js) ----------
@@ -1679,6 +1743,7 @@ function updateButtons() {
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has;
   $('exportmesh').disabled = !has;
+  $('savepic').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -1847,6 +1912,7 @@ function dropModel(msg) {
   app.partLabels = null;
   $('download').hidden = true;
   $('sheetsrow').hidden = true;
+  $('view').setAttribute('aria-label', '3D view: no model open');
   if (app.measure) app.measure.reset();
   app.hidden.clear();
   app.visUndo = [];
@@ -3085,6 +3151,13 @@ function wireInput() {
     showsHidden: () => ['wire', 'xray', 'hiddengrey'].includes(currentStyle().id),
   });
   app.measureView = measureView; // (and for tests/ui-checks.py, which projects points with it)
+  // The view is a tab stop (its arrows turn it), but a mouse press does not
+  // focus it: the press blurs whatever had the focus, as it did when the
+  // canvas took no focus at all (a click on the view leaves the page focused)
+  $('view').addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  });
   const stageXY = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   // a finger covers what it aims at: on a touch screen, a held finger aims
   // this far above itself
@@ -3496,6 +3569,7 @@ function wireInput() {
     viewChanged();
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
+  $('savepic').onclick = () => { closeMenus(); savePicture(); };
   // Export as…: a choice picked from the list exports, and the select reads
   // "Export as…" again. From the keyboard an arrow or a letter only moves the
   // choice (a closed select changes on each, and each would have saved a
@@ -3626,6 +3700,24 @@ function wireInput() {
       if (!e.repeat) viewKey(digit);
       return;
     }
+    // The camera from the keyboard: arrows turn the view as a drag does,
+    // Shift+arrows pan, + and - zoom; where the focus is the 3D view itself
+    // or nowhere (a control's own arrows win: the tree, a slider, a select).
+    // Only presets moved it from the keyboard before (feature review r2).
+    const onView = t === $('view') || t === document.body || t === document.documentElement || !(t instanceof Node);
+    if (app.header && onView && !e.defaultPrevented) {
+      const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      const zoom = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' ? 1 / 1.2
+        : e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract' ? 1.2 : 0;
+      if (arrow || zoom) {
+        e.preventDefault();
+        if (zoom) zoomBy(app.cam, zoom, app.sphere.radius, app.stageAspect);
+        else if (e.shiftKey) panBy(app.cam, arrow[0] * 24, arrow[1] * 24, $('stage').clientHeight);
+        else orbitBy(app.cam, arrow[0] * 18, arrow[1] * 18);
+        viewChanged();
+        return;
+      }
+    }
     // then an open parts panel (the narrow layout's slide-out); the next Esc
     // clears the selection. Letters match in either case, so Caps Lock does
     // not turn the shortcuts off.
@@ -3636,7 +3728,8 @@ function wireInput() {
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.measure.escape()
         || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
-      m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); } };
+      m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
+      p: () => { if (!$('savepic').disabled) savePicture(); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     // (a LETTER of another script only: punctuation on a Latin layout keeps
     // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)

@@ -188,7 +188,9 @@
   #tree .cbwrap { display:inline-flex; align-items:center; } /* the box centred on the row, as before it was wrapped */
   #stage { position:relative; min-width:0; min-height:0; overflow:hidden; touch-action:none; }
   #stage.drop { outline:2px dashed var(--acc); outline-offset:-6px; }
-  #view { width:100%; height:100%; display:block; }
+  #view { width:100%; height:100%; display:block; outline:none; }
+  /* the 3D view takes the keyboard's focus (arrows turn it): say so */
+  #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
      over the view shows), and load progress. Centred, never wider than the view. */
   #stage .card { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%);
@@ -383,7 +385,7 @@
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
     <div class="menu-panel" id="filepanel" aria-label="File">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
@@ -436,15 +438,15 @@
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
-    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges</span>
-    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops)</span>
+    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
+    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops) · P save a picture</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
     <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view"></canvas><svg id="measvg" aria-hidden="true"></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><svg id="measvg" aria-hidden="true"></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>

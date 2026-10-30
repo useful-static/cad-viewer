@@ -75,7 +75,8 @@ URL parameters:
   screen, toolbar and parts panel included, where the browser allows it.
 - **Keyboard and screen readers.** Every control is reachable from the
   keyboard. The parts tree is one tab stop: ↑ ↓ move, Enter selects, Space
-  shows or hides, → ← open and close. Shortcuts: F fit, M measure, I isolate,
+  shows or hides, → ← open and close. The 3D view is a tab stop named for its model; focused, the arrows turn it,
+  Shift+arrows pan, + and − zoom. Shortcuts: F fit, M measure, P picture, I isolate,
   H hide, A show all, E edges, Esc clear. Number keys set the view, on the digit row or the
   numpad: 1 front, 3 right, 7 top, 0 iso, 9 the opposite view, 5 Ortho on
   or off. Toggles report their state, and load results and
@@ -105,6 +106,9 @@ URL parameters:
 - **Export.** File > **Export as…** saves the parts shown as STL, 3MF (with
   colours) or GLB (with colours), turned the way the model opens: Z up for
   STL and 3MF, Y up for GLB.
+- **Picture.** File > **Save picture** (P) saves the view as a PNG at twice
+  its size, without the hover and selection highlights, with Measure's
+  results drawn in.
 - **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
   bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a
