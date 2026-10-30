@@ -594,6 +594,8 @@ export function createMeasure(deps) {
     get on() { return st.on; }, get results() { return st.results; }, get pending() { return st.pending; },
     get snap() { return st.snap; },
     get holes() { return st.holes; },
+    // a body's measured geometry (mesh index), built once (js/drawing-svg.js)
+    geometry: (mi) => { model(); return geomOf(mi, Infinity); },
     setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
   };
 }

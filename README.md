@@ -62,10 +62,10 @@ URL parameters:
   Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
   the same part of the model framed. The footer names the model in full and
   leaves the counts to the parts panel.
-- **A toolbar that fits.** The toolbar stays one row at every size: where
-  its controls do not fit, the view presets fold first, into a **Views**
-  menu, then Save .cadmesh and Copy view link into a **File** menu, then
-  Ortho, Z up, Section and Style (with the presets) into a **View** menu,
+- **A toolbar that fits.** The toolbar stays one row at every size. Saving,
+  exporting, links and the model gallery are in a **File** menu at every
+  width; where the rest does not fit, the view presets fold first, into a
+  **Views** menu, then Ortho, Z up, Section and Style (with the presets) into a **View** menu,
   then a model list's drop-down into File too, then Isolate / Hide /
   Show all / Undo into a **Show** menu, and on the narrowest phones Measure
   into View. No control shrinks or wraps its label to fit. A tool's own
@@ -111,6 +111,10 @@ URL parameters:
 - **Picture.** File > **Save picture** (P) saves the view as a PNG at twice
   its size, without the hover and selection highlights, with Measure's
   results drawn in.
+- **Drawing.** File > **Save drawing (SVG)** saves the selected parts (or
+  all shown) as a 1:1 drawing in mm, seen straight along the nearest view:
+  their edges, with holes as true circles. Select the board alone for its
+  outline and holes, e.g. for a case design. Hidden edges are not removed.
 - **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
   bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a

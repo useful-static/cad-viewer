@@ -15,6 +15,7 @@ import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
 import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { to3MF, toGLB, toSTL } from './export-mesh.js';
+import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -908,6 +909,38 @@ async function savePicture() {
   announce(note);
 }
 
+// Save drawing (SVG): the selected parts (else every one shown) at 1:1 in mm,
+// straight along the preset view nearest the camera's (Top, Front, …): their
+// b-rep edges, holes as true circles (js/drawing-svg.js). Every edge of the
+// parts is drawn, hidden ones too: a board alone gives its outline and holes.
+function saveDrawing() {
+  if (!app.header || !app.baseMesh?.faces) return;
+  const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+  if (!ids.length) { flashHover('nothing shown to draw'); return; }
+  const preset = nearestPreset(app.cam);
+  const [yaw, pitch] = VIEWS[preset];
+  const c = { q: presetQuat(yaw, pitch, app.cam.orient) };
+  const view = lookAt([0, 0, 0], camDir(c).map((v) => -v), camUp(c));
+  const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]];
+  const parts = ids.map((id) => ({ id: `body-${id}`, name: meshLabel(id), geom: app.measure.geometry(id - 1) }));
+  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const label = $('model').querySelector('.mname')?.textContent || base;
+  const d = drawingSVG(parts, right, up, { a: app.header.angularDeflection ?? 0.5,
+    title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${app.selected.size ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
+  const url = URL.createObjectURL(new Blob([d.svg], { type: 'image/svg+xml' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  app.lastDrawing = { name: a.download, preset, width: d.width, height: d.height, lines: d.lines, circles: d.circles, svg: d.svg }; // (for tests)
+  const note = `saved ${a.download}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`;
+  flashHover(note, 3000);
+  announce(note);
+}
+
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
   const u = new URL(location.href);
@@ -1139,7 +1172,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('gallerybtn').hidden
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('savedrawing').disabled && $('gallerybtn').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -1163,7 +1196,10 @@ function refold(keep = focusNow()) {
   const narrow = narrowLayout();
   if (!narrow && app.filterOpened) setPanel(false); // the slide-out keepFilter opened
   placeOpen(narrow);
-  for (const id of MENUS) $(id).classList.toggle('folded', narrow && id === 'filemenu');
+  // File is a menu at every width: it holds Save .cadmesh, Copy view link,
+  // Save picture, Export, Save drawing, Browse models and Download, which
+  // standing in a wide row folded the view presets even at 1920 px
+  for (const id of MENUS) $(id).classList.toggle('folded', id === 'filemenu');
   // Measure stands in the row after Fit (back there before measuring)
   placeMeasure(false);
   tb.classList.add('measuring');
@@ -1912,6 +1948,8 @@ function updateButtons() {
   $('measure').disabled = !has;
   $('exportmesh').disabled = !has;
   $('savepic').disabled = !has;
+  // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
+  $('savedrawing').disabled = !has || !(app.baseMesh && app.baseMesh.faces);
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -3780,6 +3818,7 @@ function wireInput() {
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
+  $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
