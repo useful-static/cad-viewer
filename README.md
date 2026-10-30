@@ -336,7 +336,7 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress8`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress10`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
@@ -355,7 +355,10 @@ OpenCascade commit as upstream) with two patches:
   or none, and no existing face is rebuilt, so colours stay. A surface model (a
   shell outside any solid), a flat sheet and a non-planar hole are left as they
   are. Each body in the result says what it is (`brep_kind`: closed, capped,
-  sheet or open), and the `.cadmesh` header keeps it as `kind`.
+  sheet or open), and the `.cadmesh` header keeps it as `kind`. A face's
+  colour is found with the same search OpenCascade's `XCAFDoc_ShapeTool::Search`
+  makes, with the assemblies' components looked up in an index built once per
+  file instead of every component scanned for every face.
 - `occt.patch` removes wasted work in OpenCascade: four loops, each quadratic
   in the number of wires (hole outlines) on a face, in shape healing
   (`ShapeFix_IntersectionTool`, `ShapeFix_Face`) and in the mesher's face check
@@ -371,6 +374,10 @@ OpenCascade commit as upstream) with two patches:
   shape healing asks for the same edge many times: the projection is now kept
   per thread, keyed by the edge's curve, range, location and plane, and handed
   out as a copy (`progress8`: a large assembly converts 14–16% faster).
+  `ShapeFix_Face::FixOrientation` compares each pair of wires' bounding boxes
+  first and skips a far pair early, in the same order and with the same result
+  (`progress10`, with the colour index: the same assembly another 11–16%
+  faster).
 
 It comes in two builds of the same sources: single-threaded, and in `mt/` a
 multi-core one (`build.sh --threads 4`): emscripten threads, OpenCascade's
@@ -382,7 +389,7 @@ Wherever the stock build meshes every face and no solid needed closing, the
 converted geometry is byte-identical to its: `occt-progress/compare.sh` converts files with two
 builds and compares them byte for byte (all 55 STEP/IGES/BREP test files of
 occt-import-js). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress8/`, with a NOTICE;
+`https://assets.known.name/occt-import-js/0.0.23-progress10/`, with a NOTICE;
 `progress3` and later stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
 no steps; the page then shows the forecast alone.

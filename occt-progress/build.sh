@@ -60,7 +60,7 @@ readonly EMSDK_VER="3.1.69" # tools/setup_emscripten_win.bat at 0.0.23
 
 usage() {
 	cat <<EOF
-usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fetch-only] [--no-patch] [--profiling]
+usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fetch-only] [--no-patch] [--profiling] [--malloc A] [--cflags F]
   --work DIR    work tree (default ~/.cache/occt-wasm)
   --out DIR     where the built .js/.wasm go (default <work>/out, <work>/out-mt with --threads)
   --jobs N      parallel compile jobs (default nproc)
@@ -68,13 +68,15 @@ usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fet
   --fetch-only  only fetch the sources and the toolchain
   --no-patch    build the unmodified upstream (a control for the patch)
   --profiling   keep the function names (--profiling-funcs) for node --cpu-prof; not for publishing
+  --malloc A    link allocator A (dlmalloc, emmalloc, mimalloc); default: emscripten's
+  --cflags F    extra compile flags (an experiment, e.g. -msimd128; gate it with compare.sh)
 EOF
 }
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 main() {
-	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1 threads=0 profiling=0
+	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1 threads=0 profiling=0 malloc="" extra_cflags=""
 	jobs="$(nproc)"
 	while (($#)); do
 		case "$1" in
@@ -87,6 +89,10 @@ main() {
 			--fetch-only) fetch_only=1; shift ;;
 			--no-patch) patch=0; shift ;;
 			--profiling) profiling=1; shift ;;
+			--malloc)
+				[[ "${2:-}" =~ ^(dlmalloc|emmalloc|mimalloc)$ ]] || { echo "--malloc takes dlmalloc, emmalloc or mimalloc" >&2; return 2; }
+				malloc="$2"; shift 2 ;;
+			--cflags) extra_cflags="$2"; shift 2 ;;
 			-h | --help) usage; return 0 ;;
 			*) usage >&2; return 2 ;;
 		esac
@@ -135,7 +141,7 @@ main() {
 	log "configuring in ${bdir}"
 	# OpenCascade's assert messages embed __FILE__: map the work tree to "."
 	# so the published WASM names no build machine's paths
-	local cflags="-ffile-prefix-map=${src}=." ldflags=""
+	local cflags="-ffile-prefix-map=${src}=.${extra_cflags:+ ${extra_cflags}}" ldflags=""
 	if ((threads)); then
 		cflags="-pthread ${cflags}"
 		# the workers are started with the module (never mid-import, which
@@ -145,6 +151,8 @@ main() {
 	# a profiling build: the function names kept in the WASM (a link flag:
 	# the same code, for `node --cpu-prof`), never one to publish
 	((profiling)) && ldflags="${ldflags} --profiling-funcs"
+	# an allocator other than the default (the multi-core build sets mimalloc)
+	[[ -n "${malloc}" ]] && ldflags="${ldflags} -sMALLOC=${malloc}"
 	(cd "${src}" && emcmake cmake -B "${bdir}" -G "Unix Makefiles" -DEMSCRIPTEN=1 -DCMAKE_BUILD_TYPE=Release \
 		"-DCMAKE_C_FLAGS=${cflags}" "-DCMAKE_CXX_FLAGS=${cflags}" "-DCMAKE_EXE_LINKER_FLAGS=${ldflags}" .) > "${work}/cmake.log" 2>&1
 	log "building with ${jobs} jobs (log: ${work}/make.log)"

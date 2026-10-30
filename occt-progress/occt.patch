@@ -331,12 +331,63 @@ index 0b52effc..2eefbea1 100644
  
    // Lists
 diff --git a/src/ShapeFix/ShapeFix_Face.cxx b/src/ShapeFix/ShapeFix_Face.cxx
-index 71b46ebe..a1e46119 100644
+index 71b46ebe..1ef185f7 100644
 --- a/src/ShapeFix/ShapeFix_Face.cxx
 +++ b/src/ShapeFix/ShapeFix_Face.cxx
-@@ -1213,7 +1213,10 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
+@@ -1190,11 +1190,39 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
+       }
+       aWireBoxes.ChangeValue(i) = aBox;
+     }
+-    
++
++    // The loop below visits every pair of the face's wires and skips a wire
++    // whose box is out of this one's (Bnd_Box2d::IsOut) only after reaching
++    // it: quadratic in the wires. Each box's bounds as Get() gives them are
++    // kept here, and the same IsOut test on them skips such a wire before
++    // anything else is touched; a box that is void, whole or open on a side
++    // ("plain" false) is left to the original test. The visiting order, the
++    // wire counter and the loop's jump (j=nb) are unchanged.
++    NCollection_Array1<Standard_Real> aPlainBox(0, 4 * nb + 3);
++    NCollection_Array1<Standard_Boolean> aIsPlain(1, nb);
++    for (i = 1; i <= nb; i++)
++    {
++      const Bnd_Box2d& aB = aWireBoxes.Value(i);
++      aIsPlain.ChangeValue(i) = !aB.IsVoid() && !aB.IsWhole() && !aB.IsOpenXmin() && !aB.IsOpenXmax()
++                               && !aB.IsOpenYmin() && !aB.IsOpenYmax();
++      if (aIsPlain.Value(i))
++        aB.Get(aPlainBox.ChangeValue(4 * i), aPlainBox.ChangeValue(4 * i + 1),
++               aPlainBox.ChangeValue(4 * i + 2), aPlainBox.ChangeValue(4 * i + 3));
++    }
++    NCollection_Array1<Standard_Boolean> aIsWireSub(1, Max(1, nbAll));
++    {
++      Standard_Integer k = 1;
++      for (TopTools_SequenceOfShape::Iterator anIt(allSubShapes); anIt.More(); anIt.Next(), k++)
++        aIsWireSub.ChangeValue(k) = anIt.Value().ShapeType() == TopAbs_WIRE;
++    }
++
+     for ( i = 1; i <= nb; i ++) {
+       TopoDS_Shape asw = ws.Value(i);
+       TopoDS_Wire aw = TopoDS::Wire (asw);
+       Bnd_Box2d aBox1 = aWireBoxes.Value(i);
++      const Standard_Boolean aPlain1 = aIsPlain.Value(i);
++      const Standard_Real aX1 = aPlainBox.Value(4 * i), aY1 = aPlainBox.Value(4 * i + 1),
++                          aXm1 = aPlainBox.Value(4 * i + 2), aYm1 = aPlainBox.Value(4 * i + 3);
+       TopoDS_Shape dummy = myFace.EmptyCopied();
+       TopoDS_Face af = TopoDS::Face ( dummy );
+ //      B.MakeFace (af,mySurf->Surface(),::Precision::Confusion());
+@@ -1212,8 +1240,20 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
+       Standard_Integer aWireIt = 0;
        for ( Standard_Integer j = 1; j <= nbAll; j ++) {
          aWireIt++;
++        // the box test below, done first on the kept bounds: aBox2.IsOut(aBox1)
++        // for two plain boxes is this comparison (Bnd_Box2d::IsOut on Get())
++        if (aPlain1 && aIsWireSub.Value(j) && aWireIt >= 1 && aWireIt <= nb && aIsPlain.Value(aWireIt))
++        {
++          const Standard_Integer o = 4 * aWireIt;
++          if (aXm1 < aPlainBox.Value(o) || aX1 > aPlainBox.Value(o + 2)
++           || aYm1 < aPlainBox.Value(o + 1) || aY1 > aPlainBox.Value(o + 3))
++            continue;
++        }
          //if(i==j) continue;
 -        TopoDS_Shape aSh2 = allSubShapes.Value(j);
 +        // a reference, not a copy: this runs for every pair of the face's

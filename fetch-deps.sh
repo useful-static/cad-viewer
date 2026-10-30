@@ -4,13 +4,14 @@
 # The .wasm is a binary, so it is gitignored and fetched here instead, pinned
 # by sha256; a mismatch stages nothing.
 #
-# Default: OUR build, 0.0.23-progress8 -- occt-import-js 0.0.23 plus
+# Default: OUR build, 0.0.23-progress10 -- occt-import-js 0.0.23 plus
 # occt-progress/progress.patch, which reports the import's progress to the page
 # (Module.onProgress), compiles with -O3, returns the file's colours as sRGB,
 # closes open solids whose missing faces are planar and reports each body's
-# b-rep status (brep_kind), and occt-progress/occt.patch, which removes wasted work in four
+# b-rep status (brep_kind) and finds face colours through a component index
+# (progress10), and occt-progress/occt.patch, which removes wasted work in
 # quadratic loops in OpenCascade, caches BRep_Tool::CurveOnPlane's projection
-# (progress8: 14-16 % off a conversion), and fixes the mesher's time and memory on
+# (progress8: 14-16 % off a conversion; progress10 a further 11-16 %), and fixes the mesher's time and memory on
 # faces with many holes (the stock build leaves such faces unmeshed once
 # WASM runs out of memory). Two builds of it: single-threaded, and in mt/ the
 # multi-core one (faces meshed on up to 4 threads, for cross-origin isolated
@@ -30,19 +31,19 @@ readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly DEST="${HERE}/vendor/occt-import-js"
 readonly CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/cad-viewer"
 
-readonly PROGRESS_VERSION="0.0.23-progress8"
+readonly PROGRESS_VERSION="0.0.23-progress10"
 readonly PROGRESS_BASE="https://assets.known.name/occt-import-js/${PROGRESS_VERSION}"
 # file -> sha256 (occt-progress/build.sh prints these); mt/ is the multi-core
 # build (build.sh --threads 4), which the page uses where js/converter-choice.js
 # allows
 readonly -A PROGRESS_SHA=(
-	[occt-import-js.js]="ab174888e0baf5d1a1578c1dfe9653dfddd89fc76c22beec07618503692ba4d1"
-	[occt-import-js.wasm]="85ad89a1fceac8f11e5a69ed28adefe6a5276a47d9d6a9bdea7542d31b8f8915"
+	[occt-import-js.js]="df2e41f9d5724986e06ea5ae7a3b0d37b31731f0007bc3abeb0a85a4f2041718"
+	[occt-import-js.wasm]="d8fa4c79439170e37a6555061d6f3e3e5a24a151266d8bf3935af443673632cc"
 	[mt/occt-import-js.js]="0f7ded0aac753047a96e4bd506f751b5ca95dc9b7b296e2b27d64bce0bf3c66a"
-	[mt/occt-import-js.wasm]="a4d53989264eefb0b997a39457ef352e07c0719d168e85acf632cdbceebc747b"
+	[mt/occt-import-js.wasm]="c3d39540e1288bfe656750bf37d985923ec1b4925eedca2eb0bd1f5329ad05ea"
 	[license.occt-import-js.txt]="7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
 	[license.occt.txt]="090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
-	[NOTICE.txt]="b9b652b2263476de7a2b685b4a743ec6c3129f33c1e77576cc4b68239babdd7e"
+	[NOTICE.txt]="800d8173871a231f1c0f35224ebbe9685122145f24dfdd4ca4921545ed1572cc"
 )
 
 readonly STOCK_VERSION="0.0.23"
