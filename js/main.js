@@ -255,28 +255,34 @@ const nextPaint = () => new Promise((resolve) => {
 
 async function makeRenderer() {
   app.attempts = [];
-  const order = { webgpu: ['webgpu'], webgl2: ['webgl2'], webgl1: ['webgl1'] }[params.get('backend')]
+  const forced = params.get('backend');
+  const order = { webgpu: ['webgpu'], webgl2: ['webgl2'], webgl1: ['webgl1'] }[forced]
     || ['webgpu', 'webgl2', 'webgl1'];
-  for (const name of order) {
+  // a software WebGPU adapter is passed over for WebGL, and taken only when
+  // WebGL fails too (or ?backend=webgpu asks for WebGPU whatever it runs on)
+  let softwareGpu = false;
+  for (const name of [...order, 'webgpu-software']) {
+    if (name === 'webgpu-software' && !softwareGpu) break;
     // A canvas keeps the first context type it hands out, so every attempt gets a fresh one.
     const old = $('view');
     const canvas = old.cloneNode(false);
     old.replaceWith(canvas);
     try {
       let r;
-      if (name === 'webgpu') {
+      if (name === 'webgpu' || name === 'webgpu-software') {
         const { WebGPURenderer } = await import('./renderer-webgpu.js');
-        r = await WebGPURenderer.create(canvas);
+        r = await WebGPURenderer.create(canvas, { allowSoftware: name === 'webgpu-software' || forced === 'webgpu' });
       } else {
         // ?gl-without=instancing,float,vtf,uint: act as a WebGL GPU without
         // those (the fallbacks' tests; SwiftShader has them all)
         const without = (params.get('gl-without') || '').split(',').filter(Boolean);
         r = WebGLRenderer.create(canvas, name === 'webgl2' ? 2 : 1, { without });
       }
-      app.attempts.push({ backend: name, ok: true });
+      app.attempts.push({ backend: name === 'webgpu-software' ? 'webgpu' : name, ok: true });
       return r;
     } catch (e) {
-      app.attempts.push({ backend: name, ok: false, error: String(e.message || e) });
+      if (e.software) softwareGpu = true;
+      app.attempts.push({ backend: name === 'webgpu-software' ? 'webgpu' : name, ok: false, error: String(e.message || e) });
       console.warn(`backend ${name} unavailable:`, e);
     }
   }
@@ -2723,7 +2729,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
     uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
     inflateMs: Math.round(inflateMs), fileBytes: buf.byteLength, fetchMs: app.fetchMs ?? null, unmeshedFaces,
-    converter: conversion ? (conversion.threads ? 'multi-core' : 'one thread') : null };
+    converter: conversion ? (conversion.threads ? 'multi-core' : 'one thread') : null, convertMs: conversion?.ms ?? null,
+    convertPhases: conversion?.phases ?? null };
   showModelName();
   showInfo();
   setStatus('ready', readyText()); // announced with the change into ready
@@ -3153,7 +3160,9 @@ async function loadAny(buf, name, seq) {
       }
     }
     if (!(await askBigConversion(buf, name, seq))) return;
+    const tConv = performance.now();
     const conversion = await convert(buf, format, seq, name);
+    conversion.ms = Math.round(performance.now() - tConv); // (in app.stats: the selftest's)
     if (stale(seq)) return;
     const out = conversion.buffer;
     // an incomplete conversion is shown (it is what the converter could do)
@@ -3461,6 +3470,17 @@ function tessellate(buf, format, seq, name, threads) {
     // forecast alone stands in.
     let conv = null; // { phase, fraction, moved }
     let step = -1, stepAt = 0, readAt = 0, readSecs = 0, barMax = 0, overStep = -1;
+    const stepTimes = []; // [step, ms] as each step began
+    // seconds per step (read, transfer, mesh, write), from the converter's
+    // own progress; before the first: loading the converter
+    const phaseSecs = (end) => {
+      const out = { load: +(((stepTimes[0]?.[1] ?? end) - t0) / 1000).toFixed(2) };
+      stepTimes.forEach(([s, t], i) => {
+        const k = ['read', 'transfer', 'mesh', 'write'][s];
+        out[k] = +((out[k] || 0) + ((stepTimes[i + 1]?.[1] ?? end) - t) / 1000).toFixed(2);
+      });
+      return out;
+    };
     const STEPS = ['reading the file', 'building the parts', 'meshing', 'writing the result'];
     const show = () => {
       if (stale(seq)) return;
@@ -3531,6 +3551,7 @@ function tessellate(buf, format, seq, name, threads) {
         const p = Math.min(3, Math.max(1, m.phase | 0));
         const st = stepOf(p, f);
         if (st !== step) {
+          stepTimes.push([st, t]); // when each step began (the selftest's phase times)
           stepAt = t;
           if (st === 0 && !readAt) readAt = t;
           if (st >= 1 && !readSecs && readAt) readSecs = (t - readAt) / 1000; // the device's speed
@@ -3541,7 +3562,7 @@ function tessellate(buf, format, seq, name, threads) {
         step = st;
         show();
       }
-      else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads });
+      else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads, phases: phaseSecs(performance.now()) });
       else done(reject, new Error(crashText(m.message)));
     };
     w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
@@ -5146,7 +5167,10 @@ async function readLists(lists, openFirst) {
 // in <pre id="selftest"> so a headless run can grade the backend
 // (tests/browser-smoke.sh). Runs on success and on failure.
 async function selftest() {
-  const out = { status: app.status, backend: app.backend, attempts: app.attempts, error: app.error || null, gpuLosses: app.gpuLosses || 0 };
+  // (the adapter: a software one -- SwiftShader, lavapipe -- explains a slow
+  // frame before any profile does)
+  const out = { status: app.status, backend: app.backend, adapter: app.renderer?.adapterInfo || app.renderer?.detail || null,
+    attempts: app.attempts, error: app.error || null, gpuLosses: app.gpuLosses || 0 };
   try {
     // ?race=<url>: start a load of <url> (pick a slower one), then immediately
     // re-load ?src. The newer load must win, and the GPU must hold the model

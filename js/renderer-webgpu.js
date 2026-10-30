@@ -289,11 +289,30 @@ function bounded(p, what) {
   return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${INIT_TIMEOUT_MS} ms`)), INIT_TIMEOUT_MS))]);
 }
 
+// A software WebGPU adapter (SwiftShader, lavapipe, WARP): the browser has no
+// hardware WebGPU but may well have hardware WebGL. On a Linux Chromium with
+// no Vulkan path, WebGPU on "google swiftshader" drew a 230k-triangle board
+// at about 100 ms a frame, against under 1 ms for WebGL2 on the same GPU.
+// So it is tried after WebGL.
+export function isSoftwareAdapter(adapter) {
+  const info = adapter.info || {};
+  if (info.isFallbackAdapter || adapter.isFallbackAdapter) return true;
+  return /swiftshader|lavapipe|llvmpipe|softpipe|\bwarp\b|basic render/i.test([info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' '));
+}
+
 export class WebGPURenderer {
-  static async create(canvas) {
+  // opts.allowSoftware: take a software adapter too (it is refused by
+  // default, so the viewer tries WebGL first: see isSoftwareAdapter)
+  static async create(canvas, opts = {}) {
     if (!navigator.gpu) throw new Error('navigator.gpu missing (browser has no WebGPU, or page is not a secure context)');
     const adapter = await bounded(navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }), 'requestAdapter');
     if (!adapter) throw new Error('no WebGPU adapter');
+    if (!opts.allowSoftware && isSoftwareAdapter(adapter)) {
+      const info = adapter.info || {};
+      const e = new Error(`software WebGPU adapter (${[info.vendor, info.architecture].filter(Boolean).join(' ') || 'fallback'}): WebGL tried first`);
+      e.software = true;
+      throw e;
+    }
     // Ask for the adapter's whole buffer limit: upload() refuses only what the
     // GPU itself cannot hold (a self-imposed 1 GiB cap refused models it could).
     const limits = {};
