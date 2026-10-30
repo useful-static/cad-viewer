@@ -93,9 +93,11 @@ function parseStep(s, where, defaults, bad) {
   if (s.from !== undefined) {
     // a preset, or the camera's orientation itself (a quaternion: the
     // recorder's "frame the selection from here")
+    // "outside": from the side of the model the framed parts lie on (a port
+    // seen from the board edge it faces), raised 30° above the horizon
     if (isVec(s.from, 4) && Math.hypot(...s.from) > 1e-6) { const n = Math.hypot(...s.from); out.from = s.from.map((v) => v / n); }
-    else if (PRESETS.includes(s.from)) out.from = s.from;
-    else throw bad(at('from'), `must be one of ${PRESETS.join(', ')}, or a camera orientation [x, y, z, w]`);
+    else if (PRESETS.includes(s.from) || s.from === 'outside') out.from = s.from;
+    else throw bad(at('from'), `must be one of ${PRESETS.join(', ')}, "outside", or a camera orientation [x, y, z, w]`);
   }
   if (s.margin !== undefined) { if (!isNum(s.margin, 1, 10)) throw bad(at('margin'), 'must be 1 to 10 (1: the parts fill the view)'); out.margin = s.margin; }
   if (s.colour !== undefined) {

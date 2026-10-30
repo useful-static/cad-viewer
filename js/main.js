@@ -11,7 +11,7 @@ import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
-import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -1270,7 +1270,7 @@ function stepPose(s) {
     pose = { target: s.view.cam.target.slice(), dist: s.view.cam.dist, q };
     if (s.view.cam.ortho !== undefined) ortho = s.view.cam.ortho;
   }
-  if (s.from) q = Array.isArray(s.from) ? s.from.slice() : preset(s.from);
+  if (s.from) q = Array.isArray(s.from) ? s.from.slice() : s.from === 'outside' ? preset('iso') : preset(s.from);
   if (s.frame || typeof s.view === 'string' || (s.from && !pose)) {
     let ids = null;
     if (Array.isArray(s.frame)) {
@@ -1280,6 +1280,7 @@ function stepPose(s) {
     }
     const box = drawnBox(ids) || drawnBox(null);
     if (!box) return null;
+    if (s.from === 'outside') q = outsideQuat(box) || q;
     const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover());
     pose = { target: f.target, dist: f.dist, q };
   }
@@ -1332,6 +1333,32 @@ function applyStepState(s) {
   pushState();
   updateButtons();
   viewChanged();
+}
+
+// A step's "from": "outside": the camera on the side of the model the box
+// lies on (from the model's centre toward the box's, along the ground),
+// raised 30° above the horizon, the model's up axis up on screen. A box at
+// the centre has no side: null (the caller keeps Iso).
+const OUTSIDE_RISE = Math.PI / 6;
+function outsideQuat(box) {
+  const up = orientUp(app.cam.orient);
+  const whole = drawnBox(null) || app.header.bbox;
+  const m = [0, 1, 2].map((k) => (whole.min[k] + whole.max[k]) / 2);
+  const p = [0, 1, 2].map((k) => (box.min[k] + box.max[k]) / 2);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let h = p.map((v, k) => v - m[k]);
+  const hu = dot(h, up);
+  h = h.map((v, k) => v - hu * up[k]);
+  const hn = Math.hypot(...h);
+  const size = Math.hypot(...[0, 1, 2].map((k) => whole.max[k] - whole.min[k]));
+  if (hn < 0.02 * size) return null;
+  h = h.map((v) => v / hn);
+  const z = h.map((v, k) => v * Math.cos(OUTSIDE_RISE) + up[k] * Math.sin(OUTSIDE_RISE)); // toward the eye
+  let y = up.map((v, k) => v - dot(up, z) * z[k]);
+  const yn = Math.hypot(...y);
+  y = y.map((v) => v / yn);
+  const x = [y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]];
+  return qFromBasis(x, y, z);
 }
 
 function cancelFlight() {

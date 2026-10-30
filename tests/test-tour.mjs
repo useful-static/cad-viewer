@@ -128,9 +128,10 @@ test('names-for', () => {
 });
 
 test('from-orientation', () => {
-  const t = parseTour(JSON.stringify({ cadtour: 1, steps: [{ frame: ['A'], from: [0, 0, 0, 2] }, { from: 'top' }] }));
+  const t = parseTour(JSON.stringify({ cadtour: 1, steps: [{ frame: ['A'], from: [0, 0, 0, 2] }, { from: 'top' }, { frame: ['A'], from: 'outside' }] }));
   assert.deepEqual(t.steps[0].from, [0, 0, 0, 1]);
   assert.equal(t.steps[1].from, 'top');
+  assert.equal(t.steps[2].from, 'outside');
   assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, steps: [{ from: [1, 2] }] })), /step 1 "from"/);
 });
 

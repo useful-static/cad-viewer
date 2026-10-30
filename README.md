@@ -127,7 +127,8 @@ URL parameters:
 - **Tours.** A tour is a file of its own (`.cadtour.json`) that plays over a
   model: a sequence of steps, each flying the camera to a view (a preset, an
   exact camera, or "frame these parts from this side", fitted to the
-  window), colouring parts, dimming the rest (faint, grey or hidden),
+  window; `"from": "outside"` looks at them from the side of the model they
+  lie on, a port from the board edge it faces), colouring parts, dimming the rest (faint, grey or hidden),
   exploding, cutting, pinning callouts, and showing a title and text in a
   caption card. It plays step by step (◀ ▶, ← →) or by itself, each step held
   and slowly orbited (Play / Pause, Space); Esc leaves and puts the view back.
