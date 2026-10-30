@@ -21,6 +21,12 @@
 "sameAs":["https://github.com/useful-static/cad-viewer"],
 "publisher":{"@type":"Organization","name":"Useful Static","url":"https://known.name/"}}
 </script>
+<!-- a link preview's title and words (no picture: the page is static, so it
+     could not show the linked model, and a fixed one would mislead) -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="CAD viewer — STEP, IGES and BREP in your browser">
+<meta property="og:description" content="Open a 3D CAD assembly in the browser: parts tree, measure, section, explode, clearance. The file stays on your device.">
+<meta name="twitter:card" content="summary">
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
@@ -545,6 +551,7 @@
     <div id="pbar" class="pbar" role="progressbar" aria-labelledby="ptitle"><div id="pfill"></div></div>
     <p id="pdetail"></p>
     <p id="phint" class="note" hidden></p>
+    <button id="pgo" class="primary" hidden>Convert anyway</button>
     <button id="pcancel">Cancel</button>
   </div>
 </div>

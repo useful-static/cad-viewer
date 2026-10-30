@@ -1918,16 +1918,40 @@ function openListed(url, refocus = false, keepMenu = false) {
   const u = new URL(before);
   u.searchParams.set('src', url);
   u.hash = ''; // a view of the last model is not a view of this one
-  history.replaceState(null, '', u);
+  // a pick is a step in the history: Back opens the model before it again
+  // (feature review item 21; it replaced the entry, so Back left the page)
+  if (u.href !== before) history.pushState({ cadvPick: true }, '', u);
   app.pendingView = null;
   if (!keepMenu) closeMenus(refocus); // the narrow layout's File menu: the pick is made
   const pick = ++listPick;
   loadListed(url).then(() => {
     // failed or cancelled, and no newer pick: the address and the drop-down
-    // name the model still shown, so the pick can be made again
+    // name the model still shown, so the pick can be made again (and the
+    // step it pushed is taken back, so Back does not land on it)
     if (pick !== listPick || app.sourceUrl === url) return;
-    if (location.href === u.href) history.replaceState(null, '', before);
+    if (location.href === u.href) {
+      if (history.state && history.state.cadvPick) { app.skipPop = true; history.back(); } else history.replaceState(null, '', before);
+    }
     syncModelList();
+  });
+}
+
+// Back / Forward between list picks: the entry's ?src opened again (and its
+// #view=, applied when it has), unless it is the model shown
+function wireHistory() {
+  window.addEventListener('popstate', () => {
+    if (app.skipPop) { app.skipPop = false; return; }
+    // (an entry with no ?src is the page as first opened, which opened the
+    // list's first model)
+    const src = new URLSearchParams(location.search).get('src') || app.listEntries?.[0]?.url;
+    if (!src || src === app.sourceUrl) { syncModelList(); return; }
+    let view = null;
+    if (location.hash.startsWith('#view=')) {
+      try { view = decodeView(decodeURIComponent(location.hash.slice(6))); } catch { /* a bad link: no view */ }
+    }
+    app.pendingView = view ? { src, view } : null;
+    listPick++;
+    loadListed(src);
   });
 }
 
@@ -2471,6 +2495,33 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   });
 }
 
+// A big CAD file on a phone (a touch-only device) is converted only once
+// asked (feature review item 21): it can take minutes and more memory than
+// the browser gives a tab, which then reloads the page with no word said.
+// Resolves true to convert, false when cancelled or superseded. A saved
+// conversion never asks (the cache is read before this).
+const BIG_PHONE_MB = 20;
+function askBigConversion(buf, name, seq) {
+  const mbs = buf.byteLength / 1e6;
+  // (app.bigAsk: { mb } makes any device ask past that size: tests/ui-checks.py)
+  if (app.bigAsk ? mbs < app.bigAsk.mb : !coarseOnly() || mbs < BIG_PHONE_MB) return Promise.resolve(true);
+  // the reference machine's time from the size alone, rounded up
+  const secs = forecastTotal(forecast({ bytes: buf.byteLength }));
+  const mins = Math.max(1, Math.ceil(secs / 60));
+  setStatus('loading', `${name} is ${mbs.toFixed(0)} MB: convert it?`);
+  showProgress(`Convert ${name}?`, 0, `${mbs.toFixed(0)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
+    'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.');
+  $('pgo').hidden = false;
+  announce(`${name} is ${mbs.toFixed(0)} MB: Convert anyway, or Cancel`);
+  $('pgo').focus();
+  return new Promise((resolve) => {
+    const finish = (v) => { clearInterval(t); $('pgo').hidden = true; $('pgo').onclick = null; resolve(v); };
+    // Cancel (or any newer load) makes this load stale
+    const t = setInterval(() => { if (stale(seq)) finish(false); }, 200);
+    $('pgo').onclick = () => finish(!stale(seq));
+  });
+}
+
 // ---------- more than one model (feature review item 18; js/scene.js) ----------
 // app.scene: [{ base (the model as decoded), name, url, offset [x,y,z] mm }],
 // the first the model opened, the rest added (File > Add model…, ?add=).
@@ -2849,6 +2900,7 @@ async function loadAny(buf, name, seq) {
         }
       }
     }
+    if (!(await askBigConversion(buf, name, seq))) return;
     const conversion = await convert(buf, format, seq, name);
     if (stale(seq)) return;
     const out = conversion.buffer;
@@ -4282,6 +4334,7 @@ function wireInput() {
   }
   pal.onchange = () => setPalette(pal.value);
   wireModelList();
+  wireHistory();
   const sty = $('style');
   for (const s of STYLES) if (BUILT_STYLES.includes(s.id)) sty.add(new Option(s.label, s.id));
   sty.value = currentStyle().id;
@@ -4489,8 +4542,11 @@ async function main() {
   if (viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
   window.addEventListener('hashchange', () => {
     // (the model now in ?src=: a pick from the model list changes it)
+    // (no src: a model from the device, or the list's first, which the page
+    // as first opened shows and Back returns to)
     const now = new URLSearchParams(location.search).get('src');
-    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl)) applyView(decodeView(viewHash()));
+    const first = app.listEntries?.[0]?.url;
+    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()));
   });
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the user opened
