@@ -98,10 +98,11 @@ await test('fetch: a list nobody answers (or CORS refuses) says so', async () =>
 });
 await test('an entry may carry step, page, author, license, labels and style; URLs resolve against the list', () => {
   const [e] = parseModelList(JSON.stringify({ 'a.cadmesh.gz': {
-    name: 'A', step: 'a.stp.gz', page: '/products/a/', author: ' Maker ', license: 'CC-BY-4.0',
+    name: 'A', step: 'a.stp.gz', page: '/products/a/', image: 'pics/a.webp', author: ' Maker ', license: 'CC-BY-4.0',
     labels: { 'HDMI_1_3': 'HDMI', 'J1': ' ' }, style: 'edges', other: 'ignored' } }), L);
   assert.deepEqual(e, { url: 'https://site.example/api/a.cadmesh.gz', name: 'A', step: 'https://site.example/api/a.stp.gz',
-    page: 'https://site.example/products/a/', author: 'Maker', license: 'CC-BY-4.0', labels: { HDMI_1_3: 'HDMI' }, style: 'edges' });
+    page: 'https://site.example/products/a/', image: 'https://site.example/api/pics/a.webp', author: 'Maker', license: 'CC-BY-4.0',
+    labels: { HDMI_1_3: 'HDMI' }, style: 'edges' });
 });
 await test('notes: by a point or a part, trimmed; a wrong one refuses the list', () => {
   const [e] = parseModelList(JSON.stringify({ a: { name: 'A', notes: [{ text: ' HDMI ', part: 'HDMI_1_3' }, { text: 'Hole', at: [1, 2, 3] }] } }), L);

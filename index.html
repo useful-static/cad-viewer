@@ -119,6 +119,19 @@
   #material { font-size:11px; padding:0 4px; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc); }
+  /* the models' gallery and the poster: cards over the view */
+  #stage #gallery { width:min(760px, calc(100% - 24px)); text-align:left; }
+  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  #gallery .galhead h2 { margin:0; }
+  #gallerygrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  #gallerygrid button { display:flex; flex-direction:column; gap:6px; padding:6px; text-align:center; }
+  #gallerygrid button[aria-current="true"] { border-color:var(--acc); }
+  #gallerygrid img { width:100%; aspect-ratio:4 / 3; object-fit:contain; background:#1b1f25; border-radius:4px; }
+  #gallerygrid .noimg { width:100%; aspect-ratio:4 / 3; display:grid; place-items:center; background:#1b1f25; border-radius:4px; color:var(--dim); font-size:28px; }
+  #stage #poster { padding:10px; }
+  #posterimg { display:block; max-width:100%; max-height:60vh; margin:0 auto 10px; }
+  #pimg { display:block; max-width:100%; max-height:28vh; margin:0 auto 8px; }
+  #pimg[hidden] { display:none; }
   #sheetsrow { display:flex; align-items:center; gap:6px; padding:4px 10px; font-size:12px; border-bottom:1px solid var(--line); cursor:pointer; }
   #sheetsrow[hidden] { display:none; }
   #sheetscount { color:var(--dim); }
@@ -397,7 +410,7 @@
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
     <div class="menu-panel" id="filepanel" aria-label="File">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
@@ -501,7 +514,15 @@
     <p class="note">Your file is opened on this device and never uploaded.</p>
     <p id="emptyerr" class="err" hidden></p>
   </div>
+  <!-- the model list as pictures (an entry's "image"), from File > Browse models -->
+  <div id="gallery" class="card" hidden role="dialog" aria-labelledby="gallerytitle">
+    <div class="galhead"><h2 id="gallerytitle">Models</h2><button id="galleryclose" aria-label="Close the models" title="Close (Esc)">×</button></div>
+    <div id="gallerygrid"></div>
+  </div>
+  <!-- ?embed=1&poster=<image>: the picture until the visitor asks for the model -->
+  <div id="poster" class="card" hidden><img id="posterimg" alt="" crossorigin="anonymous"><button id="posterload" class="primary">View in 3D</button></div>
   <div id="progress" class="card" hidden>
+    <img id="pimg" alt="" crossorigin="anonymous" hidden>
     <h2 id="ptitle"></h2>
     <div id="pbar" class="pbar" role="progressbar" aria-labelledby="ptitle"><div id="pfill"></div></div>
     <p id="pdetail"></p>

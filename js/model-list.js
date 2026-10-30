@@ -17,7 +17,7 @@
 //   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
 //     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
 //
-// It may also carry step, page, author, license, labels, style and notes (extras,
+// It may also carry step, page, image, author, license, labels, style and notes (extras,
 // below); a field it does not know is ignored, a known one that is wrong is
 // refused with the reason.
 // JavaScript orders an object's integer-like keys ("10", "2") first, by
@@ -78,6 +78,9 @@ export function parseModelList(text, listUrl) {
 //   step     the source CAD file the model was converted from: File >
 //            Download STEP (a URL, resolved against the list's)
 //   page     the model's own page (a product page): the info panel links it
+//   image    a picture of it: File > Browse models shows the list by them, and
+//            the download's card while it opens (loaded with CORS: the
+//            viewer's page is cross-origin isolated)
 //   author, license   who made it and on what terms: the info panel says so
 //   labels   { "<a part's name>": "<what to call it>" }: names the parts show
 //            in the tree, on hover and in the info panel (the file's own name
@@ -91,7 +94,7 @@ export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xr
 function extras(file, v, listUrl) {
   const out = {};
   const bad = (field, why) => new Error(`"${file}": its ${field} ${why}`);
-  for (const field of ['step', 'page']) {
+  for (const field of ['step', 'page', 'image']) {
     if (v[field] === undefined) continue;
     if (typeof v[field] !== 'string' || !v[field].trim()) throw bad(field, 'must be a URL');
     let u;

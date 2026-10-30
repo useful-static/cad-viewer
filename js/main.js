@@ -170,7 +170,8 @@ const mb = (n) => (n / 1e6).toFixed(1);
 // by CSS, during a drag over the view). After a failed load it carries the error.
 function showEmpty() {
   const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering';
-  $('empty').hidden = !!app.mesh || busy;
+  // (an embed's poster stands in for it until the visitor asks for the model)
+  $('empty').hidden = !!app.mesh || busy || !$('poster').hidden;
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
 }
@@ -1138,7 +1139,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('gallerybtn').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -1539,6 +1540,7 @@ function fillModelList(entries) {
   none.hidden = true;
   sel.add(none);
   sel.hidden = entries.length === 0;
+  $('gallerybtn').hidden = entries.length < 2; // Browse models: a list to browse
   syncModelList();
   refold();
   showModelName(); // a model shown before the list came is named from it now
@@ -1660,16 +1662,61 @@ function listedNow() {
   try { return u ? new URL(u, location.href).href : null; } catch { return null; }
 }
 
-// Open a model of the list: the drop-down names it from the start
+// Open a model of the list: the drop-down names it from the start, and the
+// download's card shows its entry's picture
 function loadListed(url) {
+  const img = listEntry(url)?.image;
+  $('pimg').hidden = !img;
+  if (img) $('pimg').src = img;
   const p = startLoad(() => loadUrl(url));
   const mine = { url, seq: app.loadSeq };
   app.listPending = mine;
   syncModelList();
   return p.finally(() => {
-    if (app.listPending === mine) app.listPending = null;
+    if (app.listPending === mine) { app.listPending = null; $('pimg').hidden = true; }
     syncModelList();
   });
+}
+
+// File > Browse models: the list as pictures (an entry's image, else a
+// placeholder) with their names; a pick opens it, Esc or × closes
+function openGallery() {
+  const grid = $('gallerygrid');
+  grid.replaceChildren();
+  const cur = listedNow();
+  for (const e of app.listEntries || []) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    if (e.url === cur) b.setAttribute('aria-current', 'true');
+    if (e.image) {
+      const im = new Image();
+      im.crossOrigin = 'anonymous'; // the page is cross-origin isolated
+      im.loading = 'lazy';
+      im.alt = '';
+      im.src = e.image;
+      b.append(im);
+    } else {
+      const d = document.createElement('span');
+      d.className = 'noimg';
+      d.setAttribute('aria-hidden', 'true'); // the name says it; the glyph is decoration
+      d.textContent = '▢';
+      b.append(d);
+    }
+    const t = document.createElement('span');
+    t.textContent = e.name;
+    b.append(t);
+    b.onclick = () => { closeGallery(false); if (e.url !== listedNow()) openListed(e.url); };
+    grid.append(b);
+  }
+  closeMenus();
+  $('gallery').hidden = false;
+  (grid.querySelector('[aria-current]') || grid.firstElementChild)?.focus();
+}
+function closeGallery(focusBack = true) {
+  if ($('gallery').hidden) return false;
+  $('gallery').hidden = true;
+  if (focusBack) ($('filemenu').classList.contains('folded') ? $('filemenu').querySelector('.menu-btn') : $('gallerybtn')).focus();
+  return true;
 }
 
 let listPick = 0;
@@ -3728,6 +3775,9 @@ function wireInput() {
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
+  $('gallerybtn').onclick = () => openGallery();
+  $('galleryclose').onclick = () => closeGallery();
+  $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
   // Export as…: a choice picked from the list exports, and the select reads
   // "Export as…" again. From the keyboard an arrow or a letter only moves the
   // choice (a closed select changes on each, and each would have saved a
@@ -3979,7 +4029,22 @@ async function main() {
   const seq0 = app.loadSeq;
   // (through loadListed, so a list read meanwhile names it while it opens and
   // a pick of it does not start it again: review r19)
-  const opening = src ? loadListed(src) : null;
+  // ?embed=1&poster=<image>: the picture, and the model only when the visitor
+  // asks for it (View in 3D) -- a page of several embeds downloads none of
+  // their models until one is wanted
+  const poster = app.embed && src && params.get('poster');
+  let opening = null;
+  if (poster) {
+    try { $('posterimg').src = new URL(poster, location.href).href; } catch { /* a bad URL: the button alone */ }
+    $('poster').hidden = false;
+    setStatus('idle', 'View in 3D loads the model');
+    showEmpty();
+    $('posterload').onclick = () => {
+      $('poster').hidden = true;
+      setEmbedActive(true);
+      loadListed(src);
+    };
+  } else if (src) opening = loadListed(src);
   const lists = params.getAll('list');
   if (!src) setStatus('idle', lists.length ? 'reading the model list…' : IDLE_MSG);
   const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0) : null;
