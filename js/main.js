@@ -10,7 +10,7 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pin
 import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
 import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
@@ -577,6 +577,39 @@ function frameState() {
   };
 }
 
+// The model's X, Y and Z (the file's own axes) in a corner of the view,
+// turned as the camera is: each axis drawn from the middle toward where it
+// points on screen, the ones pointing away from the viewer dimmer and drawn
+// first, so which way is which reads at a glance after any orbit (feature
+// review item 16)
+const TRIAD = [['X', [1, 0, 0], '#ff5c5c'], ['Y', [0, 1, 0], '#5fd35f'], ['Z', [0, 0, 1], '#5f9dff']];
+function drawTriad() {
+  const svg = $('triad');
+  svg.hidden = !app.header || app.embed;
+  if (svg.hidden) return;
+  const c = app.cam;
+  const view = lookAt([0, 0, 0], camDir(c).map((v) => -v), camUp(c));
+  const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]], toward = camDir(c);
+  const ax = TRIAD.map(([n, a, col]) => ({ n, col, x: a[0] * right[0] + a[1] * right[1] + a[2] * right[2],
+    y: -(a[0] * up[0] + a[1] * up[1] + a[2] * up[2]), z: a[0] * toward[0] + a[1] * toward[1] + a[2] * toward[2] }));
+  ax.sort((p, q) => p.z - q.z); // the far ones first
+  const R = 24;
+  const ns = 'http://www.w3.org/2000/svg';
+  svg.replaceChildren();
+  for (const a of ax) {
+    const op = a.z < -0.05 ? 0.45 : 1;
+    const l = document.createElementNS(ns, 'line');
+    l.setAttribute('x1', 0); l.setAttribute('y1', 0);
+    l.setAttribute('x2', (a.x * R).toFixed(1)); l.setAttribute('y2', (a.y * R).toFixed(1));
+    l.setAttribute('stroke', a.col); l.setAttribute('opacity', op);
+    const t = document.createElementNS(ns, 'text');
+    t.setAttribute('x', (a.x * (R + 8)).toFixed(1)); t.setAttribute('y', (a.y * (R + 8)).toFixed(1));
+    t.setAttribute('fill', a.col); t.setAttribute('opacity', op);
+    t.textContent = a.n;
+    svg.append(l, t);
+  }
+}
+
 // The view as Measure needs it (js/measure-ui.js): the frame's matrices for
 // the stage's CSS size, and the camera's axes
 function measureView() {
@@ -992,6 +1025,7 @@ function queueFrame() {
     app.renderer.render(frameState());
     app.frameCount++;
     if (app.measure) app.measure.draw(); // its layer follows the camera
+    drawTriad();
   });
 }
 
@@ -1738,7 +1772,58 @@ function wireFullscreen() {
   syncFullscreen();
 }
 
+// The cut at a position along its axis (mm, model coordinates), clamped to the
+// model's extent
+function setSectionAtMm(mm) {
+  const s = app.section;
+  if (s.axis === 'off' || !app.header) return;
+  const k = { x: 0, y: 1, z: 2 }[s.axis];
+  const { min, max } = app.header.bbox;
+  s.t = max[k] > min[k] ? Math.min(1, Math.max(0, (mm - min[k]) / (max[k] - min[k]))) : 0.5;
+  updateButtons();
+  viewChanged();
+}
+
+// The readout turned into a field: type the cut position in the display
+// unit, Enter puts the cut there, Esc (or leaving it) keeps it where it was
+function secEdit() {
+  const p = sectionPlane();
+  if (!p || app.secEditing) return;
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.step = 'any';
+  inp.id = 'secin';
+  inp.value = lenNum(p[3] * (app.section.flip ? -1 : 1), 'section');
+  inp.setAttribute('aria-label', `Cut position along ${app.section.axis.toUpperCase()}, in ${lenUnit()} (Enter puts the cut there)`);
+  app.secEditing = true;
+  $('secval').replaceChildren(inp);
+  inp.focus();
+  inp.select();
+  let over = false;
+  const done = (apply) => {
+    if (over) return;
+    over = true;
+    app.secEditing = false;
+    const v = Number(inp.value);
+    if (apply && inp.value.trim() && Number.isFinite(v)) setSectionAtMm(geomMm() ? v * MM_PER[curUnit()] : v);
+    else updateButtons();
+    $('secval').focus();
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
+  });
+  inp.addEventListener('blur', () => done(false));
+}
+
 function wireOptbar() {
+  $('secval').addEventListener('click', secEdit);
+  $('secval').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === $('secval')) { e.preventDefault(); secEdit(); } });
+  $('secsel').onclick = () => {
+    const b = app.selected.size && bboxOf([...app.selected]);
+    if (!b) return;
+    const k = { x: 0, y: 1, z: 2 }[app.section.axis];
+    setSectionAtMm((b.min[k] + b.max[k]) / 2);
+  };
   $('section').onclick = () => {
     closeMenus();
     setSection(app.section.axis === 'off' ? app.section.last : 'off', true);
@@ -1790,7 +1875,9 @@ function updateButtons() {
   $('secflip').setAttribute('aria-pressed', String(!!app.section.flip));
   syncOptbar();
   const p = sectionPlane();
-  $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(p[3] * (app.section.flip ? -1 : 1), 'section')} ${lenUnit()}` : '';
+  // (not while its position is being typed: secEdit)
+  if (!app.secEditing) $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(p[3] * (app.section.flip ? -1 : 1), 'section')} ${lenUnit()}` : '';
+  $('secsel').disabled = !on || !app.selected.size;
   // a screen reader speaks the cut position, not the slider's 0-1000 step
   if (p) $('secpos').setAttribute('aria-valuetext', $('secval').textContent);
   else $('secpos').removeAttribute('aria-valuetext');
@@ -2110,7 +2197,11 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   applyListEntry(); // its step, page, author, license, style from the model list
   touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
-  base.edgeInfo.ready = edgesOf(base).then((v) => { if (app.baseMesh === base) pushState(); refreshEdges(); return v; });
+  base.edgeInfo.ready = edgesOf(base).then((v) => {
+    if (app.baseMesh === base) { pushState(); showInfo(); } // (the facts: volume, area, mass)
+    refreshEdges();
+    return v;
+  });
 }
 
 // Past this many silhouette candidates a coarse-pointer device (a phone,
@@ -3024,12 +3115,25 @@ function showInfo() {
   const el = $('infovals');
   el.innerHTML = '';
   fillInfo(el);
+  syncMassRow();
   // no renderer and no model: no blank box or double rule
   $('info').hidden = !el.childElementCount;
 }
 
 // "measured from": the whole model's corner, or the parts chosen with
 // Measure from selection; its buttons are never rebuilt (the focus stays)
+// mass: the selection's closed bodies times the material's density (mm³ /
+// 1000 = cm³); with nothing selected it says why it waits (a whole model is
+// rarely one material)
+function syncMassRow() {
+  const f = app.factsNow;
+  const show = !!app.header && !!f && app.selected.size > 0;
+  $('infomass').hidden = !show;
+  if (!show) return;
+  const g = (f.vol / 1000) * Number($('material').value);
+  $('massval').textContent = f.closed ? `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}` : 'none closed: no volume';
+}
+
 function syncRefRow() {
   $('inforef').hidden = !app.header;
   if (!app.header) return;
@@ -3128,6 +3232,29 @@ function fillInfo(el) {
     add(`above / below it (${lenUnit()})`, `${lenNum(ab.above, 'size')} / ${lenNum(ab.below, 'size')}`);
   }
   add('triangles', fmtInt(tris));
+  // volume and area (js/edges.js facts: from the file, or the worker's once it
+  // answers): the volume of the closed bodies only, an open sheet having none;
+  // the bodies counted by their b-rep kind
+  const facts = app.baseMesh?.edgeInfo?.value?.facts;
+  const which = ids.length ? ids : app.header.meshes.map((_, i) => i + 1);
+  if (!facts) {
+    app.factsNow = null;
+    add('volume', 'computing…');
+  } else {
+    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0;
+    for (const id of which) {
+      const i = id - 1, kind = app.header.meshes[i].kind;
+      area += facts.area[i] || 0;
+      if (facts.closed[i]) { vol += facts.volume[i] || 0; closed++; if (kind === 'capped') capped++; } else if (kind === 'sheet') sheets++; else open++;
+    }
+    const u = lenUnit();
+    const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
+      open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}`);
+    add('area', `≈ ${fmtArea(area, u)}`);
+    app.factsNow = { vol, closed, of: which.length };
+    if (!ids.length) add('mass', 'select parts (a whole model is rarely one material)');
+  }
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
   if (app.stats?.converter) add('converted on', app.stats.converter);
@@ -3645,6 +3772,11 @@ function wireInput() {
   sty.onchange = () => setStyle(sty.value, true);
   blurAfterPick($('unitsel'));
   $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
+  // the material: remembered in this browser; a pick from the list is blurred
+  // (the number keys then reach the view)
+  try { const m = localStorage.getItem('cadv.material'); if (m && [...$('material').options].some((o) => o.value === m)) $('material').value = m; } catch { /* storage off */ }
+  blurAfterPick($('material'));
+  $('material').onchange = () => { try { localStorage.setItem('cadv.material', $('material').value); } catch { /* storage off */ } syncMassRow(); };
   $('refset').onclick = () => setRef(true);
   $('refclear').onclick = () => setRef(false);
   $('holesbtn').onclick = () => {

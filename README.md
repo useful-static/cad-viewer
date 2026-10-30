@@ -117,12 +117,17 @@ URL parameters:
   product page: no toolbar or panels, just Fit, full screen and **Open in
   cad.place ↗** over the view. Until a visitor clicks or taps it, it leaves
   the page's scrolling alone; Esc gives the scroll wheel back.
+- **Facts.** The volume and surface area of the selection or the model
+  (closed parts only for volume), and with parts selected their mass in a
+  material you pick (PLA, ABS, PETG, aluminium, steel, brass, FR-4).
+- **Axes.** The model's X, Y and Z turn with the view in a corner of it.
 - **Inspect.** Selection extent (X × Y × Z), its position (each axis's
   extent from a reference's corner: the whole model, or the parts chosen
   with **Measure from selection**, such as the board, which also gives how far
   things stand above and below it), and triangle count. Section plane
   (View > Section): along the bottom of the view, X / Y / Z, a slider, the
-  cut's position, and a flip.
+  cut's position (click it to type one), a button that cuts through the
+  selection, and a flip.
   Cut solids read as solid: what you see of a part's inside through the cut
   is shaded flat, like a cut face.
 - **Units.** The parts panel names the unit the file was drawn in (read

@@ -109,12 +109,14 @@
   .seg button:last-child { border-radius:0 4px 4px 0; }
   .seg button[aria-pressed=true] { position:relative; } /* its orange border over the neighbours' */
   #secpos { width:clamp(110px, 32vw, 360px); }
-  #secval { min-width:11ch; }
+  #secval { min-width:11ch; cursor:text; text-decoration:underline dotted; text-underline-offset:3px; }
+  #secin { width:9ch; font:inherit; background:#1b1f25; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
   #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; }
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
-  #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden] { display:none; }
+  #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
+  #material { font-size:11px; padding:0 4px; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc); }
   #sheetsrow { display:flex; align-items:center; gap:6px; padding:4px 10px; font-size:12px; border-bottom:1px solid var(--line); cursor:pointer; }
@@ -132,6 +134,12 @@
     padding:4px 10px; border-radius:12px; font-size:12px; pointer-events:none; white-space:nowrap; }
   /* Measure: an SVG layer and HTML labels over the view, projected each frame
      (js/measure-ui.js); they take no pointer input */
+  /* the model's axes, turning with the view (main.js drawTriad) */
+  #triad { position:absolute; right:6px; bottom:calc(6px + var(--optbar-h, 0px)); pointer-events:none; overflow:visible; }
+  #triad[hidden] { display:none; }
+  #triad line { stroke-width:2.5; stroke-linecap:round; }
+  #triad text { font:bold 11px system-ui, sans-serif; text-anchor:middle; dominant-baseline:central; paint-order:stroke; stroke:#000; stroke-width:2.5px; }
+  #stage[data-bg="paper"] #triad text { stroke:#fff; }
   #measvg, #measlabels { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
   #measvg .mline { stroke:#ffd23f; stroke-width:2.5; filter:drop-shadow(0 0 1px #000); }
   #measvg .mline.pend { stroke-dasharray:5 4; }
@@ -277,6 +285,7 @@
   @media (any-pointer: coarse) and (any-pointer: fine) { .help-touch::before { content:'· '; } }
   @media (any-pointer: coarse) {
     button, select, label.btn, a.btn { min-height:40px; padding:6px 12px; }
+    #secsel { min-width:40px; } /* one glyph: 34 px wide without it */
     select { font-size:16px; } /* iOS Safari zooms the page into a focused control under 16 px */
     #tree .row { min-height:34px; }
     #tree input { width:20px; height:20px; }
@@ -422,6 +431,12 @@
       <button id="refset" class="mini" disabled title="Measure positions from the selected parts (e.g. select the board, then this): the position row and the heights above and below then refer to them">Measure from selection</button>
       <button id="refclear" class="mini" hidden aria-label="Measure from the whole model again" title="Measure from the whole model again">×</button>
       <button id="holesbtn" class="mini" disabled title="List the holes of the selected parts (select the board for its mounting holes): diameter, position from the reference's corner, and how far apart they lie">List holes</button></div>
+    <!-- mass: the selection's closed bodies times a material's density; the
+         select lives outside #infovals, so a refresh never closes it -->
+    <div id="infomass" hidden><b>mass if</b> <select id="material" autocomplete="off" aria-label="Material the mass is worked out for" title="The material the selected parts are made of: their mass is their volume times its density">
+        <option value="1.24">PLA (1.24 g/cm³)</option><option value="1.04">ABS (1.04)</option><option value="1.27">PETG (1.27)</option>
+        <option value="2.70">aluminium (2.70)</option><option value="7.85">steel (7.85)</option><option value="8.5">brass (8.5)</option><option value="1.85">FR-4 (1.85)</option>
+      </select> <span id="massval"></span></div>
     <div id="holes" hidden><div class="holeshead"><b id="holestitle">Holes</b>
       <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
@@ -449,7 +464,7 @@
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><svg id="measvg" aria-hidden="true"></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
@@ -463,7 +478,8 @@
       <button id="secoff" aria-pressed="true" title="Turn the section off">Section <span aria-hidden="true">×</span></button>
       <span class="seg" role="group" aria-label="Section plane axis"><button data-axis="x" aria-pressed="false" title="Cut across X">X</button><button data-axis="y" aria-pressed="false" title="Cut across Y">Y</button><button data-axis="z" aria-pressed="false" title="Cut across Z">Z</button></span>
       <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
-      <span id="secval" class="secval"></span>
+      <span id="secval" class="secval" role="button" tabindex="0" title="Type the cut position (click, or Enter)"></span>
+      <button id="secsel" disabled aria-label="Cut through the selection" title="Put the cut through the middle of the selected parts">⌖</button>
       <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
     </div></div>
     <div class="opt" id="measopt" hidden><div class="opt-row">

@@ -8,7 +8,7 @@
 // significant digits, in a unit that keeps the number readable.
 
 export const DISPLAY_UNITS = ['mm', 'cm', 'm', 'in'];
-const MM_PER = { mm: 1, cm: 10, m: 1000, in: 25.4 };
+export const MM_PER = { mm: 1, cm: 10, m: 1000, in: 25.4 };
 const DECIMALS = { mm: 2, cm: 3, m: 4, in: 3 };
 
 // The display unit Auto gives for a declared unit: itself when it is one of
