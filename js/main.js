@@ -1667,6 +1667,7 @@ function listedNow() {
 function loadListed(url) {
   const img = listEntry(url)?.image;
   $('pimg').hidden = !img;
+  $('pimg').onerror = () => { $('pimg').hidden = true; }; // (served without CORS: no picture)
   if (img) $('pimg').src = img;
   const p = startLoad(() => loadUrl(url));
   const mine = { url, seq: app.loadSeq };
@@ -1688,20 +1689,24 @@ function openGallery() {
     const b = document.createElement('button');
     b.type = 'button';
     if (e.url === cur) b.setAttribute('aria-current', 'true');
+    const placeholder = () => {
+      const d = document.createElement('span');
+      d.className = 'noimg';
+      d.setAttribute('aria-hidden', 'true'); // the name says it; the glyph is decoration
+      d.textContent = '▢';
+      return d;
+    };
     if (e.image) {
       const im = new Image();
       im.crossOrigin = 'anonymous'; // the page is cross-origin isolated
       im.loading = 'lazy';
       im.alt = '';
+      // a picture its site does not serve with CORS cannot load here: the
+      // placeholder, not a broken-image icon
+      im.onerror = () => im.replaceWith(placeholder());
       im.src = e.image;
       b.append(im);
-    } else {
-      const d = document.createElement('span');
-      d.className = 'noimg';
-      d.setAttribute('aria-hidden', 'true'); // the name says it; the glyph is decoration
-      d.textContent = '▢';
-      b.append(d);
-    }
+    } else b.append(placeholder());
     const t = document.createElement('span');
     t.textContent = e.name;
     b.append(t);
