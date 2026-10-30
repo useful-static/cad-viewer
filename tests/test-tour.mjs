@@ -140,6 +140,15 @@ test('from-orientation', () => {
   assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, steps: [{ from: [1, 2] }] })), /step 1 "from"/);
 });
 
+test('orient', () => {
+  // the model's orientation for the tour, in any spelling ?orient= takes
+  assert.equal(parseTour(JSON.stringify({ cadtour: 1, orient: '+z-y', steps: [{}] })).orient, '+z-y');
+  assert.equal(parseTour(JSON.stringify({ cadtour: 1, orient: 'up:+z,front:-y', steps: [{}] })).orient, '+z-y');
+  assert.equal(parseTour(JSON.stringify({ cadtour: 1, steps: [{}] })).orient, null);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, orient: 'up', steps: [{}] })), /"orient"/);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, orient: '+z+z', steps: [{}] })), /"orient"/);
+});
+
 test('tour-names', () => {
   const t = parseTour(JSON.stringify(EXAMPLE));
   assert.deepEqual(tourNames(t).sort(), ['HDMI', 'USB 2.0 ×2']);

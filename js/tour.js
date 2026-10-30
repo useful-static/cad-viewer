@@ -2,10 +2,15 @@
 // matched to a model's bodies. Pure (no DOM), so tests/test-tour.mjs checks it
 // in Node.
 //
-// A tour is { cadtour: 1, title?, model?, mode?, loop?, defaults?, steps: [...] }.
+// A tour is { cadtour: 1, title?, model?, orient?, mode?, loop?, defaults?, steps: [...] }.
 // Every value is checked and a wrong one refuses the whole file, naming the
 // step and the field: a typo in a field name is refused too, since a tour that
 // silently ignored "colour" spelled "color" would play wrong without a word.
+// "orient" is the model's orientation while the tour plays ("+z-y": +z up,
+// -y toward the viewer; js/orient.js), so its presets and "outside" mean the
+// same on every page that opens it.
+
+import { parseOrient } from './orient.js';
 
 export const PRESETS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'];
 export const EASES = ['linear', 'inOut'];
@@ -16,7 +21,7 @@ export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' }
 
 const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
   'explode', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
-const TOP_FIELDS = ['cadtour', 'title', 'model', 'mode', 'loop', 'defaults', 'steps'];
+const TOP_FIELDS = ['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
 
 const isText = (v, max) => typeof v === 'string' && v.length <= max;
 const isNum = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
@@ -40,6 +45,10 @@ export function parseTour(text, base = undefined) {
     try { model = new URL(t.model, base).href; } catch { throw bad('"model"', `"${t.model}" is not a URL`); }
     if (!/^https?:/.test(model)) throw bad('"model"', 'must be an http(s) URL');
   }
+  let orient = null;
+  if (t.orient !== undefined) {
+    try { orient = parseOrient(t.orient); } catch (e) { throw bad('"orient"', e.message); }
+  }
   const mode = t.mode === undefined ? 'static' : t.mode;
   if (!['static', 'animated'].includes(mode)) throw bad('"mode"', 'must be "static" or "animated"');
   if (t.loop !== undefined && typeof t.loop !== 'boolean') throw bad('"loop"', 'must be true or false');
@@ -55,7 +64,7 @@ export function parseTour(text, base = undefined) {
   if (!Array.isArray(t.steps) || !t.steps.length) throw bad('"steps"', 'must be a list of at least one step');
   if (t.steps.length > MAX_STEPS) throw bad('"steps"', `at most ${MAX_STEPS} steps`);
   const steps = t.steps.map((s, i) => parseStep(s, `step ${i + 1}`, defaults, bad));
-  return { title: t.title || '', model: model || null, mode, loop: !!t.loop, defaults, steps };
+  return { title: t.title || '', model: model || null, orient, mode, loop: !!t.loop, defaults, steps };
 }
 
 function checkTiming(where, k, v, bad) {

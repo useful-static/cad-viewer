@@ -1539,6 +1539,12 @@ function startTour(tour, url) {
   const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides),
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t } };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
+  // the tour's orientation while it plays (leaving puts the visitor's back,
+  // with the rest of their view)
+  if (tour.orient && tour.orient !== app.cam.orient) {
+    app.cam.orient = tour.orient;
+    updateButtons();
+  }
   $('tourcard').hidden = false;
   // an animated tour plays from the start; a static one waits for ▶
   setTourPlaying(tour.mode === 'animated');
