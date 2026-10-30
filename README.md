@@ -31,7 +31,7 @@ URL parameters:
 | Parameter | Effect |
 |---|---|
 | `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start; a file on another site loads only if that site sends CORS headers (`Access-Control-Allow-Origin`), as GitHub raw files, most CDNs and CORS-enabled buckets do |
-| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. A name may also be `{"name": "…", "orient": "up:+z,front:-y"}`, which opens that model turned that way (see `orient=`), with any of: `"step"`, the source CAD file, offered as File > **Download STEP**; `"page"`, the model's own page, linked from the info panel; `"author"` and `"license"`, shown there; `"labels"`, `{"<a part's name>": "<what to call it>"}`, the names the parts show; `"style"`, the display style it opens in unless the visitor chose one. A model opened from a STEP URL offers that file for download too. The names fill a drop-down beside Open…; picking one opens it into `?src=`. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
+| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. A name may also be `{"name": "…", "orient": "up:+z,front:-y"}`, which opens that model turned that way (see `orient=`), with any of: `"step"`, the source CAD file, offered as File > **Download STEP**; `"page"`, the model's own page, linked from the info panel; `"author"` and `"license"`, shown there; `"labels"`, `{"<a part's name>": "<what to call it>"}`, the names the parts show; `"style"`, the display style it opens in unless the visitor chose one; `"notes"`, `[{"text": "HDMI", "part": "<a part's name>"}]` or with `"at": [x, y, z]`, notes pinned on the model. A model opened from a STEP URL offers that file for download too. The names fill a drop-down beside Open…; picking one opens it into `?src=`. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
 | `orient=up:+z,front:-y` | which of the file's axes is up and which faces the viewer in the Front view, whatever frame the file was drawn in: any two of `up`, `front` and `right`, each `+x` `-x` `+y` `-y` `+z` or `-z`, perpendicular (in a URL, `+` is written `%2B`). The view presets are taken in it and the model is fitted, so files drawn differently open the same way round. It applies to a model opened from a URL; a list entry's own `orient` wins, and a bad value is ignored |
 | `backend=webgpu\|webgl2\|webgl1` | force one backend (default: try them in that order) |
 | `selftest=1` | after loading, pick the canvas centre and publish one JSON line in `<pre id="selftest">` (for automated checks) |
@@ -98,7 +98,9 @@ URL parameters:
   Wire, X-ray and Hidden grey, which draw hidden edges); else to the surface
   under the pointer. On a touch screen a tap places a point, and a finger
   held still aims, its marker just above it. Results stay on the model as
-  lines and labels, with a list to copy or remove them; Esc stops.
+  lines and labels, with a list to copy or remove them; Esc stops. **Note**
+  pins a short text to a point of the model, and a copied view link carries
+  the notes, so a link can point at "this connector".
 - **Holes.** **List holes** (with a part selected: the board) lists its
   holes: diameter, position from the reference's corner, through-hole
   depth, and for each size how many and how far apart they lie; they are

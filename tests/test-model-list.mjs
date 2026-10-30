@@ -103,6 +103,13 @@ await test('an entry may carry step, page, author, license, labels and style; UR
   assert.deepEqual(e, { url: 'https://site.example/api/a.cadmesh.gz', name: 'A', step: 'https://site.example/api/a.stp.gz',
     page: 'https://site.example/products/a/', author: 'Maker', license: 'CC-BY-4.0', labels: { HDMI_1_3: 'HDMI' }, style: 'edges' });
 });
+await test('notes: by a point or a part, trimmed; a wrong one refuses the list', () => {
+  const [e] = parseModelList(JSON.stringify({ a: { name: 'A', notes: [{ text: ' HDMI ', part: 'HDMI_1_3' }, { text: 'Hole', at: [1, 2, 3] }] } }), L);
+  assert.deepEqual(e.notes, [{ text: 'HDMI', part: 'HDMI_1_3' }, { text: 'Hole', at: [1, 2, 3] }]);
+  for (const n of [[{ text: 'x' }], [{ text: '', part: 'p' }], [{ text: 'x', at: [1, 2] }], { text: 'x', part: 'p' }, [{ text: 'x'.repeat(201), part: 'p' }]]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: n } }), L), /its notes must be/);
+  }
+});
 await test('a wrong extra field refuses the list, naming the file and the field', () => {
   for (const [v, re] of [[{ step: 'javascript:alert(1)' }, /"a": its step .* not an http/], [{ page: 3 }, /its page must be a URL/],
     [{ labels: ['x'] }, /its labels must be/], [{ labels: { a: 1 } }, /its labels must be/], [{ style: 'fancy' }, /its style must be one of/],

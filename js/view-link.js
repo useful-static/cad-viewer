@@ -12,6 +12,8 @@
 //   h  hidden bodies, k selected bodies: ids as runs ("1-3,7")
 //   m  the model's body names, fingerprinted (8 hex): ids mean the bodies
 //      they meant only while it matches
+//   a  notes pinned to points (at most MAX_NOTES): x,y,z,text as base64url,
+//      "~" between them
 //   n  the selected bodies by name (at most MAX_NAMED), each its key
 //      (bodyKeys) as base64url: a link made before the model's file was
 //      regenerated or revised, whose ids now name other bodies, still selects
@@ -58,6 +60,7 @@ export function parseRuns(s, max = 1e6) {
 }
 
 export const MAX_NAMED = 32;
+export const MAX_NOTES = 20;
 
 // A body's key: its label, numbered from its second repeat ("A › SOLID #2"),
 // so every body of a model has its own
@@ -114,6 +117,10 @@ export function encodeView(v) {
   if (v.section && v.section.axis !== 'off') f.push(`x:${v.section.axis},${num(v.section.t)}${v.section.flip ? ',f' : ''}`);
   if (v.hidden && v.hidden.length) f.push(`h:${runs(v.hidden)}`);
   if (v.selected && v.selected.length) f.push(`k:${runs(v.selected)}`);
+  // notes pinned to points (Measure's Note): x,y,z,text(base64url), "~" between
+  if (v.notes && v.notes.length) {
+    f.push(`a:${v.notes.slice(0, MAX_NOTES).map((n) => [...n.p.map(num), b64u(n.text)].join(',')).join('~')}`);
+  }
   // v.keys: the model's body keys (bodyKeys), when the caller has them
   if (v.keys && v.keys.length) {
     f.push(`m:${modelPrint(v.keys)}`);
@@ -147,6 +154,14 @@ export function decodeView(s) {
     } else if (k === 'h') out.hidden = parseRuns(val);
     else if (k === 'k') out.selected = parseRuns(val);
     else if (k === 'm' && /^[0-9a-f]{8}$/.test(val)) out.model = val;
+    else if (k === 'a') {
+      out.notes = val.split('~').slice(0, MAX_NOTES).flatMap((s) => {
+        const q = s.split(',');
+        const p = q.slice(0, 3).map(Number);
+        if (q.length !== 4 || !p.every(Number.isFinite) || !/^[A-Za-z0-9_-]+$/.test(q[3])) return [];
+        try { return [{ p, text: unb64u(q[3]).slice(0, 200) }]; } catch { return []; }
+      });
+    }
     else if (k === 'n') {
       out.selNames = val.split(',').slice(0, MAX_NAMED).flatMap((s) => {
         try { return /^[A-Za-z0-9_-]+$/.test(s) ? [unb64u(s)] : []; } catch { return []; }

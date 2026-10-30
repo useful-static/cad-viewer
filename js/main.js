@@ -730,6 +730,7 @@ function currentView() {
     style: currentStyle().id,
     section: app.section, hidden: [...app.hidden], selected: [...app.selected],
     keys: app.bodyKeys,
+    notes: app.measure ? app.measure.notes() : [],
   };
 }
 
@@ -761,6 +762,8 @@ function applyView(v) {
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   select(bodies.selected, false);
+  // its notes (a link with none leaves the notes there are)
+  if (v.notes && app.measure) app.measure.setNotes(v.notes);
   updateButtons();
   viewChanged();
   if (bodies.changed) {
@@ -1529,6 +1532,30 @@ function orientFor(src) {
   return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
 }
 
+// Where a list's note for a part goes: the top of that part (a tree node's
+// name, else a body's), at the middle of its box, along the view's up; null
+// for a name the model does not have
+function notePoint(part) {
+  if (!part || !app.header) return null;
+  let ids = null;
+  const walk = (n) => {
+    if (ids) return;
+    if (n.name === part) { ids = collect(n); return; }
+    for (const c of n.children) walk(c);
+  };
+  walk(app.header.root);
+  if (!ids || !ids.length) {
+    ids = app.header.meshes.flatMap((m, i) => (m.name === part ? [i + 1] : []));
+  }
+  const b = ids.length ? bboxOf(ids) : null;
+  if (!b) return null;
+  const up = orientUp(app.cam.orient);
+  const k = up.findIndex((v) => v !== 0);
+  const p = [0, 1, 2].map((j) => (b.min[j] + b.max[j]) / 2);
+  p[k] = up[k] > 0 ? b.max[k] : b.min[k];
+  return p;
+}
+
 // The model list's entry for a model URL (js/model-list.js), or null
 function listEntry(src) {
   let url = null;
@@ -1559,6 +1586,10 @@ function applyListEntry() {
   if (app.header && JSON.stringify(labels) !== JSON.stringify(app.partLabels || null)) {
     app.partLabels = labels;
     buildTree();
+  }
+  // its notes, where the model has none yet (a view link's come first)
+  if (app.header && e && e.notes && app.measure && !app.measure.notes().length) {
+    app.measure.setNotes(e.notes.map((n) => ({ p: n.at || notePoint(n.part), text: n.text })).filter((n) => n.p));
   }
   // its style, where this browser has no choice of its own
   if (app.header) {

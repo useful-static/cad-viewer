@@ -2,7 +2,7 @@
 // The shareable view (js/view-link.js).   node tests/test-view-link.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { MAX_NAMED, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
+import { MAX_NAMED, MAX_NOTES, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
 
 let passed = 0;
 let failed = 0;
@@ -105,6 +105,14 @@ test('a changed model: the selection by name, the hidden ids dropped (ids alone 
   assert.equal(after[3], 'USB, A; "x": 1 › SOLID', 'the arm: id 4 names another body now');
   // (the second HDMI body keeps its key, and is found at its new id)
   assert.deepEqual(resolveBodies(d, after), { hidden: [], selected: [5], changed: true });
+});
+test('notes round-trip through the hash, text with , ; ~ : and non-ASCII; at most MAX_NOTES', () => {
+  const notes = [{ p: [80.5, 3.5, 1.2], text: 'Mount, M2.5; ~ok: 板' }, { p: [-1e-3, 0, 1234.5678], text: 'b' }];
+  const d = decodeView(decodeURIComponent(encodeView({ ...view, notes })));
+  assert.deepEqual(d.notes, [{ p: [80.5, 3.5, 1.2], text: 'Mount, M2.5; ~ok: 板' }, { p: [-0.001, 0, 1234.57], text: 'b' }]);
+  const many = Array.from({ length: MAX_NOTES + 5 }, (_, i) => ({ p: [i, 0, 0], text: `n${i}` }));
+  assert.equal(decodeView(encodeView({ ...view, notes: many })).notes.length, MAX_NOTES);
+  assert.deepEqual(decodeView('a:1,2,x,QQ~1,2,3,@@~1,2,3,QQ').notes, [{ p: [1, 2, 3], text: 'A' }]);
 });
 test('an older link (no fingerprint) keeps its ids; too many selected leaves the names out', () => {
   const keys = bodyKeys(labels);

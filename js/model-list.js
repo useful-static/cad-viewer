@@ -17,7 +17,7 @@
 //   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
 //     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
 //
-// It may also carry step, page, author, license, labels and style (extras,
+// It may also carry step, page, author, license, labels, style and notes (extras,
 // below); a field it does not know is ignored, a known one that is wrong is
 // refused with the reason.
 // JavaScript orders an object's integer-like keys ("10", "2") first, by
@@ -84,6 +84,9 @@ export function parseModelList(text, listUrl) {
 //            stays in the tooltip)
 //   style    the display style it opens in when this browser has no choice of
 //            its own (js/styles.js ids)
+//   notes    [{ "text": "HDMI", "part": "HDMI_1_3" } or { "text": …, "at": [x, y, z] }]:
+//            notes pinned on the model (a part's at the top of it), as
+//            Measure's Note makes them, unless a view link brings its own
 export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
 function extras(file, v, listUrl) {
   const out = {};
@@ -111,6 +114,15 @@ function extras(file, v, listUrl) {
   if (v.style !== undefined) {
     if (!STYLE_IDS.includes(v.style)) throw bad('style', `must be one of ${STYLE_IDS.join(', ')}`);
     out.style = v.style;
+  }
+  if (v.notes !== undefined) {
+    const n = v.notes;
+    const ok = (x) => x && typeof x === 'object' && typeof x.text === 'string' && x.text.trim() && x.text.length <= 200
+      && ((Array.isArray(x.at) && x.at.length === 3 && x.at.every(Number.isFinite)) || (typeof x.part === 'string' && x.part.trim()));
+    if (!Array.isArray(n) || n.length > 100 || !n.every(ok)) {
+      throw bad('notes', 'must be a list (at most 100) of { "text": "…" (200 characters at most), and "at": [x, y, z] (mm) or "part": "<a part\'s name>" }');
+    }
+    out.notes = n.map((x) => ({ text: x.text.trim(), ...(Array.isArray(x.at) ? { at: x.at.slice() } : { part: x.part.trim() }) }));
   }
   return out;
 }

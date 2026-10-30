@@ -214,10 +214,18 @@ export function createMeasure(deps) {
   }
 
   // ---- results ----
-  const need = () => ({ distance: 2, angle: 3, face: 2 })[st.mode];
+  const need = () => ({ distance: 2, angle: 3, face: 2, note: 1 })[st.mode];
   function finish() {
     const pts = st.pending;
     let r;
+    // Note: its point placed, the text is asked for in the options bar
+    if (st.mode === 'note') {
+      $('measnotetext').hidden = false;
+      $('measnotetext').value = '';
+      $('measnotetext').focus();
+      syncRow();
+      return;
+    }
     if (st.mode === 'distance') {
       const d = distance(pts[0].p, pts[1].p);
       r = { mode: 'distance', pts: pts.map((q) => q.p), main: deps.lenText(d.length),
@@ -238,9 +246,37 @@ export function createMeasure(deps) {
     syncRow();
   }
 
+  // A note's text given (Enter in the field): pinned at its point
+  function addNote(text) {
+    const p = st.pending[0];
+    $('measnotetext').hidden = true;
+    st.pending = [];
+    if (p && text.trim()) {
+      st.results.push({ mode: 'note', pts: [p.p], main: text.trim().slice(0, 200), sub: '', value: null });
+      deps.announce(`note: ${text.trim()}`);
+    }
+    syncRow();
+    deps.queueFrame();
+  }
+
+  // Notes as a view link or a model list gives them: [{ p: [x, y, z], text }],
+  // in place of the notes there are (other results stay)
+  function setNotes(list) {
+    st.results = st.results.filter((r) => r.mode !== 'note');
+    for (const n of list || []) {
+      if (n && Array.isArray(n.p) && n.p.length === 3 && n.p.every(Number.isFinite) && n.text) {
+        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null });
+      }
+    }
+    syncRow();
+    deps.queueFrame();
+  }
+  const notes = () => st.results.filter((r) => r.mode === 'note').map((r) => ({ p: r.pts[0], text: r.main }));
+
   function place(x, y) {
     if (!st.on) return false;
     if (st.listOpen) setList(false);
+    if (st.mode === 'note' && st.pending.length) return true; // its text is being typed
     if (st.mode === 'face') {
       const f = faceAt(x, y);
       if (!f) { deps.flash('no face here'); return true; }
@@ -309,7 +345,7 @@ export function createMeasure(deps) {
     for (const q of s) el('circle', { cx: q[0], cy: q[1], r: 4, class: 'mdot' }, layer);
     const at = r.mode === 'angle' ? s[1] : [(s[0][0] + s[s.length - 1][0]) / 2, (s[0][1] + s[s.length - 1][1]) / 2];
     const lab = document.createElement('div');
-    lab.className = 'mlabel';
+    lab.className = r.mode === 'note' ? 'mlabel note' : 'mlabel';
     lab.style.left = `${at[0]}px`;
     lab.style.top = `${at[1]}px`;
     lab.textContent = r.main;
@@ -385,7 +421,9 @@ export function createMeasure(deps) {
     $('measchip').textContent = `${n} result${n === 1 ? '' : 's'}`;
     $('measchip').setAttribute('aria-expanded', String(st.listOpen));
     $('measnote').textContent = st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
-      : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
+      : st.mode === 'note' ? (st.pending.length ? 'type the note, Enter pins it' : 'click where the note goes')
+        : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
+    if (!(st.mode === 'note' && st.pending.length)) $('measnotetext').hidden = true;
     if (st.listOpen) fillList();
     deps.syncOptbar();
   }
@@ -544,6 +582,11 @@ export function createMeasure(deps) {
     b.onclick = () => { st.mode = b.dataset.mode; st.pending = []; st.snap = null; syncRow(); deps.queueFrame(); };
   }
   $('measundo').onclick = undo;
+  // the note's text: Enter pins it, Esc drops the note (and stays in Measure)
+  $('measnotetext').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); }
+  });
   $('measclear').onclick = () => { st.pending = []; st.results = []; setList(false); syncRow(); deps.queueFrame(); };
   $('measchip').onclick = () => setList(!st.listOpen);
 
@@ -551,6 +594,6 @@ export function createMeasure(deps) {
     get on() { return st.on; }, get results() { return st.results; }, get pending() { return st.pending; },
     get snap() { return st.snap; },
     get holes() { return st.holes; },
-    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
   };
 }
