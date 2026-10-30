@@ -336,7 +336,7 @@ cannot present a WebGPU canvas, so the page itself cannot be graded there.
 repository. `fetch-deps.sh` downloads them, sha256-pinned, together with their
 licence files, into `vendor/`.
 
-By default it fetches **our build, `0.0.23-progress7`**. This is occt-import-js
+By default it fetches **our build, `0.0.23-progress8`**. This is occt-import-js
 0.0.23 built by `occt-progress/build.sh` (emscripten 3.1.69, the same
 OpenCascade commit as upstream) with two patches:
 
@@ -366,7 +366,11 @@ OpenCascade commit as upstream) with two patches:
   edge's points are kept in vectors instead of 4 KB deques
   (`IMeshData_Types`): meshing a face with N holes now grows about N^1.1
   instead of N^1.5, and a face that ran WASM out of memory, which OpenCascade
-  leaves unmeshed without an error, now meshes.
+  leaves unmeshed without an error, now meshes. `BRep_Tool::CurveOnPlane`
+  projected a planar face's edge onto the plane afresh on every request, and
+  shape healing asks for the same edge many times: the projection is now kept
+  per thread, keyed by the edge's curve, range, location and plane, and handed
+  out as a copy (`progress8`: a large assembly converts 14–16% faster).
 
 It comes in two builds of the same sources: single-threaded, and in `mt/` a
 multi-core one (`build.sh --threads 4`): emscripten threads, OpenCascade's
@@ -378,7 +382,7 @@ Wherever the stock build meshes every face and no solid needed closing, the
 converted geometry is byte-identical to its: `occt-progress/compare.sh` converts files with two
 builds and compares them byte for byte (all 55 STEP/IGES/BREP test files of
 occt-import-js). The build is hosted at
-`https://assets.known.name/occt-import-js/0.0.23-progress7/`, with a NOTICE;
+`https://assets.known.name/occt-import-js/0.0.23-progress8/`, with a NOTICE;
 `progress3` and later stay there too.
 `./fetch-deps.sh --stock` uses the unmodified npm release instead, which reports
 no steps; the page then shows the forecast alone.

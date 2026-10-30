@@ -60,20 +60,21 @@ readonly EMSDK_VER="3.1.69" # tools/setup_emscripten_win.bat at 0.0.23
 
 usage() {
 	cat <<EOF
-usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fetch-only] [--no-patch]
+usage: $(basename "$0") [--work DIR] [--out DIR] [--jobs N] [--threads N] [--fetch-only] [--no-patch] [--profiling]
   --work DIR    work tree (default ~/.cache/occt-wasm)
   --out DIR     where the built .js/.wasm go (default <work>/out, <work>/out-mt with --threads)
   --jobs N      parallel compile jobs (default nproc)
   --threads N   the multi-core variant, meshing on up to N threads (4 = what the patch caps OCCT at)
   --fetch-only  only fetch the sources and the toolchain
   --no-patch    build the unmodified upstream (a control for the patch)
+  --profiling   keep the function names (--profiling-funcs) for node --cpu-prof; not for publishing
 EOF
 }
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 main() {
-	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1 threads=0
+	local work="${XDG_CACHE_HOME:-${HOME}/.cache}/occt-wasm" out="" jobs fetch_only=0 patch=1 threads=0 profiling=0
 	jobs="$(nproc)"
 	while (($#)); do
 		case "$1" in
@@ -85,6 +86,7 @@ main() {
 				threads="$2"; shift 2 ;;
 			--fetch-only) fetch_only=1; shift ;;
 			--no-patch) patch=0; shift ;;
+			--profiling) profiling=1; shift ;;
 			-h | --help) usage; return 0 ;;
 			*) usage >&2; return 2 ;;
 		esac
@@ -140,6 +142,9 @@ main() {
 		# would need the thread to yield), no more than the machine has cores
 		ldflags="-pthread -sPTHREAD_POOL_SIZE=Math.min(${threads},navigator.hardwareConcurrency) -sMAXIMUM_MEMORY=4GB -sMALLOC=mimalloc"
 	fi
+	# a profiling build: the function names kept in the WASM (a link flag:
+	# the same code, for `node --cpu-prof`), never one to publish
+	((profiling)) && ldflags="${ldflags} --profiling-funcs"
 	(cd "${src}" && emcmake cmake -B "${bdir}" -G "Unix Makefiles" -DEMSCRIPTEN=1 -DCMAKE_BUILD_TYPE=Release \
 		"-DCMAKE_C_FLAGS=${cflags}" "-DCMAKE_CXX_FLAGS=${cflags}" "-DCMAKE_EXE_LINKER_FLAGS=${ldflags}" .) > "${work}/cmake.log" 2>&1
 	log "building with ${jobs} jobs (log: ${work}/make.log)"

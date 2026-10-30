@@ -1,5 +1,67 @@
+diff --git a/src/BRep/BRep_Tool.cxx b/src/BRep/BRep_Tool.cxx
+index 5d308fc2..57d4d5c5 100644
+--- a/src/BRep/BRep_Tool.cxx
++++ b/src/BRep/BRep_Tool.cxx
+@@ -55,6 +55,7 @@
+ #include <Precision.hxx>
+ #include <ProjLib_ProjectedCurve.hxx>
+ #include <Standard_NoSuchObject.hxx>
++#include <unordered_map>
+ #include <Standard_NullObject.hxx>
+ #include <TopExp.hxx>
+ #include <TopExp_Explorer.hxx>
+@@ -386,6 +387,37 @@ Handle(Geom2d_Curve) BRep_Tool::CurveOnPlane(const TopoDS_Edge& E,
+   aCurveLocation = aCurveLocation.Predivided(L);
+   First = f; Last = l;
+ 
++  // The projection below is a pure function of the 3d curve, its range, its
++  // location relative to the plane, and the plane; the same edge is asked
++  // for again and again while a shape is healed (about 15 callers). Kept per
++  // thread (the mesher's threads ask too), holding the curve and the plane so
++  // a freed object's address cannot come back as another's, and handed out
++  // as a copy, so a caller that changes its curve changes only its own.
++  // Emptied past a bound: a cache, never a store.
++  struct PlaneCurveEntry
++  {
++    Handle(Geom_Curve)   Curve;
++    Handle(Geom_Plane)   Plane;
++    Standard_Real        First, Last;
++    TopLoc_Location      Loc;
++    Handle(Geom2d_Curve) PCurve;
++  };
++  static thread_local std::unordered_multimap<const Standard_Transient*, PlaneCurveEntry> aPlaneCurveCache;
++  const Handle(Geom_Curve) aCurveKey = C3D;
++  {
++    auto aRange = aPlaneCurveCache.equal_range(aCurveKey.get());
++    for (auto anIt = aRange.first; anIt != aRange.second; ++anIt)
++    {
++      const PlaneCurveEntry& anEntry = anIt->second;
++      if (anEntry.Plane == GP && anEntry.First == f && anEntry.Last == l && anEntry.Loc.IsEqual(aCurveLocation))
++      {
++        return Handle(Geom2d_Curve)::DownCast(anEntry.PCurve->Copy());
++      }
++    }
++  }
++  const TopLoc_Location aKeyLoc = aCurveLocation;
++  const Standard_Real aKeyF = f, aKeyL = l;
++
+   // Transform curve and update parameters in account of scale factor
+   if (!aCurveLocation.IsIdentity())
+   {
+@@ -413,6 +445,11 @@ Handle(Geom2d_Curve) BRep_Tool::CurveOnPlane(const TopoDS_Edge& E,
+     pc = TC->BasisCurve();
+   }
+ 
++  if (aPlaneCurveCache.size() > 100000)
++  {
++    aPlaneCurveCache.clear();
++  }
++  aPlaneCurveCache.emplace(aCurveKey.get(), PlaneCurveEntry{aCurveKey, GP, aKeyF, aKeyL, aKeyLoc, Handle(Geom2d_Curve)::DownCast(pc->Copy())});
+   return pc;
+ }
+ 
 diff --git a/src/BRepMesh/BRepMesh_CircleTool.cxx b/src/BRepMesh/BRepMesh_CircleTool.cxx
-index 67aa20ee6..860343c49 100644
+index 67aa20ee..860343c4 100644
 --- a/src/BRepMesh/BRepMesh_CircleTool.cxx
 +++ b/src/BRepMesh/BRepMesh_CircleTool.cxx
 @@ -21,6 +21,9 @@
@@ -155,7 +217,7 @@ index 67aa20ee6..860343c49 100644
  
  //=======================================================================
 diff --git a/src/BRepMesh/BRepMesh_CircleTool.hxx b/src/BRepMesh/BRepMesh_CircleTool.hxx
-index 7a307bef3..aac54bf5f 100644
+index 7a307bef..aac54bf5 100644
 --- a/src/BRepMesh/BRepMesh_CircleTool.hxx
 +++ b/src/BRepMesh/BRepMesh_CircleTool.hxx
 @@ -60,6 +60,8 @@ public:
@@ -199,7 +261,7 @@ index 7a307bef3..aac54bf5f 100644
  
  #endif
 diff --git a/src/BRepMesh/BRepMesh_FaceChecker.cxx b/src/BRepMesh/BRepMesh_FaceChecker.cxx
-index b78238d69..a0852a441 100644
+index b78238d6..a0852a44 100644
 --- a/src/BRepMesh/BRepMesh_FaceChecker.cxx
 +++ b/src/BRepMesh/BRepMesh_FaceChecker.cxx
 @@ -268,11 +268,32 @@ void BRepMesh_FaceChecker::perform(const Standard_Integer theWireIndex) const
@@ -236,7 +298,7 @@ index b78238d69..a0852a441 100644
      for (Standard_Integer aSegmentIt = 0; aSegmentIt < aSegments1->Size(); ++aSegmentIt)
      {
 diff --git a/src/IMeshData/IMeshData_Types.hxx b/src/IMeshData/IMeshData_Types.hxx
-index 0b52effc0..2eefbea1c 100644
+index 0b52effc..2eefbea1 100644
 --- a/src/IMeshData/IMeshData_Types.hxx
 +++ b/src/IMeshData/IMeshData_Types.hxx
 @@ -25,6 +25,7 @@
@@ -269,7 +331,7 @@ index 0b52effc0..2eefbea1c 100644
  
    // Lists
 diff --git a/src/ShapeFix/ShapeFix_Face.cxx b/src/ShapeFix/ShapeFix_Face.cxx
-index 71b46ebee..a1e46119d 100644
+index 71b46ebe..a1e46119 100644
 --- a/src/ShapeFix/ShapeFix_Face.cxx
 +++ b/src/ShapeFix/ShapeFix_Face.cxx
 @@ -1213,7 +1213,10 @@ Standard_Boolean ShapeFix_Face::FixOrientation(TopTools_DataMapOfShapeListOfShap
@@ -285,7 +347,7 @@ index 71b46ebee..a1e46119d 100644
            continue;
          TopAbs_State stb = TopAbs_UNKNOWN;
 diff --git a/src/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
-index e5f268724..2701bf16c 100644
+index e5f26872..2701bf16 100644
 --- a/src/ShapeFix/ShapeFix_IntersectionTool.cxx
 +++ b/src/ShapeFix/ShapeFix_IntersectionTool.cxx
 @@ -855,13 +855,27 @@ Standard_Boolean ShapeFix_IntersectionTool::FixSelfIntersectWire
