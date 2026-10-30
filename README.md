@@ -63,13 +63,16 @@ URL parameters:
   Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
   the same part of the model framed. The footer names the model in full and
   leaves the counts to the parts panel.
-- **A toolbar that fits.** The toolbar stays one row at every size. Saving,
-  exporting, links and the model gallery are in a **File** menu at every
-  width; where the rest does not fit, the view presets fold first, into a
-  **Views** menu, then Ortho, Z up, Section and Style (with the presets) into a **View** menu,
-  then a model list's drop-down into File too, then Isolate / Hide /
-  Show all / Undo into a **Show** menu, and on the narrowest phones Measure
-  into View. No control shrinks or wraps its label to fit. A tool's own
+- **A toolbar that fits.** The toolbar stays one row at every size. The three
+  tools, **Measure**, **Section** and **Explode**, stand together after Fit.
+  Opening, sharing and saving are in a **File** menu at every width, in three
+  groups (Open, Share, Save). Where the rest does not fit, the view presets
+  fold first, into a **Views** menu, then the tools drop to their icons, then
+  Ortho, Z up, Style and **Display** (with the presets) fold into a **View**
+  menu, then Isolate / Hide / Show all / Undo into a **Show** menu, and last a
+  model list's drop-down into File, and on the narrowest phones the tools into
+  View. A page given a list keeps its drop-down in the row wherever it fits.
+  No control shrinks or wraps its label to fit. A tool's own
   controls are in an **options bar** along the bottom of the view while the
   tool is on, led by the tool's name as a toggle that turns it off.
 - **Full screen.** A button at the top right of the view takes the whole
@@ -106,7 +109,7 @@ URL parameters:
   holes: diameter, position from the reference's corner, through-hole
   depth, and for each size how many and how far apart they lie; they are
   numbered on the model, and the table copies as CSV.
-- **Export.** File > **Export as…** saves the parts shown as STL, 3MF (with
+- **Export.** File > **Export as STL / 3MF / GLB** saves the parts shown as STL, 3MF (with
   colours) or GLB (with colours), turned the way the model opens: Z up for
   STL and 3MF, Y up for GLB.
 - **Picture.** File > **Save picture** (P) saves the view as a PNG at twice
@@ -116,7 +119,7 @@ URL parameters:
   all shown) as a 1:1 drawing in mm, seen straight along the nearest view:
   their edges, with holes as true circles. Select the board alone for its
   outline and holes, e.g. for a case design. Hidden edges are not removed.
-- **Explode.** Views > **Explode** (X) pulls the parts apart, with a slider
+- **Explode.** **Explode** (X), beside Measure and Section, pulls the parts apart, with a slider
   for how far: by the assembly tree (subassemblies first, then their parts
   within them), or along X, Y or Z only. Clicking, the section and Fit work
   on the parts where they are drawn. Measure turns it off.
@@ -138,7 +141,7 @@ URL parameters:
   and weights, its size in its own unit, Save picture. **Measure** takes
   distances with ΔX and ΔY, snapping to line ends, middles and circle
   centres. DWG is not read.
-- **Looks.** In the parts panel: **Light** draws the shaded styles on a light
+- **Looks.** In View > **Display**: **Light** draws the shaded styles on a light
   background with a soft ground shadow; **Ghosts** draws hidden parts faintly;
   **Turntable** (or `?turntable=1`) turns the model slowly while it is left
   alone, and is not offered where the system asks for reduced motion;
@@ -225,7 +228,7 @@ URL parameters:
   25.7 MB assembly in Chromium: about 25 s instead of 29). It needs more
   memory (1.6 GB of WASM at its peak against 0.7 GB), so phones and tablets
   always use one thread, and a multi-core conversion that fails is run again
-  on one thread. The info panel says which ran.
+  on one thread. The info panel's **Details** says which ran.
 - **Missing faces are reported.** A face the converter could not mesh is named
   in the status line and the info panel, and such a conversion is not saved.
 - **Big files on a phone ask first.** A STEP, IGES or BREP of 20 MB or more

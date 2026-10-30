@@ -71,7 +71,18 @@
     width:max-content; max-width:calc(100vw - 16px); padding:8px; background:var(--panel);
     border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   .menu.folded .presets { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; flex-basis:100%; }
-  :is(#showmenu, #filemenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
+  /* a folded View is a compact panel: it grew to 932 px at 1280, its preset
+     buttons 224 px each, over the top of the model (UI organization review
+     rank 10) */
+  #viewmenu.folded.open > .menu-panel { max-width:min(420px, calc(100vw - 16px)); }
+  :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
+  /* File's group headings, and Export's three formats on one line */
+  .skip { position:fixed; left:8px; top:-80px; z-index:100; }
+  .skip:focus { top:8px; }
+  .mhead { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
+  .mhead:first-child { margin-top:0; }
+  .expgroup { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:12px; }
+  .expgroup button { flex:1; }
   /* Open… (a label) centred like the buttons under it; it sat at the left */
   .menu.folded :is(label.btn, a.btn) { justify-content:center; }
   #panelbtn .lbl { margin-left:5px; }
@@ -182,20 +193,34 @@
   #measlist[hidden] { display:none; }
   #measlist li { display:flex; gap:6px; align-items:center; padding:2px 4px; white-space:nowrap; }
   #measlist li span { flex:1; }
-  #measure .ico { margin-right:4px; vertical-align:-2px; }
+  /* the tools: Measure, Section, Explode, side by side (each drives the
+     options bar along the bottom of the view) */
+  #tools { display:contents; }
+  #tools .ico { margin-right:4px; vertical-align:-2px; }
+  /* a row without room for their names (main.js refold): the icons alone */
+  #tools.compact .lbl { display:none; }
+  #tools.compact .ico { margin-right:0; }
   /* folded into View's panel (a 320 px phone): named there */
-  .menu.folded #measure .lbl { display:inline; }
-  .menu.folded #measure .ico { margin-right:4px; }
+  .menu.folded #tools .lbl { display:inline; }
+  .menu.folded #tools .ico { margin-right:4px; }
   #holes { margin-top:6px; }
   #holes[hidden] { display:none; }
   #holes .holeshead { display:flex; gap:4px; align-items:center; }
   #holes .holeshead b { flex:1; color:var(--fg); }
   #holessum { margin:2px 0; padding-left:16px; }
   #holes table { border-collapse:collapse; width:100%; font-size:11px; }
+  /* a board's 30-odd holes scroll in a box of their own, so the table never
+     pushes the parts list out of the panel (UI organization review rank 1) */
+  #holes .holesscroll { max-height:40vh; overflow:auto; }
+  #holes thead th { position:sticky; top:0; background:var(--panel, #1d2127); }
   #holes td, #holes th { padding:1px 4px; text-align:left; border-bottom:1px solid var(--line); }
   #holes tr.pick td { background:#3a4250; }
   #holes tbody tr { cursor:pointer; }
   #inforef button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
+  #inforef .refbtns { display:flex; gap:6px; margin-bottom:4px; }
+  #inforef .refbtns button { flex:1; white-space:nowrap; font-size:12px; padding-left:6px; padding-right:6px; }
+  /* the file, graphics backend, triangles: folded at the foot of the values */
+  #infomore summary { cursor:pointer; color:var(--dim); font-size:11px; margin-top:2px; }
   #scene button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
   #scenelist { list-style:none; margin:2px 0; padding:0; }
   #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -237,7 +262,7 @@
     #printname { text-align:center; font:12px sans-serif; color:#000; }
   }
   body.mode2d #view { visibility:hidden; }
-  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #looks, #colours, #scene) { display:none !important; }
+  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid #0006; margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
@@ -299,8 +324,6 @@
   .help .keys { display:block; margin-top:4px; }
   #colours { display:flex; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   #colours select { flex:1; min-width:0; }
-  #looks { display:flex; flex-wrap:wrap; gap:4px; padding:6px 10px 0; }
-  #looks button { padding:1px 8px; font-size:11px; }
   #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
@@ -346,7 +369,7 @@
        part colour swatch (32 x 24) and the help's summary line (17 px tall) */
     .seg button, #panelbtn { min-width:40px; justify-content:center; }
     #colours input[type=color] { width:44px; height:40px; }
-    .help summary { line-height:40px; margin-bottom:0; }
+    .help summary, #infomore summary { line-height:40px; margin-bottom:0; }
   }
   /* Below desktop widths Save appears once a STEP import makes it useful */
   @media (max-width: 1400px) {
@@ -377,8 +400,8 @@
     header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    header .title, #export:disabled, #panelbtn .lbl, #measure .lbl { display:none; }
-    #measure .ico { margin-right:0; }
+    header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
+    #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
     /* a 320 px phone with touch targets: the row was 329 px, Show 9 px past
@@ -423,6 +446,9 @@
 </style>
 </head>
 <body>
+<!-- the first Tab stop, shown only while it has the focus: the 3D view was
+     the 21st (UI organization review rank 9) -->
+<button id="skipview" class="skip">Skip to the 3D view</button>
 <header><div id="tb">
   <span class="title">CAD viewer</span>
   <!-- narrow layout: an icon, named by aria-label -->
@@ -437,26 +463,49 @@
        layout this one is File: main.js moves Open… into it and it is
        always folded. -->
   <div class="menu" id="filemenu"><button class="menu-btn" aria-expanded="false" aria-controls="filepanel" title="Save the converted model, or copy a link to this view">File</button>
+    <!-- three groups under their headings (UI organization review rank 7:
+         ten items in one column): Open (main.js puts Open… and a model list
+         under its heading where they fold into File), Share, Save -->
     <div class="menu-panel" id="filepanel" aria-label="File">
-      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden><button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><a id="download" class="btn" hidden download>Download STEP</a><select id="exportmesh" autocomplete="off" disabled aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens"><option value="">Export as…</option><option value="stl">STL</option><option value="3mf">3MF</option><option value="glb">GLB</option></select>
+      <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
+      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden>
+      <span class="mhead" aria-hidden="true">Share</span>
+      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button>
+      <span class="mhead" aria-hidden="true">Save</span>
+      <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
+      <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens">Export as <button data-fmt="stl" disabled title="STL: triangles, no colour">STL</button><button data-fmt="3mf" disabled title="3MF: colours, in mm">3MF</button><button data-fmt="glb" disabled title="GLB: colours, in metres">GLB</button></span>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
+  <!-- the tools, together: each puts its controls in the options bar along
+       the bottom of the view (UI organization review rank 2); on the
+       narrowest screens they move into View's panel, named there -->
+  <span id="tools" role="group" aria-label="Tools">
   <button id="measure" aria-pressed="false" aria-label="Measure" disabled title="Measure distances, angles and gaps between faces: points snap to corners, edges, their midpoints and hole centres (M)" aria-keyshortcuts="M"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 11.5l10-10 3 3-10 10z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M4.5 8.5l1.5 1.5M6.5 6.5l1 1M8.5 4.5l1.5 1.5M10.5 2.5l1 1" stroke="currentColor" stroke-width="1.2"/></svg><span class="lbl">Measure</span></button>
-  <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis, section and display style">View</button>
+  <button id="section" aria-pressed="false" aria-label="Section" title="Cut the model with a plane; its controls show along the bottom of the view"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 5.5l6-3 6 3-6 3z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2 5.5v5l6 3 6-3v-5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-dasharray="2 1.5"/><path d="M1 9.5h14" stroke="currentColor" stroke-width="1.5"/></svg><span class="lbl">Section</span></button>
+  <button id="explode" aria-pressed="false" aria-label="Explode" hidden disabled aria-keyshortcuts="X" title="Exploded view: pull the parts apart; how far, and along what, show along the bottom of the view (X)"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5.5" y="5.5" width="5" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 4L1.5 1.5M12 4l2.5-2.5M4 12l-2.5 2.5M12 12l2.5 2.5M1.5 1.5h2.5M1.5 1.5v2.5M14.5 1.5h-2.5M14.5 1.5v2.5M1.5 14.5h2.5M1.5 14.5v-2.5M14.5 14.5h-2.5M14.5 14.5v-2.5" fill="none" stroke="currentColor" stroke-width="1.1"/></svg><span class="lbl">Explode</span></button>
+  </span>
+  <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis and display style">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
       <!-- the presets fold on their own first (Views ▾), so the row keeps
            Ortho, Z up, Section and Style where it has room for those alone;
            when the whole View group folds they are its panel's grid again -->
-      <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom; and the exploded view">Views</button>
+      <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom">Views</button>
         <div class="menu-panel" id="presetpanel" aria-label="Views">
       <span class="presets"><button data-view="iso" title="Iso view (0)" aria-keyshortcuts="0">Iso<kbd>0</kbd></button><button data-view="front" title="Front view (1)" aria-keyshortcuts="1">Front<kbd>1</kbd></button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right" title="Right view (3)" aria-keyshortcuts="3">Right<kbd>3</kbd></button><button data-view="top" title="Top view (7)" aria-keyshortcuts="7">Top<kbd>7</kbd></button><button data-view="bottom">Bottom</button></span>
-      <button id="explode" aria-pressed="false" hidden disabled aria-keyshortcuts="X" title="Exploded view: pull the parts apart; how far, and along what, show along the bottom of the view (X)">Explode<kbd>X</kbd></button>
       <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
         </div></div>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
-      <button id="section" aria-pressed="false" title="Cut the model with a plane; its controls show along the bottom of the view">Section</button>
       <select id="style" autocomplete="off" aria-label="Display style" aria-keyshortcuts="E" title="Display style. E switches the edges on and off in the Shaded styles (a choice is remembered in this browser)"></select>
+      <!-- how the view looks and moves, remembered in this browser (feature
+           review item 22): a menu of its own after Style (one button in the
+           row); in a folded View its items are View's panel's, as the
+           presets are (UI organization review rank 4: they stood in the
+           parts panel, five meanings in one row) -->
+      <div class="menu" id="displaymenu"><button class="menu-btn" aria-expanded="false" aria-controls="displaypanel" title="Light background, ghosted hidden parts, turntable, walk, level orbit">Display</button>
+        <div class="menu-panel" id="displaypanel" aria-label="Display">
+          <button id="lightbg" aria-pressed="false" title="Draw Shaded, Shaded + edges and X-ray on a light background, with a soft shadow under the model (remembered in this browser)">Light</button><button id="ghost" aria-pressed="false" title="Draw the hidden parts faintly, as ghosts, instead of not at all (remembered in this browser)">Ghosts</button><button id="turntable" aria-pressed="false" title="Turn the model slowly while the view is left alone (not offered where the system asks for reduced motion)">Turntable</button><button id="walk" aria-pressed="false" title="Walk through the model: W A S D move, Q E down and up, a drag looks around (Shift: faster)">Walk</button><button id="level" aria-pressed="false" title="Keep the model's up axis upright while dragging (off: the view turns freely, upside down too; remembered in this browser)">Level</button>
+        </div></div>
     </div></div>
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
@@ -465,14 +514,18 @@
     </div></div>
 </div></header>
 <aside id="parts" aria-label="Parts">
-  <div id="info" hidden><div id="infovals"></div>
+  <div id="info" hidden>
     <!-- where positions are measured from: the model, or a part chosen with
          "Measure from selection" (a board's PCB); outside #infovals, so a
-         refresh of the values never takes the focus from its buttons -->
-    <div id="inforef" hidden><b>measured from</b> <span id="refname"></span>
-      <button id="refset" class="mini" disabled title="Measure positions from the selected parts (e.g. select the board, then this): the position row and the heights above and below then refer to them">Measure from selection</button>
-      <button id="refclear" class="mini" hidden aria-label="Measure from the whole model again" title="Measure from the whole model again">×</button>
-      <button id="holesbtn" class="mini" disabled title="List the holes of the selected parts (select the board for its mounting holes): diameter, position from the reference's corner, and how far apart they lie">List holes</button></div>
+         refresh of the values never takes the focus from its buttons. At the
+         top, its two buttons full size: a board buyer's first steps (UI
+         organization review rank 3) -->
+    <div id="inforef" hidden><div class="refbtns">
+      <button id="refset" disabled title="Measure positions from the selected parts (e.g. select the board, then this): the position row and the heights above and below then refer to them">Measure from selection</button>
+      <button id="holesbtn" disabled title="List the holes of the selected parts (select the board for its mounting holes): diameter, position from the reference's corner, and how far apart they lie">List holes</button></div>
+      <b>measured from</b> <span id="refname"></span>
+      <button id="refclear" class="mini" hidden aria-label="Measure from the whole model again" title="Measure from the whole model again">×</button></div>
+    <div id="infovals"></div>
     <!-- mass: the selection's closed bodies times a material's density; the
          select lives outside #infovals, so a refresh never closes it -->
     <div id="infomass" hidden><b>mass if</b> <select id="material" autocomplete="off" aria-label="Material the mass is worked out for" title="The material the selected parts are made of: their mass is their volume times its density">
@@ -483,7 +536,7 @@
       <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
       <ul id="holessum"></ul>
-      <table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th>depth</th></tr></thead><tbody id="holesrows"></tbody></table></div>
+      <div class="holesscroll"><table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th>depth</th></tr></thead><tbody id="holesrows"></tbody></table></div></div>
     <!-- more than one model in the view (File > Add model…): each added one
          moved by an offset, and the clearance between the models -->
     <div id="scene" hidden><div class="holeshead"><b>models</b>
@@ -501,15 +554,6 @@
   <!-- the flat sheet bodies a board carries (pads, silkscreen, labels: the
        b-rep kind "sheet"), shown or hidden in one go -->
   <label id="sheetsrow" hidden title="Show or hide every flat sheet of the model at once: on a board its pads, silkscreen and labels (Undo steps back)"><input type="checkbox" id="sheets" checked autocomplete="off"> flat sheets (pads, labels) <span id="sheetscount"></span></label>
-  <!-- how the view looks, remembered in this browser (feature review item 22);
-       above the colours, so a swatch that disables hands the focus on to the
-       parts list, as before it -->
-  <div id="looks" role="group" aria-label="How the view looks">
-    <button id="lightbg" class="mini" aria-pressed="false" title="Draw Shaded, Shaded + edges and X-ray on a light background, with a soft shadow under the model (remembered in this browser)">Light</button>
-    <button id="ghost" class="mini" aria-pressed="false" title="Draw the hidden parts faintly, as ghosts, instead of not at all (remembered in this browser)">Ghosts</button>
-    <button id="turntable" class="mini" aria-pressed="false" title="Turn the model slowly while the view is left alone (not offered where the system asks for reduced motion)">Turntable</button>
-    <button id="walk" class="mini" aria-pressed="false" title="Walk through the model: W A S D move, Q E down and up, a drag looks around (Shift: faster)">Walk</button>
-    <button id="level" class="mini" aria-pressed="false" title="Keep the model's up axis upright while dragging (off: the view turns freely, upside down too; remembered in this browser)">Level</button></div>
   <div id="colours"><label for="palette">Colours</label>
     <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select>
     <input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">
@@ -517,7 +561,7 @@
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
-  <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
+  <details class="help" id="help"><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
     <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops) · P save a picture · X explode</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
@@ -541,7 +585,7 @@
       <span class="seg" role="group" aria-label="Section plane axis"><button data-axis="x" aria-pressed="false" title="Cut across X">X</button><button data-axis="y" aria-pressed="false" title="Cut across Y">Y</button><button data-axis="z" aria-pressed="false" title="Cut across Z">Z</button></span>
       <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
       <span id="secval" class="secval" role="button" tabindex="0" title="Type the cut position (click, or Enter)"></span>
-      <button id="secsel" disabled aria-label="Cut through the selection" title="Put the cut through the middle of the selected parts">⌖</button>
+      <button id="secsel" disabled aria-label="Cut through the selection" title="Put the cut through the middle of the selected parts"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" style="vertical-align:-2px"><circle cx="8" cy="8" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v4M8 11v4M1 8h4M11 8h4" stroke="currentColor" stroke-width="1.3"/></svg></button>
       <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
     </div></div>
     <div class="opt" id="xpopt" hidden><div class="opt-row">

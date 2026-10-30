@@ -171,7 +171,8 @@ function setStatus(s, msg) {
   showEmpty();
 }
 
-const IDLE_MSG = 'open or drop a STEP, IGES, BREP or .cadmesh file';
+// (every kind of file the page opens, as its empty card says)
+const IDLE_MSG = 'open or drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, 3MF, glTF…) or a 2D DXF';
 const mb = (n) => (n / 1e6).toFixed(1);
 
 // The empty-state card: shown while there is no model and no load running (and,
@@ -520,9 +521,7 @@ function setExplode(on, focus = false) {
   if (fitted) fitTo(drawnBox(null));
   announce(on ? `exploded ${Math.round(x.t * 100)} %` : 'explode off');
   // (off: the focus goes to the button, or to the menu it is folded into)
-  const btn = (id) => $(id).querySelector('.menu-btn');
-  if (focus) (on ? $('xpoff') : $('viewmenu').classList.contains('folded') ? btn('viewmenu')
-    : $('presetmenu').classList.contains('folded') ? btn('presetmenu') : $('explode')).focus();
+  if (focus) (on ? $('xpoff') : toolFocus('explode')).focus();
 }
 
 function syncExplodeRow() {
@@ -1516,7 +1515,9 @@ const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
 const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d';
-const MENUS = FOLD_ORDER;
+// (Display, the menu after Style, is always a menu where View stands in the
+// row, and its items are View's panel's where View folds: no fold step)
+const MENUS = [...FOLD_ORDER, 'displaymenu'];
 
 const narrowLayout = () => getComputedStyle($('tb')).flexWrap === 'nowrap';
 
@@ -1528,35 +1529,46 @@ function placeOpen(narrow) {
   const btn = menu.querySelector('.menu-btn');
   // (a move takes the focus: given back where it lands, r20)
   const had = document.activeElement === lbl;
-  if (narrow && lbl.parentElement !== panel) panel.prepend(lbl);
+  if (narrow && lbl.parentElement !== panel) $('fhopen').after(lbl); // under File's Open heading
   else if (!narrow && lbl.parentElement === panel) menu.before(lbl);
   if (had && document.activeElement !== lbl) focusBeside(lbl);
-  // a model list goes where Open… goes (moved only when it must: a move
-  // takes the focus from it)
-  if (lbl.nextElementSibling !== $('modellist')) lbl.after($('modellist'));
+  // a model list goes where Open… goes, and in the narrow layout stands in
+  // the row before File while the row has room for it (refold folds it in
+  // after Open… where it has not): a short window (800 x 500) is narrow by
+  // its height alone, and folded the list away with the row half empty (UI
+  // organization review rank 5). Moved only when it must: a move takes the
+  // focus from it.
+  const ml = $('modellist');
+  if (narrow) { if (ml.nextElementSibling !== menu) menu.before(ml); } else if (lbl.nextElementSibling !== ml) lbl.after(ml);
   // "File" at every width: it holds Copy view link too, which a menu named
   // Save hid on the desktop (live end-to-end review); refold sets the title
   btn.textContent = 'File';
   panel.setAttribute('aria-label', 'File');
 }
 
-// Measure in the row after Fit, or (folded) first in View's panel; moved only
-// when it must, its focus kept (a move takes it)
+// The tools (Measure, Section, Explode) in the row after Fit, or (folded)
+// first in View's panel; moved only when they must, the focus kept (a move
+// takes it)
 function placeMeasure(folded) {
-  const m = $('measure');
-  const had = document.activeElement === m;
+  const m = $('tools');
+  const had = m.contains(document.activeElement) ? document.activeElement : null;
   if (folded && m.parentElement !== $('viewpanel')) $('viewpanel').prepend(m);
   else if (!folded && m.previousElementSibling !== $('fit')) $('fit').after(m);
   else return;
-  if (had && document.activeElement !== m) m.focus();
+  if (had && document.activeElement !== had) had.focus();
 }
+
+// where the focus goes when a tool's "× " toggle turns it off: the tool's
+// button, or View's when the tools are folded into its closed panel
+const toolFocus = (id) => ($('viewpanel').contains($('tools')) && $('viewmenu').classList.contains('folded')
+  ? $('viewmenu').querySelector('.menu-btn') : $(id));
 
 // a folded menu with nothing it could do is disabled, like its items
 function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled && $('savepic').disabled && $('savedrawing').disabled && $('addmodelbtn').disabled && $('gallerybtn').hidden
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').querySelector('button').disabled && $('savepic').disabled && $('savedrawing').disabled && $('addmodelbtn').disabled && $('gallerybtn').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -1583,7 +1595,7 @@ function refold(keep = focusNow()) {
   // File is a menu at every width: it holds Save .cadmesh, Copy view link,
   // Save picture, Export, Save drawing, Browse models and Download, which
   // standing in a wide row folded the view presets even at 1920 px
-  for (const id of MENUS) $(id).classList.toggle('folded', id === 'filemenu');
+  for (const id of MENUS) $(id).classList.toggle('folded', id === 'filemenu' || id === 'displaymenu');
   // Measure stands in the row after Fit (back there before measuring)
   placeMeasure(false);
   tb.classList.add('measuring');
@@ -1593,10 +1605,24 @@ function refold(keep = focusNow()) {
   // how a visitor finds the other models, so View folds first: before View
   // it folded on a 1024 px tablet whose row had room for it once View had
   // (live end-to-end review). At 1280 px it fits beside a folded File.
-  for (const id of [...FOLD_ORDER.slice(0, 3), 'modellist', ...FOLD_ORDER.slice(3)]) {
+  // The tools (Measure, Section, Explode) show their names where the row has
+  // room; before View folds they drop to their icons (as on a phone), which
+  // keeps View and a model list in a 1280 px row and a 1024 px tablet's.
+  $('tools').classList.remove('compact');
+  // Show folds before the model list: its four buttons do nothing until a
+  // part is selected, while the list is how a visitor reaches the other
+  // models (UI organization review rank 6)
+  for (const id of [FOLD_ORDER[0], 'tools', ...FOLD_ORDER.slice(1), 'modellist']) {
     if (toolbarFits(tb)) break;
+    if (id === 'tools') {
+      $('tools').classList.add('compact');
+      continue;
+    }
     if (id === 'modellist') {
-      if (!narrow && !$('modellist').hidden) $('filepanel').prepend($('modellist'));
+      // (into File: first there, or after Open… where Open… is File's)
+      if (!$('modellist').hidden) {
+        if (narrow) $('open').parentElement.after($('modellist')); else $('fhopen').after($('modellist'));
+      }
       continue;
     }
     $(id).classList.add('folded');
@@ -1605,8 +1631,9 @@ function refold(keep = focusNow()) {
   // targets: 348 px) takes Measure into View's panel, as its first item (M
   // still reaches it)
   if (!toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
-  // a folded View holds the presets as its panel's grid, not a menu in a menu
-  if ($('viewmenu').classList.contains('folded')) $('presetmenu').classList.remove('folded');
+  // a folded View holds the presets as its panel's grid, and Display's items,
+  // not menus in a menu
+  if ($('viewmenu').classList.contains('folded')) for (const id of ['presetmenu', 'displaymenu']) $(id).classList.remove('folded');
   tb.classList.remove('measuring');
   MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
   // a Save menu holding the model list is the File menu
@@ -1718,9 +1745,10 @@ function focusBeside(el) {
 // from where the user was; the row of a tree a new model replaced, to the new
 // tree's row (r20).
 function focusInPanel(f, wasInTree) {
-  // (the looks row's toggles are settings, not a place to land: Tab still
-  // reaches them)
-  const all = [...$('parts').querySelectorAll('button, summary, input[type=color], #tree .label[tabindex="0"]')].filter((e) => !e.closest('#looks'));
+  // (the info block's Details fold is not a place to land: it is rebuilt
+  // with the values on every selection)
+  const all = [...$('parts').querySelectorAll('button, summary, input[type=color], #tree .label[tabindex="0"]')]
+    .filter((e) => !e.closest('#infomore'));
   const row = $('tree').querySelector('.label[tabindex="0"]');
   if (!f.isConnected) return wasInTree && row && usable(row) ? (row.focus(), true) : false;
   const before = all.filter((e) => e.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -1887,7 +1915,7 @@ function setSection(axis, focus = false) {
   viewChanged();
   if (!focus) return;
   if (axis !== 'off' && was === 'off') $('secoff').focus();
-  else if (axis === 'off') ($('viewmenu').classList.contains('folded') ? $('viewmenu').querySelector('.menu-btn') : $('section')).focus();
+  else if (axis === 'off') toolFocus('section').focus();
 }
 
 // A select is blurred after a choice picked from its list, so a focused
@@ -2372,7 +2400,7 @@ function updateButtons() {
   $('explode').hidden = !(app.renderer && app.renderer.canExplode);
   $('explode').disabled = !has;
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
-  $('exportmesh').disabled = !has;
+  for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
   $('addmodelbtn').disabled = !has || !app.scene;
   $('savepic').disabled = !has && !app.dxf;
   $('printbtn').disabled = $('savepic').disabled;
@@ -3702,7 +3730,7 @@ function droppedFile(e) {
   const dt = e.dataTransfer;
   const files = dt ? dt.files : [];
   const f = files[0];
-  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP or .cadmesh)'); return null; }
+  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP, a mesh or a DXF)'); return null; }
   const item = dt.items && dt.items[0];
   if (item && item.webkitGetAsEntry && item.webkitGetAsEntry()?.isDirectory) {
     announce(`${f.name} is a folder: drop the model file in it`);
@@ -4224,14 +4252,29 @@ function setRef(on) {
   announce(app.ref ? `positions measured from ${app.ref.name}` : 'positions measured from the whole model');
 }
 
+// The info block leads with what a visitor asks of a part (the selection, its
+// size and position, volume and mass); the file, the graphics backend, the
+// triangle count and the converter are in a Details fold at its foot (UI
+// organization review rank 3: the panel opened on "graphics WebGL 2 --
+// WebGPU not available" and pushed the parts list down). The fold is rebuilt
+// with the values, so whether it is open is kept here.
 function fillInfo(el) {
-  const add = (k, ...v) => {
+  const line = (k, v) => {
     const d = document.createElement('div');
     const a = document.createElement('b');
     a.textContent = k;
     d.append(a, ' ', ...v);
-    el.append(d);
+    return d;
   };
+  const add = (k, ...v) => el.append(line(k, v));
+  const more = document.createElement('details');
+  more.id = 'infomore';
+  more.open = !!app.infoMoreOpen;
+  more.ontoggle = () => { app.infoMoreOpen = more.open; };
+  const sum = document.createElement('summary');
+  sum.textContent = 'Details';
+  more.append(sum);
+  const addMore = (k, ...v) => more.append(line(k, v));
   // the file, in full: the narrow footer truncates it, and its title tooltip
   // never shows on a touch screen; and the site it came from (a model opened
   // by URL), so a visitor knows whose model it is
@@ -4239,8 +4282,9 @@ function fillInfo(el) {
     let host = '';
     try { host = app.sourceUrl ? new URL(app.sourceUrl, location.href).host : ''; } catch { /* no URL */ }
     if (host === location.host) host = '';
-    add('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} ${app.header.meshes.length === 1 ? 'body' : 'bodies'}${host ? ` · from ${host}` : ''}`);
+    addMore('file', `${app.sourceName} · ${fmtInt(app.header.meshes.length)} ${app.header.meshes.length === 1 ? 'body' : 'bodies'}${host ? ` · from ${host}` : ''}`);
     // what the model list says of it: its page, who made it, on what terms
+    // (in the lead: whose model it is, and the way back to its page)
     const e = listEntry(app.sourceUrl);
     if (e && e.page) {
       const l = document.createElement('a');
@@ -4256,14 +4300,16 @@ function fillInfo(el) {
   // (it explains a slow first load too): the badge's tooltip says so as well,
   // but a tooltip never shows on a touch screen or to the keyboard
   // (in plain words: "graphics WebGL 2 -- WebGPU not available: no WebGPU adapter")
+  // (with no model open there is nothing else to say: shown in the lead)
   const NAMES = { webgpu: 'WebGPU', webgl2: 'WebGL 2', webgl1: 'WebGL 1' };
+  const gfx = app.header ? addMore : add;
   if (gaveUp) {
-    add('graphics', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
+    gfx('graphics', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
   } else if (app.backend) {
     const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok)
       .map((a) => `${NAMES[a.backend] || a.backend} not available: ${a.error}`);
     const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
-    add('graphics', `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`);
+    gfx('graphics', `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`);
   }
   if (!app.header) return;
   const ids = [...app.selected];
@@ -4306,7 +4352,7 @@ function fillInfo(el) {
     const ab = aboveBelow(b, ref, orientUp(app.cam.orient));
     add(`above / below it (${lenUnit()})`, `${lenNum(ab.above, 'size')} / ${lenNum(ab.below, 'size')}`);
   }
-  add('triangles', fmtInt(tris));
+  addMore('triangles', fmtInt(tris));
   // volume and area (js/edges.js facts: from the file, or the worker's once it
   // answers): the volume of the closed bodies only, an open sheet having none;
   // the bodies counted by their b-rep kind
@@ -4332,7 +4378,8 @@ function fillInfo(el) {
   }
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
-  if (app.stats?.converter) add('converted on', app.stats.converter);
+  if (app.stats?.converter) addMore('converted on', app.stats.converter);
+  el.append(more);
 }
 
 const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
@@ -4839,24 +4886,13 @@ function wireInput() {
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
+  $('skipview').onclick = () => $('view').focus();
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
-  // Export as…: a choice picked from the list exports, and the select reads
-  // "Export as…" again. From the keyboard an arrow or a letter only moves the
-  // choice (a closed select changes on each, and each would have saved a
-  // file): Enter exports it, leaving drops it, as the model list does.
-  {
-    const sel = $('exportmesh');
-    let keyed = false;
-    const go = () => { const fmt = sel.value; sel.value = ''; keyed = false; closeMenus(); sel.blur(); exportMesh(fmt); };
-    sel.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && sel.value) { e.preventDefault(); go(); } else if (e.key === 'Escape') { sel.value = ''; keyed = false; } else keyed = true;
-    });
-    sel.addEventListener('pointerdown', () => { keyed = false; });
-    sel.addEventListener('blur', () => { if (keyed) { sel.value = ''; keyed = false; } });
-    sel.onchange = () => { if (!keyed) go(); };
-  }
+  // Export as STL / 3MF / GLB: one button each (a drop-down among buttons,
+  // which needed its own keyboard rules: UI organization review rank 7)
+  for (const b of $('exportmesh').querySelectorAll('button')) b.onclick = () => { closeMenus(); exportMesh(b.dataset.fmt); };
   $('showall').onclick = () => {
     if (!app.hidden.size) return;
     rememberVisibility();
@@ -5036,8 +5072,13 @@ async function main() {
   setupEmbed(); // ?embed=1: before the first layout, so it never shows the toolbar
   readLooks(); // the light background before the first frame
   updateButtons();
-  // on a short window the controls help starts folded: the parts list needs the room
-  if (innerHeight < 640) $('help').open = false;
+  // The controls help starts closed: open, it took ~250 px of the panel and
+  // left the parts list six rows (UI organization review rank 1). Opening
+  // it is remembered in this browser, and so is closing it again.
+  try { if (localStorage.getItem('cadv.help') === 'open' && innerHeight >= 640) $('help').open = true; } catch { /* storage off */ }
+  $('help').addEventListener('toggle', () => {
+    try { localStorage.setItem('cadv.help', $('help').open ? 'open' : 'closed'); } catch { /* storage off */ }
+  });
   // A file chosen or dropped while the GPU starts (Open… works from the
   // first paint): kept and opened once the input is wired. It was ignored,
   // and a drop made the browser leave the page for the file (review r21)
