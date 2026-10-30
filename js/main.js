@@ -743,8 +743,10 @@ function frameState() {
 const TRIAD = [['X', [1, 0, 0], '#ff5c5c'], ['Y', [0, 1, 0], '#5fd35f'], ['Z', [0, 0, 1], '#5f9dff']];
 function drawTriad() {
   const svg = $('triad');
-  svg.hidden = !app.header || app.embed;
-  if (svg.hidden) return;
+  // (an <svg> has no hidden property, only the attribute)
+  const off = !app.header || app.embed;
+  svg.toggleAttribute('hidden', off);
+  if (off) return;
   const c = app.cam;
   const view = lookAt([0, 0, 0], camDir(c).map((v) => -v), camUp(c));
   const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]], toward = camDir(c);
