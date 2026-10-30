@@ -388,13 +388,151 @@ function gpuSync() {
 // recolour makes a new mesh, whose instances carry the new colours). Never
 // throws: edges the GPU cannot hold are left out, and the model stays.
 const edgeData = new WeakMap();
+
+// ---------- Explode (plan feature 8) ----------
+// Each body's direction, summed down the assembly tree: (a node's centre -
+// its parent's) at each level, then (the body's centre - its node's), so
+// subassemblies part first and their bodies then part within them. A flat
+// tree (no subassembly) gives the radial direction from the model's centre,
+// which suits few models, so it starts along the view's up axis instead.
+// X / Y / Z keep one file axis of it. Scaled so the farthest-moving body
+// travels one model diagonal at 100 %. The directions go in the body table
+// (js/edges.js bodyTable's slot 0..2, which the vertex shaders read); the
+// fraction is the frame's `explode`. A renderer without a vertex-readable
+// table (a WebGL1 with no vertex textures) does not offer it.
+app.explode = { on: false, t: 0.4, mode: null, dirs: null, len: 0, flat: false, for: null };
+const cen = (b) => [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
+
+function explodeDirs(mode) {
+  const h = app.header;
+  const n = h.meshes.length;
+  const raw = new Float64Array(n * 3);
+  const walk = (node, parentC, acc) => {
+    const ids = collect(node);
+    const b = ids.length ? bboxOf(ids) : null;
+    const c = b ? cen(b) : parentC;
+    const a = [0, 1, 2].map((k) => acc[k] + c[k] - parentC[k]);
+    for (const mi of node.meshes) {
+      const bb = h.meshes[mi].bbox;
+      if (!bb) continue;
+      const bc = cen(bb);
+      for (let k = 0; k < 3; k++) raw[mi * 3 + k] = a[k] + bc[k] - c[k];
+    }
+    for (const ch of node.children) walk(ch, c, a);
+  };
+  const rc = h.bbox ? cen(h.bbox) : [0, 0, 0];
+  walk(h.root, rc, [0, 0, 0]);
+  const keep = { x: 0, y: 1, z: 2 }[mode];
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    if (keep !== undefined) for (let k = 0; k < 3; k++) if (k !== keep) raw[i * 3 + k] = 0;
+    max = Math.max(max, Math.hypot(raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]));
+  }
+  const b = h.bbox;
+  const diag = b ? Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : 1;
+  const s = max > 0 ? diag / max : 0;
+  const dirs = new Float32Array(n * 3);
+  for (let i = 0; i < n * 3; i++) dirs[i] = raw[i] * s;
+  return { dirs, len: max > 0 ? diag : 0 };
+}
+
+// a flat tree: no node under the root holds more than one body
+const flatTree = () => !app.header.root.children.some((c) => collect(c).length > 1);
+
+// The body table for `mesh` with the explode directions in it
+function bodiesWithExplode(mesh) {
+  const t = bodyTable(mesh.header);
+  const x = app.explode;
+  if (x.dirs && x.for === app.header) {
+    for (let i = 0; i < mesh.header.meshes.length; i++) {
+      for (let k = 0; k < 3; k++) t[(i + 1) * 8 + k] = x.dirs[i * 3 + k];
+    }
+  }
+  return t;
+}
+
+// The table on the GPU for the drawn mesh (again after a mode change)
+function syncBodies(force = false) {
+  const r = app.renderer;
+  if (!r || !app.mesh) return;
+  try {
+    if (force || r.bodiesFor !== app.mesh) r.setBodies(app.mesh, bodiesWithExplode(app.mesh));
+  } catch (e) {
+    app.edgeError = String(e.message || e);
+  }
+}
+
+// The bounding sphere the view uses (depth range, Fit, zoom limits): the
+// model's, grown by how far the farthest body has moved, while exploded
+function syncExplodeSphere() {
+  const base = app.sphereBase || app.sphere;
+  const x = app.explode;
+  app.sphere = x.on ? { center: base.center, radius: base.radius + x.t * x.len } : base;
+}
+
+function setExplodeMode(mode) {
+  const x = app.explode;
+  const fitted = x.on && atLastFit();
+  x.mode = mode;
+  const d = explodeDirs(mode);
+  x.dirs = d.dirs;
+  x.len = d.len;
+  x.for = app.header;
+  syncBodies(true);
+  syncExplodeSphere();
+  syncExplodeRow();
+  if (fitted) fitTo(drawnBox(null));
+  viewChanged();
+}
+
+function setExplode(on, focus = false) {
+  const x = app.explode;
+  if (on && (!app.header || !app.renderer?.canExplode)) return;
+  if (on === x.on) return;
+  // Measure and Explode exclude each other: Measure's points are where the
+  // bodies are, not where Explode draws them
+  if (on && app.measure && app.measure.on) { app.measure.setOn(false); flashHover('Measure off while exploded'); }
+  // a view as Fit left it is fitted again, around the parts where they go
+  const fitted = atLastFit();
+  x.on = on;
+  if (on && (x.for !== app.header || !x.dirs)) {
+    x.flat = flatTree();
+    const upAxis = 'xyz'[orientUp(app.cam.orient).findIndex((v) => v !== 0)];
+    setExplodeMode(x.flat ? upAxis : 'assembly');
+  } else {
+    syncExplodeSphere();
+    syncExplodeRow();
+    viewChanged();
+  }
+  if (fitted) fitTo(drawnBox(null));
+  announce(on ? `exploded ${Math.round(x.t * 100)} %` : 'explode off');
+  // (off: the focus goes to the button, or to the menu it is folded into)
+  const btn = (id) => $(id).querySelector('.menu-btn');
+  if (focus) (on ? $('xpoff') : $('viewmenu').classList.contains('folded') ? btn('viewmenu')
+    : $('presetmenu').classList.contains('folded') ? btn('presetmenu') : $('explode')).focus();
+}
+
+function syncExplodeRow() {
+  const x = app.explode;
+  $('xpopt').hidden = !x.on;
+  $('explode').setAttribute('aria-pressed', String(x.on));
+  $('explode').hidden = !(app.renderer && app.renderer.canExplode);
+  $('explode').disabled = !app.header;
+  for (const b of $('xpmode').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === x.mode));
+  $('xpmode').querySelector('[data-mode="assembly"]').textContent = x.flat ? 'Radial (flat file)' : 'Assembly';
+  $('xppos').value = String(Math.round(x.t * 100));
+  $('xpval').textContent = `${Math.round(x.t * 100)} %`;
+  $('xppos').setAttribute('aria-valuetext', `${Math.round(x.t * 100)} %`);
+  syncOptbar();
+}
+
 async function syncEdges(r, mesh) {
   const v = mesh.edgeInfo?.value;
   if (!r.canDrawEdges || !v || r.edgesFor === mesh) return;
   // the body table, for the cull of bodies too small to show edges. A table
   // the GPU will not hold costs the cull, never the model: no throw from here
   try {
-    if (r.bodiesFor !== mesh) r.setBodies(mesh, bodyTable(mesh.header));
+    if (r.bodiesFor !== mesh) r.setBodies(mesh, bodiesWithExplode(mesh));
   } catch (e) {
     app.edgeError = String(e.message || e);
   }
@@ -576,6 +714,8 @@ function frameState() {
     // the rack on WebGPU over SwiftShader) is the same geometry and ids, so
     // its old colours keep drawing meanwhile.
     drawModel: sameModel(r.drawn, app.mesh),
+    // Explode: the fraction of each body's direction (the body table) it moves
+    explode: app.explode.on && app.explode.for === app.header ? app.explode.t : 0,
   };
 }
 
@@ -637,7 +777,7 @@ function sectionPlane() {
   const s = app.section;
   if (s.axis === 'off' || !app.header || !app.header.bbox) return null;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
-  const { min, max } = app.header.bbox;
+  const { min, max } = sectionBox();
   const pos = min[k] + (max[k] - min[k]) * s.t;
   const n = [0, 0, 0];
   n[k] = s.flip ? -1 : 1;
@@ -983,7 +1123,7 @@ function setupEmbed() {
   document.body.classList.add('embed');
   $('embedbar').hidden = false;
   $('embedhint').hidden = false;
-  $('embedfit').onclick = () => fitTo(app.header && app.header.bbox);
+  $('embedfit').onclick = () => fitTo(drawnBox(null));
   // the link is made when it is about to be followed, so it holds the view now
   const fresh = () => { $('embedopen').href = app.header ? viewLink() : location.href.replace(/([?&])embed=1&?/, '$1'); };
   for (const ev of ['pointerenter', 'focus', 'pointerdown']) $('embedopen').addEventListener(ev, fresh);
@@ -1045,7 +1185,7 @@ const presetView = (v) => (v === 'iso' && app.header ? isoView(app.cam.orient, a
 function setView(v) {
   [app.cam.yaw, app.cam.pitch] = presetView(v);
   app.cam.q = presetQuat(app.cam.yaw, app.cam.pitch, app.cam.orient);
-  fitTo(app.header && app.header.bbox);
+  fitTo(drawnBox(null));
 }
 
 // ---------- drawing ----------
@@ -1866,7 +2006,7 @@ function setSectionAtMm(mm) {
   const s = app.section;
   if (s.axis === 'off' || !app.header) return;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
-  const { min, max } = app.header.bbox;
+  const { min, max } = sectionBox();
   s.t = max[k] > min[k] ? Math.min(1, Math.max(0, (mm - min[k]) / (max[k] - min[k]))) : 0.5;
   updateButtons();
   viewChanged();
@@ -1907,7 +2047,7 @@ function wireOptbar() {
   $('secval').addEventListener('click', secEdit);
   $('secval').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === $('secval')) { e.preventDefault(); secEdit(); } });
   $('secsel').onclick = () => {
-    const b = app.selected.size && bboxOf([...app.selected]);
+    const b = app.selected.size && drawnBox([...app.selected]);
     if (!b) return;
     const k = { x: 0, y: 1, z: 2 }[app.section.axis];
     setSectionAtMm((b.min[k] + b.max[k]) / 2);
@@ -1918,6 +2058,17 @@ function wireOptbar() {
   };
   $('secoff').onclick = () => setSection('off', true);
   for (const b of document.querySelectorAll('[data-axis]')) b.onclick = () => setSection(b.dataset.axis);
+  // Explode
+  $('explode').onclick = () => { closeMenus(); setExplode(!app.explode.on, true); };
+  $('xpoff').onclick = () => setExplode(false, true);
+  for (const b of $('xpmode').querySelectorAll('button')) b.onclick = () => setExplodeMode(b.dataset.mode);
+  $('xppos').addEventListener('input', () => {
+    app.explode.t = Number($('xppos').value) / 100;
+    syncExplodeSphere();
+    $('xpval').textContent = `${$('xppos').value} %`;
+    $('xppos').setAttribute('aria-valuetext', `${$('xppos').value} %`);
+    viewChanged();
+  });
   for (const o of $('optbar').children) {
     const row = o.firstElementChild;
     row.addEventListener('scroll', () => optFade(o));
@@ -1946,6 +2097,11 @@ function updateButtons() {
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has;
+  // Explode: only where the renderer's vertex shaders can read the directions
+  if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
+  $('explode').hidden = !(app.renderer && app.renderer.canExplode);
+  $('explode').disabled = !has;
+  $('explode').setAttribute('aria-pressed', String(app.explode.on));
   $('exportmesh').disabled = !has;
   $('savepic').disabled = !has;
   // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
@@ -2233,6 +2389,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.modelKey = key;
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
+  app.sphereBase = app.sphere; // (Explode grows app.sphere from it)
+  app.explode.on = false; // a new model opens together
+  app.explode.for = null;
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
@@ -3012,7 +3171,7 @@ function buildTree() {
       viewChanged();
     };
     label.onclick = (e) => select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
-    label.ondblclick = () => fitTo(bboxOf(ids));
+    label.ondblclick = () => fitTo(drawnBox(ids));
     return li;
   };
   // an unnamed root with a single branch (a typical STEP wrapper) is skipped:
@@ -3140,6 +3299,40 @@ function bboxOf(ids) {
     for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); }
   }
   return min[0] === Infinity ? null : { min, max };
+}
+
+// The box Fit frames: bboxOf where the bodies are DRAWN, so while exploded
+// each body's box is moved as its shader moves it (ids null: every body).
+// Measuring (the size, the datum, Explode's own directions) keeps bboxOf.
+function drawnBox(ids) {
+  const h = app.header;
+  if (!h) return null;
+  const x = app.explode;
+  if (!(x.on && x.dirs && x.for === h && x.t)) return ids ? bboxOf(ids) : h.bbox;
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  const n = ids ? ids.length : h.meshes.length;
+  for (let j = 0; j < n; j++) {
+    const id = ids ? ids[j] : j + 1;
+    const b = h.meshes[id - 1].bbox;
+    if (!b) continue;
+    for (let k = 0; k < 3; k++) {
+      const o = x.t * x.dirs[(id - 1) * 3 + k];
+      min[k] = Math.min(min[k], b.min[k] + o);
+      max[k] = Math.max(max[k], b.max[k] + o);
+    }
+  }
+  return min[0] === Infinity ? null : { min, max };
+}
+
+// The section's range: the model's box, or while exploded the drawn one (so
+// the cut reaches every moved body), kept until the explode changes
+let secBoxKey = null, secBox = null;
+function sectionBox() {
+  const x = app.explode;
+  if (!(x.on && x.t && x.for === app.header)) return app.header.bbox;
+  const key = `${x.mode}:${x.t}`;
+  if (secBoxKey !== key || secBox?.h !== app.header) { secBox = { ...drawnBox(null), h: app.header }; secBoxKey = key; }
+  return secBox;
 }
 
 // name: the tree node's name when a tree row was chosen on its own, so the
@@ -3397,6 +3590,8 @@ function wireInput() {
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => ['wire', 'xray', 'hiddengrey'].includes(currentStyle().id),
+    // Measure's points are where the bodies are, not where Explode draws them
+    beforeOn: () => { if (app.explode.on) { setExplode(false); flashHover('Explode off while measuring'); } },
   });
   app.measureView = measureView; // (and for tests/ui-checks.py, which projects points with it)
   // The view is a tab stop (its arrows turn it), but a mouse press does not
@@ -3648,7 +3843,7 @@ function wireInput() {
   let lastType = '';
   let lastTap = null;
   const fitAfterClick = () => lastClick.catch(() => false).then((clicked) => {
-    if (clicked && app.selected.size) fitTo(bboxOf([...app.selected]));
+    if (clicked && app.selected.size) fitTo(drawnBox([...app.selected]));
   });
   stage.addEventListener('dblclick', (e) => {
     if (lastType === 'touch' || e.target.closest(OVER_VIEW) || app.measure.on || !app.embedActive) return; // a double-tap / a card's or the bar's own clicks / measuring
@@ -3784,7 +3979,7 @@ function wireInput() {
     if (f) openFile(f);
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
-  $('fit').onclick = () => fitTo(app.selected.size ? bboxOf([...app.selected]) : app.header && app.header.bbox);
+  $('fit').onclick = () => fitTo(drawnBox(app.selected.size ? [...app.selected] : null));
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
@@ -3986,7 +4181,8 @@ function wireInput() {
         || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
-      p: () => { if (!$('savepic').disabled) savePicture(); } };
+      p: () => { if (!$('savepic').disabled) savePicture(); },
+      x: () => { if (!$('explode').disabled && !$('explode').hidden) setExplode(!app.explode.on, true); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     // (a LETTER of another script only: punctuation on a Latin layout keeps
     // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)

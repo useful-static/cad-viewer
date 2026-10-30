@@ -17,6 +17,7 @@ struct U {
   hover : vec4f,    // the hovered body's id bytes (0 = none)
   cull : vec4f,     // x focal px, y min radius px, z on for edges, w on for faces (the paper styles)
   fill : vec4f,     // the cut fill's colour
+  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none)
 };
 @group(0) @binding(0) var<uniform> u : U;
 @group(0) @binding(1) var stateTex : texture_2d<f32>;
@@ -40,8 +41,11 @@ struct VOut {
 
 @vertex fn vs(v : VIn) -> VOut {
   var o : VOut;
-  o.clipPos = u.viewProj * vec4f(v.pos, 1.0);
-  o.wpos = v.pos;
+  // Explode: the body moved along its direction (the body table's [2 id]),
+  // before the clip and the view values, so the section cuts it where it is
+  let p = v.pos + xoff(v.idc);
+  o.clipPos = u.viewProj * vec4f(p, 1.0);
+  o.wpos = p;
   o.nrm = v.nrm.xyz;
   o.col = v.col.rgb;
   o.idc = v.idc;
@@ -58,9 +62,13 @@ fn meshId(idc : vec4f) -> u32 {
 }
 // projected radius under cull.y px: radius * focal px / w, perspective and
 // ortho alike; a centre behind the eye is left to the clip
+fn xoff(idc : vec4f) -> vec3f {
+  if (u.xp.x == 0.0) { return vec3f(0.0); }
+  return u.xp.x * bodies[meshId(idc) * 2u].xyz;
+}
 fn culled(idc : vec4f) -> bool {
   let cr = bodies[meshId(idc) * 2u + 1u];
-  let cc = u.viewProj * vec4f(cr.xyz, 1.0);
+  let cc = u.viewProj * vec4f(cr.xyz + xoff(idc), 1.0);
   return cc.w > 0.0 && cr.w * u.cull.x < u.cull.y * cc.w;
 }
 fn stateOf(id : u32) -> vec4f {
@@ -151,17 +159,19 @@ struct SIn {
 };
 const GONE = vec4f(2.0, 2.0, 2.0, 1.0);
 @vertex fn vsEdge(e : EIn) -> VOut {
-  return edgeOut(e.corner, e.p0, e.p1, e.idc, e.col);
+  let x = xoff(e.idc);
+  return edgeOut(e.corner, e.p0 + x, e.p1 + x, e.idc, e.col);
 }
 @vertex fn vsSil(e : SIn) -> VOut {
-  let mv = u.eye.xyz - 0.5 * (e.p0 + e.p1) * u.eye.w;
+  let x = xoff(e.idc);
+  let mv = u.eye.xyz - 0.5 * (e.p0 + e.p1 + 2.0 * x) * u.eye.w;
   if (dot(e.n1.xyz, mv) * dot(e.n2.xyz, mv) > 0.0) {
     var o : VOut;
     o.clipPos = GONE;
     o.idc = e.idc;
     return o;
   }
-  return edgeOut(e.corner, e.p0, e.p1, e.idc, e.col);
+  return edgeOut(e.corner, e.p0 + x, e.p1 + x, e.idc, e.col);
 }
 fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> VOut {
   var o : VOut;
@@ -480,6 +490,10 @@ export class WebGPURenderer {
   }
 
   // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`.
+  // the body table is a storage buffer the vertex stage always reads, so
+  // Explode works on every WebGPU device (renderer-webgl.js needs a texture)
+  get canExplode() { return true; }
+
   setBodies(mesh, table) {
     if (this.lost) return;
     if (table.byteLength > this.device.limits.maxStorageBufferBindingSize) return; // no cull, rather than no model
@@ -529,6 +543,7 @@ export class WebGPURenderer {
     f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, cull && frame.cullFaces ? 1 : 0], 48);
     const fill = frame.fill || [0, 0, 0];
     f.set([fill[0], fill[1], fill[2], 1], 52);
+    f.set([frame.explode || 0, 0, 0, 0], 56);
     this.device.queue.writeBuffer(this.ubo, 0, f);
   }
 

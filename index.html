@@ -420,9 +420,10 @@
       <!-- the presets fold on their own first (Views ▾), so the row keeps
            Ortho, Z up, Section and Style where it has room for those alone;
            when the whole View group folds they are its panel's grid again -->
-      <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom">Views</button>
+      <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom; and the exploded view">Views</button>
         <div class="menu-panel" id="presetpanel" aria-label="Views">
       <span class="presets"><button data-view="iso" title="Iso view (0)" aria-keyshortcuts="0">Iso<kbd>0</kbd></button><button data-view="front" title="Front view (1)" aria-keyshortcuts="1">Front<kbd>1</kbd></button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right" title="Right view (3)" aria-keyshortcuts="3">Right<kbd>3</kbd></button><button data-view="top" title="Top view (7)" aria-keyshortcuts="7">Top<kbd>7</kbd></button><button data-view="bottom">Bottom</button></span>
+      <button id="explode" aria-pressed="false" hidden disabled aria-keyshortcuts="X" title="Exploded view: pull the parts apart; how far, and along what, show along the bottom of the view (X)">Explode<kbd>X</kbd></button>
       <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
         </div></div>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
@@ -470,7 +471,7 @@
   <ul id="tree"></ul>
   <details class="help" id="help" open><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
-    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops) · P save a picture</span>
+    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops) · P save a picture · X explode</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
     <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
@@ -494,6 +495,12 @@
       <span id="secval" class="secval" role="button" tabindex="0" title="Type the cut position (click, or Enter)"></span>
       <button id="secsel" disabled aria-label="Cut through the selection" title="Put the cut through the middle of the selected parts">⌖</button>
       <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
+    </div></div>
+    <div class="opt" id="xpopt" hidden><div class="opt-row">
+      <button id="xpoff" aria-pressed="true" title="Put the parts back together">Explode <span aria-hidden="true">×</span></button>
+      <span class="seg" id="xpmode" role="group" aria-label="Which way the parts move"><button data-mode="assembly" aria-pressed="false" title="Each subassembly away from the rest, then its parts within it">Assembly</button><button data-mode="x" aria-pressed="false" title="Along X only">X</button><button data-mode="y" aria-pressed="false" title="Along Y only">Y</button><button data-mode="z" aria-pressed="false" title="Along Z only">Z</button></span>
+      <input id="xppos" type="range" min="0" max="100" value="40" autocomplete="off" aria-label="How far apart" aria-describedby="xpval">
+      <span id="xpval" class="secval"></span>
     </div></div>
     <div class="opt" id="measopt" hidden><div class="opt-row">
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>

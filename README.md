@@ -115,6 +115,10 @@ URL parameters:
   all shown) as a 1:1 drawing in mm, seen straight along the nearest view:
   their edges, with holes as true circles. Select the board alone for its
   outline and holes, e.g. for a case design. Hidden edges are not removed.
+- **Explode.** Views > **Explode** (X) pulls the parts apart, with a slider
+  for how far: by the assembly tree (subassemblies first, then their parts
+  within them), or along X, Y or Z only. Clicking, the section and Fit work
+  on the parts where they are drawn. Measure turns it off.
 - **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
   bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a

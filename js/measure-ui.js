@@ -453,6 +453,8 @@ export function createMeasure(deps) {
   }
 
   function setOn(on, focus = false) {
+    // (the viewer turns off what cannot run beside Measure: Explode)
+    if (on && !st.on && deps.beforeOn) deps.beforeOn();
     st.on = on;
     if (!on) { st.pending = []; st.snap = null; setList(false); }
     syncRow();

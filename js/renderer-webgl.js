@@ -33,13 +33,26 @@ uniform vec4 uBodyTex;
 attribute vec4 aBody;      // this vertex's body: centre, radius (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
+uniform vec4 uXp;          // x explode: the fraction of each body's direction it moves by (0 none)
 void main() {
-  vClip = dot(uClipV.xyz, aPos) - uClipV.w;
-  vView = normalize(uEyeV.xyz - aPos * uEyeV.w); // w = 0: ortho view direction
+  // Explode: the body moved along its direction (the body table's texel
+  // 2 id), before the clip and the view values, so the section cuts it where
+  // it is. Only with the table texture (CULL_TEX): without it, no Explode.
+  vec3 xo = vec3(0.0);
+#ifdef CULL_TEX
+  if (uXp.x != 0.0) {
+    vec4 bx = floor(aId * 255.0 + 0.5);
+    float tx = (bx.x + 256.0 * bx.y + 65536.0 * bx.z) * 2.0;
+    xo = uXp.x * texture2D(uBodies, vec2((mod(tx, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(tx / uBodyTex.x) + 0.5) / uBodyTex.y)).xyz;
+  }
+#endif
+  vec3 p = aPos + xo;
+  vClip = dot(uClipV.xyz, p) - uClipV.w;
+  vView = normalize(uEyeV.xyz - p * uEyeV.w); // w = 0: ortho view direction
   vNrm = aNrm.xyz;
   vCol = aCol.rgb;
   vId = aId;
-  gl_Position = uViewProj * vec4(aPos, 1.0);
+  gl_Position = uViewProj * vec4(p, 1.0);
   // the paper styles: a body under uCull.y px (whose edges are culled) is
   // collapsed in the face and pick passes too, so it neither blanks the lines
   // behind it nor can be picked unseen
@@ -51,7 +64,7 @@ void main() {
 #else
     vec4 cr = aBody;
 #endif
-    vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
+    vec4 cc = uViewProj * vec4(cr.xyz + xo, 1.0);
     if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   }
 }`;
@@ -177,6 +190,7 @@ uniform vec4 uBodyTex;     // x width, y height of the body table
 attribute vec4 aBody;      // the edge's body: centre, radius (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, z on
+uniform vec4 uXp;          // x explode (as VS's)
 varying float vClip;
 varying vec3 vView;
 varying vec3 vNrm;
@@ -184,6 +198,16 @@ varying vec3 vCol;
 varying vec4 vId;
 void main() {
   vec4 b = floor(aEId * 255.0 + 0.5);
+  // Explode: both ends moved with their body (as VS)
+  vec3 xo = vec3(0.0);
+#ifdef CULL_TEX
+  if (uXp.x != 0.0) {
+    float tx = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0;
+    xo = uXp.x * texture2D(uBodies, vec2((mod(tx, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(tx / uBodyTex.x) + 0.5) / uBodyTex.y)).xyz;
+  }
+#endif
+  vec3 P0 = aP0 + xo;
+  vec3 P1 = aP1 + xo;
   // a body whose projected radius is under uCull.y px draws no edges: they
   // would only darken it. radius px = radius * focal px / w, in perspective
   // (w = depth) and ortho (w = 1) alike. Behind the eye: left to the clip.
@@ -194,7 +218,7 @@ void main() {
 #else
     vec4 cr = aBody;
 #endif
-    vec4 cc = uViewProj * vec4(cr.xyz, 1.0);
+    vec4 cc = uViewProj * vec4(cr.xyz + xo, 1.0);
     if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       vClip = 0.0; vView = vec3(0.0); vNrm = vec3(0.0); vCol = vec3(0.0); vId = aEId; vDash = 0.0;
@@ -202,7 +226,7 @@ void main() {
     }
   }
   if (uSil.x > 0.5) {
-    vec3 mv = uEyeV.xyz - 0.5 * (aP0 + aP1) * uEyeV.w;
+    vec3 mv = uEyeV.xyz - 0.5 * (P0 + P1) * uEyeV.w;
     if (dot(aN1.xyz, mv) * dot(aN2.xyz, mv) > 0.0) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       vClip = 0.0; vView = vec3(0.0); vNrm = vec3(0.0); vCol = vec3(0.0); vId = aEId; vDash = 0.0;
@@ -212,8 +236,8 @@ void main() {
   vNrm = vec3(0.0);
   vCol = aECol.rgb;
   vId = aEId;
-  vec4 c0 = uViewProj * vec4(aP0, 1.0);
-  vec4 c1 = uViewProj * vec4(aP1, 1.0);
+  vec4 c0 = uViewProj * vec4(P0, 1.0);
+  vec4 c1 = uViewProj * vec4(P1, 1.0);
   float d0 = c0.w * uNear.x + c0.z * uNear.y;
   float d1 = c1.w * uNear.x + c1.z * uNear.y;
   vDash = 0.0;
@@ -225,10 +249,10 @@ void main() {
   // the world ends clipped by the same fraction (clip space is linear in
   // world space), so the section test and the view vector are those of the
   // point drawn, not of an end behind the eye
-  vec3 q0 = aP0;
-  vec3 q1 = aP1;
-  if (d0 < 0.0) { float t = d0 / (d0 - d1); c0 = mix(c0, c1, t); q0 = mix(aP0, aP1, t); }
-  if (d1 < 0.0) { float t = d1 / (d1 - d0); c1 = mix(c1, c0, t); q1 = mix(aP1, aP0, t); }
+  vec3 q0 = P0;
+  vec3 q1 = P1;
+  if (d0 < 0.0) { float t = d0 / (d0 - d1); c0 = mix(c0, c1, t); q0 = mix(P0, P1, t); }
+  if (d1 < 0.0) { float t = d1 / (d1 - d0); c1 = mix(c1, c0, t); q1 = mix(P1, P0, t); }
   vec3 p = mix(q0, q1, aCorner.x);
   vClip = dot(uClipV.xyz, p) - uClipV.w;
   vView = normalize(uEyeV.xyz - p * uEyeV.w);
@@ -291,7 +315,7 @@ function compile(gl, type, src) {
 }
 
 const UNIFORMS = ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN', 'uPx', 'uHoverId', 'uNear',
-  'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill'];
+  'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill', 'uXp'];
 const BODY_TEX_W = 1024;
 
 function program(gl, fs, vs = VS, attrs = ['aPos', 'aNrm', 'aCol', 'aId']) {
@@ -636,14 +660,16 @@ export class WebGLRenderer {
     gl.uniform4f(u.uHoverId, h & 255, (h >>> 8) & 255, (h >>> 16) & 255, (h >>> 24) & 255);
     gl.uniform4f(u.uNear, 1, 1, 0, 0); // WebGL clip space: inside while z + w >= 0
     const cull = !!(e.minPx && this._cullReady('edges'));
-    if (cull && this.bodyTexOk) {
+    const xp = this._explode(frame);
+    if ((cull || xp) && this.bodyTexOk) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
+    gl.uniform4f(u.uXp, xp, 0, 0, 0);
     // with no table, the unused sampler points at the state texture, so no
     // unit is left without a texture (null locations under CULL_ATTR: no-ops)
-    gl.uniform1i(u.uBodies, cull && this.bodyTexOk ? 1 : 0);
+    gl.uniform1i(u.uBodies, (cull || xp) && this.bodyTexOk ? 1 : 0);
     gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
     gl.uniform4f(u.uCull, frame.focalPx || 0, e.minPx || 0, cull ? 1 : 0, 0);
     gl.depthMask(false);
@@ -788,11 +814,15 @@ export class WebGLRenderer {
     // program built without CULL: no-ops.)
     const e = frame.edges;
     const cull = !!(frame.cullFaces && e && e.minPx && this._cullReady('faces'));
-    if (cull && this.bodyTexOk) {
+    // Explode reads the same table (its direction texels): bound for it too,
+    // and only while the table is this mesh's
+    const xp = this._explode(frame);
+    if ((cull || xp) && this.bodyTexOk) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
+    gl.uniform4f(u.uXp, xp, 0, 0, 0);
     if (!this.bodyTexOk) {
       // CULL_ATTR: attribute 4 is aBody, from the per-vertex buffer once it
       // is made; until then a constant body no cull ever reaches
@@ -805,10 +835,18 @@ export class WebGLRenderer {
         gl.vertexAttrib4f(4, 0, 0, 0, 1e30);
       }
     }
-    gl.uniform1i(u.uBodies, cull && this.bodyTexOk ? 1 : 0);
+    gl.uniform1i(u.uBodies, (cull || xp) && this.bodyTexOk ? 1 : 0);
     gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
     gl.uniform4f(u.uCull, frame.focalPx || 0, cull ? e.minPx : 0, 0, cull ? 1 : 0);
   }
+
+  // The explode fraction to draw with: 0 unless the body table (which holds
+  // the directions) is a texture and is the drawn mesh's. Without a table
+  // texture (a WebGL1 with no vertex textures) Explode is not offered.
+  _explode(frame) {
+    return frame.explode && this.bodyTexOk && this.bodyTex && this.bodiesFor === this.drawn ? frame.explode : 0;
+  }
+  get canExplode() { return !!this.bodyTexOk; }
 
   // Every face pass is biased (POLYGON_OFFSET_FILL on): the solids, then the
   // sheets with less bias, so a sheet lying on a solid's face shows.
