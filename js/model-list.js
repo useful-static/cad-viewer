@@ -87,6 +87,8 @@ export function parseModelList(text, listUrl) {
 //            stays in the tooltip)
 //   style    the display style it opens in when this browser has no choice of
 //            its own (js/styles.js ids)
+//   tours    [{ "name": "A tour of the board", "url": "<a .cadtour.json>" }]:
+//            File offers each (js/tour.js), resolved against the list's URL
 //   notes    [{ "text": "HDMI", "part": "HDMI_1_3" } or { "text": …, "at": [x, y, z] }]:
 //            notes pinned on the model (a part's at the top of it), as
 //            Measure's Note makes them, unless a view link brings its own
@@ -117,6 +119,18 @@ function extras(file, v, listUrl) {
   if (v.style !== undefined) {
     if (!STYLE_IDS.includes(v.style)) throw bad('style', `must be one of ${STYLE_IDS.join(', ')}`);
     out.style = v.style;
+  }
+  if (v.tours !== undefined) {
+    const t = v.tours;
+    const ok = (x) => x && typeof x === 'object' && typeof x.url === 'string' && x.url.trim()
+      && (x.name === undefined || (typeof x.name === 'string' && x.name.length <= 100));
+    if (!Array.isArray(t) || t.length > 20 || !t.every(ok)) throw bad('tours', 'must be a list (at most 20) of { "name": "…", "url": "<a .cadtour.json>" }');
+    out.tours = t.map((x) => {
+      let u;
+      try { u = new URL(x.url, listUrl); } catch { throw bad('tours', `"${x.url}" is not a URL`); }
+      if (!/^https?:$/.test(u.protocol)) throw bad('tours', `"${x.url}" is not an http(s) URL`);
+      return { name: (x.name || '').trim() || 'Tour', url: u.href };
+    });
   }
   if (v.notes !== undefined) {
     const n = v.notes;

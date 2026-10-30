@@ -81,6 +81,7 @@
   .skip:focus { top:8px; }
   .mhead { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
   .mhead:first-child { margin-top:0; }
+  #tourlinks { display:contents; } /* its buttons are File's column's own */
   .expgroup { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:12px; }
   .expgroup button { flex:1; }
   /* Open… (a label) centred like the buttons under it; it sat at the left */
@@ -158,6 +159,42 @@
   body.embed header, body.embed #parts, body.embed footer, body.embed #scrim { display:none !important; }
   body.embed #stage { grid-column:1 / -1; grid-row:1 / -1; }
   body.embed:not(.active) #stage { touch-action:pan-x pan-y pinch-zoom; cursor:pointer; }
+  /* a tour's caption card: bottom left, above the options bar; frames keep
+     the strip it covers clear (main.js tourCover) */
+  #tourcard { position:absolute; left:12px; bottom:calc(12px + var(--optbar-h, 0px)); z-index:2;
+    max-width:min(440px, calc(100% - 24px)); padding:10px 12px; border:1px solid var(--line); border-radius:10px;
+    background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px; }
+  #tourcard[hidden] { display:none; }
+  #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
+  /* the tour maker: a panel at the right of the view */
+  #touredit { position:absolute; top:8px; right:8px; z-index:3; width:min(330px, calc(100% - 16px)); max-height:calc(100% - 16px);
+    overflow:auto; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel);
+    box-shadow:0 8px 24px rgba(0,0,0,.45); font-size:12px; color:var(--fg); }
+  #touredit[hidden] { display:none; }
+  #touredit .tehead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  #touredit .tehead b { font-size:14px; }
+  #touredit .tehint { color:var(--dim); margin:0 0 8px; }
+  #touredit .tefield { display:flex; flex-direction:column; gap:2px; margin:6px 0; color:var(--dim); }
+  #touredit .tefield :is(input, textarea, select) { color:var(--fg); }
+  #touredit textarea { resize:vertical; font:inherit; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:4px; }
+  #touredit .terow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; color:var(--dim); }
+  #touredit input[type=number] { width:4.5em; }
+  #testeps { margin:6px 0; padding-left:0; list-style:none; counter-reset:step; }
+  #testeps li { display:flex; gap:4px; align-items:center; margin:2px 0; counter-increment:step; }
+  #testeps li::before { content:counter(step); color:var(--dim); min-width:1.6em; text-align:right; padding-right:2px; }
+  #testeps li.sel .tename { border-color:var(--acc); }
+  #testeps .tename { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #testeps li button:not(.tename) { padding:2px 6px; }
+  #tourcard b { display:block; font-size:15px; margin-bottom:2px; }
+  #tourcard b[hidden], #tourcard p[hidden] { display:none; }
+  #tourcard p { margin:0 0 8px; line-height:1.4; white-space:pre-line; }
+  #tourcard .tourbar { display:flex; align-items:center; gap:6px; }
+  #tourcount { color:var(--dim); font-size:12px; min-width:3.5em; text-align:center; }
+  #tourexit { margin-left:auto; }
+  #tourplay svg { vertical-align:-2px; }
+  #tourplay .tp-pause, #tourplay.playing .tp-play { display:none; }
+  #tourplay.playing .tp-pause { display:inline; }
+  @media (any-pointer: coarse) { #tourcard .tourbar button { min-width:40px; min-height:40px; } }
   #embedbar { position:absolute; top:8px; left:8px; display:flex; gap:6px; z-index:2; }
   #embedbar[hidden], #embedhint[hidden] { display:none; }
   #embedhint { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); background:rgba(20,24,30,.85); color:var(--fg);
@@ -468,9 +505,9 @@
          under its heading where they fold into File), Share, Save -->
     <div class="menu-panel" id="filepanel" aria-label="File">
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
-      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden>
+      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden>
       <span class="mhead" aria-hidden="true">Share</span>
-      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button>
+      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at twice its size, without the hover and selection highlights, with Measure's results drawn in (P)">Save picture</button><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <span class="mhead" aria-hidden="true">Save</span>
       <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens">Export as <button data-fmt="stl" disabled title="STL: triangles, no colour">STL</button><button data-fmt="3mf" disabled title="3MF: colours, in mm">3MF</button><button data-fmt="glb" disabled title="GLB: colours, in metres">GLB</button></span>
@@ -575,6 +612,35 @@
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
   <div id="embedhint" hidden>Click to turn and zoom the model</div>
+  <!-- the tour maker (File > Make a tour…, js/tour-recorder.js) -->
+  <div id="touredit" role="dialog" aria-label="Tour maker" hidden>
+    <div class="tehead"><b>Make a tour</b><button id="teclose" aria-label="Close the tour maker" title="Close (Esc)">✕</button></div>
+    <p class="tehint">Set the view: turn it, colour parts with the swatch, hide or explode them, pin notes with Measure. Then Add step.</p>
+    <label class="tefield">Title <input id="tetitle" type="text" maxlength="200" autocomplete="off"></label>
+    <div class="terow"><label>Plays <select id="temode" autocomplete="off"><option value="static">step by step</option><option value="animated">by itself</option></select></label>
+      <label><input id="teloop" type="checkbox" autocomplete="off"> loop</label></div>
+    <ol id="testeps" aria-label="Steps"></ol>
+    <div class="terow"><button id="teadd" class="primary">Add step</button><button id="teopen">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
+    <div id="testep" hidden>
+      <label class="tefield">Step title <input id="tes-title" type="text" maxlength="200" autocomplete="off"></label>
+      <label class="tefield">Text <textarea id="tes-text" rows="3" maxlength="2000"></textarea></label>
+      <label class="tefield">Camera <select id="tes-cam" autocomplete="off"><option value="exact">this exact view</option><option value="frame">frame the selection, from this side</option></select></label>
+      <label class="tefield">The other parts <select id="tes-dim" autocomplete="off"><option value="none">as they are</option><option value="ghost">faint (ghosts)</option><option value="grey">grey</option><option value="hide">hidden</option></select></label>
+      <div class="terow"><label>Fly <input id="tes-transition" type="number" min="0" max="30" step="0.1" autocomplete="off"> s</label>
+        <label>Hold <input id="tes-hold" type="number" min="0" max="600" step="0.5" autocomplete="off"> s</label>
+        <label>Orbit <input id="tes-orbit" type="number" min="-360" max="360" step="5" autocomplete="off">°</label></div>
+      <div class="terow"><button id="tes-update" title="This step takes the view as it is now">Update from the view</button><button id="tes-go" title="Show this step as the tour will">Show</button></div>
+    </div>
+    <div class="terow"><button id="teplay" disabled>Preview</button><button id="tesave" class="primary" disabled>Save tour</button></div>
+    <div class="terow">Also as <button id="tepics" disabled title="Each step as a picture at twice the view's size, its caption drawn in, all in a zip">Pictures (zip)</button><button id="tevideo" disabled title="The tour played once through, recorded as a WebM video in this browser (as long as the tour plays)">Video (WebM)</button></div>
+    <p id="tenote" class="note" role="status"></p>
+  </div>
+  <!-- a tour (?tour=, js/tour.js): the step's caption, and the controls
+       that step it and leave it -->
+  <div id="tourcard" role="region" aria-label="Tour" hidden>
+    <b id="tourtitle"></b><p id="tourbody"></p>
+    <div class="tourbar"><button id="tourplay" aria-pressed="false" aria-label="Play the tour" title="Play: each step in turn (Space)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="tp-play" d="M4 2.5v11l9-5.5z" fill="currentColor"/><path class="tp-pause" d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg></button><button id="tourprev" aria-label="Previous step" title="Previous step (←)">◀</button><span id="tourcount" aria-hidden="true"></span><button id="tournext" aria-label="Next step" title="Next step (→)">▶</button><button id="tourexit" aria-label="Leave the tour" title="Leave the tour (Esc)">✕</button></div>
+  </div>
   <button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's

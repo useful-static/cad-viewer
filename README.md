@@ -32,8 +32,9 @@ URL parameters:
 | Parameter | Effect |
 |---|---|
 | `src=<url>` | load a `.cadmesh` or a STEP/IGES/BREP file on start; a file on another site loads only if that site sends CORS headers (`Access-Control-Allow-Origin`), as GitHub raw files, most CDNs and CORS-enabled buckets do |
-| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. A name may also be `{"name": "…", "orient": "up:+z,front:-y"}`, which opens that model turned that way (see `orient=`), with any of: `"step"`, the source CAD file, offered as File > **Download STEP**; `"page"`, the model's own page, linked from the info panel; `"image"`, a picture of it, shown in File > **Browse models…** (the list as a grid of pictures) and while it downloads; `"author"` and `"license"`, shown there; `"labels"`, `{"<a part's name>": "<what to call it>"}`, the names the parts show; `"style"`, the display style it opens in unless the visitor chose one; `"notes"`, `[{"text": "HDMI", "part": "<a part's name>"}]` or with `"at": [x, y, z]`, notes pinned on the model. A model opened from a STEP URL offers that file for download too. The names fill a drop-down beside Open…; picking one opens it into `?src=`, and the browser's Back opens the one before. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
+| `list=<url>` | a model list: a JSON file of the models a site offers, `{"<file>": "<display name>", …}` (or an array of `[file, name]` pairs, which keeps any order), each file resolved against the list's own URL. A name may also be `{"name": "…", "orient": "up:+z,front:-y"}`, which opens that model turned that way (see `orient=`), with any of: `"step"`, the source CAD file, offered as File > **Download STEP**; `"page"`, the model's own page, linked from the info panel; `"image"`, a picture of it, shown in File > **Browse models…** (the list as a grid of pictures) and while it downloads; `"author"` and `"license"`, shown there; `"labels"`, `{"<a part's name>": "<what to call it>"}`, the names the parts show; `"style"`, the display style it opens in unless the visitor chose one; `"notes"`, `[{"text": "HDMI", "part": "<a part's name>"}]` or with `"at": [x, y, z]`, notes pinned on the model; `"tours"`, `[{"name": "…", "url": "<a .cadtour.json>"}]`, offered in File. A model opened from a STEP URL offers that file for download too. The names fill a drop-down beside Open…; picking one opens it into `?src=`, and the browser's Back opens the one before. `list=` may repeat: the lists join in the URL's order, and a file named again keeps its first place. With no `src=` the first model opens. A list on another site needs CORS, as `src` does |
 | `orient=up:+z,front:-y` | which of the file's axes is up and which faces the viewer in the Front view, whatever frame the file was drawn in: any two of `up`, `front` and `right`, each `+x` `-x` `+y` `-y` `+z` or `-z`, perpendicular (in a URL, `+` is written `%2B`). The view presets are taken in it and the model is fitted, so files drawn differently open the same way round. It applies to a model opened from a URL; a list entry's own `orient` wins, and a bad value is ignored |
+| `tour=<url>` | play a tour (a `.cadtour.json`, below) over the model; with no `src=` the tour's own `"model"` opens. Works with `embed=1` too |
 | `backend=webgpu\|webgl2\|webgl1` | force one backend (default: try them in that order) |
 | `selftest=1` | after loading, pick the canvas centre and publish one JSON line in `<pre id="selftest">` (for automated checks) |
 
@@ -123,6 +124,20 @@ URL parameters:
   for how far: by the assembly tree (subassemblies first, then their parts
   within them), or along X, Y or Z only. Clicking, the section and Fit work
   on the parts where they are drawn. Measure turns it off.
+- **Tours.** A tour is a file of its own (`.cadtour.json`) that plays over a
+  model: a sequence of steps, each flying the camera to a view (a preset, an
+  exact camera, or "frame these parts from this side", fitted to the
+  window), colouring parts, dimming the rest (faint, grey or hidden),
+  exploding, cutting, pinning callouts, and showing a title and text in a
+  caption card. It plays step by step (◀ ▶, ← →) or by itself, each step held
+  and slowly orbited (Play / Pause, Space); Esc leaves and puts the view back.
+  File > **Make a tour…** records one from the viewer: set the view, **Add
+  step**, write its caption, then **Save tour**. It also saves the tour as a
+  zip of pictures (one per step, caption drawn in) or a WebM video of it
+  playing, made in the browser. Parts are named by their names in the file
+  (or a model list's labels), so a tour outlives a re-export.
+  `node tests/check-tour.mjs TOUR MODEL` checks a tour's part names against a
+  model.
 - **Two models and clearance.** File > **Add model…** opens another model
   into the view: a board in its case, or two boards side by side. Move it by
   X / Y / Z in mm in the info panel, then **Clearance** gives the smallest

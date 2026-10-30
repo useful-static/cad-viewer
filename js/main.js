@@ -26,6 +26,9 @@ import { mergeModels, modelRanges } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
+import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
+import { createTourRecorder } from './tour-recorder.js';
+import { EASE, poseAt } from './tour-path.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
 const $ = (id) => document.getElementById(id);
@@ -729,7 +732,8 @@ function frameState() {
     // Explode: the fraction of each body's direction (the body table) it moves
     explode: app.explode.on && app.explode.for === app.header ? app.explode.t : 0,
     // the hidden parts drawn faintly (a style with faces only)
-    ghost: app.ghostHidden && app.hidden.size && currentStyle().faces !== 'none' ? GHOST_ALPHA : 0,
+    // (or a tour step that dims the rest as ghosts)
+    ghost: (app.ghostHidden || app.tourGhost) && app.hidden.size && currentStyle().faces !== 'none' ? GHOST_ALPHA : 0,
     ground: groundShadow(),
   };
 }
@@ -810,6 +814,29 @@ function viewChanged() {
   queueFrame();
 }
 
+// Where the camera goes to frame bbox seen with orientation q, for the stage
+// as it is now: -> { target, dist, bar }. The box as this view sees it
+// (js/camera.js fitBox), not its bounding sphere: the portrait Iso of a board
+// needs it. `cover` px at the bottom of the view are covered (the options
+// bar, a tour's caption card): fit in the part above them (a narrower
+// vertical angle, the same width), and centre there by moving the target down
+// by half of them, so the model sits above.
+function fitPose(bbox, q, margin = 1.05, cover = optbarHeight()) {
+  const c = { ...app.cam, q };
+  const box = $('stage');
+  const h = Math.max(1, box.clientHeight);
+  const bar = Math.max(0, Math.min(cover, h - 1));
+  const vis = h - bar;
+  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), box.clientWidth / vis, margin);
+  let target = f.target;
+  if (bar > 0) {
+    const perPx = (2 * f.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
+    const up = camUp(c);
+    target = target.map((v, k) => v - up[k] * (bar / 2) * perPx);
+  }
+  return { target, dist: f.dist, bar };
+}
+
 function fitTo(bbox) {
   if (!bbox) return;
   const c = app.cam;
@@ -819,21 +846,9 @@ function fitTo(bbox) {
   const box = $('stage');
   const h = Math.max(1, box.clientHeight);
   const aspect = box.clientWidth / h;
-  // The box as this view sees it (js/camera.js fitBox), not its bounding
-  // sphere: the portrait Iso of a board needs it. The options bar covers the
-  // bottom of the view: fit in the part above it (a narrower vertical angle,
-  // the same width), and centre there by moving the target down by half the
-  // bar, so the model sits above the bar.
-  const bar = Math.max(0, Math.min(optbarHeight(), h - 1));
-  const vis = h - bar;
-  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), box.clientWidth / vis);
-  c.dist = f.dist;
-  c.target = f.target;
-  if (bar > 0) {
-    const perPx = (2 * c.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
-    const up = camUp(c);
-    c.target = c.target.map((v, k) => v - up[k] * (bar / 2) * perPx);
-  }
+  const { target, dist, bar } = fitPose(bbox, c.q);
+  c.dist = dist;
+  c.target = target;
   // what this fit framed, so the options bar coming or going can frame it
   // again while the view is untouched (syncOptbar)
   app.lastFit = { bbox, q: c.q, dist: c.dist, target: c.target.slice(), bar };
@@ -1030,6 +1045,34 @@ async function savePicture(print = false) {
     return;
   }
   if (!app.header || !app.renderer) return;
+  const pic = await renderPicture();
+  if (!pic) { flashHover('the picture could not be read from the GPU'); return; }
+  const out = pic.canvas;
+  const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
+  if (print) return printPng(png);
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, '0');
+  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+  const url = URL.createObjectURL(png);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH }; // (for tests)
+  const note = `saved ${name}, ${out.width} × ${out.height}`;
+  flashHover(note, 3000);
+  announce(note);
+}
+
+// The view rendered at twice its size (less where the GPU or memory cannot),
+// without the hover and selection highlights, Measure's results painted in:
+// -> { canvas, scale, cssW, cssH } or null when the GPU gave nothing back.
+// Save picture and a tour's pictures use it.
+async function renderPicture() {
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
   const lim = Math.min(r.maxCanvasSize || 4096, 8192);
@@ -1054,7 +1097,7 @@ async function savePicture(print = false) {
     app.viewGen++;
     queueFrame();
   }
-  if (!shot) { flashHover('the picture could not be read from the GPU'); return; }
+  if (!shot) return null;
   const img = await createImageBitmap(shot);
   const out = document.createElement('canvas');
   out.width = img.width;
@@ -1062,24 +1105,7 @@ async function savePicture(print = false) {
   const ctx = out.getContext('2d');
   ctx.drawImage(img, 0, 0);
   app.measure.paint(ctx, img.width / cw, !!currentStyle().paper);
-  const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
-  if (print) return printPng(png);
-  const d = new Date();
-  const two = (n) => String(n).padStart(2, '0');
-  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
-  const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
-  const url = URL.createObjectURL(png);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: cw, cssH: ch }; // (for tests)
-  const note = `saved ${name}, ${out.width} × ${out.height}`;
-  flashHover(note, 3000);
-  announce(note);
+  return { canvas: out, scale: img.width / cw, cssW: cw, cssH: ch };
 }
 
 // The copies of body `id` (1-based ids, itself included): the same name, the
@@ -1198,6 +1224,487 @@ async function shareView() {
     : 'View link copied: it holds the view, not the file (opened from this device)';
   flashHover(note);
   announce(note);
+}
+
+// ---------- tours (js/tour.js) ----------
+// A .cadtour.json played over the model (?tour=<url>): each step flies the
+// camera to its view and shows its caption in a card over the view; ◀ ▶ (and
+// ← →) step, ✕ (Esc) leaves and puts back the view the visitor had. A step's
+// camera is a preset (the whole model framed from it), a fixed camera, or
+// "frame these parts from here", fitted to the window it plays in, above the
+// card; a step with none keeps the camera where it is. Reduced motion: a cut.
+
+// the bottom of the view the caption card covers (frames sit above it)
+const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
+
+function tourParts(names) {
+  if (app.tourIdxFor !== app.header) { app.tourIdx = partIndex(app.header, app.partLabels); app.tourIdxFor = app.header; }
+  return resolveParts(names, app.tourIdx);
+}
+
+async function readTour(url) {
+  let abs;
+  try { abs = new URL(url, location.href).href; } catch { return { error: `"${url}" is not a URL` }; }
+  let text;
+  try {
+    const r = await fetch(abs, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
+    if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
+    text = await r.text();
+  } catch {
+    return { error: `could not be read from ${new URL(abs).host}: the site does not let other pages load it (no CORS), or did not answer` };
+  }
+  try { return { tour: parseTour(text, abs) }; } catch (e) { return { error: e.message }; }
+}
+
+// The camera a step asks for -> { pose: { target, dist, q }, ortho } or null
+// (a step with no camera of its own)
+function stepPose(s) {
+  const c = app.cam;
+  let q = c.q || presetQuat(c.yaw, c.pitch, c.orient);
+  let ortho = !!c.ortho;
+  let pose = null;
+  const preset = (v) => { const [y, p] = presetView(v); return presetQuat(y, p, c.orient); };
+  if (typeof s.view === 'string') q = preset(s.view);
+  else if (s.view) {
+    q = s.view.cam.q.slice();
+    pose = { target: s.view.cam.target.slice(), dist: s.view.cam.dist, q };
+    if (s.view.cam.ortho !== undefined) ortho = s.view.cam.ortho;
+  }
+  if (s.from) q = Array.isArray(s.from) ? s.from.slice() : preset(s.from);
+  if (s.frame || typeof s.view === 'string' || (s.from && !pose)) {
+    let ids = null;
+    if (Array.isArray(s.frame)) {
+      const r = tourParts(s.frame);
+      if (r.missing.length) app.tourMissing.push(...r.missing);
+      ids = r.ids.length ? r.ids : null;
+    }
+    const box = drawnBox(ids) || drawnBox(null);
+    if (!box) return null;
+    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover());
+    pose = { target: f.target, dist: f.dist, q };
+  }
+  return pose ? { pose, ortho } : null;
+}
+
+// The grey a step's dim: "grey" draws the parts it is not about in
+const TOUR_GREY = [0.62, 0.64, 0.67];
+
+// A step's emphasis: its part colours, the rest dimmed
+// (ghost: hidden and drawn faintly; grey; hide), show / hide / isolate, style,
+// section and callouts. Each step is applied to the state the visitor had
+// before the tour, never stacked on the step before, so stepping back is
+// exact. The colours are the tour's only: they are never saved as the
+// visitor's part colours. Explode is moved by the flight (flyTo).
+function applyStepState(s) {
+  const base = app.tour.base;
+  const n = app.header.meshes.length;
+  const ids = (names) => (names ? tourParts(names).ids : []);
+  let hidden = new Set(base.hidden);
+  if (s.isolate) {
+    const keep = new Set(ids(s.isolate));
+    hidden = new Set();
+    for (let id = 1; id <= n; id++) if (!keep.has(id)) hidden.add(id);
+  }
+  for (const id of ids(s.hide)) hidden.add(id);
+  for (const id of ids(s.show)) hidden.delete(id);
+  // what the step is about: the parts it colours, else the parts it frames
+  const subject = new Set(s.colour ? ids(Object.keys(s.colour)) : Array.isArray(s.frame) ? ids(s.frame) : []);
+  const overrides = new Map(base.overrides);
+  for (const [name, hex] of Object.entries(s.colour || {})) for (const id of tourParts([name]).ids) overrides.set(id - 1, hexToRgb(hex));
+  app.tourGhost = false;
+  if (subject.size && s.dim !== 'none') {
+    for (let id = 1; id <= n; id++) {
+      if (subject.has(id)) { hidden.delete(id); continue; }
+      if (s.dim === 'grey') overrides.set(id - 1, TOUR_GREY);
+      else hidden.add(id);
+    }
+    app.tourGhost = s.dim === 'ghost';
+  }
+  app.hidden = hidden;
+  syncTreeChecks();
+  const same = overrides.size === app.overrides.size && [...overrides].every(([k, v]) => app.overrides.get(k)?.every((x, j) => x === v[j]));
+  if (!same) { app.overrides = overrides; recolour(); }
+  setStyle(s.style || base.view.style, false);
+  if (s.section) Object.assign(app.section, s.section, s.section.axis !== 'off' ? { last: s.section.axis } : {});
+  else Object.assign(app.section, base.view.section);
+  // (a step's own callouts are pinned by showTourStep, where the parts will be)
+  if (app.measure && !s.callouts) app.measure.setNotes(base.view.notes);
+  pushState();
+  updateButtons();
+  viewChanged();
+}
+
+function cancelFlight() {
+  if (app.tourRaf) cancelAnimationFrame(app.tourRaf);
+  app.tourRaf = 0;
+}
+
+// Fly the camera to `to` over `secs` (eased), and Explode to `explodeTo`
+// (0-1; 0 puts the parts back); a visitor's drag, wheel or key on the view
+// during the flight takes over (the flight stops where it is)
+function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
+  cancelFlight();
+  const x = app.explode;
+  const ex0 = x.on && x.for === app.header ? x.t : 0;
+  const ex1 = app.renderer?.canExplode ? explodeTo : 0;
+  if (ex1 > 0 && !x.on) { x.t = 0; setExplode(true); }
+  const explodeAt = (e) => {
+    if (!x.on || ex0 === ex1) return;
+    x.t = ex0 + (ex1 - ex0) * e;
+    syncExplodeSphere();
+    syncExplodeRow();
+  };
+  const c = app.cam;
+  const from = { target: c.target.slice(), dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient) };
+  // (a cut: reduced motion, or a tour's pictures being taken)
+  const ms = reducedMotion() || app.tour?.cut ? 0 : secs * 1000;
+  const t0 = performance.now();
+  const input0 = app.lastInput;
+  const settle = () => {
+    // the zoom's floor follows what is framed (as applyView sets it)
+    const box = $('stage');
+    c.viewRadius = Math.min(app.sphere.radius, c.dist / fitDistance(1, c.fov, box.clientWidth / Math.max(1, box.clientHeight)));
+    app.stageAspect = box.clientWidth / Math.max(1, box.clientHeight);
+  };
+  const frame = (now) => {
+    if (app.lastInput !== input0) { // the visitor took the camera: a playing tour pauses
+      app.tourRaf = 0; explodeAt(1); if (ex1 === 0 && x.on) setExplode(false); settle();
+      setTourPlaying(false);
+      return;
+    }
+    const t = ms ? Math.min(1, (now - t0) / ms) : 1;
+    const e = (EASE[ease] || EASE.inOut)(t);
+    explodeAt(e);
+    if (t >= 1 && ex1 === 0 && x.on) setExplode(false);
+    if (!to) { // no camera of its own: the explode alone
+      viewChanged();
+      if (t < 1) app.tourRaf = requestAnimationFrame(frame); else { app.tourRaf = 0; if (done) done(); }
+      return;
+    }
+    const p = poseAt(from, to, e);
+    c.target = p.target; c.dist = p.dist; c.q = p.q;
+    // projection changes at the midpoint (it cannot be blended)
+    if (!!c.ortho !== ortho && t >= 0.5) { c.ortho = ortho; updateButtons(); }
+    viewChanged();
+    if (t < 1) app.tourRaf = requestAnimationFrame(frame);
+    else { app.tourRaf = 0; settle(); if (done) done(); }
+  };
+  app.tourRaf = requestAnimationFrame(frame);
+}
+
+// A playing tour's hold: the step's `hold` seconds, turning `orbit` degrees
+// about the model's up axis (not where the system asks for reduced motion),
+// then the next step (the first again for a looping tour; the end of one that
+// does not loop stops it). The visitor's own drag, wheel or key pauses it.
+function holdStep() {
+  const t = app.tour;
+  if (!t || !t.playing) return;
+  cancelFlight();
+  const s = t.tour.steps[t.i];
+  const t0 = performance.now();
+  let last = t0;
+  const input0 = app.lastInput;
+  const up = orientUp(app.cam.orient);
+  const rate = reducedMotion() ? 0 : ((s.orbit || 0) * Math.PI) / 180 / Math.max(0.001, s.hold);
+  const frame = (now) => {
+    if (app.tour !== t || !t.playing) { app.tourRaf = 0; return; }
+    if (app.lastInput !== input0) { app.tourRaf = 0; setTourPlaying(false); return; }
+    if (rate) { turnAbout(app.cam, up, (rate * (now - last)) / 1000); viewChanged(); }
+    last = now;
+    if (now - t0 >= s.hold * 1000) {
+      app.tourRaf = 0;
+      if (t.i < t.tour.steps.length - 1) showTourStep(t.i + 1);
+      else if (t.tour.loop && !t.recording) showTourStep(0); // (a video plays it once)
+      else setTourPlaying(false);
+      return;
+    }
+    app.tourRaf = requestAnimationFrame(frame);
+  };
+  app.tourRaf = requestAnimationFrame(frame);
+}
+
+// Play / Pause: playing, each step holds and then the next flies in; paused,
+// the tour waits for ◀ ▶. Play resumes from the view as it is.
+function setTourPlaying(on) {
+  const t = app.tour;
+  if (!t) return;
+  t.playing = on;
+  const b = $('tourplay');
+  b.setAttribute('aria-pressed', String(on));
+  b.setAttribute('aria-label', on ? 'Pause the tour' : 'Play the tour');
+  b.title = on ? 'Pause (Space)' : 'Play: each step in turn (Space)';
+  b.classList.toggle('playing', on);
+  // (a flight under way goes on, and holds when it lands; a hold stops itself)
+  if (on && !app.tourRaf) {
+    // at the end of a tour that does not loop, Play starts it again
+    if (t.i === t.tour.steps.length - 1 && !t.tour.loop && t.ended) { t.ended = false; showTourStep(0); } else holdStep();
+  }
+  if (!on && t.i === t.tour.steps.length - 1) t.ended = true;
+}
+
+function showTourStep(i) {
+  const t = app.tour;
+  const n = t.tour.steps.length;
+  t.i = Math.max(0, Math.min(n - 1, i));
+  const s = t.tour.steps[t.i];
+  $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '');
+  $('tourtitle').hidden = !$('tourtitle').textContent;
+  $('tourbody').textContent = s.text;
+  $('tourbody').hidden = !s.text;
+  $('tourcount').textContent = `${t.i + 1} / ${n}`;
+  $('tourprev').disabled = t.i === 0;
+  $('tournext').disabled = t.i === n - 1;
+  app.tourMissing = [];
+  // the emphasis first (a dim that hides parts changes what "all" frames),
+  // then the camera; the card is already filled: its height is what the
+  // frame keeps clear
+  applyStepState(s);
+  // a frame where the parts will be: framed at the step's explode, flown
+  // there from the explode they are at now
+  const x = app.explode;
+  const ex1 = app.renderer?.canExplode ? s.explode ?? 0 : 0;
+  if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; setExplode(true); }
+  const exNow = x.t;
+  if (x.on) x.t = ex1;
+  const to = stepPose(s);
+  // callouts at the top of their parts as they will be drawn (exploded too)
+  if (app.measure && s.callouts) {
+    app.measure.setNotes(s.callouts.map((c) => ({ p: c.at || topOfBox(drawnBox(tourParts([c.part]).ids)), text: c.text })).filter((c) => c.p));
+  }
+  if (x.on) x.t = exNow;
+  flyTo(to ? to.pose : null, to ? to.ortho : !!app.cam.ortho, s.transition, s.ease, ex1, holdStep);
+  if (app.tourMissing.length) flashHover(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
+}
+
+function startTour(tour, url) {
+  if (!app.header) return;
+  endTour(false);
+  const saved = currentView();
+  // what the visitor had: each step is applied to it, and leaving puts it back
+  const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides),
+    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t } };
+  app.tour = { tour, url, i: 0, saved, base, playing: false };
+  $('tourcard').hidden = false;
+  // an animated tour plays from the start; a static one waits for ▶
+  setTourPlaying(tour.mode === 'animated');
+  $('stage').classList.add('touring');
+  // the names it uses that this model lacks, once (a tour outlives a model update)
+  const missing = tourParts(tourNames(tour)).missing;
+  if (missing.length) setStatus('ready', `${readyText()} · the tour names parts this model lacks: ${missing.join(', ')}`);
+  showTourStep(0);
+}
+
+// Leave the tour: the card goes and the view the visitor had comes back
+function endTour(restore = true) {
+  if (!app.tour) return;
+  cancelFlight();
+  const { saved, base } = app.tour;
+  app.tour = null;
+  app.tourGhost = false;
+  $('tourcard').hidden = true;
+  $('stage').classList.remove('touring');
+  if (restore && saved && app.header) {
+    app.overrides = base.overrides;
+    recolour();
+    if (base.explode.on) { app.explode.t = base.explode.t; if (app.explode.on) { syncExplodeSphere(); syncExplodeRow(); } else setExplode(true); } else setExplode(false);
+    applyView(saved); // camera, style, section, hidden and selected parts, notes
+    updateButtons();
+    viewChanged();
+  }
+  announce('tour closed');
+}
+
+// The view as a tour step (the tour maker, js/tour-recorder.js): the camera
+// (exactly, or the selected parts framed from this side), the part colours,
+// what is hidden, explode, section, style, and Measure's notes as callouts.
+// Parts are named by namesFor: the fewest names that cover exactly them.
+function captureStep({ camera = 'exact' } = {}) {
+  if (!app.header) return null;
+  const c = app.cam;
+  const n = app.header.meshes.length;
+  tourParts([]); // (the name index for this model)
+  const names = (ids) => namesFor(ids, app.header, app.tourIdx, app.partLabels);
+  const r = (v, d) => +v.toFixed(d);
+  const q = (c.q || presetQuat(c.yaw, c.pitch, c.orient)).map((v) => r(v, 6));
+  const s = {};
+  if (camera === 'frame') {
+    if (!app.selected.size) return null;
+    s.frame = names([...app.selected]);
+    s.from = q;
+    s.margin = 1.3;
+  } else {
+    s.view = { cam: { target: c.target.map((v) => r(v, 4)), dist: +c.dist.toPrecision(6), q, ortho: !!c.ortho } };
+  }
+  const byHex = new Map();
+  for (const [i, rgb] of app.overrides) {
+    const h = rgbToHex(rgb);
+    if (!byHex.has(h)) byHex.set(h, []);
+    byHex.get(h).push(i + 1);
+  }
+  if (byHex.size) {
+    s.colour = {};
+    for (const [h, ids] of byHex) for (const nm of names(ids)) s.colour[nm] = h;
+  }
+  if (app.hidden.size) {
+    if (app.hidden.size > n / 2) {
+      const shown = [];
+      for (let id = 1; id <= n; id++) if (!app.hidden.has(id)) shown.push(id);
+      s.isolate = names(shown);
+    } else s.hide = names([...app.hidden]);
+  }
+  if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) s.explode = r(app.explode.t, 3);
+  if (app.section.axis !== 'off') s.section = { axis: app.section.axis, t: r(app.section.t, 4), flip: !!app.section.flip };
+  s.style = currentStyle().id;
+  const notes = app.measure ? app.measure.notes() : [];
+  if (notes.length) s.callouts = notes.map((nt) => ({ text: nt.text, at: nt.p.map((v) => r(v, 3)) }));
+  return s;
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  app.lastDownload = { name, bytes: blob.size, blob }; // (for tests)
+}
+function downloadText(text, name, type) {
+  downloadBlob(new Blob([text], { type }), name);
+  app.lastDownload.text = text;
+}
+
+// A step's caption painted into a picture or a video frame, as the card
+// shows it: bottom left, title over text, wrapped to the card's width
+function paintCaption(ctx, w, h, scale, title, text) {
+  if (!title && !text) return;
+  const pad = 12 * scale, maxW = Math.min(440 * scale, w - 24 * scale);
+  const font = (px, bold) => `${bold ? '600 ' : ''}${px * scale}px system-ui, sans-serif`;
+  const wrap = (s, f) => {
+    ctx.font = f;
+    const lines = [];
+    for (const para of s.split('\n')) {
+      let line = '';
+      for (const word of para.split(' ')) {
+        const next = line ? `${line} ${word}` : word;
+        if (ctx.measureText(next).width > maxW - 2 * pad && line) { lines.push(line); line = word; } else line = next;
+      }
+      lines.push(line);
+    }
+    return lines;
+  };
+  const tl = title ? wrap(title, font(15, true)) : [];
+  const xl = text ? wrap(text, font(13)) : [];
+  const lh1 = 20 * scale, lh2 = 18 * scale;
+  const boxW = Math.min(maxW, 2 * pad + Math.max(...[...tl.map((l) => { ctx.font = font(15, true); return ctx.measureText(l).width; }),
+    ...xl.map((l) => { ctx.font = font(13); return ctx.measureText(l).width; })]));
+  const boxH = 2 * pad + tl.length * lh1 + xl.length * lh2;
+  const x = 12 * scale, y = h - 12 * scale - boxH;
+  ctx.save();
+  ctx.fillStyle = 'rgba(37,42,50,.94)';
+  ctx.strokeStyle = '#343b46';
+  ctx.lineWidth = scale;
+  ctx.beginPath();
+  ctx.roundRect(x, y, boxW, boxH, 10 * scale);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#d8dde5';
+  ctx.textBaseline = 'top';
+  let yy = y + pad;
+  ctx.font = font(15, true);
+  for (const l of tl) { ctx.fillText(l, x + pad, yy); yy += lh1; }
+  ctx.font = font(13);
+  for (const l of xl) { ctx.fillText(l, x + pad, yy); yy += lh2; }
+  ctx.restore();
+}
+
+const slugOf = (s) => (s || 'tour').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tour';
+const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
+
+// A tour as pictures: each step applied at once (no flight), its colours on
+// the GPU, rendered at twice the view's size with its caption painted in;
+// the pictures zipped, in order. -> the number of pictures
+async function tourPictures(tour) {
+  endTour();
+  startTour(tour, null);
+  if (!app.tour) return 0;
+  setTourPlaying(false);
+  app.tour.cut = true;
+  const files = [];
+  try {
+    for (let i = 0; i < tour.steps.length; i++) {
+      showTourStep(i);
+      for (let k = 0; k < 100 && app.tourRaf; k++) await nextFrame();
+      await gpuSync().catch(() => {});
+      await nextFrame();
+      await nextFrame();
+      const pic = await renderPicture();
+      if (!pic) break;
+      const s = tour.steps[i];
+      paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, s.title || (i === 0 ? tour.title : ''), s.text);
+      const png = await new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
+      files.push([`${String(i + 1).padStart(2, '0')}-${slugOf(s.title || `step ${i + 1}`)}.png`, new Uint8Array(await png.arrayBuffer())]);
+    }
+  } finally {
+    endTour();
+  }
+  if (!files.length) return 0;
+  const { zip } = await import('./export-mesh.js');
+  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${slugOf(tour.title)}-pictures.zip`);
+  return files.length;
+}
+
+// A tour as a video: played from the start (its holds and orbits, once
+// through, whatever its mode and loop), each frame drawn with Measure's
+// notes and the step's caption into a canvas that MediaRecorder records as
+// WebM, in this browser. The visitor's own input stops it where it is.
+// -> the video's size in bytes, or a reason it could not be made
+async function tourVideo(tour) {
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = window.MediaRecorder && types.find((t) => MediaRecorder.isTypeSupported(t));
+  if (!mime || !HTMLCanvasElement.prototype.captureStream) return 'this browser cannot record video';
+  endTour();
+  startTour(tour, null);
+  if (!app.tour) return 'no model';
+  const t = app.tour;
+  t.recording = true;
+  const r = app.renderer, box = $('stage');
+  const out = document.createElement('canvas');
+  out.width = r.canvas.width;
+  out.height = r.canvas.height;
+  const ctx = out.getContext('2d');
+  const rec = new MediaRecorder(out.captureStream(30), { mimeType: mime, videoBitsPerSecond: 8e6 });
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((ok) => { rec.onstop = ok; });
+  let raf = 0;
+  const draw = () => {
+    // (rendered and copied in one task: a WebGL canvas keeps no frame to copy later)
+    r.render(frameState());
+    ctx.drawImage(r.canvas, 0, 0, out.width, out.height);
+    const scale = out.width / Math.max(1, box.clientWidth);
+    app.measure.paint(ctx, scale, !!currentStyle().paper);
+    const s = app.tour === t ? t.tour.steps[t.i] : null;
+    if (s) paintCaption(ctx, out.width, out.height, scale, s.title || (t.i === 0 ? t.tour.title : ''), s.text);
+    raf = requestAnimationFrame(draw);
+  };
+  rec.start(250);
+  draw();
+  showTourStep(0);
+  setTourPlaying(true);
+  // until it has played through (or the visitor stopped it)
+  while (app.tour === t && t.playing) await new Promise((ok) => setTimeout(ok, 100));
+  cancelAnimationFrame(raf);
+  rec.stop();
+  await stopped;
+  endTour();
+  const blob = new Blob(chunks, { type: 'video/webm' });
+  if (!blob.size) return 'the recording came out empty';
+  downloadBlob(blob, `${slugOf(tour.title)}.webm`);
+  return blob.size;
 }
 
 // ---------- ?embed=1 ----------
@@ -1514,7 +2021,7 @@ function undoVisibility() {
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
-const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d';
+const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d, #tourcard, #touredit';
 // (Display, the menu after Style, is always a menu where View stands in the
 // row, and its items are View's panel's where View folds: no fold step)
 const MENUS = [...FOLD_ORDER, 'displaymenu'];
@@ -2033,7 +2540,15 @@ function notePoint(part) {
   if (!ids || !ids.length) {
     ids = app.header.meshes.flatMap((m, i) => (m.name === part ? [i + 1] : []));
   }
-  const b = ids.length ? bboxOf(ids) : null;
+  return topOf(ids);
+}
+
+// The top of these bodies along the model's up axis, at their middle: where
+// a note pinned to a part sits
+function topOf(ids) {
+  return topOfBox(ids && ids.length ? bboxOf(ids) : null);
+}
+function topOfBox(b) {
   if (!b) return null;
   const up = orientUp(app.cam.orient);
   const k = up.findIndex((v) => v !== 0);
@@ -2065,6 +2580,21 @@ function applyListEntry() {
     const ext = (new URL(src).pathname.match(/\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i) || [])[1] || 'stp';
     a.textContent = `Download ${{ stp: 'STEP', step: 'STEP', igs: 'IGES', iges: 'IGES', brep: 'BREP', brp: 'BREP' }[ext.toLowerCase()]}`;
     a.title = `The source CAD file this model was made from: ${src}`;
+  }
+  // its tours: one File item each, under Open
+  const tl = $('tourlinks');
+  tl.textContent = '';
+  for (const t of (e && e.tours) || []) {
+    const b = document.createElement('button');
+    b.textContent = `Tour: ${t.name}`;
+    b.title = `Play the tour "${t.name}" of this model`;
+    b.onclick = async () => {
+      closeMenus();
+      const r = await readTour(t.url);
+      if (r.error) { flashHover(`the tour ${r.error}`, 4000); return; }
+      startTour(r.tour, t.url);
+    };
+    tl.append(b);
   }
   syncMenuButtons();
   // its part labels, when they differ from what the tree shows
@@ -2401,6 +2931,7 @@ function updateButtons() {
   $('explode').disabled = !has;
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
+  $('tourmake').disabled = !has;
   $('addmodelbtn').disabled = !has || !app.scene;
   $('savepic').disabled = !has && !app.dxf;
   $('printbtn').disabled = $('savepic').disabled;
@@ -2578,6 +3109,7 @@ function clearModel() {
   app.scene = null;
   app.overrides = new Map();
   app.modelKey = '';
+  endTour(false);
   app.header = null;
   app.wanted = null;
   app.sphere = { center: [0, 0, 0], radius: 1 };
@@ -2702,6 +3234,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   if (app.paintFaces) setPaint(false);
   app.stepMeta = app.stepMetaOf && app.stepMetaOf.seq === seq ? app.stepMetaOf.map : null;
   app.modelKey = key;
+  endTour(false); // a tour plays over the model it was started on
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sphereBase = app.sphere; // (Explode grows app.sphere from it)
@@ -4887,6 +5420,25 @@ function wireInput() {
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => $('view').focus();
+  $('tourprev').onclick = () => app.tour && showTourStep(app.tour.i - 1);
+  $('tournext').onclick = () => app.tour && showTourStep(app.tour.i + 1);
+  $('tourexit').onclick = () => endTour();
+  $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
+  // the tour maker: File > Make a tour… (a tour playing is opened in it)
+  app.recorder = createTourRecorder({
+    capture: captureStep,
+    preview: (tour, from, play) => { endTour(); startTour(tour, null); if (from) showTourStep(from); setTourPlaying(play); },
+    stopPreview: () => endTour(),
+    modelUrl: () => {
+      try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
+    },
+    save: (text, name) => downloadText(text, name, 'application/json'),
+    validate: (text) => parseTour(text, location.href),
+    pictures: tourPictures,
+    video: tourVideo,
+    announce,
+  });
+  $('tourmake').onclick = () => { closeMenus(); app.recorder.show(true, app.tour ? app.tour.tour : null); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
@@ -4994,6 +5546,15 @@ function wireInput() {
     // clears first, in its own handler) closes the slide-out, as from its tree
     if (typed && e.key === 'Escape' && panelOpen() && $('parts').contains(t)) { e.preventDefault(); setPanel(false, true); return; }
     if (typed) return;
+    // a tour: → / PageDown the next step, ← / PageUp the one before, Esc
+    // leaves it (ahead of the camera's arrows; a control's own arrows win)
+    if (app.tour && !e.defaultPrevented && !(t.type === 'range' || (t instanceof Node && $('tree').contains(t)))) {
+      const go = { ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[e.key];
+      if (go) { e.preventDefault(); showTourStep(app.tour.i + go); return; }
+      if (e.key === 'Escape') { e.preventDefault(); endTour(); return; }
+      // Space plays / pauses (a focused button's own Space presses it)
+      if (e.key === ' ' && !(t instanceof Element && t.closest('button, a, summary'))) { e.preventDefault(); setTourPlaying(!app.tour.playing); return; }
+    }
     // number keys: the digit row by the character typed (AZERTY types a
     // digit with Shift), the numpad by its key code (whatever NumLock says)
     // A digit row that types other digits (Persian, Arabic-Indic) goes by the
@@ -5182,13 +5743,33 @@ async function main() {
       }
     });
   }
+  // ?tour=<url> (js/tour.js): read beside the model; with no ?src the
+  // tour's own model opens (ahead of a list's first), and the tour starts
+  // once a model is shown
+  const tourUrl = params.get('tour');
+  const touring = tourUrl ? readTour(tourUrl) : null;
+  if (touring && !src && !poster) {
+    opening = touring.then((r) => (r.tour && r.tour.model && app.loadSeq === seq0 ? loadListed(r.tour.model) : null));
+  }
   const lists = params.getAll('list');
-  if (!src) setStatus('idle', lists.length ? 'reading the model list…' : IDLE_MSG);
-  const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0) : null;
+  if (!src) setStatus('idle', lists.length ? 'reading the model list…' : tourUrl ? 'reading the tour…' : IDLE_MSG);
+  const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0 && !touring) : null;
   // the file the user chose while the GPU started: the newest ask, so it
   // supersedes ?src (and the list's first model does not open after it)
   if (early) openFile(early);
   await Promise.all([opening, listed]);
+  if (touring) {
+    const r = await touring;
+    if (r.error) {
+      setStatus(app.header ? 'ready' : 'error', `${app.header ? `${readyText()} · ` : ''}the tour ${r.error}`);
+    } else {
+      // a tour with no model of its own, on a page given only a list: the
+      // list's first model, as without a tour
+      if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
+      if (app.header) startTour(r.tour, tourUrl);
+      else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
+    }
+  }
 }
 
 // The model lists: fill the drop-down, open the first model when wanted (no

@@ -111,6 +111,13 @@ await test('notes: by a point or a part, trimmed; a wrong one refuses the list',
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: n } }), L), /its notes must be/);
   }
 });
+await test('tours: named, resolved against the list; a wrong one refuses the list', () => {
+  const [e] = parseModelList(JSON.stringify({ a: { name: 'A', tours: [{ name: ' The board ', url: 'tours/a.cadtour.json' }, { url: 'https://x.example/b.json' }] } }), L);
+  assert.deepEqual(e.tours, [{ name: 'The board', url: 'https://site.example/api/tours/a.cadtour.json' }, { name: 'Tour', url: 'https://x.example/b.json' }]);
+  for (const t of [[{ name: 'x' }], [{ url: '' }], { url: 'a.json' }, [{ url: 'ftp://x/a.json' }], [{ url: 'a.json', name: 'x'.repeat(101) }]]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', tours: t } }), L), /its tours/);
+  }
+});
 await test('a wrong extra field refuses the list, naming the file and the field', () => {
   for (const [v, re] of [[{ step: 'javascript:alert(1)' }, /"a": its step .* not an http/], [{ page: 3 }, /its page must be a URL/],
     [{ labels: ['x'] }, /its labels must be/], [{ labels: { a: 1 } }, /its labels must be/], [{ style: 'fancy' }, /its style must be one of/],
