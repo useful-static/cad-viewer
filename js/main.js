@@ -7,13 +7,14 @@ import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList,
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { fetchModelLists } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, nearFar, orbitBy, panBy, pinchStep, qMul, quatFromView, refitForAspect, sphereOf, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, autoUnit, displayUnit, fmtNum } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
 import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
+import { to3MF, toGLB, toSTL } from './export-mesh.js';
 import { createMeasure } from './measure-ui.js';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -772,6 +773,45 @@ function applyView(v) {
 
 // Copy a link to this model at this view. A model opened from this device has
 // no URL: the link then holds the view alone, and the note says so.
+// Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
+// in their drawn colours, turned the way the model opens: Z up for STL and
+// 3MF (a printer's convention), Y up for GLB (glTF's)
+async function exportMesh(fmt) {
+  if (!app.header || !fmt) return;
+  const ids = app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+  if (!ids.length) { flashHover('nothing shown to export'); return; }
+  const b = orientBasis(app.cam.orient);
+  const zUp = [b.right, b.front.map((v) => -v), b.up];
+  const yUp = [b.right, b.up, b.front];
+  const model = { ...app.baseMesh, color: app.mesh.color };
+  const names = ids.map((id) => meshLabel(id));
+  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
+  await new Promise((r) => setTimeout(r, 0)); // the status line paints first
+  let bytes;
+  try {
+    bytes = fmt === 'stl' ? toSTL(model, ids, zUp, base) : fmt === '3mf' ? await to3MF(model, ids, zUp, names) : toGLB(model, ids, yUp, names);
+  } catch (e) {
+    setStatus('ready', readyText());
+    flashHover(`export failed: ${e.message || e}`);
+    return;
+  }
+  const type = { stl: 'model/stl', '3mf': 'model/3mf', glb: 'model/gltf-binary' }[fmt];
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${base}.${fmt}`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name: a.download }; // (for tests)
+  setStatus('ready', readyText());
+  const note = `saved ${a.download}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`;
+  flashHover(note, 3000);
+  announce(note);
+}
+
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
   const u = new URL(location.href);
@@ -1002,7 +1042,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').disabled
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -1638,6 +1678,7 @@ function updateButtons() {
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has;
+  $('exportmesh').disabled = !has;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -1805,6 +1846,7 @@ function dropModel(msg) {
   app.holesFor = null;
   app.partLabels = null;
   $('download').hidden = true;
+  $('sheetsrow').hidden = true;
   if (app.measure) app.measure.reset();
   app.hidden.clear();
   app.visUndo = [];
@@ -1947,6 +1989,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // the model list's labels before the tree is built (it is built once)
   app.partLabels = listEntry(app.sourceUrl)?.labels || null;
   buildTree();
+  syncSheets(); // the flat-sheets row, for this model
   app.cam.orient = orientFor(app.sourceUrl);
   setView('iso');
   app.loadQ = app.cam.q; // the view it opened at (fillModelList)
@@ -2761,7 +2804,40 @@ function revealRow(id) {
 // One source of truth for every row: a node is checked while any body under it
 // is visible (half-checked while only some are), and highlighted while every
 // body under it is selected.
+// The model's flat sheet bodies (the converter's b-rep kind "sheet": a
+// board's pads, silkscreen and labels), ids
+const sheetIds = () => (app.header ? app.header.meshes.flatMap((m, i) => (m.kind === 'sheet' ? [i + 1] : [])) : []);
+
+// the sheets row: shown only for a model that has sheets; checked while none
+// is hidden, half-checked while some are
+function syncSheets() {
+  const ids = sheetIds();
+  $('sheetsrow').hidden = !ids.length;
+  if (!ids.length) return;
+  const hidden = ids.filter((id) => app.hidden.has(id)).length;
+  $('sheets').checked = hidden < ids.length;
+  $('sheets').indeterminate = hidden > 0 && hidden < ids.length;
+  $('sheetscount').textContent = fmtInt(ids.length);
+}
+
+function setSheets(show) {
+  const ids = sheetIds();
+  if (!ids.length) return;
+  rememberVisibility();
+  for (const id of ids) {
+    if (show) app.hidden.delete(id);
+    else app.hidden.add(id);
+  }
+  syncTreeChecks();
+  pushState();
+  updateButtons();
+  showInfo();
+  viewChanged();
+  announce(`${fmtInt(ids.length)} flat sheets ${show ? 'shown' : 'hidden'}`);
+}
+
 function syncTreeChecks() {
+  syncSheets();
   document.querySelectorAll('#tree li').forEach((li) => {
     const shown = li._ids.filter((id) => !app.hidden.has(id)).length;
     li._cb.checked = shown > 0;
@@ -3419,6 +3495,22 @@ function wireInput() {
     showInfo();
     viewChanged();
   };
+  $('sheets').onchange = (e) => setSheets(e.target.checked);
+  // Export as…: a choice picked from the list exports, and the select reads
+  // "Export as…" again. From the keyboard an arrow or a letter only moves the
+  // choice (a closed select changes on each, and each would have saved a
+  // file): Enter exports it, leaving drops it, as the model list does.
+  {
+    const sel = $('exportmesh');
+    let keyed = false;
+    const go = () => { const fmt = sel.value; sel.value = ''; keyed = false; closeMenus(); sel.blur(); exportMesh(fmt); };
+    sel.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && sel.value) { e.preventDefault(); go(); } else if (e.key === 'Escape') { sel.value = ''; keyed = false; } else keyed = true;
+    });
+    sel.addEventListener('pointerdown', () => { keyed = false; });
+    sel.addEventListener('blur', () => { if (keyed) { sel.value = ''; keyed = false; } });
+    sel.onchange = () => { if (!keyed) go(); };
+  }
   $('showall').onclick = () => {
     if (!app.hidden.size) return;
     rememberVisibility();

@@ -102,6 +102,11 @@ URL parameters:
   holes: diameter, position from the reference's corner, through-hole
   depth, and for each size how many and how far apart they lie; they are
   numbered on the model, and the table copies as CSV.
+- **Export.** File > **Export as…** saves the parts shown as STL, 3MF (with
+  colours) or GLB (with colours), turned the way the model opens: Z up for
+  STL and 3MF, Y up for GLB.
+- **Flat sheets.** A board's pads, silkscreen and labels (the flat sheet
+  bodies) can be hidden or shown in one go from the parts panel.
 - **Embed.** `?embed=1` shows the model alone, for an `<iframe>` on a
   product page: no toolbar or panels, just Fit, full screen and **Open in
   cad.place ↗** over the view. Until a visitor clicks or taps it, it leaves

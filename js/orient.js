@@ -91,6 +91,13 @@ export function isoView(o, bbox, aspect) {
   return ISO;
 }
 
+// The orientation's right, up and front as model-frame unit vectors (an
+// export takes its axes along them: js/export-mesh.js)
+export function orientBasis(o) {
+  const up = vec(o.slice(0, 2)), front = vec(o.slice(2));
+  return { right: cross(up, front), up, front };
+}
+
 // The model-frame vector the orientation puts up on screen (the lighting's sky)
 export const orientUp = (o) => vec(o.slice(0, 2));
 
