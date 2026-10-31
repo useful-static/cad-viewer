@@ -1214,20 +1214,29 @@ function saveDrawing() {
   announce(note);
 }
 
-// ?src= with a ?list=: the model's place in the list (1 = its first model),
-// since the list already names its URL; a model the list does not name, or
-// a page with no list, by its URL
-function srcParam(url) {
-  if (!url || !params.getAll('list').length) return url;
-  const i = (app.listEntries || []).findIndex((e) => e.url === url);
-  return i >= 0 ? String(i + 1) : url;
+// The model in the address: with a ?list=, a model the list names is
+// ?index=<n>, its place in the list (1 = its first model), since the list
+// already names its URL; any other model is ?src=<its URL>. One or the
+// other, never both, so ?src always means a URL.
+function setModelParam(u, url) {
+  const i = url && params.getAll('list').length ? (app.listEntries || []).findIndex((e) => e.url === url) : -1;
+  u.searchParams.delete('src');
+  u.searchParams.delete('index');
+  if (i >= 0) u.searchParams.set('index', String(i + 1));
+  else if (url) u.searchParams.set('src', url);
 }
-// ...and back: a number is the list's entry (null until the list is read,
-// or past its end), anything else the URL itself
-function srcUrl(raw) {
-  if (!raw || !/^\d+$/.test(raw) || !params.getAll('list').length) return raw || null;
-  return app.listEntries?.[Number(raw) - 1]?.url || null;
+// ...and back, from an address's query: the URL of the model it names (null
+// for none, or for an ?index= the list does not have, or not yet read). A
+// numeric ?src= beside a list is read as ?index= (links made before it).
+const isPlace = (raw) => /^\d+$/.test(raw || '');
+function modelUrlIn(search) {
+  const listed = params.getAll('list').length > 0;
+  const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
+  if (listed && isPlace(place)) return app.listEntries?.[Number(place) - 1]?.url || null;
+  return search.get('src') || null;
 }
+const modelPlaceIn = (search) => (params.getAll('list').length
+  ? [search.get('index'), search.get('src')].find(isPlace) || null : null);
 
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
@@ -1236,7 +1245,7 @@ function viewLink() {
   u.hash = '';
   // the model lists too, in their order, so the link keeps the drop-down
   for (const l of params.getAll('list')) u.searchParams.append('list', l);
-  if (app.sourceUrl) u.searchParams.set('src', srcParam(app.sourceUrl));
+  if (app.sourceUrl) setModelParam(u, app.sourceUrl);
   // the added models opened from a URL, and where they were moved to
   if (app.sourceUrl && app.scene) {
     for (const m of app.scene.slice(1)) {
@@ -2853,7 +2862,7 @@ let listPick = 0;
 function openListed(url, refocus = false, keepMenu = false) {
   const before = location.href;
   const u = new URL(before);
-  u.searchParams.set('src', srcParam(url));
+  setModelParam(u, url);
   u.hash = ''; // a view of the last model is not a view of this one
   // a pick is a step in the history: Back opens the model before it again
   // (feature review item 21; it replaced the entry, so Back left the page)
@@ -2880,7 +2889,7 @@ function wireHistory() {
     if (app.skipPop) { app.skipPop = false; return; }
     // (an entry with no ?src is the page as first opened, which opened the
     // list's first model)
-    const src = srcUrl(new URLSearchParams(location.search).get('src')) || app.listEntries?.[0]?.url;
+    const src = modelUrlIn(new URLSearchParams(location.search)) || app.listEntries?.[0]?.url;
     if (!src || src === app.sourceUrl) { syncModelList(); return; }
     let view = null;
     if (location.hash.startsWith('#view=')) {
@@ -3390,11 +3399,13 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   $('clearval').textContent = '';
-  // a model from the device is not the ?src a list pick left in the address:
-  // a reload would open that instead (review r16 L7)
-  if (!app.sourceUrl && new URLSearchParams(location.search).has('src')) {
+  // a model from the device is not the ?src / ?index a list pick left in the
+  // address: a reload would open that instead (review r16 L7)
+  const q = new URLSearchParams(location.search);
+  if (!app.sourceUrl && (q.has('src') || q.has('index'))) {
     const u = new URL(location.href);
     u.searchParams.delete('src');
+    u.searchParams.delete('index');
     history.replaceState(null, '', u);
   }
   app.lastStepBuffer = stepBuf;
@@ -5820,18 +5831,19 @@ async function main() {
   keepFocus();
   queueFrame();
   refreshCacheBar();
-  // ?src=<n> beside a ?list=: the list's n-th model (srcUrl), so the list is
-  // read first; a number past its end opens its first model and says so
+  // ?index=<n> beside a ?list=: the list's n-th model (modelUrlIn), so the
+  // list is read first; a number past its end opens its first model and
+  // says so. Else ?src=, a URL.
   const lists = params.getAll('list');
   let listed = null;
   let src = params.get('src');
-  if (lists.length && /^\d+$/.test(src || '')) {
+  const place = modelPlaceIn(params);
+  if (place) {
     setStatus('idle', 'reading the model list…');
     listed = readLists(lists, () => false);
     await listed;
-    const n = src;
-    src = srcUrl(n) || app.listEntries?.[0]?.url || null;
-    if (src && !srcUrl(n)) announce(`the model list has no model ${n}: its first opens`);
+    src = modelUrlIn(params) || app.listEntries?.[0]?.url || null;
+    if (src && !modelUrlIn(params)) announce(`the model list has no model ${place}: its first opens`);
   }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
   // viewer, for a model this page opens from a URL that its list entry does
@@ -5851,7 +5863,7 @@ async function main() {
     // (the model now in ?src=: a pick from the model list changes it)
     // (no src: a model from the device, or the list's first, which the page
     // as first opened shows and Back returns to)
-    const now = srcUrl(new URLSearchParams(location.search).get('src'));
+    const now = modelUrlIn(new URLSearchParams(location.search));
     const first = app.listEntries?.[0]?.url;
     if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()), true);
   });
