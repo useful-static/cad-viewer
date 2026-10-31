@@ -224,6 +224,10 @@
   #stage[data-bg="paper"] .mlabel { background:rgba(255,255,255,.95); color:#111; }
   #stage[data-bg="paper"] .mlabel small { color:#444; }
   #stage[data-bg="paper"] #measvg .mline, #stage[data-bg="paper"] #measvg .mdot { stroke:#9a6b00; }
+  /* the snap ring and its words on paper: the yellow is 1.3:1 on #f4f4f2,
+     so they take the line's dark gold (4.3:1), the words over a white halo */
+  #stage[data-bg="paper"] #measvg .msnap { stroke:#9a6b00; }
+  #stage[data-bg="paper"] #measvg .msnaptext, #stage[data-bg="paper"] #measvg .mholetext { fill:#111; stroke:#fff; }
   #measopt { position:relative; }
   #measlist { position:absolute; bottom:100%; right:8px; max-height:50vh; overflow:auto; margin:0 0 4px; padding:4px; list-style:none;
     background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
