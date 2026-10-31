@@ -4370,6 +4370,13 @@ async function fetchFailedText(url, name, e) {
     if (u.origin !== location.origin) host = u.host;
   } catch { /* an unparsable URL: treated as this site's */ }
   if (!host) return `could not download ${name}: the server did not answer (${e.message || e})`;
+  // (a cross-origin isolated page -- cad.place is -- refuses a no-cors answer
+  // that carries no Cross-Origin-Resource-Policy, so there the probe cannot
+  // tell an answer from silence: the message names all three)
+  if (self.crossOriginIsolated) {
+    return `could not download ${name} from ${host}: the file is not there, the site does not let other web pages load its files `
+      + '(no CORS), or it did not answer -- the browser does not say which. Check the address, or download the file and open it here.';
+  }
   let answered = false;
   try {
     const timeout = typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(8000) } : {};
