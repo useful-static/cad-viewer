@@ -711,8 +711,12 @@ const PAPER_RGB = rgb(PAPER);
 const FILL_RGB = rgb(CUT_FILL);
 const PAPER_COLS = (k) => ({ plain: rgb(PAPER_EDGES.plain[k]), selected: rgb(PAPER_EDGES.selected[k]), faded: rgb(PAPER_EDGES.faded[k]) });
 const DASH_PX = 6; // the hidden edges: 3 px drawn, 3 px gap
-function styleFrame(s, scale) {
+// light: drawn on a light ground (the Light background option, or a white or
+// transparent picture): X-ray's edges, its faces' colour lightened, would
+// all but vanish there, so they take the paper colours
+function styleFrame(s, scale, light = false) {
   const visible = { depth: 'lequal', mode: 1, colours: PAPER_COLS(0) };
+  const onLight = light || app.lightBg;
   const passes = {
     edges: [{ depth: 'lequal', mode: 0 }],
     hidden: [visible],
@@ -721,7 +725,7 @@ function styleFrame(s, scale) {
     // dense model), so with nothing selected it reads as Hidden line
     hiddengrey: [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: PAPER_COLS(1), selectedOnly: true }, visible],
     wire: [{ ...visible, depth: 'always' }],
-    xray: [{ depth: 'always', mode: 2 }],
+    xray: [onLight ? { ...visible, depth: 'always' } : { depth: 'always', mode: 2 }],
   }[s.id] || null;
   return { background: s.paper || app.lightBg ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
     fill: s.faces === 'depth' ? FILL_RGB : null,
@@ -765,7 +769,7 @@ function frameState(pic = null) {
   const ps = pic ? pic.scale : pxScale(r);
   return {
     viewProj: vp, eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
-    ...styleFrame(currentStyle(), ps),
+    ...styleFrame(currentStyle(), ps, !!(pic && pic.light)),
     // the face boundaries over the shaded faces, in device px: the canvas's
     // own scale, not devicePixelRatio, which the canvas size caps
     edges: app.showEdges && currentStyle().edges ? { widthPx: EDGE_PX * ps, hoverPx: EDGE_HOVER_PX * ps, minPx: app.edgeMinPx * ps } : null,
@@ -1130,19 +1134,39 @@ async function savePicture(print = false) {
   const two = (n) => String(n).padStart(2, '0');
   const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
   const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
-  const url = URL.createObjectURL(png);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
-  // (a size the view has grown too big for saves at the largest allowed)
-  const note = `saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`;
-  flashHover(note, 3000);
-  announce(note);
+  const save = () => {
+    const url = URL.createObjectURL(png);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
+    // (a size the view has grown too big for saves at the largest allowed)
+    const note = `saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`;
+    flashHover(note, 3000);
+    announce(note);
+  };
+  // A touch-only device: the render has used up the tap's gesture, and the
+  // share sheet needs a fresh one, so "Picture ready: Share / Save" waits 8 s
+  // for a tap of its own (Share only where files can be shared)
+  if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
+    const file = new File([png], name, { type: 'image/png' });
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    const toast = $('pictoast');
+    const done = () => { toast.hidden = true; clearTimeout(app.picToastTimer); };
+    $('picshare').hidden = !canShare;
+    $('picshare').onclick = () => { done(); navigator.share({ files: [file], title: name }).catch(() => {}); };
+    $('picsave').onclick = () => { done(); save(); };
+    toast.hidden = false;
+    clearTimeout(app.picToastTimer);
+    app.picToastTimer = setTimeout(done, 8000);
+    announce(`picture ready: ${canShare ? 'share or ' : ''}save it`);
+    return;
+  }
+  save();
 }
 
 // The view rendered at twice its size (less where the GPU or memory cannot),
@@ -1246,7 +1270,7 @@ async function renderPicture(opts = app.pic) {
         // (a drawing buffer smaller than asked would stretch the tile)
         if (r.canvas.width !== tw || r.canvas.height !== th) { ok = false; break; }
         passes.forEach((bg, i) => {
-          r.render(frameState({ W, H, x0, y0, tw, th, scale: s, bg }));
+          r.render(frameState({ W, H, x0, y0, tw, th, scale: s, bg, light: opts.bg !== 'view' }));
           (i ? wctx : ctx).drawImage(r.canvas, 0, 0, tw, th, x0, y0, tw, th);
         });
         tiles++;
@@ -2321,7 +2345,7 @@ function undoVisibility() {
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
-const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d, #tourcard, #touredit';
+const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
 // (Display, the menu after Style, is always a menu where View stands in the
 // row, and its items are View's panel's where View folds: no fold step)
 const MENUS = [...FOLD_ORDER, 'displaymenu'];

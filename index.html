@@ -354,6 +354,12 @@
   /* above the options bar (main.js sets --optbar-h to its height) */
   /* a long name with no space to break at wraps inside the view instead of
      running past its right edge */
+  /* a touch-only device's picture: rendered, then Share / Save on a tap of
+     their own (navigator.share needs a fresh gesture) */
+  #pictoast { position:absolute; left:10px; bottom:calc(36px + var(--optbar-h, 0px)); z-index:6; display:flex; align-items:center; gap:8px;
+    padding:6px 10px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 4px 14px rgba(0,0,0,.45); }
+  #pictoast[hidden] { display:none; }
+  #pictoast button { min-height:36px; padding:4px 14px; }
   #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); max-width:calc(100% - 20px); overflow-wrap:anywhere;
     color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
   /* the paper styles (Hidden line, Hidden grey, Wire): dark text on a light
@@ -635,7 +641,7 @@
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" role="img" aria-label="2D drawing" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><canvas id="measloupe" aria-hidden="true" hidden></canvas><div id="hover"></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" role="img" aria-label="2D drawing" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><canvas id="measloupe" aria-hidden="true" hidden></canvas><div id="hover"></div><div id="pictoast" role="status" hidden><span>Picture ready</span><button id="picshare" hidden>Share</button><button id="picsave">Save</button></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
