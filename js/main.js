@@ -2655,7 +2655,8 @@ function wireMenus() {
       // in the row: an item that disabled itself (Hide, Undo) gives the focus
       // to its neighbour, not to the page (review r19)
       if (!m.classList.contains('folded')) { if (back && b.disabled) focusBeside(b); return; }
-      if (b.hasAttribute('aria-pressed')) return;
+      // (a toggle, and a disclosure -- Save picture's ▾ -- leave it open)
+      if (b.hasAttribute('aria-pressed') || b.hasAttribute('aria-expanded')) return;
       setMenu(m, false);
       // a menu left with nothing to do is disabled (Undo, Show's last live
       // item): its neighbour then; the focus fell to the page and the next
