@@ -993,6 +993,8 @@ function currentView() {
     style: currentStyle().id,
     aspect: stageAspectNow(), // (a link opened on another shape is reframed)
     section: app.section, hidden: [...app.hidden], selected: [...app.selected],
+    // Explode: how far and how, while it is on for this model
+    explode: app.explode.on && app.explode.for === app.header ? { t: app.explode.t, mode: app.explode.mode } : null,
     keys: app.bodyKeys,
     notes: app.measure ? app.measure.notes() : [],
   };
@@ -1026,6 +1028,14 @@ function applyView(v, link = false) {
   if (v.section) Object.assign(app.section, v.section, { last: v.section.axis });
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
+  // Explode as the link has it (a whole link without it: off), how far
+  // first, then on, then how
+  if (v.explode && app.renderer?.canExplode) {
+    app.explode.t = v.explode.t;
+    setExplode(true);
+    if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
+    syncExplodeRow();
+  } else if (v.cam && app.explode.on) setExplode(false);
   select(bodies.selected, false);
   // A view made on another shape (a desktop link opened on a phone): its
   // selected parts framed afresh from the same side, with room around them,

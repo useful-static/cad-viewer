@@ -9,6 +9,7 @@
 //      +z-y (Z up, the older links' only value); absent: the file's own +y+z
 //   s  display style id (js/styles.js; absent: the viewer's own default)
 //   x  section: axis, position 0..1, f when flipped (absent: off)
+//   e  Explode: how far 0..1, and how (assembly | x | y | z) (absent: off)
 //   h  hidden bodies, k selected bodies: ids as runs ("1-3,7")
 //   m  the model's body names, fingerprinted (8 hex): ids mean the bodies
 //      they meant only while it matches
@@ -60,6 +61,7 @@ export function parseRuns(s, max = 1e6) {
 }
 
 export const MAX_NAMED = 32;
+const EXPLODE_MODES = ['assembly', 'x', 'y', 'z'];
 export const MAX_NOTES = 20;
 
 // A body's key: its label, numbered from its second repeat ("A › SOLID #2"),
@@ -118,6 +120,7 @@ export function encodeView(v) {
   if (o !== DEFAULT_ORIENT) f.push(`u:${o === Z_UP_ORIENT ? 'z' : o}`);
   if (v.style) f.push(`s:${v.style}`);
   if (v.section && v.section.axis !== 'off') f.push(`x:${v.section.axis},${num(v.section.t)}${v.section.flip ? ',f' : ''}`);
+  if (v.explode && EXPLODE_MODES.includes(v.explode.mode)) f.push(`e:${num(v.explode.t)},${v.explode.mode}`);
   if (v.hidden && v.hidden.length) f.push(`h:${runs(v.hidden)}`);
   if (v.selected && v.selected.length) f.push(`k:${runs(v.selected)}`);
   // notes pinned to points (Measure's Note): x,y,z,text(base64url), "~" between
@@ -155,6 +158,10 @@ export function decodeView(s) {
       const [axis, t, f] = val.split(',');
       const tn = Number(t);
       if (['x', 'y', 'z'].includes(axis) && tn >= 0 && tn <= 1) out.section = { axis, t: tn, flip: f === 'f' };
+    } else if (k === 'e') {
+      const [t, mode] = val.split(',');
+      const tn = t === '' ? NaN : Number(t);
+      if (tn >= 0 && tn <= 1 && EXPLODE_MODES.includes(mode)) out.explode = { t: tn, mode };
     } else if (k === 'h') out.hidden = parseRuns(val);
     else if (k === 'k') out.selected = parseRuns(val);
     else if (k === 'm' && /^[0-9a-f]{8}$/.test(val)) out.model = val;

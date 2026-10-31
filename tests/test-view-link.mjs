@@ -130,5 +130,14 @@ test('the view shape round-trips (a desktop link reframed on a phone); a wild on
   for (const w of ['0', '-1', '99', 'x']) assert.equal(decodeView(`c:0,0,0,10,0,0,0,1;w:${w}`).aspect, undefined);
 });
 
+test('Explode rides in the link: how far and how; off leaves it out; a bad one is dropped', () => {
+  const s = encodeView({ ...view, explode: { t: 0.65, mode: 'z' } });
+  assert.match(s, /;e:0\.65,z/);
+  assert.deepEqual(decodeView(s).explode, { t: 0.65, mode: 'z' });
+  assert.deepEqual(decodeView(encodeView({ ...view, explode: { t: 0.4, mode: 'assembly' } })).explode, { t: 0.4, mode: 'assembly' });
+  assert.ok(!/(^|;)e:/.test(encodeView({ ...view, explode: null })), 'no e: when Explode is off');
+  for (const e of ['1.5,z', '-0.1,z', 'x,z', '0.5,diagonal', '0.5']) assert.equal(decodeView(`c:0,0,0,10,0,0,0,1;e:${e}`).explode, undefined, e);
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
