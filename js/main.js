@@ -729,13 +729,18 @@ function styleFrame(s, scale) {
     cullFaces: !!s.paper };
 }
 
-function frameState() {
+// pic (a picture's tile, renderPicture): { W, H, x0, y0, tw, th, scale } --
+// the whole picture's size in px, this tile's place in it, and px per CSS
+// px. The projection is the whole picture's, cropped to the tile, so every
+// screen-space value (edge width, the 6 px cull) is in picture px and
+// nothing jumps at a seam.
+function frameState(pic = null) {
   const c = app.cam;
   const r = app.renderer;
   const d = camDir(c);
   const eye = eyeOf(c, app.sphere);
   const view = lookAt(eye, c.target, camUp(c));
-  const w = r.canvas.width || 1, h = r.canvas.height || 1;
+  const w = pic ? pic.W : r.canvas.width || 1, h = pic ? pic.H : r.canvas.height || 1;
   const [near, far] = nearFar(c, app.sphere);
   const zo = r.name === 'webgpu';
   const proj = c.ortho
@@ -749,12 +754,21 @@ function frameState() {
   // eye.w = 1: a point (perspective: view vector = eye - p); w = 0: the
   // direction to the viewer (ortho: one view vector for every pixel)
   const eye4 = c.ortho ? [d[0], d[1], d[2], 0] : [eye[0], eye[1], eye[2], 1];
+  // a tile: clip x' = sx x + tx w, y' = sy y + ty w maps the tile's part of
+  // the picture onto the whole clip square (column-major)
+  let vp = multiply(proj, view);
+  if (pic) {
+    const sx = pic.W / pic.tw, sy = pic.H / pic.th;
+    const tx = (pic.W - 2 * pic.x0 - pic.tw) / pic.tw, ty = -(pic.H - 2 * pic.y0 - pic.th) / pic.th;
+    vp = multiply([sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, 1, 0, tx, ty, 0, 1], vp);
+  }
+  const ps = pic ? pic.scale : pxScale(r);
   return {
-    viewProj: multiply(proj, view), eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
-    ...styleFrame(currentStyle(), pxScale(r)),
+    viewProj: vp, eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
+    ...styleFrame(currentStyle(), ps),
     // the face boundaries over the shaded faces, in device px: the canvas's
     // own scale, not devicePixelRatio, which the canvas size caps
-    edges: app.showEdges && currentStyle().edges ? { widthPx: EDGE_PX * pxScale(r), hoverPx: EDGE_HOVER_PX * pxScale(r), minPx: app.edgeMinPx * pxScale(r) } : null,
+    edges: app.showEdges && currentStyle().edges ? { widthPx: EDGE_PX * ps, hoverPx: EDGE_HOVER_PX * ps, minPx: app.edgeMinPx * ps } : null,
     // device px per model unit at w = 1: the projection's y scale times half
     // the height (a body's projected radius is radius * focalPx / w)
     focalPx: proj[5] * h / 2,
@@ -1085,12 +1099,10 @@ async function exportMesh(fmt) {
   announce(note);
 }
 
-// Save picture (P): the view as a PNG at twice its CSS size (capped by the
-// GPU's largest target and 16.7 Mpx), hover and selection left out, with
-// Measure's results and the hole table's markers drawn in. The canvas is
-// drawn once at that size and read back in the same task (before the browser
-// presents it), then given back its own size. Tiles (4x past the GPU's
-// limit) and a transparent background are not built yet.
+// Save picture (P): the view as a PNG at app.pictureScale (2 by default) x
+// its CSS size (renderPicture: in tiles, capped at 8192 px and 16.7 Mpx),
+// hover and selection left out, with Measure's results and the hole table's
+// markers drawn in. A transparent background is not built yet.
 // print: the picture printed (File > Print) instead of saved
 async function savePicture(print = false) {
   // a drawing: its canvas as it is drawn
@@ -1124,7 +1136,7 @@ async function savePicture(print = false) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
-  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH }; // (for tests)
+  app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
   const note = `saved ${name}, ${out.width} × ${out.height}`;
   flashHover(note, 3000);
   announce(note);
@@ -1134,23 +1146,50 @@ async function savePicture(print = false) {
 // without the hover and selection highlights, Measure's results painted in:
 // -> { canvas, scale, cssW, cssH } or null when the GPU gave nothing back.
 // Save picture and a tour's pictures use it.
+// The picture's size: N x the view's CSS size, capped at 8192 px on the long
+// side and 16.7 Mpx -> { s, W, H, capped }
+const PIC_LONG = 8192, PIC_AREA = 16.7e6, TILE = 2048;
+function pictureSize(n, cw, ch) {
+  const s = Math.min(n, PIC_LONG / Math.max(cw, ch), Math.sqrt(PIC_AREA / (cw * ch)));
+  return { s, W: Math.max(1, Math.round(cw * s)), H: Math.max(1, Math.round(ch * s)), capped: s < n - 1e-9 };
+}
+
+// The view rendered at app.pictureScale (2 by default) x its CSS size, in
+// tiles of at most 2048 px: each tile is the whole picture's projection
+// cropped to it (frameState's pic), drawn on the view's own canvas at the
+// tile's size and copied into the picture in the same task, before the
+// browser presents or clears the canvas. -> { canvas, scale, cssW, cssH,
+// tiles, capped } or null when the GPU could not give a tile its size.
 async function renderPicture() {
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
-  const lim = Math.min(r.maxCanvasSize || 4096, 8192);
-  const s = Math.min(2, lim / cw, lim / ch, Math.sqrt(16.7e6 / (cw * ch)));
-  const w = Math.max(1, Math.round(cw * s)), h = Math.max(1, Math.round(ch * s));
+  const { s, W, H, capped } = pictureSize(app.pictureScale || 2, cw, ch);
+  const T = Math.min(TILE, r.maxCanvasSize || 4096);
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const ctx = out.getContext('2d');
   // hover and the selection's tint are of the moment, not of the model
   const hov = app.hover;
   const sel = [...app.selected];
   app.hover = 0;
   app.selected.clear();
   pushState();
-  let shot = null;
+  let ok = true, tiles = 0;
   try {
-    r.resize(w, h);
-    r.render(frameState());
-    shot = await new Promise((ok) => r.canvas.toBlob(ok, 'image/png'));
+    for (let y0 = 0; y0 < H && ok; y0 += T) {
+      for (let x0 = 0; x0 < W && ok; x0 += T) {
+        const tw = Math.min(T, W - x0), th = Math.min(T, H - y0);
+        r.resize(tw, th);
+        // (a drawing buffer smaller than asked would stretch the tile)
+        if (r.canvas.width !== tw || r.canvas.height !== th) { ok = false; break; }
+        r.render(frameState({ W, H, x0, y0, tw, th, scale: s }));
+        ctx.drawImage(r.canvas, 0, 0, tw, th, x0, y0, tw, th);
+        tiles++;
+      }
+    }
+  } catch {
+    ok = false;
   } finally {
     app.hover = hov;
     for (const id of sel) app.selected.add(id);
@@ -1159,15 +1198,9 @@ async function renderPicture() {
     app.viewGen++;
     queueFrame();
   }
-  if (!shot) return null;
-  const img = await createImageBitmap(shot);
-  const out = document.createElement('canvas');
-  out.width = img.width;
-  out.height = img.height;
-  const ctx = out.getContext('2d');
-  ctx.drawImage(img, 0, 0);
-  app.measure.paint(ctx, img.width / cw, !!currentStyle().paper);
-  return { canvas: out, scale: img.width / cw, cssW: cw, cssH: ch };
+  if (!ok) return null;
+  app.measure.paint(ctx, s, !!currentStyle().paper);
+  return { canvas: out, scale: s, cssW: cw, cssH: ch, tiles, capped };
 }
 
 // The copies of body `id` (1-based ids, itself included): the same name, the
