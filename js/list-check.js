@@ -102,8 +102,19 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   if (!res.ok) {
     return { level: 'bad', detail: `${res.status === 404 ? 'not found' : 'refused'} (${res.status})`, url };
   }
+  // the size: a part (206) says the whole in Content-Range, which a browser
+  // hides from another site's page unless the server exposes it; its
+  // Content-Length is only the part, so the size is then asked with HEAD
+  // (Content-Length is always readable)
   const range = res.headers.get('content-range');
-  const total = range && /\/(\d+)$/.test(range) ? Number(range.match(/\/(\d+)$/)[1]) : Number(res.headers.get('content-length')) || null;
+  let total = range && /\/(\d+)$/.test(range) ? Number(range.match(/\/(\d+)$/)[1]) : null;
+  if (!total && res.status !== 206) total = Number(res.headers.get('content-length')) || null;
+  if (!total && res.status === 206) {
+    try {
+      const h = await fetchFn(url, { method: 'HEAD', cache: 'no-store' });
+      if (h.ok) total = Number(h.headers.get('content-length')) || null;
+    } catch { /* the size stays unknown */ }
+  }
   const bits = [total ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
   if (sniff) {

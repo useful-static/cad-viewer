@@ -7,6 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
+import { randomBytes } from 'node:crypto';
 import { checkFile, checkLists, namedFormat, sniffFormat, summary } from '../js/list-check.js';
 
 let passed = 0;
@@ -27,6 +28,9 @@ const FILES = {
     'liar.cadmesh.gz': { name: 'Liar', tours: [{ name: 'Bad tour', url: 'bad.cadtour.json' }] },
   }),
   [`${B}good.cadmesh.gz`]: cadmesh,
+  // 2 MB of noise after the magic: gzip cannot shrink it, so the file is far
+  // bigger than the 64 KB part the check reads
+  [`${B}big.cadmesh.gz`]: gzipSync(Buffer.concat([Buffer.from('CADM'), randomBytes(2_000_000)])),
   [`${B}good.webp`]: Buffer.from('RIFF....WEBP'),
   [`${B}good.stp.gz`]: gzipSync(Buffer.from('ISO-10303-21;')),
   [`${B}good.cadtour.json`]: tour,
@@ -40,10 +44,13 @@ async function fakeFetch(url, opts = {}) {
   const body = FILES[u];
   const len = Buffer.byteLength(body);
   const ranged = opts.headers && opts.headers.Range;
-  return new Response(opts.method === 'HEAD' ? null : body, {
-    status: ranged ? 206 : 200,
-    headers: ranged ? { 'content-range': `bytes 0-${len - 1}/${len}`, 'content-length': String(len) } : { 'content-length': String(len) },
-  });
+  // a part is a 206 whose Content-Length is the part's; with hideRange the
+  // Content-Range is hidden, as a browser hides it from another site's page
+  // when the server does not expose it (libre.computer, 2026-10-31)
+  const partLen = Math.min(len, 65536);
+  const headers = { 'content-length': String(ranged ? partLen : len) };
+  if (ranged && !fakeFetch.hideRange) headers['content-range'] = `bytes 0-${partLen - 1}/${len}`;
+  return new Response(opts.method === 'HEAD' ? null : Buffer.from(body).subarray(0, ranged ? partLen : len), { status: ranged ? 206 : 200, headers });
 }
 
 await test('formats', () => {
@@ -62,6 +69,21 @@ await test('file-good', async () => {
   assert.equal(r.level, 'ok', r.detail);
   assert.match(r.detail, /MB · gzip · cadmesh/);
   assert.equal(r.url, `${B}good.cadmesh.gz`);
+});
+
+// the size of a model bigger than the 64 KB part read: from Content-Range,
+// or, when the browser hides that header, from a HEAD's Content-Length --
+// never the part's own Content-Length (live bug: every board read 0.07 MB)
+await test('file-size-beyond-the-part', async () => {
+  const total = Buffer.byteLength(FILES[`${B}big.cadmesh.gz`]);
+  const want = `${(total / 1e6).toFixed(1)} MB`;
+  for (const hide of [false, true]) {
+    fakeFetch.hideRange = hide;
+    const r = await checkFile(`${B}big.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
+    assert.equal(r.level, 'ok', r.detail);
+    assert.ok(r.detail.startsWith(`${want} · gzip · cadmesh`), `hideRange=${hide}: ${r.detail}, want ${want}`);
+  }
+  fakeFetch.hideRange = false;
 });
 
 await test('file-missing-refused-mislabelled', async () => {
