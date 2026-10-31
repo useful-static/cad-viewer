@@ -1395,7 +1395,11 @@ function outsideQuat(box, ids = null, step = null) {
     const whole = drawnBox(null) || h.bbox;
     const m = [0, 1, 2].map((k) => (whole.min[k] + whole.max[k]) / 2);
     const mine = new Set(ids || []);
-    const hidden = app.tour ? new Set(app.tour.base.hidden) : app.hidden;
+    // (what the step shows: the visitor's hidden parts, plus the step's own
+    // hide -- a heatsink taken off its chip -- less its show)
+    const hidden = new Set(app.tour ? app.tour.base.hidden : app.hidden);
+    if (step && step.hide) for (const id of tourParts(step.hide).ids) hidden.add(id);
+    if (step && step.show) for (const id of tourParts(step.show).ids) hidden.delete(id);
     const within = (b) => [0, 1, 2].every((k) => {
       const c = (b.min[k] + b.max[k]) / 2;
       return c >= box.min[k] && c <= box.max[k];
@@ -2726,7 +2730,21 @@ function applyListEntry() {
   const labels = (e && e.labels) || null;
   if (app.header && JSON.stringify(labels) !== JSON.stringify(app.partLabels || null)) {
     app.partLabels = labels;
+    app.tourIdxFor = null; // (part names resolve by label too: tourParts)
     buildTree();
+  }
+  // its hidden parts (a heatsink over the chips), once per model opened and
+  // not over a view link's view; ahead of its tour, which starts from them
+  if (app.header && e && e.hide && app.listHideFor !== app.header && !app.pendingView) {
+    app.listHideFor = app.header;
+    const ids = tourParts(e.hide).ids;
+    if (ids.length) {
+      for (const id of ids) app.hidden.add(id);
+      syncTreeChecks();
+      pushState();
+      updateButtons();
+      viewChanged();
+    }
   }
   // its notes, where the model has none yet (a view link's come first)
   if (app.header && e && e.notes && app.measure && !app.measure.notes().length) {

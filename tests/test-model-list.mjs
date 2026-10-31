@@ -123,6 +123,13 @@ await test('notes: by a point or a part, trimmed; a wrong one refuses the list',
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: n } }), L), /its notes must be/);
   }
 });
+await test('hide: part names, trimmed; a wrong one refuses the list', () => {
+  const [e] = parseModelList(JSON.stringify({ a: { name: 'A', hide: [' #2831 ', 'PRT0001'] } }), L);
+  assert.deepEqual(e.hide, ['#2831', 'PRT0001']);
+  for (const h of ['#1', [''], [3], ['x'.repeat(201)]]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', hide: h } }), L), /its hide must be/);
+  }
+});
 await test('tours: named, resolved against the list; a wrong one refuses the list', () => {
   const [e] = parseModelList(JSON.stringify({ a: { name: 'A', tours: [{ name: ' The board ', url: 'tours/a.cadtour.json' }, { url: 'https://x.example/b.json' }] } }), L);
   assert.deepEqual(e.tours, [{ name: 'The board', url: 'https://site.example/api/tours/a.cadtour.json' }, { name: 'Tour', url: 'https://x.example/b.json' }]);

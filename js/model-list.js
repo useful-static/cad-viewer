@@ -95,6 +95,10 @@ export function parseModelList(text, listUrl) {
 //   notes    [{ "text": "HDMI", "part": "HDMI_1_3" } or { "text": …, "at": [x, y, z] }]:
 //            notes pinned on the model (a part's at the top of it), as
 //            Measure's Note makes them, unless a view link brings its own
+//   hide     [ "<a part's name>", … ]: parts hidden when it opens (a heatsink
+//            over the chips), unless a view link brings its own view; Show all
+//            brings them back. Names as a tour names parts (js/tour.js
+//            resolveParts: a label, a node, a body, a path, or "#<id>")
 export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
 function extras(file, v, listUrl) {
   const out = {};
@@ -143,6 +147,13 @@ function extras(file, v, listUrl) {
       throw bad('notes', 'must be a list (at most 100) of { "text": "…" (200 characters at most), and "at": [x, y, z] (mm) or "part": "<a part\'s name>" }');
     }
     out.notes = n.map((x) => ({ text: x.text.trim(), ...(Array.isArray(x.at) ? { at: x.at.slice() } : { part: x.part.trim() }) }));
+  }
+  if (v.hide !== undefined) {
+    const h = v.hide;
+    if (!Array.isArray(h) || h.length > 1000 || !h.every((x) => typeof x === 'string' && x.trim() && x.length <= 200)) {
+      throw bad('hide', 'must be a list (at most 1000) of part names (200 characters at most)');
+    }
+    out.hide = h.map((x) => x.trim());
   }
   return out;
 }
