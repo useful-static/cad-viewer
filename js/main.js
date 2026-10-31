@@ -10,7 +10,7 @@ import { directUrl } from './open-url.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { fetchModelLists } from './model-list.js';
+import { entryByName, fetchModelLists } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
@@ -1214,29 +1214,39 @@ function saveDrawing() {
   announce(note);
 }
 
-// The model in the address: with a ?list=, a model the list names is
-// ?index=<n>, its place in the list (1 = its first model), since the list
-// already names its URL; any other model is ?src=<its URL>. One or the
-// other, never both, so ?src always means a URL.
+// The model in the address, one way only: with a ?list=, a model the list
+// names is ?model=<its id> when its entry has one (a name that survives the
+// list's reordering), else ?index=<n>, its place in the list (1 = its first
+// model); any other model is ?src=<its URL>. So ?src always means a URL.
+const MODEL_PARAMS = ['model', 'index', 'src'];
 function setModelParam(u, url) {
-  const i = url && params.getAll('list').length ? (app.listEntries || []).findIndex((e) => e.url === url) : -1;
-  u.searchParams.delete('src');
-  u.searchParams.delete('index');
-  if (i >= 0) u.searchParams.set('index', String(i + 1));
+  const list = url && params.getAll('list').length ? app.listEntries || [] : [];
+  const i = list.findIndex((e) => e.url === url);
+  for (const k of MODEL_PARAMS) u.searchParams.delete(k);
+  if (i >= 0 && list[i].id) u.searchParams.set('model', list[i].id);
+  else if (i >= 0) u.searchParams.set('index', String(i + 1));
   else if (url) u.searchParams.set('src', url);
 }
 // ...and back, from an address's query: the URL of the model it names (null
-// for none, or for an ?index= the list does not have, or not yet read). A
-// numeric ?src= beside a list is read as ?index= (links made before it).
+// for none, or for a ?model= / ?index= the list does not have, or not yet
+// read). ?model= matches an entry's id, else an alias. A numeric ?src=
+// beside a list is read as ?index= (links made before it).
 const isPlace = (raw) => /^\d+$/.test(raw || '');
 function modelUrlIn(search) {
   const listed = params.getAll('list').length > 0;
+  if (listed && search.get('model')) return entryByName(app.listEntries, search.get('model'))?.url || null;
   const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
   if (listed && isPlace(place)) return app.listEntries?.[Number(place) - 1]?.url || null;
   return search.get('src') || null;
 }
-const modelPlaceIn = (search) => (params.getAll('list').length
-  ? [search.get('index'), search.get('src')].find(isPlace) || null : null);
+// (what an address names by the list, which must be read before it opens:
+// "model le-potato", "index 3"; null when it names a URL or nothing)
+const modelNameIn = (search) => {
+  if (!params.getAll('list').length) return null;
+  if (search.get('model')) return `"${search.get('model')}"`;
+  const place = [search.get('index'), search.get('src')].find(isPlace);
+  return place ? place : null;
+};
 
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
@@ -3399,13 +3409,12 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   $('clearval').textContent = '';
-  // a model from the device is not the ?src / ?index a list pick left in the
-  // address: a reload would open that instead (review r16 L7)
+  // a model from the device is not the ?model / ?index / ?src a list pick
+  // left in the address: a reload would open that instead (review r16 L7)
   const q = new URLSearchParams(location.search);
-  if (!app.sourceUrl && (q.has('src') || q.has('index'))) {
+  if (!app.sourceUrl && MODEL_PARAMS.some((k) => q.has(k))) {
     const u = new URL(location.href);
-    u.searchParams.delete('src');
-    u.searchParams.delete('index');
+    for (const k of MODEL_PARAMS) u.searchParams.delete(k);
     history.replaceState(null, '', u);
   }
   app.lastStepBuffer = stepBuf;
@@ -5831,13 +5840,13 @@ async function main() {
   keepFocus();
   queueFrame();
   refreshCacheBar();
-  // ?index=<n> beside a ?list=: the list's n-th model (modelUrlIn), so the
-  // list is read first; a number past its end opens its first model and
-  // says so. Else ?src=, a URL.
+  // ?model=<id> or ?index=<n> beside a ?list=: a model the list names
+  // (modelUrlIn), so the list is read first; a name it does not have opens
+  // its first model and says so. Else ?src=, a URL.
   const lists = params.getAll('list');
   let listed = null;
   let src = params.get('src');
-  const place = modelPlaceIn(params);
+  const place = modelNameIn(params);
   if (place) {
     setStatus('idle', 'reading the model list…');
     listed = readLists(lists, () => false);

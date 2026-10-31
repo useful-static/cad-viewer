@@ -3,7 +3,7 @@
 //   node tests/test-model-list.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { fetchModelLists, joinModelLists, parseModelList } from '../js/model-list.js';
+import { entryByName, fetchModelLists, joinModelLists, parseModelList } from '../js/model-list.js';
 
 let passed = 0;
 let failed = 0;
@@ -122,6 +122,27 @@ await test('notes: by a point or a part, trimmed; a wrong one refuses the list',
   for (const n of [[{ text: 'x' }], [{ text: '', part: 'p' }], [{ text: 'x', at: [1, 2] }], { text: 'x', part: 'p' }, [{ text: 'x'.repeat(201), part: 'p' }]]) {
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: n } }), L), /its notes must be/);
   }
+});
+await test('id and aliases: a model found by either; a bad or doubled one refuses the list', () => {
+  const es = parseModelList(JSON.stringify({ a: { name: 'A', id: 'le-potato', aliases: ['aml-s905x-cc', 'le-potato'] }, b: { name: 'B', id: 'tritium' } }), L);
+  assert.equal(es[0].id, 'le-potato');
+  assert.deepEqual(es[0].aliases, ['aml-s905x-cc']); // (its own id is not an alias)
+  assert.equal(entryByName(es, 'le-potato'), es[0]);
+  assert.equal(entryByName(es, 'aml-s905x-cc'), es[0]);
+  assert.equal(entryByName(es, 'tritium'), es[1]);
+  assert.equal(entryByName(es, 'nope'), null);
+  for (const v of [{ id: 'Le Potato' }, { id: '-x' }, { id: 3 }, { aliases: 'x' }, { aliases: ['A'] }]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', ...v } }), L), /its (id|aliases) must be/);
+  }
+  assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', id: 'x' }, b: { name: 'B', aliases: ['x'] } }), L), /"x" names two models/);
+  // joined: an earlier list's name keeps its model, the later entry stays without it
+  const [l1, l2] = [parseModelList(JSON.stringify({ a: { name: 'A', id: 'x' } }), L),
+    parseModelList(JSON.stringify({ b: { name: 'B', id: 'x', aliases: ['y'] } }), L)];
+  const j = joinModelLists([l1, l2]);
+  assert.equal(j.length, 2);
+  assert.equal(entryByName(j, 'x').name, 'A');
+  assert.equal(j[1].id, undefined);
+  assert.equal(entryByName(j, 'y').name, 'B');
 });
 await test('hide: part names, trimmed; a wrong one refuses the list', () => {
   const [e] = parseModelList(JSON.stringify({ a: { name: 'A', hide: [' #2831 ', 'PRT0001'] } }), L);

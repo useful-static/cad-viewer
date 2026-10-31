@@ -52,7 +52,7 @@ export function parseModelList(text, listUrl) {
     : data && typeof data === 'object' ? Object.entries(data) : null;
   if (!pairs) throw new Error('not a list: it must be one JSON object, file -> display name (or an array of [file, name] pairs)');
   if (pairs.length > MAX_LIST_ENTRIES) throw new Error(`${pairs.length} files, more than the ${MAX_LIST_ENTRIES} a list may name`);
-  return pairs.map(([file, v]) => {
+  const entries = pairs.map(([file, v]) => {
     if (!file.trim()) throw new Error('a file with no name ("")');
     const name = typeof v === 'string' ? v : v && typeof v === 'object' && typeof v.name === 'string' ? v.name : null;
     if (name === null) throw new Error(`"${file}": its name must be a string (or { "name": "…" })`);
@@ -72,8 +72,44 @@ export function parseModelList(text, listUrl) {
       }
     }
     if (v && typeof v === 'object') Object.assign(entry, extras(file, v, listUrl));
+    if (v && typeof v === 'object') Object.assign(entry, names(file, v));
     return entry;
   });
+  // (an id or an alias names one model of the list: a second is refused)
+  const taken = new Map();
+  for (const e of entries) {
+    for (const n of [e.id, ...(e.aliases || [])].filter(Boolean)) {
+      if (taken.has(n)) throw new Error(`"${n}" names two models (${taken.get(n)} and ${e.name})`);
+      taken.set(n, e.name);
+    }
+  }
+  return entries;
+}
+
+// A model's fixed names: "id", the one a link names it by (?model=<id>),
+// and "aliases", ids it was known by before, which links made then still
+// use. The same form as a tour step's id (js/tour.js STEP_ID): a-z, 0-9 and
+// "-", starting with a letter or digit, at most 64.
+export const MODEL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+function names(file, v) {
+  const out = {};
+  if (v.id !== undefined) {
+    if (typeof v.id !== 'string' || !MODEL_ID.test(v.id)) throw new Error(`"${file}": its id must be a-z, 0-9 and "-", starting with a letter or digit, at most 64`);
+    out.id = v.id;
+  }
+  if (v.aliases !== undefined) {
+    if (!Array.isArray(v.aliases) || v.aliases.length > 20 || !v.aliases.every((a) => typeof a === 'string' && MODEL_ID.test(a))) {
+      throw new Error(`"${file}": its aliases must be a list (at most 20) of ids (a-z, 0-9 and "-")`);
+    }
+    out.aliases = v.aliases.filter((a) => a !== v.id);
+  }
+  return out;
+}
+
+// The entry a link's ?model= names: by its id, else by one of its aliases
+export function entryByName(entries, name) {
+  if (!name) return null;
+  return (entries || []).find((e) => e.id === name) || (entries || []).find((e) => (e.aliases || []).includes(name)) || null;
 }
 
 // An entry's other fields, all optional, each checked (a wrong one refuses the
@@ -95,6 +131,9 @@ export function parseModelList(text, listUrl) {
 //   notes    [{ "text": "HDMI", "part": "HDMI_1_3" } or { "text": …, "at": [x, y, z] }]:
 //            notes pinned on the model (a part's at the top of it), as
 //            Measure's Note makes them, unless a view link brings its own
+//   id       a fixed name, which a link names the model by: ?model=<id>
+//            (a-z, 0-9, "-"; one model's in the joined lists, MODEL_ID)
+//   aliases  [ "<an id it had before>", … ]: links made then still open it
 //   hide     [ "<a part's name>", … ]: parts hidden when it opens (a heatsink
 //            over the chips), unless a view link brings its own view; Show all
 //            brings them back. Names as a tour names parts (js/tour.js
@@ -158,15 +197,24 @@ function extras(file, v, listUrl) {
   return out;
 }
 
-// Lists joined in order: a file named again later keeps its first entry.
+// Lists joined in order: a file named again later keeps its first entry,
+// and an id or alias an earlier list already gave keeps its first model
+// (the later entry stays, without that name).
 export function joinModelLists(lists) {
   const seen = new Set();
+  const named = new Set();
   const out = [];
   for (const l of lists) {
     for (const e of l) {
       if (seen.has(e.url)) continue;
       seen.add(e.url);
-      out.push(e);
+      let x = e;
+      if ((e.id && named.has(e.id)) || (e.aliases || []).some((a) => named.has(a))) {
+        x = { ...e, aliases: (e.aliases || []).filter((a) => !named.has(a)) };
+        if (named.has(e.id)) delete x.id;
+      }
+      for (const n of [x.id, ...(x.aliases || [])].filter(Boolean)) named.add(n);
+      out.push(x);
     }
   }
   return out;
