@@ -187,6 +187,33 @@ function showEmpty() {
   $('empty').hidden = !!app.mesh || !!app.dxf || busy || !$('poster').hidden;
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
+  // In an embed the card is for the host page's visitor, who chose nothing to
+  // open: it says the model could not be shown, and why, and offers the full
+  // viewer -- never "Choose a file…" or the drop hint
+  if (app.embed) {
+    const failed = app.status === 'error';
+    document.querySelector('#empty h2').textContent = failed ? 'This model could not be shown' : 'No model to show';
+    for (const sel of ['.drop-hint', '.drop-now', '#emptyopen', '#empty .note']) {
+      const el = document.querySelector(sel);
+      if (el) el.hidden = true;
+    }
+    let a = $('emptyfull');
+    if (!a) {
+      a = document.createElement('a');
+      a.id = 'emptyfull';
+      a.className = 'btn';
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Open in cad.place ↗';
+      $('emptyerr').before(a);
+    }
+    // (the full viewer with the same address, but not ?embed: it may open
+    // there, and its message is in full)
+    const u = new URL(location.href);
+    u.searchParams.delete('embed');
+    a.href = u.href;
+    a.hidden = !failed;
+  }
 }
 
 // The narrow layout's parts panel, a slide-out over the view. It is "open"
@@ -509,7 +536,15 @@ function setExplode(on, focus = false) {
   if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
-  if (on && app.measure && app.measure.on) { app.measure.setOn(false); flashHover('Measure off while exploded'); }
+  // (said where it is seen and heard: the status line and the screen reader,
+  // not only the hover text -- UI review)
+  if (on && app.measure && app.measure.on) {
+    app.measure.setOn(false);
+    const why = 'Measure is off while exploded: it measures the parts where they are, not where Explode draws them';
+    flashHover('Measure off while exploded');
+    if (app.status === 'ready') setStatus('ready', `${readyText()} · ${why}`);
+    announce(why);
+  }
   // a view as Fit left it is fitted again, around the parts where they go
   const fitted = atLastFit();
   x.on = on;
@@ -1311,8 +1346,10 @@ async function readTour(url) {
     const r = await fetch(abs, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
     if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
     text = await r.text();
-  } catch {
-    return { error: `could not be read from ${new URL(abs).host}: the site does not let other pages load it (no CORS), or did not answer` };
+  } catch (e) {
+    // (the site answered without CORS -- the tour is not there, or not
+    // shared -- or did not answer: fetchFailedText tells which)
+    return { error: (await fetchFailedText(abs, 'the tour', e)).replace(/^could not download the tour /, 'could not be read ') };
   }
   try { return { tour: parseTour(text, abs) }; } catch (e) { return { error: e.message }; }
 }
@@ -4320,19 +4357,29 @@ const fileName = (url) => {
   return tail;
 };
 
-// A fetch that throws had no usable answer. From another site the usual
-// cause is that the site does not allow other web pages to read its files
-// (no CORS headers) -- the browser hides which, so the message names both.
-function fetchFailedText(url, name, e) {
+// A fetch that throws had no usable answer. From another site, a HEAD in
+// "no-cors" mode then tells whether the site answered at all: if it did, it
+// did not let this page read the answer -- it sends no CORS for that file,
+// or the file is not there (a site that sends CORS only for files it has,
+// as libre.computer does, reports a missing file this way: the browser
+// hides the 404 too). If it did not, the site is down or unreachable.
+async function fetchFailedText(url, name, e) {
   let host = null;
   try {
     const u = new URL(url, location.href);
     if (u.origin !== location.origin) host = u.host;
   } catch { /* an unparsable URL: treated as this site's */ }
-  return host
-    ? `could not download ${name} from ${host}: that site does not let other web pages load its files (no CORS), `
-      + 'or it did not answer. Download the file and open it here instead.'
-    : `could not download ${name}: the server did not answer (${e.message || e})`;
+  if (!host) return `could not download ${name}: the server did not answer (${e.message || e})`;
+  let answered = false;
+  try {
+    const timeout = typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(8000) } : {};
+    await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', ...timeout });
+    answered = true;
+  } catch { /* no answer at all */ }
+  return answered
+    ? `could not download ${name} from ${host}: the site answered but would not let this page read it -- the file is not there, `
+      + 'or the site does not let other web pages load its files (no CORS). Check the address, or download the file and open it here.'
+    : `could not download ${name}: ${host} did not answer (it may be down, or the address is wrong).`;
 }
 
 async function loadUrl(url) {
@@ -4355,7 +4402,9 @@ async function loadUrl(url) {
     res = await fetch(direct.url, ac ? { signal: ac.signal } : {});
   } catch (e) {
     if (stale(seq)) return; // aborted: a newer load, or Cancel
-    throw new Error(fetchFailedText(url, name, e));
+    const text = await fetchFailedText(url, name, e);
+    if (stale(seq)) return;
+    throw new Error(text);
   }
   if (stale(seq)) return;
   if (!res.ok) {
@@ -5045,8 +5094,12 @@ function fillInfo(el) {
       .map(([lo, hi], k) => `${'XYZ'[k]} ${lenNum(lo, 'size')} to ${lenNum(hi, 'size')}`).join(' · '));
   }
   if (app.ref && b && ref) {
+    // (how far it stands out past the reference's top and its bottom; a part
+    // that does not reach past one says so, rather than a negative number
+    // nobody can read -- UI review: "6.2 / -0.7")
     const ab = aboveBelow(b, ref, orientUp(app.cam.orient));
-    add(`above / below it (${lenUnit()})`, `${lenNum(ab.above, 'size')} / ${lenNum(ab.below, 'size')}`);
+    const past = (v, side) => (v > 0.005 ? `${lenNum(v, 'size')} ${side}` : `none ${side}`);
+    add(`above / below it (${lenUnit()})`, `${past(ab.above, 'above')} · ${past(ab.below, 'below')}`);
   }
   addMore('triangles', fmtInt(tris));
   // volume and area (js/edges.js facts: from the file, or the worker's once it
