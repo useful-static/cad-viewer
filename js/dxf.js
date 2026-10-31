@@ -1,6 +1,7 @@
 // 2D DXF drawings (plan feature 23; feature review item 23): a group-code
-// parser, model space only, flattened to what a 2D canvas strokes:
-//   { units, sourceUnits, layers: [{ name, colour, on }], extents,
+// parser, ASCII or binary, model space only (paper-space entities are
+// counted, not drawn), flattened to what a 2D canvas strokes:
+//   { units, sourceUnits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill }],
 //     texts: [{ layer, colour, x, y, h, rot, text, align }] }
 // LINE, LWPOLYLINE (bulges), POLYLINE / VERTEX, CIRCLE, ARC, ELLIPSE, SPLINE
@@ -24,6 +25,60 @@ function pairs(s) {
   return out;
 }
 
+// A binary DXF: "AutoCAD Binary DXF\r\n\x1a\0", then group codes -- two
+// bytes from R13, one in R12 (255 escaping a two-byte code) -- each value
+// typed by its code. -> the same [code, string] pairs the text gives
+const BIN_SENTINEL = 'AutoCAD Binary DXF\r\n\x1a\x00';
+export function isBinaryDXF(buf) {
+  const b = new Uint8Array(buf, 0, Math.min(22, buf.byteLength));
+  return b.length === 22 && String.fromCharCode(...b) === BIN_SENTINEL;
+}
+function valueKind(c) {
+  if (c <= 9 || (c >= 100 && c <= 109) || (c >= 300 && c <= 309) || (c >= 320 && c <= 369) || (c >= 390 && c <= 399)
+    || (c >= 410 && c <= 419) || (c >= 430 && c <= 439) || (c >= 470 && c <= 481) || c === 999 || (c >= 1000 && c <= 1003)
+    || (c >= 1005 && c <= 1009)) return 's';
+  if ((c >= 310 && c <= 319) || c === 1004) return 'bin';
+  if ((c >= 10 && c <= 59) || (c >= 110 && c <= 149) || (c >= 210 && c <= 239) || (c >= 460 && c <= 469) || (c >= 1010 && c <= 1059)) return 'd';
+  if ((c >= 90 && c <= 99) || (c >= 420 && c <= 429) || (c >= 440 && c <= 459) || c === 1071) return 'i32';
+  if (c >= 160 && c <= 169) return 'i64';
+  if (c >= 290 && c <= 299) return 'b';
+  return 'i16';
+}
+function binaryPairs(buf) {
+  const dv = new DataView(buf);
+  const b = new Uint8Array(buf);
+  // R12 writes the first code (0) as one byte, then "SECTION"; R13+ as two
+  const oneByte = b[22] === 0 && b[23] !== 0;
+  // (UTF-8: R2007 and later write their strings so)
+  const dec = new TextDecoder('utf-8');
+  const out = [];
+  let o = 22;
+  while (o < b.length) {
+    let c;
+    if (oneByte) {
+      c = b[o++];
+      if (c === 255) { c = dv.getUint16(o, true); o += 2; }
+    } else { c = dv.getUint16(o, true); o += 2; }
+    const k = valueKind(c);
+    let v;
+    if (k === 's') {
+      let e = o;
+      while (e < b.length && b[e] !== 0) e++;
+      v = dec.decode(b.subarray(o, e));
+      o = e + 1;
+    } else if (k === 'bin') { const n = b[o]; v = ''; o += 1 + n; }
+    else if (k === 'd') { v = String(dv.getFloat64(o, true)); o += 8; }
+    else if (k === 'i32') { v = String(dv.getInt32(o, true)); o += 4; }
+    else if (k === 'i64') { v = String(dv.getBigInt64(o, true)); o += 8; }
+    else if (k === 'b') { v = String(b[o]); o += 1; }
+    else { v = String(dv.getInt16(o, true)); o += 2; }
+    if (o > b.length) throw new Error('the binary DXF ends inside a value');
+    out.push([c, v]);
+    if (c === 0 && v === 'EOF') break;
+  }
+  return out;
+}
+
 // The entity records of a section, each { type, g: [[code, value], ...] }
 function records(ps, from, to) {
   const out = [];
@@ -40,9 +95,18 @@ const all = (r, c) => r.g.filter((x) => x[0] === c).map((x) => Number(x[1]));
 
 export const UNITS = { 1: ['in', 25.4], 2: ['ft', 304.8], 4: ['mm', 1], 5: ['cm', 10], 6: ['m', 1000], 8: ['uin', 25.4e-6], 9: ['mil', 0.0254], 10: ['yd', 914.4], 13: ['um', 0.001], 14: ['dm', 100] };
 
+// s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
+// or ASCII read from the bytes)
 export function parseDXF(s) {
-  if (!/^\s*0\s*\r?\n\s*SECTION/.test(s)) throw new Error('not an ASCII DXF file (a binary DXF or a DWG is not read)');
-  const ps = pairs(s);
+  let ps;
+  if (s instanceof ArrayBuffer) {
+    if (isBinaryDXF(s)) ps = binaryPairs(s);
+    else s = new TextDecoder('latin1').decode(s);
+  }
+  if (!ps) {
+    if (!/^\s*0\s*\r?\n\s*SECTION/.test(s)) throw new Error('not a DXF file (a DWG is not read)');
+    ps = pairs(s);
+  }
   // the sections by name
   const sec = {};
   for (let i = 0; i < ps.length; i++) {
@@ -93,12 +157,18 @@ export function parseDXF(s) {
     }
   }
   const out = { paths: [], texts: [] };
-  const ents = sec.ENTITIES ? records(ps, ...sec.ENTITIES) : [];
+  // model space only: an entity in paper space (67 = 1: a layout's title
+  // block, its viewports' frames) is left out and counted, not drawn over
+  // the model at the layout's sheet coordinates
+  const every = sec.ENTITIES ? records(ps, ...sec.ENTITIES) : [];
+  const inPaper = (r) => get(r, 67, '0') === '1';
+  const ents = every.filter((r) => !inPaper(r));
+  const paperSpace = every.filter((r) => inPaper(r) && !['VERTEX', 'SEQEND', 'ATTRIB'].includes(r.type)).length;
   emit(ents, IDENT, null, 0, { layers, blocks, out, ltypes, ltscale });
   for (const p of out.paths) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true });
   const u = UNITS[insunits];
   return { units: u ? u[0] : null, mmPerUnit: u ? u[1] : null, insunits,
-    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out) };
+    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace };
 }
 
 // 2D affine [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f

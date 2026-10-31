@@ -62,6 +62,7 @@ await test('formats', () => {
   assert.equal(sniffFormat(Buffer.from('glTF\x02\0\0\0')), 'glTF');
   assert.equal(sniffFormat(Buffer.from('solid x\n facet normal 0 0 1')), 'STL');
   assert.equal(sniffFormat(Buffer.from('\x00\x01\x02')), null);
+  assert.equal(sniffFormat(Buffer.from('AutoCAD Binary DXF\r\n\x1a\x00\x00\x00SECTION\x00')), 'DXF');
 });
 
 await test('file-good', async () => {

@@ -30,7 +30,7 @@ export function sniffFormat(bytes) {
   if (text.startsWith('glTF')) return 'glTF';
   if (text.startsWith('PK\x03\x04')) return 'zip';
   if (/^ply\s/.test(text)) return 'PLY';
-  if (/^\s*(\d+\s*\n\s*)?0\s*\n\s*SECTION/.test(text)) return 'DXF';
+  if (/^\s*(\d+\s*\n\s*)?0\s*\n\s*SECTION/.test(text) || text.startsWith('AutoCAD Binary DXF')) return 'DXF';
   if (/^\s*solid[\s\S]*facet/.test(text)) return 'STL';
   if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return 'glTF';
   if (/^(\s*(#.*)?\n)*\s*(v|o|g|mtllib)\s/.test(text)) return 'OBJ';

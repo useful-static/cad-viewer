@@ -4,7 +4,7 @@
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { MESH_EXTS, meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
-import { onPaper, parseDXF } from './dxf.js';
+import { isBinaryDXF, onPaper, parseDXF } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directUrl } from './open-url.js';
 import { stepProducts } from './step-meta.js';
@@ -4202,7 +4202,8 @@ async function loadDxf(buf, name, seq) {
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of DXF`);
   await nextPaint();
   if (stale(seq)) return;
-  const drawing = parseDXF(new TextDecoder().decode(buf));
+  // (a binary DXF is read from its bytes; an ASCII one as UTF-8 text)
+  const drawing = parseDXF(isBinaryDXF(buf) ? buf : new TextDecoder().decode(buf));
   if (!drawing.paths.length && !drawing.texts.length) throw new Error(`${name} has nothing in model space to draw (a DXF of paper-space layouts only is not drawn)`);
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
@@ -4322,6 +4323,9 @@ function fillInfo2D(el) {
   row('units', d.units ? `${d.units} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
   row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  // (model space is drawn; a layout's sheet, title block and viewport frames
+  // are paper space, left out)
+  if (d.paperSpace) row('paper space', `${fmtInt(d.paperSpace)} ${d.paperSpace === 1 ? 'entity' : 'entities'} not shown (model space is drawn)`);
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
     row('selection', `layer ${l}: ${fmtInt(d.paths.filter((p) => p.layer === l).length)} lines and shapes`);

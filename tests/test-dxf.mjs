@@ -120,7 +120,61 @@ test('line types and weights: BYLAYER pattern x $LTSCALE, the layer weight, an e
   assert.equal(b.weight, 0.25);
 });
 test('not a DXF: refused in words', () => {
-  assert.throws(() => parseDXF('AC1015 binary'), /not an ASCII DXF/);
+  assert.throws(() => parseDXF('AC1015 binary'), /not a DXF file/);
+});
+
+// A binary DXF of the same groups, as AutoCAD writes one: the sentinel, then
+// each group code (2 bytes from R13; 1 byte, 255 escaping, in R12) and its
+// value typed by the code (strings null-terminated, doubles, int16/32, bools)
+function binaryDXF(groups, oneByte = false) {
+  const parts = [new TextEncoder().encode('AutoCAD Binary DXF\r\n\x1a\x00')];
+  const kind = (c) => (c <= 9 || (c >= 100 && c <= 109) || (c >= 300 && c <= 369) || (c >= 390 && c <= 399) || (c >= 410 && c <= 419)
+    || (c >= 430 && c <= 439) || (c >= 470 && c <= 481) || c === 999 || (c >= 1000 && c <= 1009) ? 's'
+    : (c >= 10 && c <= 59) || (c >= 110 && c <= 149) || (c >= 210 && c <= 239) || (c >= 460 && c <= 469) || (c >= 1010 && c <= 1059) ? 'd'
+      : (c >= 90 && c <= 99) || (c >= 420 && c <= 429) || (c >= 440 && c <= 459) || c === 1071 ? 'i32'
+        : (c >= 290 && c <= 299) ? 'b' : 'i16');
+  for (const [c, v] of groups) {
+    const code = oneByte ? (c < 255 ? Uint8Array.of(c) : Uint8Array.of(255, c & 255, c >> 8)) : Uint8Array.of(c & 255, c >> 8);
+    parts.push(code);
+    const k = kind(c);
+    if (k === 's') parts.push(new TextEncoder().encode(`${v}\0`));
+    else {
+      const b = new DataView(new ArrayBuffer(k === 'd' ? 8 : k === 'i32' ? 4 : k === 'b' ? 1 : 2));
+      if (k === 'd') b.setFloat64(0, Number(v), true);
+      else if (k === 'i32') b.setInt32(0, Number(v), true);
+      else if (k === 'b') b.setUint8(0, Number(v));
+      else b.setInt16(0, Number(v), true);
+      parts.push(new Uint8Array(b.buffer));
+    }
+  }
+  const n = parts.reduce((s, p) => s + p.length, 0);
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out.buffer;
+}
+
+test('a binary DXF reads as its ASCII twin (R13+ two-byte codes, R12 one-byte)', () => {
+  const text = parseDXF(dxf(D));
+  for (const one of [false, true]) {
+    const bin = parseDXF(binaryDXF(D, one));
+    assert.equal(bin.units, text.units, `units (${one ? 'R12' : 'R13+'})`);
+    assert.deepEqual(bin.layers.map((l) => [l.name, l.colour, l.on]), text.layers.map((l) => [l.name, l.colour, l.on]));
+    assert.equal(bin.paths.length, text.paths.length, 'paths');
+    assert.equal(bin.texts.length, text.texts.length, 'texts');
+    assert.deepEqual(bin.extents, text.extents, 'extents');
+  }
+});
+
+test('paper space is not drawn in the model: a 67 = 1 entity is left out and counted', () => {
+  const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0],
+    [0, 'LINE'], [8, '0'], [67, 1], [10, 500], [20, 500], [11, 600], [21, 500],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  const d = parseDXF(dxf(ents));
+  assert.equal(d.paths.length, 1, 'only the model-space line');
+  assert.equal(d.paperSpace, 1, 'one paper-space entity counted');
+  assert.ok(d.extents.max[0] <= 10, `extents ${JSON.stringify(d.extents)} not stretched by paper space`);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
