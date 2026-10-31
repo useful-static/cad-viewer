@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Check a model list — CAD viewer</title>
+<meta name="description" content="Check a cad.place model list: each model, picture, STEP file and tour fetched as the viewer fetches it, with the reason for any it cannot open.">
+<meta name="theme-color" content="#1d2127">
+<link rel="canonical" href="https://cad.place/">
+<meta property="og:site_name" content="Useful Static">
+<meta property="og:url" content="https://cad.place/">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"CAD viewer","url":"https://cad.place/",
+"description":"Browser-based 3D viewer for STEP, IGES and BREP assemblies, rendered with WebGPU or WebGL. Files are opened locally and never uploaded.",
+"applicationCategory":"DesignApplication","operatingSystem":"Any (web browser)","isAccessibleForFree":true,
+"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+"sameAs":["https://github.com/useful-static/cad-viewer"],
+"publisher":{"@type":"Organization","name":"Useful Static","url":"https://known.name/"}}
+</script>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: dark; --bg:#1d2127; --panel:#252a31; --line:#353b44; --text:#e6e8eb; --dim:#9aa3ad; --accent:#ff8c1a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header a { color:var(--text); text-decoration:none; font-weight:600; }
+  main { max-width:1100px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:4px 0 6px; }
+  p.lede { color:var(--dim); margin:0 0 14px; max-width:760px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  textarea { flex:1 1 520px; min-height:42px; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font:13px ui-monospace, monospace; }
+  button { background:var(--accent); color:#1d2127; border:0; border-radius:6px; padding:8px 16px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #summary { margin:10px 0; font-weight:600; }
+  #lists p { margin:4px 0; color:var(--dim); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; }
+  td.url { font:12px ui-monospace, monospace; color:var(--dim); word-break:break-all; }
+  td.model { font-weight:600; }
+  td.model small { display:block; font-weight:400; color:var(--dim); }
+  .bad td.res { color:#ff8f8f; } .warn td.res { color:#ffd27a; }
+  .note { color:var(--dim); font-size:12px; margin-top:18px; max-width:760px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header><a href="./">CAD viewer</a><span style="color:var(--dim)">· Check a model list</span></header>
+<main>
+  <h1>Check a model list</h1>
+  <p class="lede">Each model in the list, its picture, its STEP file and its tours, fetched from this page the way the
+    viewer fetches them: a file that fails here fails for your visitors, and the reason is given. Nothing is uploaded;
+    your list is read from your site by your browser.</p>
+  <form id="form">
+    <textarea id="lists" aria-label="The list's URL (one per line for several lists, joined as the viewer joins them)" placeholder="https://example.com/models.json"></textarea>
+    <button id="go" type="submit">Check</button>
+  </form>
+  <div id="summary" role="status" aria-live="polite"></div>
+  <div id="listnotes"></div>
+  <table id="results" hidden>
+    <thead><tr><th scope="col"></th><th scope="col">Model</th><th scope="col">Check</th><th scope="col">Result</th><th scope="col">URL tried</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="note">A file the viewer cannot read across sites needs your server to send
+    <code>Access-Control-Allow-Origin</code> for it (cad.place's origin, or <code>*</code>), on errors too, or a
+    missing file reads as a refusal. The model is read only up to its first 64 KB, enough to see its format.
+    The list format: <a href="https://github.com/useful-static/cad-viewer#model-lists">model lists</a>.</p>
+</main>
+<script type="module" src="js/check-page.js"></script>
+</body>
+</html>

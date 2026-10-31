@@ -2264,7 +2264,7 @@ function syncMenuButtons() {
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
-  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('exportmesh').querySelector('button').disabled && $('savepic').disabled && $('savedrawing').disabled && $('addmodelbtn').disabled && $('gallerybtn').hidden
+  $('filemenu').querySelector('.menu-btn').disabled = $('export').disabled && $('sharelink').disabled && $('download').hidden && $('checklist').hidden && $('exportmesh').querySelector('button').disabled && $('savepic').disabled && $('savedrawing').disabled && $('addmodelbtn').disabled && $('gallerybtn').hidden
     && !$('filepanel').contains($('open')) && ($('modellist').hidden || !$('filepanel').contains($('modellist')));
 }
 
@@ -5919,6 +5919,15 @@ async function main() {
   // (modelUrlIn), so the list is read first; a name it does not have opens
   // its first model and says so. Else ?src=, a URL.
   const lists = params.getAll('list');
+  // File › Check this list…: the list check (check.html) on this page's
+  // lists, for their owner, whether or not they read
+  if (lists.length && !app.embed) {
+    const c = new URL('check.html', location.href);
+    for (const l of lists) c.searchParams.append('list', new URL(l, location.href).href);
+    $('checklist').href = c.href;
+    $('checklist').hidden = false;
+    syncMenuButtons();
+  }
   let listed = null;
   let src = params.get('src');
   const place = modelNameIn(params);
