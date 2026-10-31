@@ -5242,7 +5242,12 @@ function wireInput() {
   let embedPress = null;
   const endPointer = (e) => {
     if (embedPress && e.pointerId === embedPress.id) embedPress = null; // the page took it (a scroll)
-    if (drag && e.pointerId === drag.id) drag = null;
+    if (drag && e.pointerId === drag.id) {
+      // (a dragged dot stays where it got to; a loupe goes)
+      if (drag.dot && drag.moved) app.measure.endDot(drag.dot);
+      if (drag.aim || drag.dot) app.measure.loupe(null);
+      drag = null;
+    }
     releaseTouch(e.pointerId);
   };
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -5258,6 +5263,8 @@ function wireInput() {
       touches.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
       if (touches.size >= 2 && !pinch && (!drag || drag.type === 'touch')) {
+        if (drag && drag.dot && drag.moved) app.measure.endDot(drag.dot);
+        if (drag && (drag.aim || drag.dot)) app.measure.loupe(null);
         drag = null; // the orbit becomes a pinch
         startPinch();
         app.hoverSeq++;
@@ -5278,6 +5285,18 @@ function wireInput() {
     // before): it may still orbit, but a click does not pick
     const dismiss = dismissPresses.has(e);
     drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan, moved: false, id: e.pointerId, type: e.pointerType, dismiss };
+    // Measure: a press on a placed end dot (a 22 px target) drags it, and
+    // wins over the orbit; the dot keeps its offset from the pointer, so it
+    // does not jump under the finger
+    if (app.measure.on && !pan && (e.button === 0 || e.pointerType === 'touch') && !dismiss) {
+      const [x, y] = stageXY(e);
+      const h = app.measure.dotAt(x, y);
+      if (h) {
+        drag.dot = h;
+        drag.off = [h.at[0] - x, h.at[1] - y];
+        return;
+      }
+    }
     // Measure on a touch screen: a finger held still 300 ms (inside the tap
     // slop) aims -- the snap marker shows above it as it slides, and lifting
     // places the point; moving sooner orbits as ever
@@ -5288,6 +5307,7 @@ function wireInput() {
         d.aim = true;
         const [x, y] = stageXY(e);
         app.measure.hover(x, y - AIM_LIFT);
+        app.measure.loupe(x, y, x, y - AIM_LIFT);
       }, 300);
     }
   });
@@ -5367,17 +5387,32 @@ function wireInput() {
       if (app.measure.on) {
         measXY = stageXY(e);
         if (!measRaf) measRaf = requestAnimationFrame(() => { measRaf = 0; if (measXY) app.measure.hover(...measXY); });
-      }
+        // over a placed end dot: it can be dragged
+        stage.classList.toggle('grab', !!app.measure.dotAt(...measXY));
+      } else if (stage.classList.contains('grab')) stage.classList.remove('grab');
       const wait = 60 - (performance.now() - hoverT);
       if (wait <= 0) hoverPick();
       else if (!hoverTimer) hoverTimer = setTimeout(hoverPick, wait);
       return;
     }
     if (e.pointerId !== drag.id) return;
+    // dragging a Measure end dot: it snaps where it goes, its result follows;
+    // a finger also gets the loupe
+    if (drag.dot) {
+      const [x, y] = stageXY(e);
+      const slop = drag.type === 'touch' ? 10 : 3;
+      if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > slop) drag.moved = true;
+      if (!drag.moved) return;
+      const tx = x + drag.off[0], ty = y + drag.off[1];
+      app.measure.moveDot(drag.dot, tx, ty);
+      if (drag.type === 'touch') app.measure.loupe(x, y, tx, ty);
+      return;
+    }
     // aiming a Measure point: the finger slides the marker, the view stays
     if (drag.aim) {
       const [x, y] = stageXY(e);
       app.measure.hover(x, y - AIM_LIFT);
+      app.measure.loupe(x, y, x, y - AIM_LIFT);
       return;
     }
     // A fingertip tap drifts 3-8 px: touch gets a 10 px slop, and until it is
@@ -5413,11 +5448,20 @@ function wireInput() {
     // a drag, or a pick dropped by a camera change, must not trigger the
     // dblclick fit of an older selection
     lastClick = Promise.resolve(false);
+    // a dragged end dot: the result as it now reads (a press on a dot that
+    // did not move places nothing)
+    if (d.dot) {
+      if (d.moved) app.measure.endDot(d.dot);
+      lastType = d.type;
+      lastTap = null;
+      return;
+    }
     // Measure: a click or tap places a point (never selects); a held finger
     // places where it aimed. Double-click and double-tap zoom are off meanwhile.
     if (app.measure.on && !d.moved && (e.button === 0 || d.type === 'touch') && app.mesh && !d.dismiss) {
       const [x, y] = stageXY(e);
       app.measure.place(x, d.aim ? y - AIM_LIFT : y);
+      if (d.aim) app.measure.loupe(null);
       if (d.type === 'touch') app.measure.hover(null);
       lastType = d.type;
       lastTap = null;

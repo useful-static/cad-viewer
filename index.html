@@ -208,6 +208,12 @@
   #triad text { font:bold 11px system-ui, sans-serif; text-anchor:middle; dominant-baseline:central; paint-order:stroke; stroke:#000; stroke-width:2.5px; }
   #stage[data-bg="paper"] #triad text { stroke:#fff; }
   #measvg, #measlabels { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
+  /* Measure's loupe: a finger aiming sees the point under it at 2x, beside it */
+  #measloupe { position:absolute; width:120px; height:120px; border-radius:50%; pointer-events:none;
+    box-shadow:0 0 0 2px #ffd23f, 0 2px 10px rgba(0,0,0,.5); }
+  #measloupe[hidden] { display:none; }
+  #stage.grab { cursor:grab; }
+  #stage[data-bg="paper"] #measloupe { box-shadow:0 0 0 2px #9a6b00, 0 2px 10px rgba(0,0,0,.25); }
   #measvg .mline { stroke:#ffd23f; stroke-width:2.5; filter:drop-shadow(0 0 1px #000); }
   #measvg .mline.pend { stroke-dasharray:5 4; }
   #measvg .mdot { fill:#ffd23f; stroke:#000; stroke-width:1; }
@@ -604,14 +610,14 @@
   <ul id="tree"></ul>
   <details class="help" id="help"><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
-    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims · Esc stops) · P save a picture · X explode</span>
+    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims with a loupe; drag an end dot to move it · Esc stops) · P save a picture · X explode</span>
     <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
     <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <p class="help" style="margin:0"><a href="https://known.name/" style="color:inherit">More free tools</a></p>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" role="img" aria-label="2D drawing" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><div id="hover"></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" role="img" aria-label="2D drawing" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><canvas id="measloupe" aria-hidden="true" hidden></canvas><div id="hover"></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>

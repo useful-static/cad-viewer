@@ -10,8 +10,9 @@
 // coordinates; results are drawn on an SVG layer over the view, projected
 // each frame, so every backend shows them the same.
 //
-// main.js owns the input; it calls hover / place / aim and draw, and asks
-// escape() and onKey() first.
+// main.js owns the input; it calls hover / place, loupe (a finger aiming),
+// dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
+// escape() first.
 
 import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
 import { faceOfTri, makeCaster } from './raycast.js';
@@ -215,6 +216,16 @@ export function createMeasure(deps) {
 
   // ---- results ----
   const need = () => ({ distance: 2, angle: 3, face: 2, note: 1 })[st.mode];
+  // a Distance or Angle result from its points (placing them, or dragging one)
+  function pointResult(mode, pts) {
+    if (mode === 'distance') {
+      const d = distance(pts[0], pts[1]);
+      return { mode, pts, main: deps.lenText(d.length),
+        sub: `ΔX ${deps.lenText(Math.abs(d.delta[0]))} · ΔY ${deps.lenText(Math.abs(d.delta[1]))} · ΔZ ${deps.lenText(Math.abs(d.delta[2]))}`, value: d.length };
+    }
+    const a = angleAt(pts[0], pts[1], pts[2]);
+    return { mode, pts, main: a === null ? 'no angle (two points coincide)' : `${a.toFixed(2)}°`, sub: '', value: a };
+  }
   function finish() {
     const pts = st.pending;
     let r;
@@ -226,13 +237,8 @@ export function createMeasure(deps) {
       syncRow();
       return;
     }
-    if (st.mode === 'distance') {
-      const d = distance(pts[0].p, pts[1].p);
-      r = { mode: 'distance', pts: pts.map((q) => q.p), main: deps.lenText(d.length),
-        sub: `ΔX ${deps.lenText(Math.abs(d.delta[0]))} · ΔY ${deps.lenText(Math.abs(d.delta[1]))} · ΔZ ${deps.lenText(Math.abs(d.delta[2]))}`, value: d.length };
-    } else if (st.mode === 'angle') {
-      const a = angleAt(pts[0].p, pts[1].p, pts[2].p);
-      r = { mode: 'angle', pts: pts.map((q) => q.p), main: a === null ? 'no angle (two points coincide)' : `${a.toFixed(2)}°`, sub: '', value: a };
+    if (st.mode === 'distance' || st.mode === 'angle') {
+      r = pointResult(st.mode, pts.map((q) => q.p));
     } else {
       const g = faceGap(pts[0].face, pts[1].face);
       const main = g.notPlanar ? 'the first face is not flat: pick a flat face first'
@@ -298,6 +304,104 @@ export function createMeasure(deps) {
     deps.queueFrame();
   }
 
+  // ---- dragging a placed end dot ----
+  // The end dot within 11 CSS px (a 22 px target) of (x, y), nearest first:
+  // { r, i } (result, point index) | null. A Face to face result's ends are
+  // picks of faces, and a distance found elsewhere (the clearance check) is
+  // that check's; neither is dragged.
+  function dotAt(x, y) {
+    if (!st.on || !app.header) return null;
+    const v = projector();
+    let best = null;
+    for (const r of st.results) {
+      if (r.mode === 'face' || r.fixed) continue;
+      r.pts.forEach((p, i) => {
+        const s = v.toScreen(p);
+        if (!s) return;
+        const d = Math.hypot(s[0] - x, s[1] - y);
+        if (d <= 11 && (!best || d < best.d)) best = { r, i, d, at: s };
+      });
+    }
+    return best && { r: best.r, i: best.i, at: best.at };
+  }
+  // the dragged dot to the snap under (x, y); its result follows
+  function moveDot(h, x, y) {
+    const s = snapAt(x, y);
+    st.snap = s && s.p ? s : null;
+    if (st.snap) {
+      const pts = h.r.pts.slice();
+      pts[h.i] = s.p;
+      if (h.r.mode === 'note') h.r.pts = pts;
+      else Object.assign(h.r, pointResult(h.r.mode, pts));
+    }
+    deps.queueFrame();
+  }
+  // the drag ended: the result as it now reads
+  function endDot(h) {
+    st.snap = null;
+    st.loupe = null;
+    if (h.r.mode !== 'note') {
+      deps.announce(`${h.r.main}${h.r.sub ? `, ${h.r.sub}` : ''}`);
+      deps.flash(h.r.main, 4000);
+    }
+    if (st.listOpen) fillList();
+    deps.queueFrame();
+  }
+
+  // The loupe: while a finger aims (or drags a dot), the view around the
+  // snap point at 2x in a round inset beside the finger at (fx, fy); null
+  // hides it
+  // (ax, ay: the point aimed at, shown when nothing snaps)
+  function loupe(fx, fy, ax = fx, ay = fy) {
+    st.loupe = fx === null || fx === undefined ? null : { x: fx, y: fy, ax, ay };
+    deps.queueFrame();
+  }
+  const LOUPE = 120; // CSS px across
+  const ZOOM = 2;
+  // Copied from the 3D canvas right after it is drawn (draw() runs in the
+  // same frame), so the copy is the frame's pixels on every backend
+  function drawLoupe(v) {
+    const box = $('measloupe');
+    const L = st.loupe;
+    if (!L || !st.on) { if (!box.hidden) box.hidden = true; return; }
+    const src = $('view');
+    const k = src.width / Math.max(1, v.w); // device px per CSS px of the canvas
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const px = Math.round(LOUPE * dpr);
+    if (box.width !== px) { box.width = px; box.height = px; }
+    const sp = st.snap && st.snap.p ? v.toScreen(st.snap.p) : null;
+    const [cx, cy] = sp || [L.ax, L.ay];
+    // above the finger, or below it where the top of the view leaves no room
+    const gap = 72;
+    const top = L.y - gap - LOUPE < 4 ? L.y + gap : L.y - gap - LOUPE;
+    const left = Math.max(4, Math.min(v.w - LOUPE - 4, L.x - LOUPE / 2));
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+    const ctx = box.getContext('2d');
+    const half = LOUPE / ZOOM / 2; // CSS px of the view either side of the centre
+    ctx.fillStyle = document.getElementById('stage').dataset.bg === 'paper' ? '#f4f4f2' : '#1d2127';
+    ctx.fillRect(0, 0, px, px);
+    try {
+      ctx.drawImage(src, (cx - half) * k, (cy - half) * k, 2 * half * k, 2 * half * k, 0, 0, px, px);
+    } catch { /* a canvas that cannot be read leaves the plain backing */ }
+    // the centre: a crosshair, and the snap ring when there is a snap
+    const paper = document.getElementById('stage').dataset.bg === 'paper';
+    const c = px / 2;
+    ctx.strokeStyle = paper ? '#9a6b00' : '#ffd23f';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(c - 10 * dpr, c); ctx.lineTo(c - 3 * dpr, c);
+    ctx.moveTo(c + 3 * dpr, c); ctx.lineTo(c + 10 * dpr, c);
+    ctx.moveTo(c, c - 10 * dpr); ctx.lineTo(c, c - 3 * dpr);
+    ctx.moveTo(c, c + 3 * dpr); ctx.lineTo(c, c + 10 * dpr);
+    ctx.stroke();
+    if (sp) {
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath(); ctx.arc(c, c, 7 * ZOOM * dpr / 2, 0, 2 * Math.PI); ctx.stroke();
+    }
+    box.hidden = false;
+  }
+
   // ---- drawing ----
   function el(tag, attrs, parent) {
     const e = document.createElementNS(SVG, tag);
@@ -308,9 +412,10 @@ export function createMeasure(deps) {
   function draw() {
     layer.replaceChildren();
     labels.replaceChildren();
-    if (!st.on && !st.results.length) return;
+    if (!st.on && !st.results.length) { drawLoupe({}); return; }
     if (!app.header) return;
     const v = projector();
+    drawLoupe(v);
     for (const r of st.results) drawResult(v, r);
     const pend = st.pending.map((q) => v.toScreen(q.p));
     for (let i = 1; i < pend.length; i++) {
@@ -456,7 +561,7 @@ export function createMeasure(deps) {
     // (the viewer turns off what cannot run beside Measure: Explode)
     if (on && !st.on && deps.beforeOn) deps.beforeOn();
     st.on = on;
-    if (!on) { st.pending = []; st.snap = null; setList(false); }
+    if (!on) { st.pending = []; st.snap = null; st.loupe = null; setList(false); }
     syncRow();
     deps.queueFrame();
     if (on) deps.flash('Measure: click points on the model (Esc to stop)', 3000);
@@ -484,6 +589,7 @@ export function createMeasure(deps) {
     st.pending = [];
     st.results = [];
     st.snap = null;
+    st.loupe = null;
     st.model = null;
     st.geom = new Map();
     setList(false);
@@ -598,13 +704,14 @@ export function createMeasure(deps) {
     get holes() { return st.holes; },
     // a body's measured geometry (mesh index), built once (js/drawing-svg.js)
     geometry: (mi) => { model(); return geomOf(mi, Infinity); },
-    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    get loupeShown() { return !!st.loupe; },
+    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
     // a distance found elsewhere (the clearance check): drawn and listed as
     // Measure's own, replacing an earlier one of the same `sub`
     addDistance(pa, pb, sub) {
       st.results = st.results.filter((r) => r.sub !== sub);
       const d = distance(pa, pb);
-      st.results.push({ mode: 'distance', pts: [pa.slice(), pb.slice()], main: deps.lenText(d.length), sub, value: d.length });
+      st.results.push({ mode: 'distance', pts: [pa.slice(), pb.slice()], main: deps.lenText(d.length), sub, value: d.length, fixed: true });
       syncRow();
       deps.queueFrame();
     },
