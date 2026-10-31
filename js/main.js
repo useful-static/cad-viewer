@@ -4979,13 +4979,25 @@ function showInfo() {
 // mass: the selection's closed bodies times the material's density (mm³ /
 // 1000 = cm³); with nothing selected it says why it waits (a whole model is
 // rarely one material)
+// The density in g/cm³: the material picked, or the one typed after
+// "other…"; null while the typed one is not a usable number
+function density() {
+  if ($('material').value !== 'custom') return Number($('material').value);
+  const d = Number($('density').value);
+  return Number.isFinite(d) && d > 0 && d <= 25 ? d : null;
+}
+
 function syncMassRow() {
   const f = app.factsNow;
   const show = !!app.header && !!f && app.selected.size > 0;
   $('infomass').hidden = !show;
+  $('densitybox').hidden = $('material').value !== 'custom';
   if (!show) return;
-  const g = (f.vol / 1000) * Number($('material').value);
-  $('massval').textContent = f.closed ? `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}` : 'none closed: no volume';
+  const d = density();
+  if (!f.closed) { $('massval').textContent = 'none closed: no volume'; return; }
+  if (d === null) { $('massval').textContent = 'type a density (g/cm³, water is 1)'; return; }
+  const g = (f.vol / 1000) * d;
+  $('massval').textContent = `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}`;
 }
 
 function syncRefRow() {
@@ -5144,6 +5156,7 @@ function fillInfo(el) {
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
     add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}`);
     add('area', `≈ ${fmtArea(area, u)}`);
+    addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
     if (!ids.length) add('mass', 'select parts (a whole model is rarely one material)');
   }
@@ -5154,6 +5167,19 @@ function fillInfo(el) {
 }
 
 const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
+
+// What the volume counts, in words (Details, under the volume): "the 305
+// closed bodies; 1,082 are flat sheets (pads, labels) and 4 are open surface
+// models", with "(12 of them closed by the converter's caps)" when some are
+function volumeCounts(n, closed, capped, sheets, open) {
+  const bodies = (k) => `${fmtInt(k)} ${k === 1 ? 'body' : 'bodies'}`;
+  let s = closed === n ? (n === 1 ? 'the one body, closed' : `all ${bodies(n)}, every one closed`)
+    : closed ? `the ${fmtInt(closed)} closed ${closed === 1 ? 'body' : 'bodies'}` : 'no body: none is closed';
+  if (capped) s += ` (${fmtInt(capped)} of them closed by the converter's caps)`;
+  const rest = [sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'is a flat sheet' : 'are flat sheets'} (pads, labels)`,
+    open && `${fmtInt(open)} ${open === 1 ? 'is an open surface model' : 'are open surface models'}`].filter(Boolean);
+  return rest.length ? `${s}; ${rest.join(' and ')}` : s;
+}
 
 // ---------- input ----------
 
@@ -5764,7 +5790,18 @@ function wireInput() {
   // (the number keys then reach the view)
   try { const m = localStorage.getItem('cadv.material'); if (m && [...$('material').options].some((o) => o.value === m)) $('material').value = m; } catch { /* storage off */ }
   blurAfterPick($('material'));
-  $('material').onchange = () => { try { localStorage.setItem('cadv.material', $('material').value); } catch { /* storage off */ } syncMassRow(); };
+  $('material').onchange = () => {
+    try { localStorage.setItem('cadv.material', $('material').value); } catch { /* storage off */ }
+    syncMassRow();
+    // "other…": the density is typed next (the pick's blur has run already)
+    if ($('material').value === 'custom') $('density').focus();
+  };
+  // a typed density, remembered as the material is
+  try { const d = localStorage.getItem('cadv.density'); if (d) $('density').value = d; } catch { /* storage off */ }
+  $('density').oninput = () => {
+    try { localStorage.setItem('cadv.density', $('density').value); } catch { /* storage off */ }
+    syncMassRow();
+  };
   $('refset').onclick = () => setRef(true);
   $('refclear').onclick = () => setRef(false);
   $('holesbtn').onclick = () => {

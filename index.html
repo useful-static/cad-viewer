@@ -135,6 +135,8 @@
   #info b { color:var(--dim); font-weight:500; }
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
   #material { font-size:11px; padding:0 4px; }
+  #densitybox[hidden] { display:none; }
+  #density { width:6ch; font-size:11px; padding:0 4px; background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc); }
   /* the models' gallery and the poster: cards over the view */
@@ -578,7 +580,8 @@
     <div id="infomass" hidden><b>mass if</b> <select id="material" autocomplete="off" aria-label="Material the mass is worked out for" title="The material the selected parts are made of: their mass is their volume times its density">
         <option value="1.24">PLA (1.24 g/cm³)</option><option value="1.04">ABS (1.04)</option><option value="1.27">PETG (1.27)</option>
         <option value="2.70">aluminium (2.70)</option><option value="7.85">steel (7.85)</option><option value="8.5">brass (8.5)</option><option value="1.85">FR-4 (1.85)</option>
-      </select> <span id="massval"></span></div>
+        <option value="custom">other…</option>
+      </select><span id="densitybox" hidden> <input id="density" type="number" inputmode="decimal" min="0.01" max="25" step="0.01" autocomplete="off" aria-label="Density, in grams per cubic centimetre" title="The material's density in g/cm³ (water is 1)"> g/cm³</span> <span id="massval"></span></div>
     <div id="holes" hidden><div class="holeshead"><b id="holestitle">Holes</b>
       <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
