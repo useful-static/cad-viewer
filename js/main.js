@@ -1272,15 +1272,30 @@ function modelUrlIn(search) {
   if (listed && search.get('model')) return entryByName(app.listEntries, search.get('model'))?.url || null;
   const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
   if (listed && isPlace(place)) return app.listEntries?.[Number(place) - 1]?.url || null;
-  return search.get('src') || null;
+  // a relative ?src= beside a list: the entry it names, read against the
+  // list's own URL as the list's files are ("boards/x.cadmesh" in a list at
+  // example.com/models.json), else against this page as before
+  const src = search.get('src');
+  if (listed && isRelative(src)) {
+    for (const l of params.getAll('list')) {
+      let url = null;
+      try { url = new URL(src, new URL(l, location.href)).href; } catch { /* not a URL */ }
+      const e = url && (app.listEntries || []).find((x) => x.url === url);
+      if (e) return e.url;
+    }
+  }
+  return src || null;
 }
+const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
 // (what an address names by the list, which must be read before it opens:
-// "model le-potato", "index 3"; null when it names a URL or nothing)
+// "model le-potato", "index 3", a relative src the list may name; null when
+// it names an absolute URL or nothing)
 const modelNameIn = (search) => {
   if (!params.getAll('list').length) return null;
   if (search.get('model')) return `"${search.get('model')}"`;
   const place = [search.get('index'), search.get('src')].find(isPlace);
-  return place ? place : null;
+  if (place) return place;
+  return isRelative(search.get('src')) ? `"${search.get('src')}"` : null;
 };
 
 // A link to this model at this view, in the full viewer (never ?embed=)
