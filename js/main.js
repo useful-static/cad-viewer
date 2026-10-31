@@ -785,6 +785,8 @@ function frameState(pic = null) {
     // (or a tour step that dims the rest as ghosts)
     ghost: (app.ghostHidden || app.tourGhost) && app.hidden.size && currentStyle().faces !== 'none' ? GHOST_ALPHA : 0,
     ground: groundShadow(),
+    // a picture's own background (white; black then white for transparent)
+    ...(pic && pic.bg ? { background: pic.bg } : {}),
   };
 }
 
@@ -1099,10 +1101,10 @@ async function exportMesh(fmt) {
   announce(note);
 }
 
-// Save picture (P): the view as a PNG at app.pictureScale (2 by default) x
-// its CSS size (renderPicture: in tiles, capped at 8192 px and 16.7 Mpx),
-// hover and selection left out, with Measure's results and the hole table's
-// markers drawn in. A transparent background is not built yet.
+// Save picture (P): the view as a PNG at the picture options' size and
+// background (renderPicture: in tiles, capped at 8192 px and 16.7 Mpx),
+// hover left out, the selection unless the options include it, with
+// Measure's results and the hole table's markers drawn in.
 // print: the picture printed (File > Print) instead of saved
 async function savePicture(print = false) {
   // a drawing: its canvas as it is drawn
@@ -1137,7 +1139,8 @@ async function savePicture(print = false) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
   app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
-  const note = `saved ${name}, ${out.width} × ${out.height}`;
+  // (a size the view has grown too big for saves at the largest allowed)
+  const note = `saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`;
   flashHover(note, 3000);
   announce(note);
 }
@@ -1154,26 +1157,85 @@ function pictureSize(n, cw, ch) {
   return { s, W: Math.max(1, Math.round(cw * s)), H: Math.max(1, Math.round(ch * s)), capped: s < n - 1e-9 };
 }
 
-// The view rendered at app.pictureScale (2 by default) x its CSS size, in
-// tiles of at most 2048 px: each tile is the whole picture's projection
-// cropped to it (frameState's pic), drawn on the view's own canvas at the
-// tile's size and copied into the picture in the same task, before the
-// browser presents or clears the canvas. -> { canvas, scale, cssW, cssH,
-// tiles, capped } or null when the GPU could not give a tile its size.
-async function renderPicture() {
+// The options group shown or not (▾), its buttons in step with app.pic: a
+// size the view is too big for is greyed, its tooltip giving the limit
+function setPicOpts(open) {
+  $('picopts').hidden = !open;
+  $('picmore').setAttribute('aria-expanded', String(open));
+  if (open) syncPicOpts();
+}
+function syncPicOpts() {
+  const box = $('stage');
+  const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
+  for (const b of $('picopts').querySelectorAll('[data-scale]')) {
+    const n = Number(b.dataset.scale), sz = pictureSize(n, cw, ch);
+    b.setAttribute('aria-pressed', String(app.pic.scale === n));
+    b.setAttribute('aria-disabled', String(sz.capped));
+    b.title = sz.capped ? `this view is too big for ${n}×: a picture is at most ${PIC_LONG} px long and ${PIC_AREA / 1e6} Mpx (it would save at ${sz.W} × ${sz.H})`
+      : `${sz.W} × ${sz.H} px`;
+  }
+  for (const b of $('picopts').querySelectorAll('[data-bg]')) b.setAttribute('aria-pressed', String(app.pic.bg === b.dataset.bg));
+  $('picbgview').textContent = currentStyle().paper || app.lightBg ? 'view (paper)' : 'view';
+  $('picsel').setAttribute('aria-pressed', String(app.pic.sel));
+}
+function savePicOpts() {
+  try { localStorage.setItem('cadv.pic', JSON.stringify(app.pic)); } catch { /* storage off */ }
+  syncPicOpts();
+}
+
+// Copy image: the picture to the clipboard. The ClipboardItem is made in the
+// click's own task with a promise for the PNG, so the clipboard still takes
+// it when the render finishes.
+function copyPicture() {
+  if (!app.header || !app.renderer) return;
+  const png = renderPicture().then((pic) => {
+    if (!pic) throw new Error('the picture could not be read from the GPU');
+    return new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
+  });
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]).then(
+    () => { flashHover('picture copied', 3000); announce('picture copied'); },
+    (e) => flashHover(`the picture could not be copied: ${e.message || e}`, 4000));
+}
+
+// The picture options (File > Save picture ▾), remembered in this browser:
+// scale 1 | 2 | 4, bg 'view' | 'white' | 'transparent', sel (draw the
+// selection as selected)
+app.pic = { scale: 2, bg: 'view', sel: false };
+try {
+  const p = JSON.parse(localStorage.getItem('cadv.pic') || 'null');
+  if (p && [1, 2, 4].includes(p.scale)) app.pic.scale = p.scale;
+  if (p && ['view', 'white', 'transparent'].includes(p.bg)) app.pic.bg = p.bg;
+  if (p && typeof p.sel === 'boolean') app.pic.sel = p.sel;
+} catch { /* storage off, or not ours */ }
+
+// The view rendered at app.pic.scale x its CSS size, in tiles of at most
+// 2048 px: each tile is the whole picture's projection cropped to it
+// (frameState's pic), drawn on the view's own canvas at the tile's size and
+// copied into the picture in the same task, before the browser presents or
+// clears the canvas. Hover is always left out, the selection unless
+// app.pic.sel. Background: the view's, white, or transparent -- each tile
+// drawn on black and on white (the canvas has no alpha), alpha = 1 - (white
+// - black), colour = black / alpha, so antialiased edges and X-ray come out
+// partly transparent. -> { canvas, scale, cssW, cssH, tiles, capped } or
+// null when the GPU could not give a tile its size.
+async function renderPicture(opts = app.pic) {
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
-  const { s, W, H, capped } = pictureSize(app.pictureScale || 2, cw, ch);
+  const { s, W, H, capped } = pictureSize(opts.scale || 2, cw, ch);
   const T = Math.min(TILE, r.maxCanvasSize || 4096);
-  const out = document.createElement('canvas');
-  out.width = W;
-  out.height = H;
+  const canvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const out = canvas(W, H);
   const ctx = out.getContext('2d');
-  // hover and the selection's tint are of the moment, not of the model
+  // transparent: the white pass's picture beside the black one in `out`
+  const clear = opts.bg === 'transparent';
+  const onWhite = clear ? canvas(W, H) : null;
+  const wctx = onWhite && onWhite.getContext('2d');
+  const passes = clear ? [[0, 0, 0], [1, 1, 1]] : [opts.bg === 'white' ? [1, 1, 1] : null];
+  // hover is of the moment; the selection's tint too, unless asked for
   const hov = app.hover;
   const sel = [...app.selected];
   app.hover = 0;
-  app.selected.clear();
+  if (!opts.sel) app.selected.clear();
   pushState();
   let ok = true, tiles = 0;
   try {
@@ -1183,8 +1245,10 @@ async function renderPicture() {
         r.resize(tw, th);
         // (a drawing buffer smaller than asked would stretch the tile)
         if (r.canvas.width !== tw || r.canvas.height !== th) { ok = false; break; }
-        r.render(frameState({ W, H, x0, y0, tw, th, scale: s }));
-        ctx.drawImage(r.canvas, 0, 0, tw, th, x0, y0, tw, th);
+        passes.forEach((bg, i) => {
+          r.render(frameState({ W, H, x0, y0, tw, th, scale: s, bg }));
+          (i ? wctx : ctx).drawImage(r.canvas, 0, 0, tw, th, x0, y0, tw, th);
+        });
         tiles++;
       }
     }
@@ -1199,7 +1263,20 @@ async function renderPicture() {
     queueFrame();
   }
   if (!ok) return null;
-  app.measure.paint(ctx, s, !!currentStyle().paper);
+  if (clear) {
+    const b = ctx.getImageData(0, 0, W, H), w = wctx.getImageData(0, 0, W, H).data, d = b.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // the coverage each channel shows, averaged; colour un-blended from black
+      const a = 1 - ((w[i] - d[i]) + (w[i + 1] - d[i + 1]) + (w[i + 2] - d[i + 2])) / 765;
+      if (a <= 1 / 255) { d[i] = d[i + 1] = d[i + 2] = d[i + 3] = 0; continue; }
+      d[i] = Math.min(255, d[i] / a); d[i + 1] = Math.min(255, d[i + 1] / a); d[i + 2] = Math.min(255, d[i + 2] / a);
+      d[i + 3] = Math.round(a * 255);
+    }
+    ctx.putImageData(b, 0, 0);
+  }
+  // Measure's chips: the light palette on a light picture (paper, white,
+  // transparent: a page it lands on is most often light)
+  app.measure.paint(ctx, s, !!currentStyle().paper || opts.bg !== 'view');
   return { canvas: out, scale: s, cssW: cw, cssH: ch, tiles, capped };
 }
 
@@ -1853,7 +1930,8 @@ async function tourPictures(tour) {
       await gpuSync().catch(() => {});
       await nextFrame();
       await nextFrame();
-      const pic = await renderPicture();
+      // (the tour's pictures keep their own settings, not Save picture's)
+      const pic = await renderPicture({ scale: 2, bg: 'view', sel: false });
       if (!pic) break;
       const s = tour.steps[i];
       paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, s.title || (i === 0 ? tour.title : ''), s.text);
@@ -3182,6 +3260,9 @@ function updateButtons() {
   $('addmodelbtn').disabled = !has || !app.scene;
   $('savepic').disabled = !has && !app.dxf;
   $('printbtn').disabled = $('savepic').disabled;
+  // (a drawing saves its own canvas: the options are the 3D view's)
+  $('picmore').disabled = !has || !!app.dxf;
+  if ($('picmore').disabled) setPicOpts(false);
   // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
   $('savedrawing').disabled = !has || !(app.baseMesh && app.baseMesh.faces);
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
@@ -4115,6 +4196,8 @@ function show2D(drawing, name, url) {
   $('sharelink').disabled = !url;
   $('savepic').disabled = false;
   $('printbtn').disabled = false;
+  $('picmore').disabled = true;
+  setPicOpts(false);
   syncMenuButtons();
   showInfo();
   setStatus('ready', `ready · 2D drawing${drawing.units ? '' : ' (its unit is not stored)'}`);
@@ -5758,6 +5841,17 @@ function wireInput() {
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
+  // the picture options (▾): pressing one keeps the group open
+  $('picmore').onclick = () => setPicOpts($('picopts').hidden);
+  for (const b of $('picopts').querySelectorAll('[data-scale]')) {
+    b.onclick = () => { if (b.getAttribute('aria-disabled') !== 'true') { app.pic.scale = Number(b.dataset.scale); savePicOpts(); } };
+  }
+  for (const b of $('picopts').querySelectorAll('[data-bg]')) b.onclick = () => { app.pic.bg = b.dataset.bg; savePicOpts(); };
+  $('picsel').onclick = () => { app.pic.sel = !app.pic.sel; savePicOpts(); };
+  // Copy image: where the clipboard takes a picture (ClipboardItem with a
+  // promise, so the gesture still holds when the render finishes)
+  $('piccopy').hidden = typeof ClipboardItem !== 'function' || !navigator.clipboard?.write;
+  $('piccopy').onclick = () => copyPicture();
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => $('view').focus();
