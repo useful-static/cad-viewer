@@ -24,8 +24,11 @@
 // number: a list whose files are named so can be an array of pairs instead,
 // [["10", "Ten"], ["2", "Two"]], which keeps its order whatever the names.
 // Like ?src=, a list on another site must be served with CORS.
+// A file must be http(s), or on the list's own scheme and host (an app that
+// serves the viewer and its files from its own scheme, js/same-place.js).
 
 import { parseOrient } from './orient.js';
+import { samePlace } from './same-place.js';
 
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
@@ -59,7 +62,7 @@ export function parseModelList(text, listUrl) {
     } catch {
       throw new Error(`"${file}" is not a URL`);
     }
-    if (!/^https?:$/.test(new URL(url).protocol)) throw new Error(`"${file}" is not an http(s) URL`);
+    if (!samePlace(url, listUrl)) throw new Error(`"${file}" is not an http(s) URL, nor on the list's own scheme and host`);
     const entry = { url, name: name.trim() || file };
     if (v && typeof v === 'object' && v.orient !== undefined) {
       try {

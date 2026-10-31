@@ -29,6 +29,7 @@ import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
+import { clearestDirection } from './tour-sight.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1213,6 +1214,21 @@ function saveDrawing() {
   announce(note);
 }
 
+// ?src= with a ?list=: the model's place in the list (1 = its first model),
+// since the list already names its URL; a model the list does not name, or
+// a page with no list, by its URL
+function srcParam(url) {
+  if (!url || !params.getAll('list').length) return url;
+  const i = (app.listEntries || []).findIndex((e) => e.url === url);
+  return i >= 0 ? String(i + 1) : url;
+}
+// ...and back: a number is the list's entry (null until the list is read,
+// or past its end), anything else the URL itself
+function srcUrl(raw) {
+  if (!raw || !/^\d+$/.test(raw) || !params.getAll('list').length) return raw || null;
+  return app.listEntries?.[Number(raw) - 1]?.url || null;
+}
+
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
   const u = new URL(location.href);
@@ -1220,7 +1236,7 @@ function viewLink() {
   u.hash = '';
   // the model lists too, in their order, so the link keeps the drop-down
   for (const l of params.getAll('list')) u.searchParams.append('list', l);
-  if (app.sourceUrl) u.searchParams.set('src', app.sourceUrl);
+  if (app.sourceUrl) u.searchParams.set('src', srcParam(app.sourceUrl));
   // the added models opened from a URL, and where they were moved to
   if (app.sourceUrl && app.scene) {
     for (const m of app.scene.slice(1)) {
@@ -1307,7 +1323,7 @@ function stepPose(s) {
     // (a frame given as a box: the box itself)
     const box = s.frame && s.frame.min ? { min: s.frame.min.slice(), max: s.frame.max.slice() } : drawnBox(ids) || drawnBox(null);
     if (!box) return null;
-    if (s.from === 'outside') q = outsideQuat(box) || q;
+    if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
     const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover());
     pose = { target: f.target, dist: f.dist, q };
   }
@@ -1362,25 +1378,38 @@ function applyStepState(s) {
   viewChanged();
 }
 
-// A step's "from": "outside": the camera on the side of the model the box
-// lies on (from the model's centre toward the box's, along the ground),
-// raised 30° above the horizon, the model's up axis up on screen. A box at
-// the centre has no side: null (the caller keeps Iso).
-const OUTSIDE_RISE = Math.PI / 6;
-function outsideQuat(box) {
+// A step's "from": "outside": the camera where the part is least hidden by
+// the rest of the model (js/tour-sight.js): from the side of the model it
+// lies on, 30° up, when that is clear; higher, from another side, or from
+// underneath (a part on a board's bottom face) when it is not. The model's
+// up axis stays up on screen. Worked out once per step (ids: the step's
+// parts, whose own bodies never hide them; with none, a box frame, the
+// bodies inside the box).
+const sightOf = new WeakMap();
+function outsideQuat(box, ids = null, step = null) {
   const up = orientUp(app.cam.orient);
-  const whole = drawnBox(null) || app.header.bbox;
-  const m = [0, 1, 2].map((k) => (whole.min[k] + whole.max[k]) / 2);
-  const p = [0, 1, 2].map((k) => (box.min[k] + box.max[k]) / 2);
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  let h = p.map((v, k) => v - m[k]);
-  const hu = dot(h, up);
-  h = h.map((v, k) => v - hu * up[k]);
-  const hn = Math.hypot(...h);
-  const size = Math.hypot(...[0, 1, 2].map((k) => whole.max[k] - whole.min[k]));
-  if (hn < 0.02 * size) return null;
-  h = h.map((v) => v / hn);
-  const z = h.map((v, k) => v * Math.cos(OUTSIDE_RISE) + up[k] * Math.sin(OUTSIDE_RISE)); // toward the eye
+  let z = step && sightOf.get(step);
+  if (!z || z.orient !== app.cam.orient) {
+    const h = app.header;
+    const whole = drawnBox(null) || h.bbox;
+    const m = [0, 1, 2].map((k) => (whole.min[k] + whole.max[k]) / 2);
+    const mine = new Set(ids || []);
+    const hidden = app.tour ? new Set(app.tour.base.hidden) : app.hidden;
+    const within = (b) => [0, 1, 2].every((k) => {
+      const c = (b.min[k] + b.max[k]) / 2;
+      return c >= box.min[k] && c <= box.max[k];
+    });
+    const obstacles = [];
+    h.meshes.forEach((mesh, i) => {
+      const b = mesh.bbox;
+      if (!b || mine.has(i + 1) || hidden.has(i + 1) || within(b)) return;
+      obstacles.push(b);
+    });
+    z = { dir: clearestDirection(box, up, m, obstacles).dir, orient: app.cam.orient };
+    if (step) sightOf.set(step, z);
+  }
+  z = z.dir; // toward the eye
   let y = up.map((v, k) => v - dot(up, z) * z[k]);
   const yn = Math.hypot(...y);
   y = y.map((v) => v / yn);
@@ -1531,12 +1560,25 @@ function showTourStep(i) {
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
 }
 
-function startTour(tour, url) {
-  if (!app.header) return;
+// only: a step id (?step=<id>, a v2 tour): that step alone, held, with no
+// card (the page around the viewer says what it shows). A tour without it
+// leaves the model as it is; returns whether the tour started.
+function startTour(tour, url, only = null) {
+  if (!app.header) return false;
+  if (only) {
+    const s = tour.steps.find((x) => x.id === only);
+    if (!s) {
+      setStatus('ready', `${readyText()} · the tour has no step "${only}"`);
+      return false;
+    }
+    tour = { ...tour, steps: [s], mode: 'static', loop: false };
+  }
   endTour(false);
   const saved = currentView();
   // what the visitor had: each step is applied to it, and leaving puts it back
-  const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides),
+  // (styleChoice: the visitor's own choice of style, which a step's style is
+  // not; leaving puts it back as it was)
+  const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t } };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
   // the tour's orientation while it plays (leaving puts the visitor's back,
@@ -1545,7 +1587,7 @@ function startTour(tour, url) {
     app.cam.orient = tour.orient;
     updateButtons();
   }
-  $('tourcard').hidden = false;
+  $('tourcard').hidden = !!only;
   // an animated tour plays from the start; a static one waits for ▶
   setTourPlaying(tour.mode === 'animated');
   $('stage').classList.add('touring');
@@ -1553,6 +1595,7 @@ function startTour(tour, url) {
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) setStatus('ready', `${readyText()} · the tour names parts this model lacks: ${missing.join(', ')}`);
   showTourStep(0);
+  return true;
 }
 
 // Leave the tour: the card goes and the view the visitor had comes back
@@ -1569,6 +1612,7 @@ function endTour(restore = true) {
     recolour();
     if (base.explode.on) { app.explode.t = base.explode.t; if (app.explode.on) { syncExplodeSphere(); syncExplodeRow(); } else setExplode(true); } else setExplode(false);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
+    app.styleChoice = base.styleChoice;
     updateButtons();
     viewChanged();
   }
@@ -1776,14 +1820,21 @@ async function tourVideo(tour) {
 // over the view. Until a click or tap makes it active it takes nothing from
 // the page around it: the wheel and a finger's drag scroll the page, and a
 // hint says how to start; Esc gives the wheel back.
-app.embed = new URLSearchParams(location.search).get('embed') === '1';
-app.embedActive = !app.embed;
+// &active=1: active from the start (a page that shows the model as an
+// overlay of its own, not in a scrolling page, has no page to give the wheel
+// to). &noopen=1: no "Open in cad.place ↗" (a page in an app, where a new tab
+// has nowhere to open).
+const embedParams = new URLSearchParams(location.search);
+app.embed = embedParams.get('embed') === '1';
+app.embedActive = !app.embed || embedParams.get('active') === '1';
 function setupEmbed() {
   if (!app.embed) return;
   document.body.classList.add('embed');
+  document.body.classList.toggle('active', app.embedActive);
   $('embedbar').hidden = false;
-  $('embedhint').hidden = false;
+  $('embedhint').hidden = app.embedActive;
   $('embedfit').onclick = () => fitTo(drawnBox(null));
+  if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
   // the link is made when it is about to be followed, so it holds the view now
   const fresh = () => { $('embedopen').href = app.header ? viewLink() : location.href.replace(/([?&])embed=1&?/, '$1'); };
   for (const ev of ['pointerenter', 'focus', 'pointerdown']) $('embedopen').addEventListener(ev, fresh);
@@ -2659,6 +2710,17 @@ function applyListEntry() {
     };
     tl.append(b);
   }
+  // a listed model with a tour plays it as soon as the list names it: once
+  // per model opened, never over a view link's view or ?tour='s own tour
+  // (the visitor's ✕ ends it for this model)
+  if (app.header && app.autoTourFor !== app.header) {
+    if (app.pendingView || app.urlTourPending) app.autoTourFor = app.header;
+    else if (e && e.tours && e.tours.length && !app.tour) {
+      const h = app.autoTourFor = app.header;
+      const t = e.tours[0];
+      readTour(t.url).then((r) => { if (!r.error && app.header === h && !app.tour) startTour(r.tour, t.url); });
+    }
+  }
   syncMenuButtons();
   // its part labels, when they differ from what the tree shows
   const labels = (e && e.labels) || null;
@@ -2773,7 +2835,7 @@ let listPick = 0;
 function openListed(url, refocus = false, keepMenu = false) {
   const before = location.href;
   const u = new URL(before);
-  u.searchParams.set('src', url);
+  u.searchParams.set('src', srcParam(url));
   u.hash = ''; // a view of the last model is not a view of this one
   // a pick is a step in the history: Back opens the model before it again
   // (feature review item 21; it replaced the entry, so Back left the page)
@@ -2800,7 +2862,7 @@ function wireHistory() {
     if (app.skipPop) { app.skipPop = false; return; }
     // (an entry with no ?src is the page as first opened, which opened the
     // list's first model)
-    const src = new URLSearchParams(location.search).get('src') || app.listEntries?.[0]?.url;
+    const src = srcUrl(new URLSearchParams(location.search).get('src')) || app.listEntries?.[0]?.url;
     if (!src || src === app.sourceUrl) { syncModelList(); return; }
     let view = null;
     if (location.hash.startsWith('#view=')) {
@@ -5740,7 +5802,19 @@ async function main() {
   keepFocus();
   queueFrame();
   refreshCacheBar();
-  const src = params.get('src');
+  // ?src=<n> beside a ?list=: the list's n-th model (srcUrl), so the list is
+  // read first; a number past its end opens its first model and says so
+  const lists = params.getAll('list');
+  let listed = null;
+  let src = params.get('src');
+  if (lists.length && /^\d+$/.test(src || '')) {
+    setStatus('idle', 'reading the model list…');
+    listed = readLists(lists, () => false);
+    await listed;
+    const n = src;
+    src = srcUrl(n) || app.listEntries?.[0]?.url || null;
+    if (src && !srcUrl(n)) announce(`the model list has no model ${n}: its first opens`);
+  }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
   // viewer, for a model this page opens from a URL that its list entry does
   // not orient (orientFor). A bad one is no orientation, never an error.
@@ -5759,7 +5833,7 @@ async function main() {
     // (the model now in ?src=: a pick from the model list changes it)
     // (no src: a model from the device, or the list's first, which the page
     // as first opened shows and Back returns to)
-    const now = new URLSearchParams(location.search).get('src');
+    const now = srcUrl(new URLSearchParams(location.search).get('src'));
     const first = app.listEntries?.[0]?.url;
     if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()), true);
   });
@@ -5811,12 +5885,14 @@ async function main() {
   // once a model is shown
   const tourUrl = params.get('tour');
   const touring = tourUrl ? readTour(tourUrl) : null;
+  // (its own tour, not the list's, plays over the first model: applyListEntry)
+  app.urlTourPending = !!tourUrl;
   if (touring && !src && !poster) {
     opening = touring.then((r) => (r.tour && r.tour.model && app.loadSeq === seq0 ? loadListed(r.tour.model) : null));
   }
-  const lists = params.getAll('list');
   if (!src) setStatus('idle', lists.length ? 'reading the model list…' : tourUrl ? 'reading the tour…' : IDLE_MSG);
-  const listed = lists.length ? readLists(lists, () => !src && app.loadSeq === seq0 && !touring) : null;
+  // (already read when ?src was a place in it)
+  listed = listed || (lists.length ? readLists(lists, () => !src && app.loadSeq === seq0 && !touring) : null);
   // the file the user chose while the GPU started: the newest ask, so it
   // supersedes ?src (and the list's first model does not open after it)
   if (early) openFile(early);
@@ -5829,9 +5905,11 @@ async function main() {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
-      if (app.header) startTour(r.tour, tourUrl);
+      if (app.header) startTour(r.tour, tourUrl, params.get('step'));
       else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
     }
+    // (the next model picked from the list plays its own tour)
+    if (app.header) { app.autoTourFor = app.header; app.urlTourPending = false; }
   }
 }
 

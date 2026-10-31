@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS } from '../js/tour.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
+import { blockedShare, clearestDirection, rayHitsBox } from '../js/tour-sight.js';
 
 let passed = 0;
 let failed = 0;
@@ -59,6 +60,28 @@ test('parse-model-url', () => {
   assert.equal(t.model, 'https://example.com/tours/board.cadmesh.gz');
 });
 
+test('parse-v2-step-ids', () => {
+  const t = parseTour(JSON.stringify({ cadtour: 2, steps: [{ id: 'microsd', title: 'microSD card slot' }, { title: 'no id' }, { id: 'uart' }] }));
+  assert.equal(t.version, 2);
+  assert.deepEqual(t.steps.map((s) => s.id), ['microsd', undefined, 'uart']);
+  assert.equal(parseTour(JSON.stringify({ cadtour: 1, steps: [{}] })).version, 1);
+});
+
+// an app serving the viewer and its files from its own scheme (lc://app/)
+// names its model there; nothing else that is not http(s) passes. URL.origin
+// is "null" for every one of these, which is why it is not the test.
+test('model-on-the-tours-own-scheme-and-host', () => {
+  const T = 'lc://app/data/cad/le-potato/tour.cadtour.json';
+  const ok = parseTour(JSON.stringify({ cadtour: 2, model: '/data/cad/le-potato/model.cadmesh.gz', steps: [{}] }), T);
+  assert.equal(ok.model, 'lc://app/data/cad/le-potato/model.cadmesh.gz');
+  const refuse = (model, base) => assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, model, steps: [{}] }), base), /"model"/);
+  refuse('lc://other/x.cadmesh.gz', T);
+  refuse('foo://app/x.cadmesh.gz', T);
+  refuse('foo://evil/x', T);
+  refuse('x.cadmesh.gz', 'file:///srv/tour.cadtour.json');
+  refuse('file:///etc/passwd', 'file:///srv/tour.cadtour.json');
+});
+
 // each mistake refused, and the message names where it is
 const REFUSE = [
   ['not JSON', '{', /not JSON/],
@@ -76,6 +99,10 @@ const REFUSE = [
   ['callout without a place', { cadtour: 1, steps: [{ callouts: [{ text: 'x' }] }] }, /step 1 "callouts"/],
   ['bad mode', { cadtour: 1, mode: 'auto', steps: [{}] }, /"mode"/],
   ['not http', { cadtour: 1, model: 'file:///etc/passwd', steps: [{}] }, /"model"/],
+  ['an id in a v1 tour', { cadtour: 1, steps: [{ id: 'uart' }] }, /step 1 "id": not a step field/],
+  ['a bad id', { cadtour: 2, steps: [{ id: 'UART header' }] }, /step 1 "id"/],
+  ['an id used twice', { cadtour: 2, steps: [{ id: 'uart' }, { id: 'uart' }] }, /step 2 "id": "uart" is used by an earlier step/],
+  ['version 3', { cadtour: 3, steps: [{}] }, /"cadtour"/],
 ];
 for (const [name, t, re] of REFUSE) {
   test(`refuse-${name.replace(/ /g, '-')}`, () => {
@@ -147,6 +174,32 @@ test('orient', () => {
   assert.equal(parseTour(JSON.stringify({ cadtour: 1, steps: [{}] })).orient, null);
   assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, orient: 'up', steps: [{}] })), /"orient"/);
   assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, orient: '+z+z', steps: [{}] })), /"orient"/);
+});
+
+test('sight', () => {
+  // a board 100 x 60 x 1.6 in x-y, +z up; a part near its +x edge
+  const up = [0, 0, 1];
+  const board = { min: [0, 0, 0], max: [100, 60, 1.6] };
+  const centre = [50, 30, 5];
+  const top = { min: [80, 25, 1.6], max: [90, 35, 4] };
+  assert.ok(rayHitsBox([0, 0, 0], [1, 0, 0], { min: [5, -1, -1], max: [6, 1, 1] }));
+  assert.ok(!rayHitsBox([0, 0, 0], [-1, 0, 0], { min: [5, -1, -1], max: [6, 1, 1] }));
+  // nothing in the way: from its own side (+x), 30° up, as before
+  let r = clearestDirection(top, up, centre, [board]);
+  assert.equal(r.blocked, 0);
+  assert.ok(r.dir[0] > 0.86 && Math.abs(r.dir[2] - 0.5) < 1e-9, `${r.dir}`);
+  // on the bottom face: the board hides it from above, so from underneath
+  const bottom = { min: [80, 25, -2.4], max: [90, 35, 0] };
+  r = clearestDirection(bottom, up, centre, [board]);
+  assert.equal(r.blocked, 0);
+  assert.ok(r.dir[2] < 0, `${r.dir}`);
+  // a tall row of pins between it and its own side, 30° up: another side
+  // or higher, and clear
+  const pins = { min: [92, 0, 1.6], max: [95, 60, 12] };
+  assert.ok(blockedShare(top, [Math.cos(Math.PI / 6), 0, 0.5], [board, pins]) > 0.5);
+  r = clearestDirection(top, up, centre, [board, pins]);
+  assert.equal(r.blocked, 0);
+  assert.ok(blockedShare(top, r.dir, [board, pins]) === 0);
 });
 
 test('tour-names', () => {

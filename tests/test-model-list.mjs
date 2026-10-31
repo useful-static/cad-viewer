@@ -41,6 +41,18 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('{"a": ', L), /not JSON/);
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
+await test('a list on an app\'s own scheme names its own files; any other non-http place is refused', () => {
+  const A = 'lc://app/data/cad/list.json';
+  const e = parseModelList('{"/data/cad/le-potato/model.cadmesh.gz": {"name": "Le Potato", "labels": {"X_1": "microSD card slot"}}}', A);
+  assert.equal(e[0].url, 'lc://app/data/cad/le-potato/model.cadmesh.gz');
+  assert.deepEqual(e[0].labels, { X_1: 'microSD card slot' });
+  // must reject: another host on the same scheme, another scheme, and file: against file:
+  // (URL.origin is "null" for all of these, which is why it is not the test)
+  assert.throws(() => parseModelList('{"lc://other/x.cadmesh": "X"}', A), /not an http\(s\) URL, nor on the list's own scheme and host/);
+  assert.throws(() => parseModelList('{"foo://app/x.cadmesh": "X"}', A), /not an http\(s\) URL/);
+  assert.throws(() => parseModelList('{"x.cadmesh": "X"}', 'file:///srv/list.json'), /not an http\(s\) URL/);
+  assert.throws(() => parseModelList('{"file:///etc/passwd": "X"}', 'file:///srv/list.json'), /not an http\(s\) URL/);
+});
 await test('an array of pairs keeps its order where integer-like keys would not; "" is refused', () => {
   const o = parseModelList('{"z.cadmesh": "Z", "10": "Ten", "2": "Two"}', L).map((x) => x.name);
   assert.deepEqual(o, ['Two', 'Ten', 'Z']); // the object form: JavaScript's key order

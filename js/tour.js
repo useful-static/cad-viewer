@@ -2,7 +2,10 @@
 // matched to a model's bodies. Pure (no DOM), so tests/test-tour.mjs checks it
 // in Node.
 //
-// A tour is { cadtour: 1, title?, model?, orient?, mode?, loop?, defaults?, steps: [...] }.
+// A tour is { cadtour: 1|2, title?, model?, orient?, mode?, loop?, defaults?, steps: [...] }.
+// Version 2 is version 1 plus an optional step "id": a fixed name a page
+// can ask for one step by (?step=<id>), where a title is for people and
+// gets renamed. A v1 file with an "id" is refused, as any unknown field is.
 // Every value is checked and a wrong one refuses the whole file, naming the
 // step and the field: a typo in a field name is refused too, since a tour that
 // silently ignored "colour" spelled "color" would play wrong without a word.
@@ -11,6 +14,7 @@
 // same on every page that opens it.
 
 import { parseOrient } from './orient.js';
+import { samePlace } from './same-place.js';
 
 export const PRESETS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'];
 export const EASES = ['linear', 'inOut'];
@@ -21,7 +25,8 @@ export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' }
 
 const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
   'explode', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
-const TOP_FIELDS = ['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
+export const STEP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
 
 const isText = (v, max) => typeof v === 'string' && v.length <= max;
 const isNum = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
@@ -37,13 +42,13 @@ export function parseTour(text, base = undefined) {
   if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('a tour is a JSON object');
   const bad = (where, why) => new Error(`${where}: ${why}`);
   for (const k of Object.keys(t)) if (!TOP_FIELDS.includes(k)) throw bad(`"${k}"`, `not a tour field (${TOP_FIELDS.join(', ')})`);
-  if (t.cadtour !== 1) throw bad('"cadtour"', 'must be 1 (the format version)');
+  if (t.cadtour !== 1 && t.cadtour !== 2) throw bad('"cadtour"', 'must be 1 or 2 (the format version)');
   if (t.title !== undefined && !isText(t.title, 200)) throw bad('"title"', 'must be text of at most 200 characters');
   let model;
   if (t.model !== undefined) {
     if (typeof t.model !== 'string' || !t.model.trim()) throw bad('"model"', 'must be a URL');
     try { model = new URL(t.model, base).href; } catch { throw bad('"model"', `"${t.model}" is not a URL`); }
-    if (!/^https?:/.test(model)) throw bad('"model"', 'must be an http(s) URL');
+    if (!samePlace(model, base)) throw bad('"model"', 'must be an http(s) URL, or on the tour\'s own scheme and host');
   }
   let orient = null;
   if (t.orient !== undefined) {
@@ -63,8 +68,14 @@ export function parseTour(text, base = undefined) {
   }
   if (!Array.isArray(t.steps) || !t.steps.length) throw bad('"steps"', 'must be a list of at least one step');
   if (t.steps.length > MAX_STEPS) throw bad('"steps"', `at most ${MAX_STEPS} steps`);
-  const steps = t.steps.map((s, i) => parseStep(s, `step ${i + 1}`, defaults, bad));
-  return { title: t.title || '', model: model || null, orient, mode, loop: !!t.loop, defaults, steps };
+  const steps = t.steps.map((s, i) => parseStep(s, `step ${i + 1}`, defaults, bad, t.cadtour));
+  const ids = new Set();
+  steps.forEach((s, i) => {
+    if (!s.id) return;
+    if (ids.has(s.id)) throw bad(`step ${i + 1} "id"`, `"${s.id}" is used by an earlier step`);
+    ids.add(s.id);
+  });
+  return { version: t.cadtour, title: t.title || '', model: model || null, orient, mode, loop: !!t.loop, defaults, steps };
 }
 
 function checkTiming(where, k, v, bad) {
@@ -74,11 +85,16 @@ function checkTiming(where, k, v, bad) {
   if (k === 'dim' && !DIMS.includes(v)) throw bad(where, `must be one of ${DIMS.join(', ')}`);
 }
 
-function parseStep(s, where, defaults, bad) {
+function parseStep(s, where, defaults, bad, version) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw bad(where, 'must be an object');
-  for (const k of Object.keys(s)) if (!STEP_FIELDS.includes(k)) throw bad(`${where} "${k}"`, `not a step field (${STEP_FIELDS.join(', ')})`);
+  const fields = version >= 2 ? ['id', ...STEP_FIELDS] : STEP_FIELDS;
+  for (const k of Object.keys(s)) if (!fields.includes(k)) throw bad(`${where} "${k}"`, `not a step field (${fields.join(', ')})`);
   const at = (k) => `${where} "${k}"`;
   const out = { title: '', text: '' };
+  if (s.id !== undefined) {
+    if (typeof s.id !== 'string' || !STEP_ID.test(s.id)) throw bad(at('id'), 'must be a-z, 0-9 and "-", starting with a letter or digit, at most 64');
+    out.id = s.id;
+  }
   if (s.title !== undefined) { if (!isText(s.title, 200)) throw bad(at('title'), 'must be text of at most 200 characters'); out.title = s.title; }
   if (s.text !== undefined) { if (!isText(s.text, 2000)) throw bad(at('text'), 'must be text of at most 2000 characters'); out.text = s.text; }
   if (s.view !== undefined) {
