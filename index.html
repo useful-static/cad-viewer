@@ -55,12 +55,23 @@
   .secval { color:var(--dim); font-variant-numeric:tabular-nums; min-width:0; }
   .secval:empty { display:none; }
   .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
-  /* the renderer, in the page's top right: its tooltip is the graphics line
-     (WebGL 2 -- WebGPU not available: …). A wide window puts it over the
-     corner, out of the row, so the toolbar keeps the full width (a model
-     list at 1280 px still has View unfolded). A narrow window puts it back
-     in the row, so the last control cannot slide under it. */
-  #backend { position:absolute; top:11px; right:8px; z-index:2; margin:0; flex:none; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; cursor:help; }
+  /* ? in the view's top right, beside Full screen (in the corner where the
+     browser has none), opens #helppop: the controls and shortcuts, and the
+     renderer (WebGPU / WebGL 2 / WebGL 1) with why a faster one was skipped.
+     Over the view, not in the header: the toolbar row is full at 1280 px with
+     a model list, so a button at its end covered Undo or folded View. */
+  #helpbtn { position:absolute; top:8px; right:46px; z-index:1; width:32px; height:32px; padding:0; font-weight:600; }
+  #fullscreen[hidden] ~ #helpbtn { right:8px; }
+  #helpbtn[aria-expanded=true] { background:#3a4250; border-color:#566173; }
+  /* the box: under ?, at its right edge (main.js sets top and right) */
+  #helppop { position:fixed; z-index:10; width:min(420px, calc(100vw - 16px)); max-height:calc(100dvh - 64px); overflow:auto;
+    padding:10px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45);
+    color:var(--dim); font-size:12px; }
+  #helppop[hidden] { display:none; }
+  #helppop:focus { outline:none; }
+  #helppop .gfx { display:flex; gap:8px; align-items:baseline; padding-bottom:8px; margin-bottom:6px; border-bottom:1px solid var(--line); color:var(--fg); }
+  #helppop .head { color:var(--fg); font-weight:600; display:block; margin-bottom:4px; }
+  #backend { flex:none; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; }
   /* A .menu: where the row has room its controls stand in it (the wrappers
      are display:contents); main.js adds .folded where they do not fit, and
      they then open from the menu's button as a panel under the toolbar
@@ -127,7 +138,8 @@
   #fullscreen svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
-  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } #backend { top:18px; } }
+  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; }
+    #helpbtn { width:40px; height:40px; min-height:40px; padding:0; right:54px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
@@ -392,8 +404,6 @@
   .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   label.btn:focus-visible, a.btn:focus-visible, #tree .label:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
-  .help { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); }
-  .help summary { cursor:pointer; color:var(--fg); font-size:12px; margin-bottom:2px; }
   .help .keys { display:block; margin-top:4px; }
   #colours { display:flex; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   #colours select { flex:1; min-width:0; }
@@ -440,9 +450,9 @@
     .help-touch { display:inline; }
     /* 40 px wide too: the section's X / Y / Z (35 px), the ☰ (38 px), the
        part colour swatch (32 x 24) and the help's summary line (17 px tall) */
-    .seg button, #panelbtn { min-width:40px; justify-content:center; }
+    .seg button, #panelbtn, #helpbtn { min-width:40px; justify-content:center; }
     #colours input[type=color] { width:44px; height:40px; }
-    .help summary, #infomore summary { line-height:40px; margin-bottom:0; }
+    #infomore summary { line-height:40px; margin-bottom:0; }
   }
   /* Below desktop widths Save appears once a STEP import makes it useful */
   @media (max-width: 1400px) {
@@ -471,19 +481,17 @@
        rendered no fade in Chromium with a classic scrollbar; a sticky
        pseudo-element inside it cannot leave its containing block, so never
        showed either -- both measured.) */
-    header.more-right::after { content:''; position:absolute; top:0; right:76px; bottom:var(--sbh, 0px); width:40px;
+    header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
     header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
     #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
-    /* the badge is in the row here. The controls give up horizontal padding
-       (a finger still gets 40 px) so the folded row fits a 320 px phone:
-       with 12 px of padding the row was 305 px in 253. */
-    #backend { position:static; top:auto; right:auto; margin:11px 8px 0 0; z-index:auto; }
+    /* The controls give up horizontal padding (a finger still gets 40 px) so
+       the folded row fits a 320 px phone: with 12 px of padding the row was
+       305 px in 253. */
     #tb :is(button, select, label.btn, a.btn) { padding-left:2px; padding-right:2px; min-width:40px; }
-    @media (any-pointer: coarse) { #backend { margin-top:18px; } }
     @media (max-width: 340px) { #tb { gap:2px; padding:6px 4px; } .sep { margin:0; } }
     /* The parts panel slides out from the left OVER the 3D view (it shares
        the view's grid cell), so opening it never shrinks or reframes the view;
@@ -584,7 +592,7 @@
     <div class="menu-panel" id="showpanel" aria-label="Show">
       <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all or checkbox (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
     </div></div>
-</div><span id="backend">…</span></header>
+</div></header>
 <aside id="parts" aria-label="Parts">
   <div id="info" hidden>
     <!-- where positions are measured from: the model, or a part chosen with
@@ -634,11 +642,6 @@
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
-  <details class="help" id="help"><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
-    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
-    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims with a loupe; drag an end dot to move it · Esc stops) · P save a picture · X explode</span>
-    <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc leaves one thing a press: Measure, Paint, Walk, Explode, the section, then the selection</span>
-    <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
@@ -677,6 +680,18 @@
     <div class="tourbar"><button id="tourplay" aria-pressed="false" aria-label="Play the tour" title="Play: each step in turn (Space)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="tp-play" d="M4 2.5v11l9-5.5z" fill="currentColor"/><path class="tp-pause" d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg></button><button id="tourprev" aria-label="Previous step" title="Previous step (←)">◀</button><span id="tourcount" aria-hidden="true"></span><button id="tournext" aria-label="Next step" title="Next step (→)">▶</button><button id="tourexit" aria-label="Leave the tour" title="Leave the tour (Esc)">✕</button></div>
   </div>
   <button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button>
+  <!-- ? beside Full screen (in the corner where there is none): the controls
+       and shortcuts, and the renderer, in a box (main.js wireHelp) -->
+  <button id="helpbtn" aria-expanded="false" aria-controls="helppop" aria-keyshortcuts="?" title="Controls, shortcuts and graphics (?)">?</button>
+  <div id="helppop" class="help" role="dialog" aria-label="Controls, shortcuts and graphics" tabindex="-1" hidden>
+    <div class="gfx"><span id="backend">…</span><span id="gfxnote"></span></div>
+    <span class="head">Controls &amp; shortcuts</span><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
+    <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
+    <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims with a loupe; drag an end dot to move it · Esc stops) · P save a picture · X explode</span>
+    <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc leaves one thing a press: Measure, Paint, Walk, Explode, the section, then the selection</span>
+    <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span>
+    <span class="keys">? this box (Esc closes it)</span>
+  </div>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's
        name as a pressed toggle that turns it off -->

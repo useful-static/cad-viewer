@@ -271,7 +271,8 @@ export function createMeasure(deps) {
     st.results = st.results.filter((r) => r.mode !== 'note');
     for (const n of list || []) {
       if (n && Array.isArray(n.p) && n.p.length === 3 && n.p.every(Number.isFinite) && n.text) {
-        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null });
+        // (given: the page's, not the user's -- it does not open the bar)
+        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null, given: true });
       }
     }
     syncRow();
@@ -516,7 +517,9 @@ export function createMeasure(deps) {
     // the bar shows while measuring, and while results stay drawn with
     // Measure off -- then only what removes them (the list, Clear all): the
     // results on screen are always removable from the screen
-    const kept = !st.on && st.results.length > 0;
+    // (results the user made; a tour's callouts and the notes a list or a
+    // view link pins are the page's, and never pop the bar up on their own)
+    const kept = !st.on && st.results.some((r) => !r.given);
     $('measopt').hidden = !st.on && !kept;
     for (const id of ['measoff', 'measmode', 'measundo']) $(id).hidden = kept;
     $('measure').setAttribute('aria-pressed', String(st.on));

@@ -348,8 +348,8 @@ function adoptRenderer(r) {
   if (isDead(r)) queueMicrotask(() => r.onlost && r.onlost('lost before it was adopted'));
   $('backend').textContent = app.backend.toUpperCase();
   // the attempts behind THIS renderer (makeRenderer empties app.attempts when
-  // a recovery starts), and the info panel's renderer line follows the swap.
-  // showInfo sets the badge's tooltip to the same graphics line.
+  // a recovery starts), and the ? box's graphics line follows the swap
+  // (showInfo writes it).
   app.adoptedAttempts = app.attempts.slice();
   showInfo();
 }
@@ -2372,7 +2372,7 @@ function undoVisibility() {
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
-const OVER_VIEW = '.card, #optbar, #fullscreen, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
+const OVER_VIEW = '.card, #optbar, #fullscreen, #helpbtn, #helppop, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
 // (Display, the menu after Style, is always a menu where View stands in the
 // row, and its items are View's panel's where View folds: no fold step)
 const MENUS = [...FOLD_ORDER, 'displaymenu'];
@@ -5191,8 +5191,9 @@ function setUnitChoice(u) {
 }
 
 function showInfo() {
-  const note = graphicsNote();
-  if (note) $('backend').title = `graphics ${note}`;
+  // the ? box's graphics line: the renderer in words, and why a faster one
+  // was skipped (as text, not a tooltip: a touch screen shows no tooltip)
+  $('gfxnote').textContent = graphicsNote();
   syncUnitsRow();
   syncRefRow();
   const el = $('infovals');
@@ -5319,11 +5320,7 @@ function fillInfo(el) {
     }
     if (e && (e.author || e.license)) add('model', [e.author && `by ${e.author}`, e.license].filter(Boolean).join(' · '));
   }
-  // the same line as the badge's tooltip (showInfo). A tooltip never shows on
-  // a touch screen or to the keyboard, so the panel says it too: in the lead
-  // when nothing else is open, else in the Details fold.
-  const note = graphicsNote();
-  if (note) (app.header ? addMore : add)('graphics', note);
+  // (the graphics line is the ? box's: showInfo)
   if (!app.header) return;
   const ids = [...app.selected];
   const b = ids.length ? bboxOf(ids) : app.header.bbox;
@@ -6021,7 +6018,7 @@ function wireInput() {
   // Undo's key as this OS names it (both work everywhere)
   if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
     $('undo').title = $('undo').title.replace('Ctrl+Z', '⌘Z');
-    for (const k of document.querySelectorAll('#help .keys')) k.textContent = k.textContent.replace('Ctrl+Z', '⌘Z');
+    for (const k of document.querySelectorAll('#helppop .keys')) k.textContent = k.textContent.replace('Ctrl+Z', '⌘Z');
   }
   pal.onchange = () => setPalette(pal.value);
   wireModelList();
@@ -6114,12 +6111,16 @@ function wireInput() {
     const t = e.target;
     // Esc closes an open toolbar menu first, wherever focus is
     if (e.key === 'Escape' && closeMenus(true)) { e.preventDefault(); return; }
+    // ...and the ? box, giving the focus back to ? when it was in the box
+    if (e.key === 'Escape' && helpOpen()) { e.preventDefault(); setHelp(false, $('helppop').contains(document.activeElement)); return; }
     const typed = (t.tagName === 'INPUT' && !NOT_TYPED.includes(t.type))
       || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
     // ...but Esc in the slide-out's field (an empty Filter parts: a filled one
     // clears first, in its own handler) closes the slide-out, as from its tree
     if (typed && e.key === 'Escape' && panelOpen() && $('parts').contains(t)) { e.preventDefault(); setPanel(false, true); return; }
     if (typed) return;
+    // ? opens and closes the ? box (a typed ?: Shift+/ on most layouts)
+    if (e.key === '?') { e.preventDefault(); if (!e.repeat) setHelp(!helpOpen(), true); return; }
     // a tour: → / PageDown the next step, ← / PageUp the one before, Esc
     // leaves it (ahead of the camera's arrows; a control's own arrows win)
     if (app.tour && !e.defaultPrevented && !(t.type === 'range' || (t instanceof Node && $('tree').contains(t)))) {
@@ -6202,6 +6203,43 @@ function wireInput() {
   });
 }
 
+// ---------- the ? box ----------
+//
+// The controls and shortcuts, and the renderer (WebGPU / WebGL 2 / WebGL 1)
+// with why a faster one was skipped, in a box that opens from ? in the view's
+// top right, beside Full screen (they were a fold at the foot of the parts panel, which took the
+// list's room, and a badge whose explanation was a tooltip a touch screen
+// never shows). ? (the button or the key) opens and closes it; so do Esc and
+// a press anywhere else. Opened from the keyboard it takes the focus, and
+// closing it gives the focus back to ?.
+const helpOpen = () => !$('helppop').hidden;
+function setHelp(open, focus = false) {
+  const pop = $('helppop'), btn = $('helpbtn');
+  if (open === helpOpen()) return;
+  const inside = pop.contains(document.activeElement);
+  if (open) {
+    closeMenus();
+    const r = btn.getBoundingClientRect();
+    pop.style.top = `${Math.round(r.bottom) + 4}px`;
+    pop.hidden = false;
+    // under ?, its right edge with ?'s, but inside the window: a phone's box
+    // is nearly the window's width, and aligned to ? it ran off the left
+    pop.style.right = `${Math.max(8, Math.min(Math.round(innerWidth - r.right), innerWidth - 8 - pop.offsetWidth))}px`;
+  }
+  pop.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open && focus) pop.focus();
+  else if (!open && (focus || inside)) btn.focus();
+}
+function wireHelp() {
+  // detail 0: a keyboard press (Enter / Space) takes the focus into the box
+  $('helpbtn').onclick = (e) => setHelp(!helpOpen(), e.detail === 0);
+  addEventListener('pointerdown', (e) => {
+    if (helpOpen() && !e.target.closest('#helppop, #helpbtn')) setHelp(false);
+  }, true);
+  addEventListener('resize', () => setHelp(false));
+}
+
 // ---------- boot ----------
 
 async function main() {
@@ -6210,13 +6248,7 @@ async function main() {
   setupEmbed(); // ?embed=1: before the first layout, so it never shows the toolbar
   readLooks(); // the light background before the first frame
   updateButtons();
-  // The controls help starts closed: open, it took ~250 px of the panel and
-  // left the parts list six rows (UI organization review rank 1). Opening
-  // it is remembered in this browser, and so is closing it again.
-  try { if (localStorage.getItem('cadv.help') === 'open' && innerHeight >= 640) $('help').open = true; } catch { /* storage off */ }
-  $('help').addEventListener('toggle', () => {
-    try { localStorage.setItem('cadv.help', $('help').open ? 'open' : 'closed'); } catch { /* storage off */ }
-  });
+  wireHelp();
   // A file chosen or dropped while the GPU starts (Open… works from the
   // first paint): kept and opened once the input is wired. It was ignored,
   // and a drop made the browser leave the page for the file (review r21)
