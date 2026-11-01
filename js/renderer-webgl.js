@@ -31,14 +31,18 @@ uniform vec4 uBodyTex;
 #endif
 #ifdef CULL_ATTR
 attribute vec4 aBody;      // this vertex's body: centre, radius (no table texture)
+attribute vec4 aXd;        // its body's Explode direction (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
 uniform vec4 uXp;          // x explode: the fraction of each body's direction it moves by (0 none)
 void main() {
   // Explode: the body moved along its direction (the body table's texel
-  // 2 id), before the clip and the view values, so the section cuts it where
-  // it is. Only with the table texture (CULL_TEX): without it, no Explode.
+  // 2 id; without the table texture, the aXd attribute), before the clip
+  // and the view values, so the section cuts it where it is
   vec3 xo = vec3(0.0);
+#ifdef CULL_ATTR
+  xo = uXp.x * aXd.xyz;
+#endif
 #ifdef CULL_TEX
   if (uXp.x != 0.0) {
     vec4 bx = floor(aId * 255.0 + 0.5);
@@ -191,6 +195,7 @@ uniform sampler2D uBodies; // the body table: texel 2 id + 1 = centre, radius
 uniform vec4 uBodyTex;     // x width, y height of the body table
 #else
 attribute vec4 aBody;      // the edge's body: centre, radius (no table texture)
+attribute vec4 aXd;        // its body's Explode direction (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, z on
 uniform vec4 uXp;          // x explode (as VS's)
@@ -208,6 +213,8 @@ void main() {
     float tx = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0;
     xo = uXp.x * texture2D(uBodies, vec2((mod(tx, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(tx / uBodyTex.x) + 0.5) / uBodyTex.y)).xyz;
   }
+#else
+  xo = uXp.x * aXd.xyz;
 #endif
   vec3 P0 = aP0 + xo;
   vec3 P1 = aP1 + xo;
@@ -387,7 +394,8 @@ export class WebGLRenderer {
     const vtf = !off.has('vtf') && gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) > 0;
     this.bodyTexOk = version === 2 || (!!ext('float', 'OES_texture_float') && vtf);
     const cullDef = this.bodyTexOk ? '#define CULL_TEX\n' : '#define CULL_ATTR\n';
-    const faceAttrs = ['aPos', 'aNrm', 'aCol', 'aId', ...(this.bodyTexOk ? [] : ['aBody'])];
+    // (CULL_ATTR: aBody 4 for the cull, aXd 5 for Explode's direction)
+    const faceAttrs = ['aPos', 'aNrm', 'aCol', 'aId', ...(this.bodyTexOk ? [] : ['aBody', 'aXd'])];
     this.shade = program(gl, FS_SHADE, cullDef + VS, faceAttrs);
     this.pickProg = program(gl, FS_PICK, cullDef + VS, faceAttrs);
     this.fillProg = program(gl, FS_FILL, cullDef + VS, faceAttrs);
@@ -399,7 +407,7 @@ export class WebGLRenderer {
       ? { divisor: (i, d) => gl.vertexAttribDivisor(i, d), draw: (m, f, c, n) => gl.drawArraysInstanced(m, f, c, n) }
       : ia ? { divisor: (i, d) => ia.vertexAttribDivisorANGLE(i, d), draw: (m, f, c, n) => ia.drawArraysInstancedANGLE(m, f, c, n) } : null;
     this.edgeProg = program(gl, FS_EDGE, cullDef + VS_EDGE,
-      ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2', ...(this.bodyTexOk ? [] : ['aBody'])]);
+      ['aCorner', 'aP0', 'aP1', 'aEId', 'aECol', 'aN1', 'aN2', ...(this.bodyTexOk ? [] : ['aBody', 'aXd'])]);
     this.canDrawEdges = true;
     // the ground shadow: 4 corners as a strip, its own small program
     this.groundProg = program(gl, FS_GROUND, VS_GROUND, ['aXY']);
@@ -519,7 +527,9 @@ export class WebGLRenderer {
     // again by setBodies for this mesh
     this.faceIds = id;
     if (this.faceBodyBuf) gl.deleteBuffer(this.faceBodyBuf);
+    if (this.faceXdBuf) gl.deleteBuffer(this.faceXdBuf);
     this.faceBodyBuf = null;
+    this.faceXdBuf = null;
     this.faceBodiesFor = null;
     if (!this.bodyTexOk && this.bodyTable && this.bodiesFor === mesh) this._faceBodies();
   }
@@ -576,8 +586,10 @@ export class WebGLRenderer {
   _edgeLayout(stride) {
     const expanded = !this.instancing;
     const inst = expanded ? 8 : 0;
+    // (CULL_ATTR: the body's centre and radius, then its Explode direction,
+    // 16 bytes each)
     const body = this.bodyTexOk ? null : inst + stride;
-    return { expanded, inst, body, stride: inst + stride + (body === null ? 0 : 16), verts: expanded ? 6 : 1 };
+    return { expanded, inst, body, stride: inst + stride + (body === null ? 0 : 32), verts: expanded ? 6 : 1 };
   }
 
   _packEdges(data, stride, lay) {
@@ -600,28 +612,37 @@ export class WebGLRenderer {
         if (lay.body !== null) {
           const t = (2 * id + 1) * 4;
           const bo = (o + lay.body) / 4;
-          if (tbl && t + 3 < tbl.length) { f[bo] = tbl[t]; f[bo + 1] = tbl[t + 1]; f[bo + 2] = tbl[t + 2]; f[bo + 3] = tbl[t + 3]; }
-          else f[bo + 3] = 1e30; // no table: never culled
+          if (tbl && t + 3 < tbl.length) {
+            f[bo] = tbl[t]; f[bo + 1] = tbl[t + 1]; f[bo + 2] = tbl[t + 2]; f[bo + 3] = tbl[t + 3];
+            // the Explode direction: texel 2 id, just before
+            f[bo + 4] = tbl[t - 4]; f[bo + 5] = tbl[t - 3]; f[bo + 6] = tbl[t - 2];
+          } else f[bo + 3] = 1e30; // no table: never culled (nor moved)
         }
       }
     }
     return out;
   }
 
-  // CULL_ATTR: each drawn vertex's body centre and radius, from its id bytes
+  // CULL_ATTR: each drawn vertex's body centre and radius (the table's texel
+  // 2 id + 1), and its body's Explode direction (texel 2 id), from its id
+  // bytes -- what a GPU without vertex textures (a Mali-450) cannot sample
   _faceBodies() {
     const gl = this.gl;
     const ids = this.faceIds, tbl = this.bodyTable;
     const n = ids.length / 4;
     const a = new Float32Array(n * 4);
+    const d = new Float32Array(n * 4);
     for (let v = 0; v < n; v++) {
       const t = (2 * (ids[v * 4] | (ids[v * 4 + 1] << 8) | (ids[v * 4 + 2] << 16)) + 1) * 4;
-      if (t + 3 < tbl.length) a.set(tbl.subarray(t, t + 4), v * 4);
+      if (t + 3 < tbl.length) { a.set(tbl.subarray(t, t + 4), v * 4); d.set(tbl.subarray(t - 4, t), v * 4); }
       else a[v * 4 + 3] = 1e30;
     }
     if (!this.faceBodyBuf) this.faceBodyBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.faceBodyBuf);
     gl.bufferData(gl.ARRAY_BUFFER, a, gl.STATIC_DRAW);
+    if (!this.faceXdBuf) this.faceXdBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.faceXdBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, d, gl.STATIC_DRAW);
     this._checkAlloc('body cull data');
     this.faceBodiesFor = this.drawn;
   }
@@ -640,8 +661,10 @@ export class WebGLRenderer {
       this.bodyTable = table;
       this.bodiesFor = mesh;
       if (this.drawn === mesh && this.faceIds) this._faceBodies();
+      // (the edges carry the table too, its Explode directions among it,
+      // which change with Explode's mode: packed again on every new table)
       const raw = this.edgeRaw;
-      if (raw && raw.mesh === mesh && this.edgeBodiesFor !== mesh) this.uploadEdges(mesh, raw.data, raw.silData);
+      if (raw && raw.mesh === mesh) this.uploadEdges(mesh, raw.data, raw.silData);
       return;
     }
     const texels = table.length / 4;
@@ -723,7 +746,7 @@ export class WebGLRenderer {
       const o = lay.inst;
       const attr = [[1, 3, gl.FLOAT, false, o], [2, 3, gl.FLOAT, false, o + 12], [3, 4, gl.UNSIGNED_BYTE, true, o + 24], [4, 4, gl.UNSIGNED_BYTE, true, o + 28]];
       if (sil) attr.push([5, 4, gl.SHORT, true, o + 32], [6, 4, gl.SHORT, true, o + 40]);
-      if (lay.body !== null) attr.push([7, 4, gl.FLOAT, false, lay.body]);
+      if (lay.body !== null) attr.push([7, 4, gl.FLOAT, false, lay.body], [8, 4, gl.FLOAT, false, lay.body + 16]);
       for (const [i, n, t, norm, off] of attr) {
         gl.enableVertexAttribArray(i);
         gl.vertexAttribPointer(i, n, t, norm, lay.stride, off);
@@ -752,8 +775,8 @@ export class WebGLRenderer {
     gl.depthFunc(gl.LESS);
     // the face passes set attributes 0-3 (and 4, CULL_ATTR's aBody) again,
     // but never their divisors
-    for (let i = 1; i <= 7; i++) div(i, 0);
-    for (const i of [4, 5, 6, 7]) gl.disableVertexAttribArray(i);
+    for (let i = 1; i <= 8; i++) div(i, 0);
+    for (const i of [4, 5, 6, 7, 8]) gl.disableVertexAttribArray(i);
   }
 
   // Drop the model: nothing drawn, picks answer background for no mesh.
@@ -771,7 +794,9 @@ export class WebGLRenderer {
     this.bodiesFor = null;
     this.bodyTable = null;
     if (this.faceBodyBuf) gl.deleteBuffer(this.faceBodyBuf);
+    if (this.faceXdBuf) gl.deleteBuffer(this.faceXdBuf);
     this.faceBodyBuf = null;
+    this.faceXdBuf = null;
     this.faceBodiesFor = null;
     this.faceIds = null;
     for (const b of this.buffers) gl.deleteBuffer(b);
@@ -862,9 +887,15 @@ export class WebGLRenderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.faceBodyBuf);
         gl.enableVertexAttribArray(4);
         gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0);
+        // attribute 5, aXd: the body's Explode direction
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.faceXdBuf);
+        gl.enableVertexAttribArray(5);
+        gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 0, 0);
       } else {
         gl.disableVertexAttribArray(4);
         gl.vertexAttrib4f(4, 0, 0, 0, 1e30);
+        gl.disableVertexAttribArray(5);
+        gl.vertexAttrib4f(5, 0, 0, 0, 0);
       }
     }
     gl.uniform1i(u.uBodies, (cull || xp) && this.bodyTexOk ? 1 : 0);
@@ -899,12 +930,14 @@ export class WebGLRenderer {
   }
 
   // The explode fraction to draw with: 0 unless the body table (which holds
-  // the directions) is a texture and is the drawn mesh's. Without a table
-  // texture (a WebGL1 with no vertex textures) Explode is not offered.
+  // the directions) is the drawn mesh's -- as a texture, or, on a WebGL1
+  // with no vertex or float textures (a Mali-450), as the aXd attribute.
   _explode(frame) {
-    return frame.explode && this.bodyTexOk && this.bodyTex && this.bodiesFor === this.drawn ? frame.explode : 0;
+    if (!frame.explode) return 0;
+    if (this.bodyTexOk) return this.bodyTex && this.bodiesFor === this.drawn ? frame.explode : 0;
+    return this.faceBodiesFor === this.drawn && this.drawn ? frame.explode : 0;
   }
-  get canExplode() { return !!this.bodyTexOk; }
+  get canExplode() { return true; }
 
   // Every face pass is biased (POLYGON_OFFSET_FILL on): the solids, then the
   // sheets with less bias, so a sheet lying on a solid's face shows.
