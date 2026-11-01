@@ -556,6 +556,8 @@ function setExplode(on, focus = false) {
     if (app.status === 'ready') setStatus('ready', `${readyText()} · ${why}`);
     announce(why);
   }
+  // (Paint picks the faces where they are: off while exploded)
+  if (on && app.paintFaces) setPaint(false);
   // a view as Fit left it is fitted again, around the parts where they go
   const fitted = atLastFit();
   x.on = on;
@@ -1348,6 +1350,10 @@ app.select = (ids) => select(ids, false); // (for tests: a selection as a click 
 // while this model is open; Reset with nothing selected clears it too)
 app.faceOverrides = new Map();
 function setPaint(on) {
+  // (one click mode at a time; Paint picks the faces where they are, so not
+  // while exploded)
+  if (on && app.measure && app.measure.on) app.measure.setOn(false);
+  if (on && app.explode.on) setExplode(false);
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) flashHover('this model has no b-rep faces to paint');
@@ -3499,7 +3505,18 @@ function clearModel() {
   $('download').hidden = true;
   $('sheetsrow').hidden = true;
   $('view').setAttribute('aria-label', '3D view: no model open');
-  if (app.measure) app.measure.reset();
+  if (app.measure) app.measure.reset(true); // (Measure too: a drawing has its own)
+  // the tools that belong to the model shown go with it -- the section's cut,
+  // Walk's viewpoint, Paint -- or a 2D drawing (or the next model) opens with
+  // them on and their controls hidden (Explode is reset where the new mesh
+  // lands; a view link sets the section again after this). Turntable and the
+  // Display looks are preferences and stay.
+  app.section.axis = 'off';
+  app.explode.on = false;
+  app.explode.for = null;
+  $('xpopt').hidden = true;
+  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
+  if (app.paintFaces) setPaint(false);
   app.hidden.clear();
   app.visUndo = [];
   app.hover = 0;
@@ -3619,6 +3636,10 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.sphereBase = app.sphere; // (Explode grows app.sphere from it)
   app.explode.on = false; // a new model opens together
   app.explode.for = null;
+  // nor with the last one's cut or Walk viewpoint (a view link sets the
+  // section again below; updateButtons syncs the section's controls)
+  app.section.axis = 'off';
+  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
@@ -5440,7 +5461,13 @@ function wireInput() {
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => ['wire', 'xray', 'hiddengrey'].includes(currentStyle().id),
     // Measure's points are where the bodies are, not where Explode draws them
-    beforeOn: () => { if (app.explode.on) { setExplode(false); flashHover('Explode off while measuring'); } },
+    // (Measure, Paint and Explode exclude each other: a click goes to one,
+    // and Measure and Paint pick the parts where they are, not where Explode
+    // draws them)
+    beforeOn: () => {
+      if (app.explode.on) { setExplode(false); flashHover('Explode off while measuring'); }
+      if (app.paintFaces) setPaint(false);
+    },
   });
   app.measureView = measureView; // (and for tests/ui-checks.py, which projects points with it)
   // a drawing open: Measure is the drawing's own (js/dxf-view.js)
@@ -6148,10 +6175,13 @@ function wireInput() {
     // not turn the shortcuts off.
     // A layout whose keys type no Latin letter (Cyrillic, Greek) goes by the
     // key's place, as QWERTY names it.
-    // Esc: the panel, then Measure's results list, its half-made point, Measure
-    // itself, then the selection
+    // Esc, one thing a press: the panel, then Measure's results list, its
+    // half-made point, Measure itself, then Paint, Walk, Explode and the
+    // Section (each a mode the view is in), then the selection
+    const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
+      : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? (app.dxf.view.escapeMeasure() || (app.dxf.view.measuring ? (toggle2DMeasure(), true) : app.dxf.view.select(null))) : app.measure.escape()
-        || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
+        || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
       p: () => { if (!$('savepic').disabled) savePicture(); },

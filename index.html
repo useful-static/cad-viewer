@@ -637,7 +637,7 @@
   <details class="help" id="help"><summary>Controls &amp; shortcuts</summary><span class="help-mouse">drag: orbit (any direction, no limit) · shift/right-drag: pan · wheel: zoom toward the pointer · click: select (ctrl adds) · double-click: zoom to selection</span> <span class="help-touch">one finger: orbit · two fingers: pinch to zoom there, drag to pan · tap: select · double-tap: zoom to selection</span>
     <span class="keys">views: 1 front · 3 right · 7 top · 0 iso · 9 the opposite view · 5 ortho · F fit · E edges · arrows turn, shift+arrows pan, + − zoom (the view or the page focused)</span>
     <span class="keys">tools: M measure (a click places a point, snapping to corners, edges and hole centres; a held finger aims with a loupe; drag an end dot to move it · Esc stops) · P save a picture · X explode</span>
-    <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc clear</span>
+    <span class="keys">visibility: I isolate · H hide · A show all · Ctrl+Z undo · Esc leaves one thing a press: Measure, Paint, Walk, Explode, the section, then the selection</span>
     <span class="keys">parts list: ↑ ↓ Home End move · Enter select · Space show/hide · → ← open/close</span></details>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
@@ -701,7 +701,7 @@
       <span id="measnote" class="secval"></span>
       <input id="measnotetext" type="text" hidden maxlength="200" autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
       <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result">↶</button>
-      <button id="measclear" disabled title="Clear every result">Clear</button>
+      <button id="measclear" disabled title="Remove every result">Clear all</button>
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
     </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
   </div>

@@ -513,7 +513,12 @@ export function createMeasure(deps) {
 
   // ---- the options bar row ----
   function syncRow() {
-    $('measopt').hidden = !st.on;
+    // the bar shows while measuring, and while results stay drawn with
+    // Measure off -- then only what removes them (the list, Clear all): the
+    // results on screen are always removable from the screen
+    const kept = !st.on && st.results.length > 0;
+    $('measopt').hidden = !st.on && !kept;
+    for (const id of ['measoff', 'measmode', 'measundo']) $(id).hidden = kept;
     $('measure').setAttribute('aria-pressed', String(st.on));
     for (const b of $('measmode').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === st.mode));
     // Face needs the b-rep faces (a .cadmesh written before they were kept has none)
@@ -525,7 +530,8 @@ export function createMeasure(deps) {
     $('measchip').hidden = !n;
     $('measchip').textContent = `${n} result${n === 1 ? '' : 's'}`;
     $('measchip').setAttribute('aria-expanded', String(st.listOpen));
-    $('measnote').textContent = st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
+    $('measnote').textContent = kept ? 'Measure is off; its results stay until cleared'
+      : st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
       : st.mode === 'note' ? (st.pending.length ? 'type the note, Enter pins it' : 'click where the note goes')
         : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
     if (!(st.mode === 'note' && st.pending.length)) $('measnotetext').hidden = true;
@@ -584,8 +590,11 @@ export function createMeasure(deps) {
     return false;
   }
 
-  // a new model: its results are of the old one
-  function reset() {
+  // a new model: its results are of the old one. off: Measure itself goes
+  // too, quietly (the 3D model gone: a drawing has its own Measure, and the
+  // 3D one left on behind it came back on with its button reading off)
+  function reset(off = false) {
+    if (off) st.on = false;
     st.pending = [];
     st.results = [];
     st.snap = null;
@@ -695,11 +704,15 @@ export function createMeasure(deps) {
     if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); }
   });
-  $('measclear').onclick = () => { st.pending = []; st.results = []; setList(false); syncRow(); deps.queueFrame(); };
+  $('measclear').onclick = () => {
+    const n = st.results.length;
+    st.pending = []; st.results = []; setList(false); syncRow(); deps.queueFrame();
+    if (n) deps.announce(`${n} result${n === 1 ? '' : 's'} cleared`);
+  };
   $('measchip').onclick = () => setList(!st.listOpen);
 
   return {
-    get on() { return st.on; }, get results() { return st.results; }, get pending() { return st.pending; },
+    get on() { return st.on; }, get mode() { return st.mode; }, get results() { return st.results; }, get pending() { return st.pending; },
     get snap() { return st.snap; },
     get holes() { return st.holes; },
     // a body's measured geometry (mesh index), built once (js/drawing-svg.js)
