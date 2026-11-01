@@ -5,10 +5,12 @@
 // The body is cut along the board: every b-rep face lying within the board's
 // slab (its top and bottom planes, its outline, the walls of its holes) is the
 // board; the faces left fall into separate pieces where the board held them
-// together, and each piece is a part. A piece whose every face is a sliver
-// (a through-hole lead's stub under the board, a pad) is given to the part
-// above it, or to the board when no part stands there. Parts that touch each
-// other (a stacked connector, a heatsink on its chip) stay one piece.
+// together, and each piece is a part. A sliver (a pad, a lead's tip) is
+// given to the part on the same face whose footprint holds it, else to that
+// face's "small parts" body (the board's body stays the board alone). A face running through the board's thickness and on past the rest
+// of its piece is the board's edge, which the export merged with a part
+// flush with it. Parts that touch each other (a stacked connector, a
+// heatsink on its chip) stay one piece.
 //
 // Each output body is named "part N" (N by position, left to right, then
 // front to back, so the names stay put when the file is cut again); bodies
@@ -27,8 +29,9 @@ const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--e
   the board and its parts; other bodies pass through unchanged.
   --edges    write the edge sections too (default: none, as the site's files)
   --report   print each output body's name, triangle count and box
-  --sliver MM  a piece no larger than this in any direction is merged into
-             what it touches or stands under (default 1.2)
+  --sliver MM  a piece no larger than this in any direction joins the part on
+             its face of the board that it lies within, else that face's
+             "small parts" body (default 1.2)
 `;
 
 function args(argv) {
@@ -88,29 +91,8 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
   const M = meshes[bm];
   const fs = [];
   for (let f = M.faceStart; f < M.faceStart + M.faceCount; f++) fs.push(f);
-  const inBoard = (f) => lo[3 * f + 2] >= zb - eps && hi[3 * f + 2] <= zt + eps;
-  const rest = fs.filter((f) => !inBoard(f) && F[2 * f + 1] > 0);
-  // weld vertices by position (1 µm) and join faces that share one
-  const par = new Int32Array(nf).map((_, i) => i);
-  const find = (x) => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
-  const join = (a, b) => { a = find(a); b = find(b); if (a !== b) par[a] = b; };
-  const owner = new Map();
-  for (const f of rest) {
-    for (let t = F[2 * f]; t < F[2 * f] + F[2 * f + 1]; t++) {
-      for (let k = 0; k < 3; k++) {
-        const v = I[3 * t + k] * 3;
-        const key = `${Math.round(P[v] * 1e3)},${Math.round(P[v + 1] * 1e3)},${Math.round(P[v + 2] * 1e3)}`;
-        const o = owner.get(key);
-        if (o === undefined) owner.set(key, f); else join(o, f);
-      }
-    }
-  }
-  const groups = new Map();
-  for (const f of rest) {
-    const r = find(f);
-    if (!groups.has(r)) groups.set(r, []);
-    groups.get(r).push(f);
-  }
+  const slab = new Set(fs.filter((f) => lo[3 * f + 2] >= zb - eps && hi[3 * f + 2] <= zt + eps));
+  const inBoard = (f) => slab.has(f);
   const box = (list) => {
     const b = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (const f of list) for (let k = 0; k < 3; k++) {
@@ -119,25 +101,77 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
     }
     return b;
   };
-  let pieces = [...groups.values()].map((list) => ({ list, box: box(list) }));
+  // the faces left, in pieces: faces sharing a vertex (welded by position,
+  // 1 µm) are one piece
+  const group = () => {
+    const rest = fs.filter((f) => !inBoard(f) && F[2 * f + 1] > 0);
+    const par = new Map(rest.map((f) => [f, f]));
+    const find = (x) => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
+    const owner = new Map();
+    for (const f of rest) {
+      for (let t = F[2 * f]; t < F[2 * f] + F[2 * f + 1]; t++) {
+        for (let k = 0; k < 3; k++) {
+          const v = I[3 * t + k] * 3;
+          const key = `${Math.round(P[v] * 1e3)},${Math.round(P[v + 1] * 1e3)},${Math.round(P[v + 2] * 1e3)}`;
+          const o = owner.get(key);
+          if (o === undefined) owner.set(key, f);
+          else { const a = find(o), b = find(f); if (a !== b) par.set(a, b); }
+        }
+      }
+    }
+    const groups = new Map();
+    for (const f of rest) {
+      const r = find(f);
+      if (!groups.has(r)) groups.set(r, []);
+      groups.get(r).push(f);
+    }
+    return [...groups.values()].map((list) => ({ list, box: box(list) }));
+  };
+  let pieces = group();
+  // A face that runs through the board's thickness and on far past the rest
+  // of its piece is the board's edge, fused with a part flush with that edge
+  // (a microSD slot's front, merged with 50 mm of the board's outline): the
+  // board's. Then the pieces again, without it.
+  const REACH = 3; // mm past the rest of the piece
+  let moved = 0;
+  const edge = new Set();
+  for (const p of pieces) {
+    if (p.list.length < 2) continue;
+    const through = p.list.filter((f) => lo[3 * f + 2] < zt - eps && hi[3 * f + 2] > zb + eps);
+    if (!through.length || through.length === p.list.length) continue;
+    const core = box(p.list.filter((f) => !through.includes(f)));
+    for (const f of through) {
+      const out = [0, 1].some((k) => core.min[k] - lo[3 * f + k] > REACH || hi[3 * f + k] - core.max[k] > REACH);
+      if (out) { slab.add(f); edge.add(f); moved++; }
+    }
+  }
+  if (moved) pieces = group();
   const size = (p) => Math.max(...[0, 1, 2].map((k) => p.box.max[k] - p.box.min[k]));
   const big = pieces.filter((p) => size(p) > sliver);
-  const board = fs.filter((f) => inBoard(f) || F[2 * f + 1] === 0);
+  // (the edge faces taken back are a body of their own: they reach past the
+  // board's thickness, and the board's body stays the board's box)
+  const board = fs.filter((f) => (inBoard(f) && !edge.has(f)) || F[2 * f + 1] === 0);
   // a sliver goes to the smallest part whose footprint holds its centre on
-  // the same side of the board; else to one on the other side (a lead's
-  // stub, through the board from its part); else to the board
+  // the same side of the board, else to a body of its face's small parts.
+  // (Never through the board to a part on the other face: what lies under
+  // a chip's footprint there is its decoupling capacitors, not its leads,
+  // and a part spanning both faces is framed from neither: Renegade
+  // Elite's SoC. Nor into the board: a board body as thick as the parts on
+  // both its faces holds them in its box, and a viewer that judges what
+  // hides a part by boxes no longer sees the board in the way.)
+  const upper = (b) => (b.min[2] + b.max[2]) / 2 > (zb + zt) / 2;
+  const small = { true: [], false: [] };
   for (const p of pieces) {
     if (size(p) > sliver) continue;
     const cx = (p.box.min[0] + p.box.max[0]) / 2, cy = (p.box.min[1] + p.box.max[1]) / 2;
-    const above = p.box.min[2] >= zt - eps;
     let best = null;
     for (const q of big) {
+      if (upper(q.box) !== upper(p.box)) continue;
       if (cx < q.box.min[0] || cx > q.box.max[0] || cy < q.box.min[1] || cy > q.box.max[1]) continue;
-      const same = (q.box.min[2] >= zt - eps) === above;
       const area = (q.box.max[0] - q.box.min[0]) * (q.box.max[1] - q.box.min[1]);
-      if (!best || same > best.same || (same === best.same && area < best.area)) best = { q, area, same };
+      if (!best || area < best.area) best = { q, area };
     }
-    if (best) best.q.list.push(...p.list); else board.push(...p.list);
+    if (best) best.q.list.push(...p.list); else small[upper(p.box)].push(...p.list);
   }
   for (const q of big) q.box = box(q.list);
   // stable names: by the part's centre, rows of 1 mm in y, then x
@@ -191,6 +225,10 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
     out.push(body(m.name, board, mi));
     pieces.forEach((p, i) => out.push(body(`part ${i + 1}`, p.list, mi)));
   });
+  // last, so the parts keep their places in the body list
+  if (edge.size) out.push(body('board edge', [...edge], bm));
+  if (small.true.length) out.push(body('small parts, +z face', small.true, bm));
+  if (small.false.length) out.push(body('small parts, -z face', small.false, bm));
   return { meshes: out, slab: [zb, zt], board: bm, parts: pieces.length };
 }
 
