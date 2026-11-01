@@ -916,8 +916,11 @@ function fitTo(bbox) {
   // is refolded by an observer only after this task, so the stage measured
   // here was the two-line header's, and the view, back at its own size by
   // the next frame, never reported a change (a tour's first step framed for
-  // 980 x 729 in a 980 x 761 view)
-  if (!toolbarFits($('tb'))) refold();
+  // 980 x 729 in a 980 x 761 view). Only a WRAPPING row: the narrow one
+  // scrolls, never changes the header's height, and may overflow on purpose
+  // (a refold on every Fit there reset its scroll and could move the focus)
+  const tb = $('tb');
+  if (getComputedStyle(tb).flexWrap !== 'nowrap' && !toolbarFits(tb)) refold();
   const box = $('stage');
   const h = Math.max(1, box.clientHeight);
   const aspect = box.clientWidth / h;
@@ -1610,7 +1613,9 @@ function applyStepState(s) {
   if (s.section) Object.assign(app.section, s.section, s.section.axis !== 'off' ? { last: s.section.axis } : {});
   else Object.assign(app.section, base.view.section);
   // (a step's own callouts are pinned by showTourStep, where the parts will be)
-  if (app.measure && !s.callouts) app.measure.setNotes(base.view.notes);
+  // (the visitor's own notes shown as the page's while the tour plays: they
+  // do not open Measure's bar over it; leaving gives them back as theirs)
+  if (app.measure && !s.callouts) app.measure.setNotes((base.view.notes || []).map((n) => ({ ...n, own: false })));
   pushState();
   updateButtons();
   viewChanged();
@@ -1826,6 +1831,12 @@ function startTour(tour, url, only = null) {
   const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t }, walk: !!app.walk };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
+  // (in place of another tour: the visitor's orientation, not that tour's,
+  // unless this one sets its own below)
+  if (prev && saved.cam && saved.cam.orient && saved.cam.orient !== app.cam.orient) {
+    app.cam.orient = saved.cam.orient;
+    updateButtons();
+  }
   // Walk off while it plays (its keys would move the camera off the step);
   // leaving puts it back, the camera with it
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
@@ -1860,7 +1871,9 @@ function endTour(restore = true) {
     recolour();
     if (base.explode.on) { app.explode.t = base.explode.t; if (app.explode.on) { syncExplodeSphere(); syncExplodeRow(); } else setExplode(true); } else setExplode(false);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
-    if (base.walk) { app.walk = true; $('walk').setAttribute('aria-pressed', 'true'); }
+    // Walk as the visitor had it: back on, or off if they turned it on in the
+    // tour (its eye was placed for a step, not for the view put back)
+    if (!!app.walk !== base.walk) { app.walk = base.walk; $('walk').setAttribute('aria-pressed', String(base.walk)); }
     app.styleChoice = base.styleChoice;
     updateButtons();
     viewChanged();
@@ -5820,12 +5833,7 @@ function wireInput() {
     // a phone turned between portrait and landscape while the view is still
     // the one the model opened at: the Iso that suits the new shape
     // (js/orient.js isoView), framed afresh
-    // (each branch keeps the new aspect: the two that returned before it did
-    // left the old one, so every framing after -- a tour's step, Fit -- was
-    // for the shape the view had had: a header that wrapped for a moment as
-    // the page started framed a tour's first step 0.7 % too far)
     if (a > 0 && app.header && app.cam.q === app.loadQ && (a < PORTRAIT) !== (app.stageAspect < PORTRAIT)) {
-      app.stageAspect = a;
       setView('iso');
       app.loadQ = app.cam.q;
       queueFrame();
@@ -5834,7 +5842,6 @@ function wireInput() {
     // a view still as Fit left it is fitted again for the new shape: exact,
     // where scaling the distance (below) holds a sphere's framing, not the box's
     if (a > 0 && a !== app.stageAspect && atLastFit()) {
-      app.stageAspect = a;
       fitTo(app.lastFit.bbox);
       queueFrame();
       return;

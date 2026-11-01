@@ -64,7 +64,7 @@
   #hdend { flex:none; display:flex; gap:6px; align-items:center; padding:6px 10px 6px 0; }
   #hdend button { min-width:28px; padding:3px 6px; display:inline-flex; align-items:center; justify-content:center; }
   #stage > #hdend { position:absolute; top:8px; right:8px; z-index:1; padding:0; }
-  #stage > #hdend button { background:rgba(37,42,50,.85); }
+  #stage > #hdend button { background:rgba(37,42,50,.85); min-width:32px; min-height:32px; } /* (over the view: a near miss starts a drag) */
   #helpbtn { font-weight:600; }
   #helpbtn[aria-expanded=true] { background:#3a4250; border-color:#566173; }
   /* the box: under ?, at its right edge (main.js sets top and right) */
