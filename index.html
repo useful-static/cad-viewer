@@ -56,9 +56,11 @@
   .secval:empty { display:none; }
   .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
   /* the renderer, in the page's top right: its tooltip is the graphics line
-     (WebGL 2 -- WebGPU not available: …). margin centres it on the first
-     toolbar row; the row under it, when the toolbar wraps, stays clear */
-  #backend { flex:none; margin:11px 8px 0 0; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; cursor:help; }
+     (WebGL 2 -- WebGPU not available: …). A wide window puts it over the
+     corner, out of the row, so the toolbar keeps the full width (a model
+     list at 1280 px still has View unfolded). A narrow window puts it back
+     in the row, so the last control cannot slide under it. */
+  #backend { position:absolute; top:11px; right:8px; z-index:2; margin:0; flex:none; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; cursor:help; }
   /* A .menu: where the row has room its controls stand in it (the wrappers
      are display:contents); main.js adds .folded where they do not fit, and
      they then open from the menu's button as a panel under the toolbar
@@ -125,7 +127,7 @@
   #fullscreen svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
-  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } #backend { margin-top:18px; } }
+  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } #backend { top:18px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
@@ -476,9 +478,13 @@
     #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
     .sep { margin:0 1px; }
-    /* a 320 px phone with touch targets: the row was 329 px, Show 9 px past
-       the edge (review r18) */
-    @media (max-width: 340px) { #tb { gap:3px; padding:6px 4px; } .sep { margin:0; } }
+    /* the badge is in the row here. The controls give up horizontal padding
+       (a finger still gets 40 px) so the folded row fits a 320 px phone:
+       with 12 px of padding the row was 305 px in 253. */
+    #backend { position:static; top:auto; right:auto; margin:11px 8px 0 0; z-index:auto; }
+    #tb :is(button, select, label.btn, a.btn) { padding-left:2px; padding-right:2px; min-width:40px; }
+    @media (any-pointer: coarse) { #backend { margin-top:18px; } }
+    @media (max-width: 340px) { #tb { gap:2px; padding:6px 4px; } .sep { margin:0; } }
     /* The parts panel slides out from the left OVER the 3D view (it shares
        the view's grid cell), so opening it never shrinks or reframes the view;
        a scrim dims the view and closes the panel when tapped. Closed, the
