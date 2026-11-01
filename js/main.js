@@ -1809,12 +1809,15 @@ function startTour(tour, url, only = null) {
     }
     tour = { ...tour, steps: [s], mode: 'static', loop: false };
   }
+  // (one tour in place of another, as from File: what the visitor had
+  // before the first, not the first tour's step)
+  const prev = app.tour;
   endTour(false);
-  const saved = currentView();
+  const saved = prev ? prev.saved : currentView();
   // what the visitor had: each step is applied to it, and leaving puts it back
   // (styleChoice: the visitor's own choice of style, which a step's style is
   // not; leaving puts it back as it was)
-  const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
+  const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t }, walk: !!app.walk };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
   // Walk off while it plays (its keys would move the camera off the step);
