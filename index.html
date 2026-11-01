@@ -43,8 +43,8 @@
   /* header = the non-scrolling frame (background, border, the narrow layout's
      fade overlay); #tb = the row of controls inside it (wraps on desktop,
      scrolls sideways when narrow) */
-  header { grid-column: 1 / 3; position:relative; min-width:0; background:var(--panel); border-bottom:1px solid var(--line); }
-  #tb { display:flex; gap:6px; align-items:center; padding:6px 10px; flex-wrap:wrap; }
+  header { grid-column: 1 / 3; position:relative; min-width:0; display:flex; align-items:flex-start; background:var(--panel); border-bottom:1px solid var(--line); }
+  #tb { display:flex; gap:6px; align-items:center; padding:6px 10px; flex-wrap:wrap; flex:1; min-width:0; }
   header .title { font-weight:600; margin-right:8px; }
   button, select, label.btn, a.btn { background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
   button:hover, label.btn:hover, a.btn:hover { border-color:#566173; }
@@ -55,7 +55,10 @@
   .secval { color:var(--dim); font-variant-numeric:tabular-nums; min-width:0; }
   .secval:empty { display:none; }
   .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
-  #backend { flex:none; align-self:center; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; cursor:help; }
+  /* the renderer, in the page's top right: its tooltip is the graphics line
+     (WebGL 2 -- WebGPU not available: …). margin centres it on the first
+     toolbar row; the row under it, when the toolbar wraps, stays clear */
+  #backend { flex:none; margin:11px 8px 0 0; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; cursor:help; }
   /* A .menu: where the row has room its controls stand in it (the wrappers
      are display:contents); main.js adds .folded where they do not fit, and
      they then open from the menu's button as a panel under the toolbar
@@ -122,7 +125,7 @@
   #fullscreen svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
-  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } }
+  @media (any-pointer: coarse) { #fullscreen { width:40px; height:40px; min-height:40px; padding:8px; } #backend { margin-top:18px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
@@ -470,14 +473,15 @@
     /* a control reached by Tab stops short of the right-edge fade */
     #tb { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; scroll-padding-inline-end:40px; }
     /* The fade is an overlay on the NON-scrolling header, outside the
-       scroller: a 40 px gradient to the panel colour at the right edge,
-       stopping --sbh px above the bottom (main.js measures #tb's classic
+       scroller: a 40 px gradient to the panel colour, ending at the renderer
+       badge (the top-right corner) rather than over it, and stopping --sbh
+       px above the bottom (main.js measures #tb's classic
        scrollbar; 0 where scrollbars overlay), so the scrollbar and its arrow
        are never faded. Clicks pass through. (A two-layer mask on the scroller
        rendered no fade in Chromium with a classic scrollbar; a sticky
        pseudo-element inside it cannot leave its containing block, so never
        showed either -- both measured.) */
-    header.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
+    header.more-right::after { content:''; position:absolute; top:0; right:76px; bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
     header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
@@ -513,10 +517,7 @@
     /* narrow: one line; the model name truncates (wrapping it to a second
        line would cost the 3D view a row on every phone) */
     footer { grid-column:1; grid-row:3; flex-wrap:nowrap; }
-    /* room for the renderer badge (WEBGL2: 59 px) and the two 12 px gaps
-       beside the (then empty) model name; 64 px left the badge 9 px past
-       the screen's edge under a long status (measured, 390 and 768 px) */
-    #status { max-width:calc(100% - 92px); }
+    #status { max-width:100%; }
     /* the status (errors included) wraps; the model name gives way */
     #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
     /* the name, not the counts (the info panel has them): a phone cut the
@@ -598,7 +599,7 @@
     <div class="menu-panel" id="showpanel" aria-label="Show">
       <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all or checkbox (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
     </div></div>
-</div></header>
+</div><span id="backend">…</span></header>
 <aside id="parts" aria-label="Parts">
   <div id="info" hidden>
     <!-- where positions are measured from: the model, or a part chosen with
@@ -747,7 +748,7 @@
 </div>
 <!-- File > Print: the view's picture alone on the printed page -->
 <div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname"></p></div>
-<footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span><span id="backend">…</span></footer>
+<footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span></footer>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

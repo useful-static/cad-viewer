@@ -347,12 +347,23 @@ function adoptRenderer(r) {
   // lost between creation and here (onlost was not wired yet): report it now
   if (isDead(r)) queueMicrotask(() => r.onlost && r.onlost('lost before it was adopted'));
   $('backend').textContent = app.backend.toUpperCase();
-  $('backend').title = `${r.adapterInfo || ''}\n${r.detail || ''}\n` +
-    app.attempts.map((a) => `${a.backend}: ${a.ok ? 'ok' : a.error}`).join('\n');
   // the attempts behind THIS renderer (makeRenderer empties app.attempts when
-  // a recovery starts), and the info panel's renderer line follows the swap
+  // a recovery starts), and the info panel's renderer line follows the swap.
+  // showInfo sets the badge's tooltip to the same graphics line.
   app.adoptedAttempts = app.attempts.slice();
   showInfo();
+}
+
+// The graphics line, in the words the info panel and the badge's tooltip share:
+// "graphics WebGL 2 -- WebGPU not available: no WebGPU adapter".
+function graphicsNote() {
+  const NAMES = { webgpu: 'WebGPU', webgl2: 'WebGL 2', webgl1: 'WebGL 1' };
+  if (gaveUp) return `none -- ${gaveUp}`;
+  if (!app.backend) return '';
+  const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok)
+    .map((a) => `${NAMES[a.backend] || a.backend} not available: ${a.error}`);
+  const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
+  return `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`;
 }
 
 // ---------- GPU model sync ----------
@@ -5159,6 +5170,8 @@ function setUnitChoice(u) {
 }
 
 function showInfo() {
+  const note = graphicsNote();
+  if (note) $('backend').title = `graphics ${note}`;
   syncUnitsRow();
   syncRefRow();
   const el = $('infovals');
@@ -5285,21 +5298,11 @@ function fillInfo(el) {
     }
     if (e && (e.author || e.license)) add('model', [e.author && `by ${e.author}`, e.license].filter(Boolean).join(' · '));
   }
-  // the backend, and why any faster one was skipped -- with or without a model
-  // (it explains a slow first load too): the badge's tooltip says so as well,
-  // but a tooltip never shows on a touch screen or to the keyboard
-  // (in plain words: "graphics WebGL 2 -- WebGPU not available: no WebGPU adapter")
-  // (with no model open there is nothing else to say: shown in the lead)
-  const NAMES = { webgpu: 'WebGPU', webgl2: 'WebGL 2', webgl1: 'WebGL 1' };
-  const gfx = app.header ? addMore : add;
-  if (gaveUp) {
-    gfx('graphics', `none -- ${gaveUp}`); // the adopted one is dead; never name it as in use
-  } else if (app.backend) {
-    const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok)
-      .map((a) => `${NAMES[a.backend] || a.backend} not available: ${a.error}`);
-    const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
-    gfx('graphics', `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`);
-  }
+  // the same line as the badge's tooltip (showInfo). A tooltip never shows on
+  // a touch screen or to the keyboard, so the panel says it too: in the lead
+  // when nothing else is open, else in the Details fold.
+  const note = graphicsNote();
+  if (note) (app.header ? addMore : add)('graphics', note);
   if (!app.header) return;
   const ids = [...app.selected];
   const b = ids.length ? bboxOf(ids) : app.header.bbox;
