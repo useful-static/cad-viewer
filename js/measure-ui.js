@@ -271,14 +271,15 @@ export function createMeasure(deps) {
     st.results = st.results.filter((r) => r.mode !== 'note');
     for (const n of list || []) {
       if (n && Array.isArray(n.p) && n.p.length === 3 && n.p.every(Number.isFinite) && n.text) {
-        // (given: the page's, not the user's -- it does not open the bar)
-        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null, given: true });
+        // (given: the page's, not the user's -- it does not open the bar; a
+        // note of the user's own, put back as a tour ends, stays theirs)
+        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null, given: n.own !== true });
       }
     }
     syncRow();
     deps.queueFrame();
   }
-  const notes = () => st.results.filter((r) => r.mode === 'note').map((r) => ({ p: r.pts[0], text: r.main }));
+  const notes = () => st.results.filter((r) => r.mode === 'note').map((r) => ({ p: r.pts[0], text: r.main, ...(r.given ? {} : { own: true }) }));
 
   function place(x, y) {
     if (!st.on) return false;
