@@ -62,8 +62,8 @@ URL parameters:
   The parts panel slides out from the left over the view (**☰** in the
   toolbar) and closes on a tap on the dimmed view, on Esc, or on the button.
   Open… and Save .cadmesh are in a **File** menu. Rotating the device keeps
-  the same part of the model framed. The footer names the model in full and
-  leaves the counts to the parts panel.
+  the same part of the model framed. The tab's title names the model; the
+  parts panel has the counts.
 - **A toolbar that fits.** The toolbar stays one row at every size. The three
   tools, **Measure**, **Section** and **Explode**, stand together after Fit.
   Opening, sharing and saving are in a **File** menu at every width, in three

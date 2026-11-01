@@ -39,7 +39,7 @@
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
-  body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr auto; height:100vh; }
+  body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
   /* header = the non-scrolling frame (background, border, the narrow layout's
      fade overlay); #tb = the row of controls inside it (wraps on desktop,
      scrolls sideways when narrow) */
@@ -180,7 +180,7 @@
   /* ?embed=1: the 3D view alone, its few controls over it; until a click or
      tap makes it active it takes no wheel or drag from the page around it */
   body.embed { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
-  body.embed header, body.embed #parts, body.embed footer, body.embed #scrim { display:none !important; }
+  body.embed header, body.embed #parts, body.embed #scrim { display:none !important; }
   body.embed #stage { grid-column:1 / -1; grid-row:1 / -1; }
   body.embed:not(.active) #stage { touch-action:pan-x pan-y pinch-zoom; cursor:pointer; }
   /* a tour's caption card: bottom left, above the options bar; frames keep
@@ -384,21 +384,9 @@
      chip, since the dark view's grey with a black shadow is 2.75:1 on paper */
   #stage[data-bg="paper"] #hover { color:#222; text-shadow:none; }
   #stage[data-bg="paper"] #hover:not(:empty) { background:rgba(255,255,255,0.9); padding:1px 6px; border-radius:4px; box-shadow:0 0 0 1px #d0d0cc; }
-  footer { grid-column: 1 / 3; display:flex; gap:12px; padding:3px 10px; background:var(--panel); border-top:1px solid var(--line); font-size:12px; color:var(--dim); }
-  #status[data-state=error] { color:#ff7b7b; }
-  #status[data-state=ready] { color:#9fd8a6; }
-  #model { margin-left:auto; }
-  /* The status keeps its natural width (never shrunk: shrinking split "ready"
-     mid-word whenever the model name next to it was truncated), capped at the
-     footer's width, where a long filename or URL wraps instead of widening
-     the page. The model name absorbs all the shrinking. */
-  #status { flex-shrink:0; max-width:100%; overflow-wrap:anywhere; }
-  /* On desktop the footer wraps: a long status takes the line and the model
-     name moves to the next (squeezed beside it instead, it wrapped one
-     character per line -- measured, a 763 px footer). min-width:0 and
-     overflow-wrap keep a model name longer than the footer from widening it. */
-  footer { flex-wrap:wrap; }
-  #model { min-width:0; overflow-wrap:anywhere; }
+  /* status and the model name stay in the document for the live region and
+     the tab title; the bar that showed them repeated the empty card */
+  footer { display:none; }
   .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   label.btn:focus-visible, a.btn:focus-visible, #tree .label:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
@@ -466,9 +454,9 @@
      Short means any window under 500 px tall, mouse or touch: there the
      wrapping toolbar took 71-99 px of 390. */
   @media (max-width: 700px), (max-aspect-ratio: 4/5) and (max-width: 900px), (max-height: 500px) {
-    /* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a long nowrap model name
-       in the footer would otherwise widen the column past the screen */
-    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; overflow:hidden; }
+    /* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a nowrap row would
+       otherwise widen the column past the screen */
+    body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; overflow:hidden; }
     header { grid-column:1; }
     /* a control reached by Tab stops short of the right-edge fade */
     #tb { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; scroll-padding-inline-end:40px; }
@@ -514,15 +502,6 @@
        is left of its line. */
     .opt-row { flex-wrap:wrap; }
     #secpos { flex:1 1 110px; }
-    /* narrow: one line; the model name truncates (wrapping it to a second
-       line would cost the 3D view a row on every phone) */
-    footer { grid-column:1; grid-row:3; flex-wrap:nowrap; }
-    #status { max-width:100%; }
-    /* the status (errors included) wraps; the model name gives way */
-    #model { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
-    /* the name, not the counts (the info panel has them): a phone cut the
-       board's name to make room for "· 2,833 bodies" */
-    #model .mstats { display:none; }
   }
 </style>
 </head>
@@ -748,7 +727,8 @@
 </div>
 <!-- File > Print: the view's picture alone on the printed page -->
 <div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname"></p></div>
-<footer><span id="announce" class="sr-only" role="status" aria-live="polite"></span><span id="status">loading</span><span id="model"></span></footer>
+<span id="announce" class="sr-only" role="status" aria-live="polite"></span>
+<footer hidden><span id="status">loading</span><span id="model"></span></footer>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
