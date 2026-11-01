@@ -912,6 +912,12 @@ function fitTo(bbox) {
   const s = sphereOf(bbox);
   // the zoom's limits follow the sphere: what is framed, whatever the view
   c.viewRadius = s.radius;
+  // the header as it will be drawn: a row that a load's changes made wrap
+  // is refolded by an observer only after this task, so the stage measured
+  // here was the two-line header's, and the view, back at its own size by
+  // the next frame, never reported a change (a tour's first step framed for
+  // 980 x 729 in a 980 x 761 view)
+  if (!toolbarFits($('tb'))) refold();
   const box = $('stage');
   const h = Math.max(1, box.clientHeight);
   const aspect = box.clientWidth / h;
@@ -2075,6 +2081,8 @@ function setupEmbed() {
   if (!app.embed) return;
   document.body.classList.add('embed');
   document.body.classList.toggle('active', app.embedActive);
+  // no header here: ? and Full screen over the view's top right corner
+  $('stage').append($('hdend'));
   $('embedbar').hidden = false;
   $('embedhint').hidden = app.embedActive;
   $('embedfit').onclick = () => fitTo(drawnBox(null));
@@ -2379,7 +2387,7 @@ function undoVisibility() {
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
-const OVER_VIEW = '.card, #optbar, #fullscreen, #helpbtn, #helppop, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
+const OVER_VIEW = '.card, #optbar, #hdend, #helppop, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
 // (Display, the menu after Style, is always a menu where View stands in the
 // row, and its items are View's panel's where View folds: no fold step)
 const MENUS = [...FOLD_ORDER, 'displaymenu'];
@@ -2474,13 +2482,20 @@ function refold(keep = focusNow()) {
   // room; before View folds they drop to their icons (as on a phone), which
   // keeps View and a model list in a 1280 px row and a 1024 px tablet's.
   $('tools').classList.remove('compact');
+  // The page's name goes next, before View: a 1280 px row with a model list
+  // and ? and Full screen at its end had room for View only without it
+  tb.classList.remove('notitle');
   // Show folds before the model list: its four buttons do nothing until a
   // part is selected, while the list is how a visitor reaches the other
   // models (UI organization review rank 6)
-  for (const id of [FOLD_ORDER[0], 'tools', ...FOLD_ORDER.slice(1), 'modellist']) {
+  for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist']) {
     if (toolbarFits(tb)) break;
     if (id === 'tools') {
       $('tools').classList.add('compact');
+      continue;
+    }
+    if (id === 'title') {
+      tb.classList.add('notitle');
       continue;
     }
     if (id === 'modellist') {
@@ -5805,7 +5820,12 @@ function wireInput() {
     // a phone turned between portrait and landscape while the view is still
     // the one the model opened at: the Iso that suits the new shape
     // (js/orient.js isoView), framed afresh
+    // (each branch keeps the new aspect: the two that returned before it did
+    // left the old one, so every framing after -- a tour's step, Fit -- was
+    // for the shape the view had had: a header that wrapped for a moment as
+    // the page started framed a tour's first step 0.7 % too far)
     if (a > 0 && app.header && app.cam.q === app.loadQ && (a < PORTRAIT) !== (app.stageAspect < PORTRAIT)) {
+      app.stageAspect = a;
       setView('iso');
       app.loadQ = app.cam.q;
       queueFrame();
@@ -5814,6 +5834,7 @@ function wireInput() {
     // a view still as Fit left it is fitted again for the new shape: exact,
     // where scaling the distance (below) holds a sphere's framing, not the box's
     if (a > 0 && a !== app.stageAspect && atLastFit()) {
+      app.stageAspect = a;
       fitTo(app.lastFit.bbox);
       queueFrame();
       return;
@@ -5868,6 +5889,8 @@ function wireInput() {
     // scrollbars); a style on the HEADER, which the observer below (on #tb)
     // does not watch, so writing it cannot re-trigger moreHint
     header.style.setProperty('--sbh', `${Math.max(0, tb.offsetHeight - tb.clientHeight)}px`);
+    // ...and ends at ? and Full screen, beside the row
+    header.style.setProperty('--endw', `${$('hdend').offsetWidth}px`);
   };
   tb.addEventListener('wheel', (e) => {
     if (tb.scrollWidth <= tb.clientWidth || e.deltaX || !e.deltaY) return;
