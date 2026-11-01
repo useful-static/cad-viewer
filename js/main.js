@@ -2100,6 +2100,18 @@ function setupEmbed() {
   $('embedhint').hidden = app.embedActive;
   $('embedfit').onclick = () => fitTo(drawnBox(null));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
+  // &maximize=1 (a product page's inline viewer): "Open in cad.place" is a
+  // maximize icon in the top right, beside ?, in place of Full screen -- the
+  // way to the whole viewer is the one way to make it bigger
+  if (embedParams.get('maximize') === '1') {
+    const a = $('embedopen');
+    a.classList.add('maxopen');
+    a.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>';
+    a.setAttribute('aria-label', 'Open the full viewer');
+    a.title = 'Open the full viewer, at this view, in a new tab (cad.place)';
+    $('helpbtn').after(a);
+    document.body.classList.add('embedmax');
+  }
   // the link is made when it is about to be followed, so it holds the view now
   const fresh = () => { $('embedopen').href = app.header ? viewLink() : location.href.replace(/([?&])embed=1&?/, '$1'); };
   for (const ev of ['pointerenter', 'focus', 'pointerdown']) $('embedopen').addEventListener(ev, fresh);

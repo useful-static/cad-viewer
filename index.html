@@ -62,9 +62,12 @@
      / WebGL 1) with why a faster one was skipped. An embedded page has no
      header: main.js puts them over the view's top right corner there. */
   #hdend { flex:none; display:flex; gap:6px; align-items:center; padding:6px 10px 6px 0; }
-  #hdend button { min-width:28px; padding:3px 6px; display:inline-flex; align-items:center; justify-content:center; }
+  #hdend :is(button, a.btn) { min-width:28px; padding:3px 6px; display:inline-flex; align-items:center; justify-content:center; }
   #stage > #hdend { position:absolute; top:8px; right:8px; z-index:1; padding:0; }
-  #stage > #hdend button { background:rgba(37,42,50,.85); min-width:32px; min-height:32px; } /* (over the view: a near miss starts a drag) */
+  /* (embedded with &maximize=1: the maximize icon, Open in cad.place, stands
+     in Full screen's place) */
+  body.embedmax #fullscreen { display:none !important; }
+  #stage > #hdend :is(button, a.btn) { background:rgba(37,42,50,.85); min-width:32px; min-height:32px; } /* (over the view: a near miss starts a drag) */
   #helpbtn { font-weight:600; }
   #helpbtn[aria-expanded=true] { background:#3a4250; border-color:#566173; }
   /* the box: under ?, at its right edge (main.js sets top and right) */
@@ -147,10 +150,10 @@
   /* Full screen: an icon, in #hdend */
   #fullscreen[hidden] { display:none; }
   #fullscreen:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
-  #fullscreen svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  :is(#fullscreen, .maxopen) svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
-  @media (any-pointer: coarse) { #hdend button { min-width:40px; padding:6px 8px; } #fullscreen svg { width:20px; height:20px; } }
+  @media (any-pointer: coarse) { #hdend :is(button, a.btn) { min-width:40px; padding:6px 8px; } :is(#fullscreen, .maxopen) svg { width:20px; height:20px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
