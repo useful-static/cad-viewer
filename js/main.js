@@ -6055,7 +6055,7 @@ function wireInput() {
   // Undo's key as this OS names it (both work everywhere)
   if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
     $('undo').title = $('undo').title.replace('Ctrl+Z', '⌘Z');
-    for (const k of document.querySelectorAll('#helppop .keys')) k.textContent = k.textContent.replace('Ctrl+Z', '⌘Z');
+    for (const k of document.querySelectorAll('#helppop kbd')) if (k.textContent === 'Ctrl+Z') k.textContent = '⌘Z';
   }
   pal.onchange = () => setPalette(pal.value);
   wireModelList();
