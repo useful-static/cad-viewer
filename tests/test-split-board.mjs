@@ -96,7 +96,7 @@ test('the output encodes and decodes as a valid cadmesh', () => {
 
 // A part flush with the board's edge, whose front face the export merged
 // with the board's edge face into one face running the edge's whole length
-// (Renegade's microSD slot): that face is the board's, the part its own.
+// (a card slot flush with the edge): that face is the board's, the part its own.
 test('a part flush with the board edge does not take the edge with it', () => {
   const b = builder();
   b.box(0, 0, 0, 20, 10, 1.5);

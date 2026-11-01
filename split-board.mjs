@@ -155,8 +155,8 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
   // the same side of the board, else to a body of its face's small parts.
   // (Never through the board to a part on the other face: what lies under
   // a chip's footprint there is its decoupling capacitors, not its leads,
-  // and a part spanning both faces is framed from neither: Renegade
-  // Elite's SoC. Nor into the board: a board body as thick as the parts on
+  // and a part spanning both faces cannot be shown from either. Nor into
+  // the board: a board body as thick as the parts on
   // both its faces holds them in its box, and a viewer that judges what
   // hides a part by boxes no longer sees the board in the way.)
   const upper = (b) => (b.min[2] + b.max[2]) / 2 > (zb + zt) / 2;
