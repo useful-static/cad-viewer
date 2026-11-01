@@ -2905,9 +2905,14 @@ function listEntry(src) {
 function applyListEntry() {
   const e = app.header ? listEntry(app.sourceUrl) : null;
   // Download STEP: the entry's source file, else the file itself when the
-  // model was opened from a STEP / IGES / BREP URL
+  // model was opened from a STEP / IGES / BREP URL -- an http(s) one or this
+  // page's own (a ?src=data:… one is never handed back as a link)
+  let own = null;
+  try { own = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; } catch { /* no URL */ }
+  // (origin alone is not enough: under file:// it is "null", as a data: URL's is)
+  if (own && !(/^https?:$/.test(own.protocol) || (own.protocol === location.protocol && own.origin === location.origin))) own = null;
   const src = e && e.step ? e.step
-    : app.sourceUrl && /\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i.test(new URL(app.sourceUrl, location.href).pathname) ? new URL(app.sourceUrl, location.href).href : null;
+    : own && /\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i.test(own.pathname) ? own.href : null;
   const a = $('download');
   a.hidden = !src;
   if (src) {
@@ -4204,9 +4209,33 @@ async function loadDxf(buf, name, seq) {
   if (stale(seq)) return;
   // (a binary DXF is read from its bytes; an ASCII one as UTF-8 text)
   const drawing = parseDXF(isBinaryDXF(buf) ? buf : new TextDecoder().decode(buf));
-  if (!drawing.paths.length && !drawing.texts.length) throw new Error(`${name} has nothing in model space to draw (a DXF of paper-space layouts only is not drawn)`);
+  const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
+  if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
+}
+
+// The 2D view on a sheet: -1 model space, else layout i (its paper space and
+// what its viewports show). The layers are the drawing's: which are off
+// carries over; a Measure in progress does not
+function setSheet(i) {
+  const d = app.dxf.drawing;
+  const L = i >= 0 ? d.layouts[i] : null;
+  const shown = L ? { ...d, paths: L.paths, texts: L.texts, extents: L.extents } : d;
+  const old = app.dxf.view;
+  const off = old ? d.layers.filter((l) => !old.layerOn(l.name)).map((l) => l.name) : [];
+  if (old) old.destroy();
+  app.dxf.sheet = i;
+  app.dxf.shown = shown;
+  $('sheet').value = String(i);
+  app.dxf.view = createDxfView($('view2d'), shown, {
+    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
+    onHover: (what, snap) => { $('hover').textContent = !what ? '' : snap ? what : `layer ${what}`; },
+    onMeasure: (r) => { flashHover(r.text, 4000); announce(r.text); },
+  });
+  for (const n of off) app.dxf.view.setLayerOn(n, false);
+  $('measure').setAttribute('aria-pressed', 'false');
+  if (old) { buildLayerList(); showInfo(); announce(L ? `${L.name}: paper space` : 'model space'); }
 }
 
 function show2D(drawing, name, url) {
@@ -4215,14 +4244,18 @@ function show2D(drawing, name, url) {
   document.body.classList.add('mode2d');
   const cv = $('view2d');
   cv.hidden = false;
-  app.dxf = { drawing, name, url };
+  app.dxf = { drawing, name, url, sheet: -1 };
   app.sourceName = name;
   app.sourceUrl = url;
-  app.dxf.view = createDxfView(cv, drawing, {
-    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
-    onHover: (what, snap) => { $('hover').textContent = !what ? '' : snap ? what : `layer ${what}`; },
-    onMeasure: (r) => { flashHover(r.text, 4000); announce(r.text); },
-  });
+  // the sheets: model space, then each layout that draws anything; a
+  // drawing with nothing in model space opens on its first layout
+  const sheets = drawing.layouts.map((l, i) => ({ l, i })).filter(({ l }) => l.paths.length || l.texts.length);
+  const sel = $('sheet');
+  sel.replaceChildren(...[['-1', 'Model'], ...sheets.map(({ l, i }) => [String(i), l.name])].map(([v, t]) => {
+    const o = document.createElement('option'); o.value = v; o.textContent = t; return o;
+  }));
+  sel.hidden = !sheets.length;
+  setSheet(drawing.paths.length || drawing.texts.length || !sheets.length ? -1 : sheets[0].i);
   $('measure').setAttribute('aria-pressed', 'false');
   updateButtons(); // (clearModel ran them before app.dxf: Measure, Fit and Print come on for the drawing)
   buildLayerList();
@@ -4260,6 +4293,7 @@ function leave2D() {
   app.dxf = null;
   document.body.classList.remove('mode2d');
   $('view2d').hidden = true;
+  $('sheet').hidden = true;
   $('hover').textContent = '';
 }
 
@@ -4268,7 +4302,8 @@ function buildLayerList() {
   const tree = $('tree');
   tree.textContent = '';
   $('treefilter').hidden = true;
-  const d = app.dxf.drawing;
+  // (the sheet shown: a layout lists the layers it draws)
+  const d = app.dxf.shown || app.dxf.drawing;
   const count = new Map();
   for (const p of d.paths) count.set(p.layer, (count.get(p.layer) || 0) + 1);
   for (const t of d.texts) count.set(t.layer, (count.get(t.layer) || 0) + 1);
@@ -4310,9 +4345,11 @@ function syncLayerRows() {
 
 // the info panel in 2D mode: the drawing's size, unit, layers and contents
 function fillInfo2D(el) {
-  const d = app.dxf.drawing;
+  // (the sheet shown: model space, or a layout)
+  const d = app.dxf.shown || app.dxf.drawing, full = app.dxf.drawing;
   const row = (k, v) => { const p = document.createElement('div'); const b = document.createElement('b'); b.textContent = k; p.append(b, ` ${v}`); el.append(p); };
   row('file', `${app.dxf.name} · 2D drawing`);
+  if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (paper space, and model space through its viewports)`);
   const e = d.extents;
   if (e) {
     const u = d.units || 'units';
@@ -4325,7 +4362,9 @@ function fillInfo2D(el) {
   row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
-  if (d.paperSpace) row('paper space', `${fmtInt(d.paperSpace)} ${d.paperSpace === 1 ? 'entity' : 'entities'} not shown (model space is drawn)`);
+  if (app.dxf.sheet < 0 && full.paperSpace) {
+    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${full.layouts.length ? '; the Sheet menu shows the layouts' : ''})`);
+  }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
     row('selection', `layer ${l}: ${fmtInt(d.paths.filter((p) => p.layer === l).length)} lines and shapes`);
@@ -5053,6 +5092,8 @@ function sectionBox() {
   return secBox;
 }
 
+app.sectionBox = () => sectionBox(); // (for tests: the section's range)
+
 // name: the tree node's name when a tree row was chosen on its own, so the
 // info panel can show it in full (the row truncates it); any other selection
 // change forgets it.
@@ -5220,13 +5261,27 @@ function fillInfo(el) {
     // what the model list says of it: its page, who made it, on what terms
     // (in the lead: whose model it is, and the way back to its page)
     const e = listEntry(app.sourceUrl);
-    if (e && e.page) {
+    const outLink = (url, text) => {
       const l = document.createElement('a');
-      l.href = e.page;
+      l.href = url;
       l.target = '_blank';
       l.rel = 'noopener';
-      l.textContent = `${new URL(e.page).host}${new URL(e.page).pathname.replace(/\/$/, '')} ↗`;
-      add('page', l);
+      l.textContent = text;
+      return l;
+    };
+    if (e && e.page) {
+      const u = new URL(e.page);
+      add('page', outLink(e.page, `${u.host}${u.pathname.replace(/\/$/, '')} ↗`));
+    }
+    // its other pages (the list's `links`), each by its name and its host:
+    // a list on any site can name any page, so whose page it is always shows
+    if (e && e.links && e.links.length) {
+      const items = [];
+      for (const k of e.links) {
+        if (items.length) items.push(' · ');
+        items.push(outLink(k.url, `${k.name} ↗`), ` (${new URL(k.url).host})`);
+      }
+      add('see', ...items);
     }
     if (e && (e.author || e.license)) add('model', [e.author && `by ${e.author}`, e.license].filter(Boolean).join(' · '));
   }
@@ -5951,6 +6006,10 @@ function wireInput() {
   sty.onchange = () => setStyle(sty.value, true);
   blurAfterPick($('unitsel'));
   $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
+  // the 2D drawing's sheet: model space or a layout (a pick from the list is
+  // blurred, so the keys reach the drawing)
+  blurAfterPick($('sheet'));
+  $('sheet').onchange = (e) => { if (app.dxf) setSheet(Number(e.target.value)); };
   $('meshunit').onchange = (e) => setMeshUnit(e.target.value);
   // the material: remembered in this browser; a pick from the list is blurred
   // (the number keys then reach the view)

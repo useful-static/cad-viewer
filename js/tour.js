@@ -61,7 +61,7 @@ export function parseTour(text, base = undefined) {
   if (t.defaults !== undefined) {
     if (!t.defaults || typeof t.defaults !== 'object' || Array.isArray(t.defaults)) throw bad('"defaults"', 'must be an object');
     for (const [k, v] of Object.entries(t.defaults)) {
-      if (!(k in DEFAULTS)) throw bad(`"defaults.${k}"`, `not a default (${Object.keys(DEFAULTS).join(', ')})`);
+      if (!Object.hasOwn(DEFAULTS, k)) throw bad(`"defaults.${k}"`, `not a default (${Object.keys(DEFAULTS).join(', ')})`);
       checkTiming(`"defaults.${k}"`, k, v, bad);
       defaults[k] = v;
     }
@@ -239,7 +239,8 @@ export function namesFor(ids, header, idx, labels = null) {
     }
     if (pick) {
       for (const x of idx.get(pick.trim().toLowerCase())) covered.add(x);
-      names.push(byLabel[pick.trim().toLowerCase()] || pick);
+      const key = pick.trim().toLowerCase();
+      names.push((Object.hasOwn(byLabel, key) && byLabel[key]) || pick);
     } else {
       covered.add(id);
       names.push(`#${id}`);

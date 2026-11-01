@@ -158,6 +158,18 @@ await test('tours: named, resolved against the list; a wrong one refuses the lis
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', tours: t } }), L), /its tours/);
   }
 });
+await test('links: named, resolved against the list; a wrong one (or a script URL) refuses the list', () => {
+  const [e] = parseModelList(JSON.stringify({ a: { name: 'A', links: [{ name: ' Layout ', url: 'https://layout.example/?board=a' }, { name: 'Page', url: '/p/' }] } }), L);
+  assert.deepEqual(e.links, [{ name: 'Layout', url: 'https://layout.example/?board=a' }, { name: 'Page', url: 'https://site.example/p/' }]);
+  // (the limit is on the name as shown, after trimming)
+  const [p] = parseModelList(JSON.stringify({ a: { name: 'A', links: [{ name: ` ${'x'.repeat(100)} `, url: 'a' }] } }), L);
+  assert.equal(p.links[0].name.length, 100);
+  for (const k of [[{ name: 'x' }], [{ url: 'a' }], [{ name: ' ', url: 'a' }], { name: 'x', url: 'a' },
+    [{ name: 'x', url: 'javascript:alert(1)' }], [{ name: 'x', url: 'data:text/html,<b>' }], [{ name: 'x'.repeat(101), url: 'a' }],
+    Array.from({ length: 11 }, () => ({ name: 'x', url: 'a' }))]) {
+    assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', links: k } }), L), /its links/);
+  }
+});
 await test('a wrong extra field refuses the list, naming the file and the field', () => {
   for (const [v, re] of [[{ step: 'javascript:alert(1)' }, /"a": its step .* not an http/], [{ page: 3 }, /its page must be a URL/],
     [{ labels: ['x'] }, /its labels must be/], [{ labels: { a: 1 } }, /its labels must be/], [{ style: 'fancy' }, /its style must be one of/],

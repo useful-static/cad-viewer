@@ -17,7 +17,7 @@
 //   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
 //     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
 //
-// It may also carry step, page, image, author, license, labels, style and notes (extras,
+// It may also carry step, page, links, image, author, license, labels, style and notes (extras,
 // below); a field it does not know is ignored, a known one that is wrong is
 // refused with the reason.
 // JavaScript orders an object's integer-like keys ("10", "2") first, by
@@ -117,6 +117,10 @@ export function entryByName(entries, name) {
 //   step     the source CAD file the model was converted from: File >
 //            Download STEP (a URL, resolved against the list's)
 //   page     the model's own page (a product page): the info panel links it
+//   links    [{ "name": "Board layout", "url": "<an http(s) page>" }] (at most
+//            10): more pages about it, which the info panel lists after the
+//            page, each by its name and its site's host (a list on any site
+//            can name any page, so the host is never left out)
 //   image    a picture of it: File > Browse models shows the list by them, and
 //            the download's card while it opens (loaded with CORS: the
 //            viewer's page is cross-origin isolated)
@@ -176,6 +180,18 @@ function extras(file, v, listUrl) {
       try { u = new URL(x.url, listUrl); } catch { throw bad('tours', `"${x.url}" is not a URL`); }
       if (!/^https?:$/.test(u.protocol)) throw bad('tours', `"${x.url}" is not an http(s) URL`);
       return { name: (x.name || '').trim() || 'Tour', url: u.href };
+    });
+  }
+  if (v.links !== undefined) {
+    const k = v.links;
+    const ok = (x) => x && typeof x === 'object' && typeof x.url === 'string' && x.url.trim()
+      && typeof x.name === 'string' && x.name.trim() && x.name.trim().length <= 100;
+    if (!Array.isArray(k) || k.length > 10 || !k.every(ok)) throw bad('links', 'must be a list (at most 10) of { "name": "…" (100 characters at most), "url": "<an http(s) page>" }');
+    out.links = k.map((x) => {
+      let u;
+      try { u = new URL(x.url, listUrl); } catch { throw bad('links', `"${x.url}" is not a URL`); }
+      if (!/^https?:$/.test(u.protocol)) throw bad('links', `"${x.url}" is not an http(s) URL`);
+      return { name: x.name.trim(), url: u.href };
     });
   }
   if (v.notes !== undefined) {

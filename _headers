@@ -2,6 +2,11 @@
 # multi-core converter (vendor/occt-import-js/mt/) needs for its threads.
 # Everything the page loads is its own, so nothing else is affected; without
 # these headers the viewer converts on one thread.
+# nosniff: a file is only ever run as the type it is served as. (The page's
+# Content-Security-Policy is a <meta> in index.html, so the viewer is held to
+# it wherever it is served; framing stays open for ?embed=1.)
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

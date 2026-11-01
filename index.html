@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- What this page may run and load. Its own scripts only (and the WASM the
+     converter compiles), workers from its own files or the blobs the
+     multi-core converter starts them from; models, lists, tours and pictures
+     from any site (a ?list= or ?src= names them), since a model list is data
+     and nothing it carries is ever run or written as HTML. No plugins, no
+     <base>, no forms. The inline <style> below needs 'unsafe-inline'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src * data: blob:; img-src * data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<!-- a link's address never leaves with more than this site's origin -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CAD viewer — view STEP, IGES and BREP files in your browser</title>
 <meta name="description" content="Free online 3D CAD viewer for STEP, IGES and BREP assemblies. Runs in your browser with WebGPU or WebGL; your file is opened locally and never uploaded. Parts tree, section planes, isolate and hide.">
@@ -321,7 +330,9 @@
     #printname { text-align:center; font:12px sans-serif; color:#000; }
   }
   body.mode2d #view { visibility:hidden; }
-  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene) { display:none !important; }
+  #sheet[hidden] { display:none; }
+  #sheet { margin-left:4px; }
+  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid #0006; margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
@@ -546,7 +557,7 @@
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens">Export as <button data-fmt="stl" disabled title="STL: triangles, no colour">STL</button><button data-fmt="3mf" disabled title="3MF: colours, in mm">3MF</button><button data-fmt="glb" disabled title="GLB: colours, in metres">GLB</button></span>
     </div></div>
   <span class="sep"></span>
-  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button>
+  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the model, or a layout" title="Model space, or a layout (paper space with what its viewports show)"></select>
   <!-- the tools, together: each puts its controls in the options bar along
        the bottom of the view (UI organization review rank 2); on the
        narrowest screens they move into View's panel, named there -->

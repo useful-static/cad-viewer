@@ -165,10 +165,98 @@ export function parseDXF(s) {
   const ents = every.filter((r) => !inPaper(r));
   const paperSpace = every.filter((r) => inPaper(r) && !['VERTEX', 'SEQEND', 'ATTRIB'].includes(r.type)).length;
   emit(ents, IDENT, null, 0, { layers, blocks, out, ltypes, ltscale });
-  for (const p of out.paths) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true });
+  // Layouts (paper space): the active one is the entities flagged 67 = 1,
+  // others are the *Paper_Space<n> blocks. Each draws its own entities and,
+  // through each VIEWPORT (but the sheet's own, id 1), model space: a model
+  // point m lands at C + R(twist) (h / viewHeight) (m - viewCentre),
+  // clipped to the viewport's frame, which is drawn too (frame: true)
+  const sets = [];
+  const active = every.filter(inPaper);
+  if (active.length) sets.push(active);
+  for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push(b.recs);
+  const layouts = sets.map((recs, li) => {
+    const lo = { paths: [], texts: [] };
+    emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, { layers, blocks, out: lo, ltypes, ltscale });
+    for (const v of recs) {
+      if (v.type !== 'VIEWPORT' || num(v, 69, 0) === 1) continue;
+      const cx = num(v, 10), cy = num(v, 20), w = num(v, 40), h = num(v, 41), vh = num(v, 45);
+      if (!(w > 0 && h > 0 && vh > 0)) continue;
+      const s = h / vh, tw = (num(v, 51) * Math.PI) / 180;
+      const c = Math.cos(tw) * s, si = Math.sin(tw) * s, mx = num(v, 12), my = num(v, 22);
+      const M = [c, si, -si, c, cx - (c * mx - si * my), cy - (si * mx + c * my)];
+      const rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+      for (const p of out.paths) clipPath(p, M, s, rect, lo.paths);
+      for (const t of out.texts) {
+        const [x, y] = ap(M, t.x, t.y);
+        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) lo.texts.push({ ...t, x, y, h: t.h * s, rot: t.rot + tw });
+      }
+      const layer = get(v, 8, '0');
+      lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
+        pts: Float64Array.of(rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]), closed: true, fill: false, frame: true });
+    }
+    return { name: li === 0 && active.length ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
+  });
+  // (a layer no table names, in model space or a layout, is a layer too)
+  for (const p of [...out.paths, ...layouts.flatMap((l) => l.paths)]) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true });
   const u = UNITS[insunits];
   return { units: u ? u[0] : null, mmPerUnit: u ? u[1] : null, insunits,
-    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace };
+    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts };
+}
+
+// One model path seen through a viewport (transform M, scale s) onto paper,
+// clipped to rect [x0, y0, x1, y1]: a filled one by Sutherland-Hodgman, a
+// line by Liang-Barsky segment by segment, its kept runs as open paths
+function clipPath(p, M, s, rect, out) {
+  const n = p.pts.length / 2;
+  const P = [];
+  for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
+  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null };
+  if (p.fill) {
+    let poly = P;
+    const edges = [[0, rect[0], 1], [0, rect[2], -1], [1, rect[1], 1], [1, rect[3], -1]];
+    for (const [k, lim, sg] of edges) {
+      const inside = (q) => sg * (q[k] - lim) >= 0;
+      const next = [];
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        if (inside(a)) next.push(a);
+        if (inside(a) !== inside(b)) {
+          const t = (lim - a[k]) / (b[k] - a[k]);
+          next.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
+      }
+      poly = next;
+      if (!poly.length) return;
+    }
+    out.push({ ...base, pts: Float64Array.from(poly.flat()), closed: true });
+    return;
+  }
+  if (n === 1 || p.point) {
+    const [x, y] = P[0];
+    if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) out.push({ ...base, pts: Float64Array.of(x, y, x, y) });
+    return;
+  }
+  const segs = p.closed ? n : n - 1;
+  let run = null;
+  const flush = () => { if (run && run.length >= 4) out.push({ ...base, pts: Float64Array.from(run), closed: false }); run = null; };
+  for (let i = 0; i < segs; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    // Liang-Barsky
+    let t0 = 0, t1 = 1;
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    let keep = true;
+    for (const [pp, q] of [[-dx, a[0] - rect[0]], [dx, rect[2] - a[0]], [-dy, a[1] - rect[1]], [dy, rect[3] - a[1]]]) {
+      if (pp === 0) { if (q < 0) { keep = false; break; } continue; }
+      const r = q / pp;
+      if (pp < 0) { if (r > t1) { keep = false; break; } if (r > t0) t0 = r; } else { if (r < t0) { keep = false; break; } if (r < t1) t1 = r; }
+    }
+    if (!keep) { flush(); continue; }
+    const s0 = [a[0] + dx * t0, a[1] + dy * t0], s1 = [a[0] + dx * t1, a[1] + dy * t1];
+    if (!run || t0 > 0) { flush(); run = [s0[0], s0[1]]; }
+    run.push(s1[0], s1[1]);
+    if (t1 < 1) flush();
+  }
+  flush();
 }
 
 // 2D affine [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f

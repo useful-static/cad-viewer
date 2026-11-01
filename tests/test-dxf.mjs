@@ -177,5 +177,48 @@ test('paper space is not drawn in the model: a 67 = 1 entity is left out and cou
   assert.ok(d.extents.max[0] <= 10, `extents ${JSON.stringify(d.extents)} not stretched by paper space`);
 });
 
+test('a layout: its paper space, and model space through its viewport, scaled and clipped', () => {
+  const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
+    // model: a line 0..100 along x, and one far off to the right (outside the viewport's view)
+    [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 100], [21, 0],
+    [0, 'LINE'], [8, '0'], [10, 1000], [20, 0], [11, 1100], [21, 0],
+    // paper: the sheet's own viewport (id 1, not drawn), a title frame, a viewport
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    [0, 'LWPOLYLINE'], [8, 'TITLE'], [67, 1], [90, 4], [70, 1], [10, 0], [20, 0], [10, 297], [20, 0], [10, 297], [20, 210], [10, 0], [20, 210],
+    // centre (50, 40), 60 x 40 on paper; it shows model (50, 0), 80 high: scale 0.5
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 50], [22, 0], [45, 80],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  const d = parseDXF(dxf(ents));
+  assert.equal(d.paths.length, 2, 'model space: both lines');
+  assert.equal(d.layouts.length, 1, 'one layout');
+  const L = d.layouts[0];
+  // the title frame, and the first line through the viewport (the far one
+  // clipped away), besides the viewport's own frame
+  const drawn = L.paths.filter((p) => !p.frame);
+  assert.equal(drawn.length, 2, `paths ${drawn.map((p) => p.layer).join(',')}`);
+  assert.equal(L.paths.filter((p) => p.frame).length, 1, 'one viewport frame (the sheet\'s id-1 viewport has none)');
+  const line = drawn.find((p) => p.layer === '0');
+  const xs = [line.pts[0], line.pts[2]].sort((a, b) => a - b);
+  // model 0..100 at scale 0.5 about (50, 0) -> paper 25..75 at y 40; the
+  // viewport spans x 20..80, so all of it shows
+  assert.ok(Math.abs(xs[0] - 25) < 1e-9 && Math.abs(xs[1] - 75) < 1e-9, `x ${xs}`);
+  assert.ok(Math.abs(line.pts[1] - 40) < 1e-9, `y ${line.pts[1]}`);
+  assert.ok(L.extents.max[0] <= 297 + 1e-9, 'the sheet');
+  // a layer only a layout uses (no LAYER table here) is in the drawing's list
+  assert.ok(d.layers.some((l) => l.name === 'TITLE'), `layers ${d.layers.map((l) => l.name)}`);
+});
+
+test('a viewport clips what it shows to its frame', () => {
+  const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, '0'], [10, -200], [20, 0], [11, 200], [21, 0],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  const L = parseDXF(dxf(ents)).layouts[0];
+  const line = L.paths.find((p) => !p.frame);
+  const xs = [line.pts[0], line.pts[2]].sort((a, b) => a - b);
+  // scale 1 about (0, 0) -> paper x -150..250, clipped to the frame's 20..80
+  assert.ok(Math.abs(xs[0] - 20) < 1e-9 && Math.abs(xs[1] - 80) < 1e-9, `x ${xs}`);
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
