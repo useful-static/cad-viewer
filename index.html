@@ -330,6 +330,10 @@
     #printname { text-align:center; font:12px sans-serif; color:#000; }
   }
   body.mode2d #view { visibility:hidden; }
+  /* 2D mode: View (3D only) gives way to a small badge saying what is open */
+  #badge2d { display:none; align-self:center; padding:1px 6px; border:1px solid var(--line); border-radius:4px;
+    color:var(--dim); font-size:11px; font-weight:600; letter-spacing:.04em; }
+  body.mode2d #badge2d { display:inline-block; }
   #sheet[hidden] { display:none; }
   #sheet { margin-left:4px; }
   body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
@@ -566,6 +570,7 @@
   <button id="section" aria-pressed="false" aria-label="Section" title="Cut the model with a plane; its controls show along the bottom of the view"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 5.5l6-3 6 3-6 3z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2 5.5v5l6 3 6-3v-5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-dasharray="2 1.5"/><path d="M1 9.5h14" stroke="currentColor" stroke-width="1.5"/></svg><span class="lbl">Section</span></button>
   <button id="explode" aria-pressed="false" aria-label="Explode" hidden disabled aria-keyshortcuts="X" title="Exploded view: pull the parts apart; how far, and along what, show along the bottom of the view (X)"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5.5" y="5.5" width="5" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 4L1.5 1.5M12 4l2.5-2.5M4 12l-2.5 2.5M12 12l2.5 2.5M1.5 1.5h2.5M1.5 1.5v2.5M14.5 1.5h-2.5M14.5 1.5v2.5M1.5 14.5h2.5M1.5 14.5v-2.5M14.5 14.5h-2.5M14.5 14.5v-2.5" fill="none" stroke="currentColor" stroke-width="1.1"/></svg><span class="lbl">Explode</span></button>
   </span>
+  <span id="badge2d" role="img" aria-label="2D drawing" title="2D drawing">2D</span>
   <div class="menu" id="viewmenu"><button class="menu-btn" aria-expanded="false" aria-controls="viewpanel" title="View presets, projection, up axis and display style">View</button>
     <div class="menu-panel" id="viewpanel" aria-label="View">
       <!-- the presets fold on their own first (Views ▾), so the row keeps
