@@ -1815,8 +1815,11 @@ function startTour(tour, url, only = null) {
   // (styleChoice: the visitor's own choice of style, which a step's style is
   // not; leaving puts it back as it was)
   const base = { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
-    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t } };
+    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t }, walk: !!app.walk };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
+  // Walk off while it plays (its keys would move the camera off the step);
+  // leaving puts it back, the camera with it
+  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   // the tour's orientation while it plays (leaving puts the visitor's back,
   // with the rest of their view)
   if (tour.orient && tour.orient !== app.cam.orient) {
@@ -1848,6 +1851,7 @@ function endTour(restore = true) {
     recolour();
     if (base.explode.on) { app.explode.t = base.explode.t; if (app.explode.on) { syncExplodeSphere(); syncExplodeRow(); } else setExplode(true); } else setExplode(false);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
+    if (base.walk) { app.walk = true; $('walk').setAttribute('aria-pressed', 'true'); }
     app.styleChoice = base.styleChoice;
     updateButtons();
     viewChanged();
