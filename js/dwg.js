@@ -13,6 +13,8 @@
 //
 // No other reader's code was consulted: the clean-room rule of the project.
 
+import { caret, valueKind, aciColour } from './dxf.js';
+
 // --- checks -------------------------------------------------------------------------------------
 
 const CRC16 = (() => {
@@ -142,9 +144,20 @@ class Bits {
   align() { this.p = (this.p + 7) & ~7; }
 }
 const LATIN1 = new TextDecoder('windows-1252');
+// The index a true colour shows as where only an index is read (DXF group 62 beside 420): the
+// nearest of ACI 1-255. From R2004 the CMC of a true colour stores index 0, and AutoCAD's and
+// ODA's DXF of such a file carry this nearest index (sample_base layers: 150, 31, 247)
+let ACI_RGB = null;
+function nearestAci(rgb) {
+  if (!ACI_RGB) ACI_RGB = Array.from({ length: 256 }, (_, a) => (a ? aciColour(a) : null));
+  const r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
+  let best = 7, bd = Infinity;
+  for (let a = 1; a <= 255; a++) { const c = ACI_RGB[a]; const d = (c.r - r) ** 2 + (c.g - g) ** 2 + (c.b - b) ** 2; if (d < bd) { bd = d; best = a; } }
+  return best;
+}
 function colourOfRgb(idx, rgb) {
   const kind = rgb >>> 24;
-  if (kind === 0xc2) return { aci: idx || 7, rgb: rgb & 0xffffff };
+  if (kind === 0xc2) return { aci: idx >= 1 && idx <= 255 ? idx : nearestAci(rgb & 0xffffff), rgb: rgb & 0xffffff };
   if (kind === 0xc3) return { aci: rgb & 0xff };
   if (kind === 0xc0) return { aci: 256 };
   if (kind === 0xc1) return { aci: 0 };
@@ -1274,7 +1287,9 @@ export function dwgToPairs(dwg) {
         ext(d.ext); break;
       }
       case 'HATCH': {
-        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.name); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
+        // the stored name may carry the island style ("SOLID,_O": _N normal, _O outer, _I
+        // ignore); DXF names the pattern alone (the style is group 75): acadsharp sample_base 371
+        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.name.replace(/,_[NOI]$/i, '')); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
         for (const L of d.loops) {
           put(92, L.flag);
           if (L.flag & 2) {
@@ -1335,9 +1350,10 @@ export function dwgToPairs(dwg) {
 // for the tests: the pieces, so each layer can be checked on its own
 export const _internal = { Bits, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, readHeader, deRS, checksum04, checksum21, magic };
 
-// The pairs as ASCII DXF text
+// The pairs as DXF text; a string's control characters and carets in DXF's caret notation (a
+// text may hold U+0003; written raw, a line feed would split the pair)
 export function pairsToDXF(P) {
   let s = '';
-  for (const [c, v] of P) s += `${c < 10 ? '  ' : c < 100 ? ' ' : ''}${c}\r\n${v}\r\n`;
+  for (const [c, v] of P) s += `${c < 10 ? '  ' : c < 100 ? ' ' : ''}${c}\r\n${typeof v === 'string' && valueKind(c) === 's' ? caret(v) : v}\r\n`;
   return s;
 }

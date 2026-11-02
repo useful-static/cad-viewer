@@ -3,6 +3,7 @@
 // DWG version) against the reader's js/dwg.js dwgToPairs output. Used by validate-dwg.mjs and
 // validate-dwg-versions.mjs, so both judge by the same rules.
 import { readFileSync } from 'node:fs';
+import { uncaret, valueKind } from '../js/dxf.js';
 
 // the groups compared per DXF type (a group absent from the key is not compared)
 export const GROUPS = {
@@ -22,7 +23,7 @@ export function dxfPairs(path) {
   for (let i = 0; i + 1 < t.length; i += 2) {
     const c = Number(t[i].trim());
     if (!Number.isInteger(c)) return null; // binary or malformed: no answer key
-    out.push([c, t[i + 1]]);
+    out.push([c, valueKind(c) === 's' ? uncaret(t[i + 1]) : t[i + 1]]);
   }
   return out;
 }
@@ -90,6 +91,13 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     // a fit-point spline: the DWG holds its fit points; AutoCAD's DXF adds control points it
     // computes, which the file does not hold: compare the fit points
     if (a.type === 'SPLINE' && Number(vals(b, 73)[0] || 0) === 0) groups = [71, 74, 11, 21];
+    // a key whose fit-point count (74) disagrees with the fit points it lists (11): the key
+    // contradicts itself (ODA's R2010 DXF of acadsharp sample_base 434: 74 = 2, no 11), so its
+    // count is not an answer; counted apart, the points still compared
+    if (a.type === 'SPLINE' && vals(a, 74).length && Number(vals(a, 74)[0]) !== vals(a, 11).length) {
+      groups = groups.filter((c) => c !== 74);
+      cmp.keyInconsistent = (cmp.keyInconsistent || 0) + 1;
+    }
     cmp.matched++;
     // R13-R14 DXF has no ARC_DIMENSION / LARGE_RADIAL_DIMENSION: AutoCAD writes one as an INSERT
     // of a proxy block it makes for the DXF; the DWG holds the dimension and its own *D block
@@ -125,6 +133,11 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
         const ok = opts.oldNames && (c === 2 || c === 6) ? oldName(xa[k]) === oldName(xb[k]) : same(xa[k], xb[k], c);
         if (!ok) bad = true;
       }
+      // opts.knotTol (a save made by another writer): a knot vector of the same length whose knots
+      // all moved by at most knotTol is that writer's change (the ODA writer parts repeated knots
+      // by 1e-9; its own DXF of the file holds the moved values), counted apart
+      if (bad && opts.knotTol && a.type === 'SPLINE' && c === 40 && xa.length === xb.length
+        && xa.every((x, k) => Math.abs(Number(x) - Number(xb[k])) <= opts.knotTol)) { cmp.knotMoved = (cmp.knotMoved || 0) + 1; continue; }
       if (bad) { cmp.valueDiff++; ex(`${a.type} ${h.toString(16)} group ${c}: ${xa.slice(0, 3).join(',')} vs ${xb.slice(0, 3).join(',')}`); }
     }
   }

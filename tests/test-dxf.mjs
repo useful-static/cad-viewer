@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, aciColour, onPaper } from '../js/dxf.js';
+import { parseDXF, bulgePts, mtextPlain, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 
 let passed = 0;
 let failed = 0;
@@ -218,6 +218,19 @@ test('a viewport clips what it shows to its frame', () => {
   const xs = [line.pts[0], line.pts[2]].sort((a, b) => a - b);
   // scale 1 about (0, 0) -> paper x -150..250, clipped to the frame's 20..80
   assert.ok(Math.abs(xs[0] - 20) < 1e-9 && Math.abs(xs[1] - 80) < 1e-9, `x ${xs}`);
+});
+
+test('caret notation: "^C" is U+0003, "^ " a caret, and caret() writes them back', () => {
+  const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'a^Cb^ c'],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  assert.equal(parseDXF(dxf(ents)).texts[0].text, 'a\x03b^c');
+  assert.equal(uncaret('a^Cb^ c^J'), 'a\x03b^c\n');
+  assert.equal(caret('a\x03b^c\n'), 'a^Cb^ c^J');
+  assert.equal(uncaret(caret('^^\x00\x1f x')), '^^\x00\x1f x');
+  // must fire: a caret before a character outside @.._ and space is kept as written
+  assert.equal(uncaret('2^3'), '2^3');
+  assert.notEqual(uncaret('a^Cb'), 'a^Cb');
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

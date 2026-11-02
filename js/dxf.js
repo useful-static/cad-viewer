@@ -11,17 +11,31 @@
 // its outline), SOLID / TRACE. The object coordinate system (210/220/230,
 // the arbitrary-axis rule) is applied; BYLAYER and BYBLOCK resolve through
 // nested inserts; ACI and true colour (420). $INSUNITS gives the unit
-// (0: not stored). DWG is not read (a licence decision: plan feature 23).
+// (0: not stored). A DWG arrives here as group-code pairs from js/dwg.js:
+// parseDXF takes the text or the pairs.
 //
 // Pure ES module, no DOM.
 
 const SEG_RAD = Math.PI / 36; // arcs flattened at 5° a segment (finer when big: see arcPts)
 
+// A text DXF writes a control character in a string as a caret and the character 64 on ("^C" is
+// U+0003, "^J" a line feed), and a caret itself as "^ " (DXF reference, "Group Codes in Numerical
+// Order": control characters). Binary DXF holds the bytes as they are.
+export function uncaret(s) {
+  return s.indexOf('^') < 0 ? s : s.replace(/\^([@-_ ])/g, (m, ch) => (ch === ' ' ? '^' : String.fromCharCode(ch.charCodeAt(0) - 64)));
+}
+export function caret(s) {
+  return /[\x00-\x1f^]/.test(s) ? s.replace(/[\x00-\x1f^]/g, (ch) => (ch === '^' ? '^ ' : '^' + String.fromCharCode(ch.charCodeAt(0) + 64))) : s;
+}
+
 // group-code pairs from the text
 function pairs(s) {
   const lines = s.split(/\r?\n/);
   const out = [];
-  for (let i = 0; i + 1 < lines.length; i += 2) out.push([parseInt(lines[i], 10), lines[i + 1]]);
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const c = parseInt(lines[i], 10);
+    out.push([c, valueKind(c) === 's' ? uncaret(lines[i + 1]) : lines[i + 1]]);
+  }
   return out;
 }
 
@@ -33,7 +47,7 @@ export function isBinaryDXF(buf) {
   const b = new Uint8Array(buf, 0, Math.min(22, buf.byteLength));
   return b.length === 22 && String.fromCharCode(...b) === BIN_SENTINEL;
 }
-function valueKind(c) {
+export function valueKind(c) {
   if (c <= 9 || (c >= 100 && c <= 109) || (c >= 300 && c <= 309) || (c >= 320 && c <= 369) || (c >= 390 && c <= 399)
     || (c >= 410 && c <= 419) || (c >= 430 && c <= 439) || (c >= 470 && c <= 481) || c === 999 || (c >= 1000 && c <= 1003)
     || (c >= 1005 && c <= 1009)) return 's';

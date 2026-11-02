@@ -81,10 +81,10 @@ function main() {
     if (r.decoded) { s.decoded += r.decoded[0]; s.decodable += r.decoded[1]; }
     for (const [, [p, t]] of Object.entries(r.checks || {})) { s.checks += t; s.checkFail += t - p; }
     if (r.adapter) { s.owned += r.adapter.owned; s.emitted += r.adapter.emitted; s.unexplained += r.adapter.unexplained; if (r.adapter.roundTrip) s.roundTrip++; }
-    if (r.twin) { s.twins++; s.matched += r.twin.matched; s.fields += r.twin.fieldsCompared; s.diffs += r.twin.differences; s.drift += r.twin.notInFile + r.twin.represented; }
+    if (r.twin) { s.twins++; s.matched += r.twin.matched; s.fields += r.twin.fieldsCompared; s.diffs += r.twin.differences; s.drift += r.twin.notInFile + r.twin.represented + (r.twin.keyInconsistent || 0); }
   }
   const rng = (a) => (a.length ? `${Math.min(...a)}–${Math.max(...a)}` : '-');
-  const lines = ['| | Standard | Files passing | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | DXF twins | Twin fields compared | Twin differences | Twin drift (not compared) |',
+  const lines = ['| | Standard | Files passing | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | DXF twins | Twin fields compared | Twin differences | Twin drift, or the key contradicting itself (not compared) |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
   for (const [std, s] of Object.entries(by)) {
     lines.push(`| ${s.pass === s.files ? '🟢' : '🔴'} | ${std} | ${s.pass} of ${s.files} | ${rng(s.ent)} | ${rng(s.types)} | ${s.decoded} of ${s.decodable} | ${s.checkFail} of ${s.checks} | ${s.emitted} of ${s.owned}, ${s.unexplained} | ${s.roundTrip} of ${s.files} | ${s.twins} | ${s.fields} | ${s.diffs} | ${s.drift} |`);
