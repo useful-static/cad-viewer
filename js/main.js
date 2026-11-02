@@ -5,6 +5,7 @@
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { MESH_EXTS, meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
 import { isBinaryDXF, onPaper, parseDXF } from './dxf.js';
+import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
 import { directUrl } from './open-url.js';
 import { stepProducts } from './step-meta.js';
@@ -4112,7 +4113,7 @@ async function loadAny(buf, name, seq) {
   // into a .cadmesh (js/mesh-formats.js)
   const meshName = name.replace(/\.gz$/i, '');
   if (MESH_EXTS.includes(extOf(meshName)) || (!extOf(meshName) && !isGzip(buf) && meshFormatOf('', buf))) return loadMeshFile(buf, name, seq);
-  if (extOf(meshName) === 'dxf') return loadDxf(buf, name, seq);
+  if (extOf(meshName) === 'dxf' || extOf(meshName) === 'dwg' || isDWG(buf)) return loadDxf(buf, name, seq);
   if (extOf(name) === 'zip') return loadZip(buf, name, seq);
   // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
   // to download): unpacked here, then opened as the file inside it
@@ -4268,7 +4269,7 @@ async function loadZip(buf, name, seq) {
   if (stale(seq)) return;
   const z = await unzip(buf);
   const files = z.names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
-  const opens = (n) => { const e = extOf(n.replace(/\.gz$/i, '')); return !!STEP_EXT[e] || MESH_EXTS.includes(e) || e === 'cadmesh' || e === 'dxf'; };
+  const opens = (n) => { const e = extOf(n.replace(/\.gz$/i, '')); return !!STEP_EXT[e] || MESH_EXTS.includes(e) || e === 'cadmesh' || e === 'dxf' || e === 'dwg'; };
   const model = files.find(opens);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   const others = files.filter((n) => n !== model && opens(n)).length;
@@ -4288,11 +4289,13 @@ async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `reading ${name}`);
-  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of DXF`);
+  const dwg = isDWG(buf);
+  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${dwg ? 'DWG' : 'DXF'}`);
   await nextPaint();
   if (stale(seq)) return;
-  // (a binary DXF is read from its bytes; an ASCII one as UTF-8 text)
-  const drawing = parseDXF(isBinaryDXF(buf) ? buf : new TextDecoder().decode(buf));
+  // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a binary DXF is read
+  // from its bytes; an ASCII one as UTF-8 text
+  const drawing = parseDXF(dwg ? dwgToPairs(readDWG(buf)) : isBinaryDXF(buf) ? buf : new TextDecoder().decode(buf));
   const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
   if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
@@ -4456,7 +4459,9 @@ function fillInfo2D(el) {
 }
 
 // what Open… and a drop take, for the messages that say so
-const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB) or a 2D DXF';
+const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB) or a 2D DXF or DWG (R13 to 2018)';
+// a DWG by its bytes: the version string R13 to R2018 (AC1012 .. AC1032)
+const isDWG = (buf) => { const b = new Uint8Array(buf, 0, Math.min(6, buf.byteLength)); return /^AC10(1[2458]|2[147]|32)$/.test(String.fromCharCode(...b)); };
 
 // The conversion runs in this tab, in one call; the card shows the step it is
 // on, the time so far, and what to expect.

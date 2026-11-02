@@ -97,9 +97,11 @@ export const UNITS = { 1: ['in', 25.4], 2: ['ft', 304.8], 4: ['mm', 1], 5: ['cm'
 
 // s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
 // or ASCII read from the bytes)
+// (or the group-code pairs themselves, [[code, 'value'], ...]: js/dwg.js dwgToPairs)
 export function parseDXF(s) {
   let ps;
-  if (s instanceof ArrayBuffer) {
+  if (Array.isArray(s)) ps = s;
+  else if (s instanceof ArrayBuffer) {
     if (isBinaryDXF(s)) ps = binaryPairs(s);
     else s = new TextDecoder('latin1').decode(s);
   }
