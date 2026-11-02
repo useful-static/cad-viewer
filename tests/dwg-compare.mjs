@@ -56,6 +56,29 @@ export function byHandle(P) {
   return m;
 }
 export const vals = (r, c) => r.g.filter((x) => x[0] === c).map((x) => x[1]);
+
+// a SPLINE record's curve (71 degree, 40 knots, 10/20 control points; weights ignored: only a
+// non-rational spline is evaluated) at each distinct knot of its domain, by de Boor; null if
+// rational or malformed
+export function splineAtKnots(r) {
+  const p = Number(vals(r, 71)[0]), U = vals(r, 40).map(Number);
+  const P = vals(r, 10).map((x, k) => [Number(x), Number(vals(r, 20)[k])]);
+  if (vals(r, 41).length || !(p >= 1) || U.length !== P.length + p + 1) return null;
+  const lo = U[p], hi = U[U.length - p - 1];
+  const at = (t) => {
+    let k = p;
+    while (k < U.length - p - 2 && t >= U[k + 1]) k++;
+    const d = [];
+    for (let j = 0; j <= p; j++) d.push([...P[j + k - p]]);
+    for (let s = 1; s <= p; s++) for (let j = p; j >= s; j--) {
+      const i = j + k - p, den = U[i + p + 1 - s] - U[i], al = den ? (t - U[i]) / den : 0;
+      d[j] = [(1 - al) * d[j - 1][0] + al * d[j][0], (1 - al) * d[j - 1][1] + al * d[j][1]];
+    }
+    return d[p];
+  };
+  const ts = [...new Set(U.slice(p, U.length - p))].filter((t) => t >= lo && t <= hi);
+  return ts.map((t) => at(t === hi ? hi - 1e-12 * Math.max(1, Math.abs(hi)) : t));
+}
 export function same(a, b, c) {
   if (c === 1 || c === 2 || c === 6) return a === b || a.toUpperCase() === b.toUpperCase();
   const x = Number(a), y = Number(b);
@@ -91,6 +114,22 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     // a fit-point spline: the DWG holds its fit points; AutoCAD's DXF adds control points it
     // computes, which the file does not hold: compare the fit points
     if (a.type === 'SPLINE' && Number(vals(b, 73)[0] || 0) === 0) groups = [71, 74, 11, 21];
+    // a key that lists fit points (74/11/21) beside control points for a spline whose DWG holds
+    // none (an R2010 file stores one or the other): the key's writer derived them, as the curve
+    // at each distinct knot (ODA's DXF of AutoCAD-saved KoiPond: 19 points, within 1e-12). They
+    // are checked so -- our control points and knots evaluated there -- and counted apart
+    if (a.type === 'SPLINE' && Number(vals(a, 74)[0] || 0) > 0 && Number(vals(a, 73)[0] || 0) > 0
+      && vals(a, 11).length === Number(vals(a, 74)[0]) && Number(vals(b, 74)[0] || 0) === 0 && Number(vals(b, 73)[0] || 0) > 0) {
+      const fx = vals(a, 11).map(Number), fy = vals(a, 21).map(Number);
+      const at = splineAtKnots(b);
+      cmp.fieldsCompared += 2 * fx.length;
+      const tol = (x) => 1e-9 * Math.max(1, Math.abs(x));
+      const ok = at && at.length === fx.length && at.every((q, k) => Math.abs(q[0] - fx[k]) <= tol(fx[k]) && Math.abs(q[1] - fy[k]) <= tol(fy[k]));
+      if (ok) { cmp.keyDerived = (cmp.keyDerived || 0) + 1; groups = groups.filter((c) => c !== 74); } else {
+        cmp.valueDiff++; ex(`SPLINE ${h.toString(16)} key fit points ${fx.length} are not our curve at its knots (${at ? at.length : 'none'})`);
+        groups = groups.filter((c) => c !== 74);
+      }
+    }
     // a key whose fit-point count (74) disagrees with the fit points it lists (11): the key
     // contradicts itself (ODA's R2010 DXF of acadsharp sample_base 434: 74 = 2, no 11), so its
     // count is not an answer; counted apart, the points still compared

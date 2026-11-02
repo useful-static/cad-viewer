@@ -414,7 +414,35 @@ function container18(b, chk) {
     return out;
   };
   const sec = (name) => { const d = read(name); return d ? { b: d, at: 0, size: d.length } : null; };
-  return { header: sec('AcDb:Header'), classes: sec('AcDb:Classes'), handles: sec('AcDb:Handles'), objects: sec('AcDb:AcDbObjects'), codepage: b[0x13] | (b[0x14] << 8) };
+  // 16: AppInfo names the program that saved the file (metadata: read when present, never required)
+  let appInfo = null;
+  try { appInfo = sec('AcDb:AppInfo'); } catch { appInfo = null; }
+  return { header: sec('AcDb:Header'), classes: sec('AcDb:Classes'), handles: sec('AcDb:Handles'), objects: sec('AcDb:AcDbObjects'), appInfo, codepage: b[0x13] | (b[0x14] << 8) };
+}
+
+// 16: the AppInfo section's strings (to R2004 one-byte, from R2007 UTF-16LE), as stored: the
+// writer's name and version ("AutoCAD", a product XML, a build number)
+function appInfoStrings(s, v) {
+  if (!s) return [];
+  const b = s.b, out = [];
+  let cur = '';
+  const flush = () => { if (cur.trim().length >= 3) out.push(cur.trim()); cur = ''; };
+  if (v >= 21) {
+    for (let k = 0; k + 1 < b.length; k += 2) { const c = b[k] | (b[k + 1] << 8); if (c >= 0x20 && c !== 0xfffd && c < 0xd800) cur += String.fromCharCode(c); else flush(); }
+  } else for (let k = 0; k < b.length; k++) { const c = b[k]; if (c >= 0x20 && c < 0x7f) cur += String.fromCharCode(c); else flush(); }
+  flush();
+  return out;
+}
+
+// who saved the file, from its AppInfo: "Autodesk" (a TrustedDWG: "last saved by an Autodesk
+// application or Autodesk licensed application"), "ODA" (an Open Design Alliance application),
+// the ProductInformation name otherwise, '' when there is no AppInfo (to R2000; or unread)
+function writerOf(strs) {
+  const all = strs.join(' ');
+  if (/Trusted DWG last saved by an Autodesk/.test(all)) return 'Autodesk';
+  if (/Open Design Alliance|Teigha/.test(all)) return 'ODA';
+  const m = /ProductInformation name\s*=\s*\\?"([^"\\]+)/.exec(all);
+  return m ? m[1] : '';
 }
 
 // 5: R2007 (Reed-Solomon, its own compression)
@@ -481,12 +509,18 @@ function container21(b, chk) {
 
 // --- 10: classes --------------------------------------------------------------------------------
 
+// 9 / 10: "R2010+, if maint > 3: RL" (the size's high half) after a section's size. From R2013
+// it is there whatever the maintenance byte says (LibreCAD's ordinary_enc_AC1027: byte 0, field
+// present; every R2018 file here: byte 0); an R2010 file with byte 2 (Autodesk's architectural
+// example) has none
+const sizeHigh = (v, maint) => (v >= 24 && maint > 3) || v >= 27;
+
 function readClasses(s, v, maint, chk) {
   const b = s.b, at = s.at;
   chk.ok('classes sentinel', isSN(b, at, SN.classes));
   const size = u32(b, at + 16);
   let dataAt = at + 20;
-  if ((v >= 24 && maint > 3) || v >= 32) dataAt += 4;
+  if (sizeHigh(v, maint)) dataAt += 4;
   const r = new Bits(b, v, dataAt);
   let endBit = (dataAt + size) * 8;
   if (v >= 21) {
@@ -562,7 +596,7 @@ function readHeader(s, v, maint, chk) {
   chk.ok('header sentinel', isSN(b, at, SN.header));
   const size = u32(b, at + 16);
   let dataAt = at + 20;
-  if ((v >= 24 && maint > 3) || v >= 32) dataAt += 4;
+  if (sizeHigh(v, maint)) dataAt += 4;
   const r = new Bits(b, v, dataAt);
   const H = {};
   // R2007+: strings and handles are in streams of their own: skip them here
@@ -1100,11 +1134,16 @@ export function readDWG(buf) {
   const chk = new Checks();
   const maint = b[0x0b];
   const cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk);
+  // a file without the four sections every drawing has is refused by name (dwg-rs's 1440-byte
+  // synthetic_2010/2013 fixtures: a container with no drawing in it)
+  const missing = ['header', 'classes', 'handles', 'objects'].filter((k) => !cont[k]);
+  if (missing.length) throw new Error(`not a complete DWG: no ${missing.join(', ')} section`);
   const dec = codepageDecoder(cont.codepage);
   const classes = readClasses(cont.classes, v, maint, chk);
   let header = {};
   try { header = readHeader(cont.header, v, maint, chk); } catch (err) { chk.ok('header variables read', false); header = { error: String(err.message) }; }
   const map = readHandles(cont.handles, chk);
+  const appInfo = appInfoStrings(cont.appInfo, v);
   const rd = new ObjectReader(cont.objects, v, classes, chk, dec);
   const objects = new Map();
   const types = {};
@@ -1116,7 +1155,7 @@ export function readDWG(buf) {
     types[o.name] = (types[o.name] || 0) + 1;
     objects.set(o.handle, o);
   }
-  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length };
+  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length, appInfo, writer: writerOf(appInfo) };
 }
 function codepageDecoder(cp) {
   // the DWG code page numbers of the common ANSI pages
@@ -1287,9 +1326,11 @@ export function dwgToPairs(dwg) {
         ext(d.ext); break;
       }
       case 'HATCH': {
-        // the stored name may carry the island style ("SOLID,_O": _N normal, _O outer, _I
-        // ignore); DXF names the pattern alone (the style is group 75): acadsharp sample_base 371
-        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.name.replace(/,_[NOI]$/i, '')); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
+        // a solid fill is "SOLID" in DXF whatever name is stored ("SOLID,_O" in acadsharp
+        // sample_base 371, "_SOLID" in an AutoCAD R2010 file); a pattern's name is written as
+        // stored, island-style suffix included ("ANSI31,_O", "AR-RROOF,_O": ODA's DXF of
+        // AutoCAD-saved R2010/R2013 drawings)
+        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.solid ? 'SOLID' : d.name); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
         for (const L of d.loops) {
           put(92, L.flag);
           if (L.flag & 2) {

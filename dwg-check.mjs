@@ -21,7 +21,8 @@ for (const f of files) {
     const t0 = Date.now();
     const d = readDWG(readFileSync(f));
     rep.ms = Date.now() - t0;
-    Object.assign(rep, { version: d.version, release: d.release, objects: d.objects.size, mapped: d.mapCount, failures: d.failures,
+    // savedBy: the AppInfo writer (Autodesk, ODA, another product's name; '' when not stated)
+    Object.assign(rep, { version: d.version, release: d.release, savedBy: d.writer, objects: d.objects.size, mapped: d.mapCount, failures: d.failures,
       checks: Object.fromEntries(Object.entries(d.checks).map(([k, c]) => [k, `${c.pass}/${c.pass + c.fail}`])),
       header: { INSUNITS: d.header.INSUNITS, LTSCALE: d.header.LTSCALE, EXTMIN: d.header.EXTMIN, EXTMAX: d.header.EXTMAX, error: d.header.error } });
     const types = {};

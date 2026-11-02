@@ -28,7 +28,7 @@ export function validate(std, path) {
   const res = { std, path, ok: true, notes: [] };
   let d;
   try { d = readDWG(readFileSync(path)); } catch (err) { res.ok = false; res.error = String(err.message || err); return res; }
-  res.version = d.version; res.objects = d.objects.size;
+  res.version = d.version; res.objects = d.objects.size; res.writer = d.writer || '';
   res.checks = Object.fromEntries(Object.entries(d.checks).map(([k, c]) => [k, [c.pass, c.pass + c.fail]]));
   res.checkFailures = d.failures;
   let decoded = 0, decodable = 0;
@@ -76,6 +76,9 @@ function main() {
   for (const r of results) {
     const s = (by[r.std] ||= { files: 0, pass: 0, objects: 0, ent: [], types: [], decoded: 0, decodable: 0, checks: 0, checkFail: 0, owned: 0, emitted: 0, unexplained: 0, roundTrip: 0, twins: 0, matched: 0, fields: 0, diffs: 0, drift: 0 });
     s.files++; if (r.ok) s.pass++;
+    // to R2000 a file has no AppInfo; R2004's and R2007's are not identified by the reader
+    const w = r.writer || 'not identified';
+    (s.writers ||= {})[w] = (s.writers[w] || 0) + 1;
     s.objects += r.objects || 0;
     if (r.complexity) { s.ent.push(r.complexity.entities); s.types.push(r.complexity.entityTypes); }
     if (r.decoded) { s.decoded += r.decoded[0]; s.decodable += r.decoded[1]; }
@@ -84,17 +87,18 @@ function main() {
     if (r.twin) { s.twins++; s.matched += r.twin.matched; s.fields += r.twin.fieldsCompared; s.diffs += r.twin.differences; s.drift += r.twin.notInFile + r.twin.represented + (r.twin.keyInconsistent || 0); }
   }
   const rng = (a) => (a.length ? `${Math.min(...a)}–${Math.max(...a)}` : '-');
-  const lines = ['| | Standard | Files passing | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | DXF twins | Twin fields compared | Twin differences | Twin drift, or the key contradicting itself (not compared) |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
+  const lines = ['| | Standard | Files passing | Saved by (the file\'s AppInfo) | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | DXF twins | Twin fields compared | Twin differences | Twin drift, or the key contradicting itself (not compared) |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
   for (const [std, s] of Object.entries(by)) {
-    lines.push(`| ${s.pass === s.files ? '🟢' : '🔴'} | ${std} | ${s.pass} of ${s.files} | ${rng(s.ent)} | ${rng(s.types)} | ${s.decoded} of ${s.decodable} | ${s.checkFail} of ${s.checks} | ${s.emitted} of ${s.owned}, ${s.unexplained} | ${s.roundTrip} of ${s.files} | ${s.twins} | ${s.fields} | ${s.diffs} | ${s.drift} |`);
+    const ws = Object.entries(s.writers).sort((a, b) => b[1] - a[1]).map(([w, n]) => `${w} ${n}`).join(', ');
+    lines.push(`| ${s.pass === s.files ? '🟢' : '🔴'} | ${std} | ${s.pass} of ${s.files} | ${ws} | ${rng(s.ent)} | ${rng(s.types)} | ${s.decoded} of ${s.decodable} | ${s.checkFail} of ${s.checks} | ${s.emitted} of ${s.owned}, ${s.unexplained} | ${s.roundTrip} of ${s.files} | ${s.twins} | ${s.fields} | ${s.diffs} | ${s.drift} |`);
   }
   console.log(lines.join('\n'));
   for (const r of results) if (!r.ok) console.log(`FAIL ${r.std} ${r.path}: ${r.error || [...(r.checkFailures || []), ...Object.entries(r.decodeErrors || {}).map(([k, n]) => `decode ${k} x${n}`), ...(r.adapter && r.adapter.unexplained ? [`adapter drops ${JSON.stringify(r.adapter.dropped)}`] : []), ...(r.adapter && !r.adapter.roundTrip ? ['adapter round trip differs'] : []), ...((r.twin && r.twin.examples) || [])].join('; ')}`);
   const mi = args.indexOf('--md');
   if (mi >= 0) {
-    const per = ['', '| Standard | File | Entities | Entity types | Blocks | Layers | DXF twin |', '|---|---|---|---|---|---|---|',
-      ...results.map((r) => `| ${r.std} | ${r.path.split('/').slice(-2).join('/')} | ${r.complexity ? r.complexity.entities : '-'} | ${r.complexity ? r.complexity.entityTypes : '-'} | ${r.complexity ? r.complexity.blocks : '-'} | ${r.complexity ? r.complexity.layers : '-'} | ${r.twin ? `${r.twin.matched} matched, ${r.twin.differences} differ` : '-'} |`)];
+    const per = ['', '| Standard | File | Saved by | Entities | Entity types | Blocks | Layers | DXF twin |', '|---|---|---|---|---|---|---|---|',
+      ...results.map((r) => `| ${r.std} | ${r.path.split('/').slice(-2).join('/')} | ${r.writer || '-'} | ${r.complexity ? r.complexity.entities : '-'} | ${r.complexity ? r.complexity.entityTypes : '-'} | ${r.complexity ? r.complexity.blocks : '-'} | ${r.complexity ? r.complexity.layers : '-'} | ${r.twin ? `${r.twin.matched} matched, ${r.twin.differences} differ` : '-'} |`)];
     writeFileSync(args[mi + 1], lines.join('\n') + '\n' + per.join('\n') + '\n');
   }
   process.exit(results.every((r) => r.ok) ? 0 : 1);
