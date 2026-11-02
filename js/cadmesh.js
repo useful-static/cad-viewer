@@ -15,11 +15,15 @@
 //     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox, kind?,
 //               faceStart?, faceCount? }],
 //     root:{ name, meshes:[i...], children:[...] },
-//     sourceUnits?, angularDeflection? }
+//     sourceUnits?, angularDeflection?, recolour? }
 // kind (optional; absent from files converted before it existed) is the
 // body's status taken from the b-rep by the converter, not from the mesh:
 // "closed", "capped" (closed by planar faces the converter added where the
 // file left a hole), "sheet" (flat, zero thickness: a pad, a label) or "open".
+// recolour: present when the per-vertex colours are no longer the
+// converter's -- set-colours.mjs wrote others -- naming what wrote them, so a
+// tool that derives colours from the converter's knows not to run on its
+// own output. Tools that rewrite a file (split-board.mjs) keep it.
 // sourceUnits: the length unit the source file DECLARES (js/source-units.js:
 // 'mm', 'in', ...; 'mixed' when its shapes disagree); absent = unknown, never
 // mm. The geometry itself is always in `units` (mm: OpenCascade converts).
@@ -73,7 +77,7 @@ export function bytesToId(b0, b1, b2, b3) {
 //          normals:Float32Array|null, colors:Uint8Array(rgba per vertex)|null,
 //          indices:Uint32Array (local to the mesh),
 //          faces?:Uint32Array (first, count) pairs in the mesh's own triangle
-//          numbers}], root, sourceUnits?, angularDeflection? }
+//          numbers}], root, sourceUnits?, angularDeflection?, recolour? }
 // The faces section is written only when every mesh carries faces. The edge
 // list and the body facts are built here (opts.edges = false leaves them out).
 export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
@@ -176,6 +180,7 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
     vertexCount, indexCount, sections, meshes: metas,
     root: model.root || { name: 'model', meshes: metas.map((_, i) => i), children: [] },
     ...(typeof model.sourceUnits === 'string' ? { sourceUnits: model.sourceUnits } : {}),
+    ...(typeof model.recolour === 'string' && model.recolour ? { recolour: model.recolour } : {}),
     ...(model.angularDeflection > 0 ? { angularDeflection: model.angularDeflection } : {}),
     ...(edgeInfo ? { facts: roundFacts(edgeInfo.facts) } : {}),
     ...(edgeInfo?.silhouettesOmitted ? { silhouettesOmitted: edgeInfo.silhouettesOmitted } : {}),
@@ -377,6 +382,7 @@ function validateHeader(h) {
     }
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
+  if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');
   if (h.angularDeflection !== undefined && !(Number.isFinite(h.angularDeflection) && h.angularDeflection > 0)) {
     bad('angularDeflection is not a positive number');
   }

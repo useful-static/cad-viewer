@@ -53,6 +53,47 @@ export function blockedShare(box, d, obstacles) {
   return blocked / n;
 }
 
+// The obstacles for a part's box, from the other bodies' boxes. A body whose
+// box holds one of the part's sample points (a board whose box runs past
+// both its faces, because what is fused to it -- a card slot past its edge,
+// small parts on each face -- reaches past them) would never count: it is
+// taken as its b-rep faces' boxes instead, when faceBoxes(i) gives them, so
+// the board's own face still stands between a chip and the far side.
+// bodies: [{ i, box }]; faceBoxes(i): [box] or null (no faces section).
+export function obstaclesFor(box, bodies, faceBoxes) {
+  const pts = [];
+  for (const fx of FRACS) for (const fy of FRACS) for (const fz of FRACS) {
+    pts.push([fx, fy, fz].map((f, k) => box.min[k] + f * (box.max[k] - box.min[k])));
+  }
+  const out = [];
+  for (const { i, box: b } of bodies) {
+    const fb = pts.some((p) => inside(p, b)) ? faceBoxes(i) : null;
+    if (fb && fb.length) out.push(...fb); else out.push(b);
+  }
+  return out;
+}
+
+// Each b-rep face's box of mesh m: faces is the cadmesh's (first triangle,
+// count) pairs, index its triangle list, position its vertices.
+export function meshFaceBoxes(m, position, index, faces) {
+  const out = [];
+  for (let f = m.faceStart; f < m.faceStart + m.faceCount; f++) {
+    const t0 = faces[2 * f], n = faces[2 * f + 1];
+    if (!n) continue;
+    const b = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+    for (let t = t0 * 3; t < (t0 + n) * 3; t++) {
+      const v = index[t] * 3;
+      for (let k = 0; k < 3; k++) {
+        const c = position[v + k];
+        if (c < b.min[k]) b.min[k] = c;
+        if (c > b.max[k]) b.max[k] = c;
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
+
 // The candidate directions (unit vectors toward the eye) round `up`,
 // starting from the ground direction `h0` (any unit vector across up)
 export function candidates(up, h0) {

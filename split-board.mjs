@@ -245,6 +245,8 @@ function main() {
     root: { name: h.root?.children?.[0]?.name || h.root?.name || 'model', meshes: s.meshes.map((_, i) => i), children: [] },
     ...(h.sourceUnits ? { sourceUnits: h.sourceUnits } : {}),
     ...(h.angularDeflection ? { angularDeflection: h.angularDeflection } : {}),
+    // (the colours are carried over vertex by vertex: still whoever's they were)
+    ...(h.recolour ? { recolour: h.recolour } : {}),
   };
   const enc = new Uint8Array(encodeCadmesh(model, { edges: !!a.edges }));
   writeFileSync(a.out, a.out.endsWith('.gz') ? gzipSync(enc, { level: zc.Z_BEST_COMPRESSION }) : enc);

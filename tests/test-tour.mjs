@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS } from '../js/tour.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
-import { blockedShare, clearestDirection, rayHitsBox } from '../js/tour-sight.js';
+import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 let passed = 0;
 let failed = 0;
@@ -200,6 +200,37 @@ test('sight', () => {
   r = clearestDirection(top, up, centre, [board, pins]);
   assert.equal(r.blocked, 0);
   assert.ok(blockedShare(top, r.dir, [board, pins]) === 0);
+});
+
+test('sight-thick-board', () => {
+  // a board body whose box runs 4 mm past each face (what is fused to it
+  // reaches past them), and a chip on its bottom face inside that box
+  const up = [0, 0, 1];
+  const centre = [50, 30, 0.8];
+  const chip = { min: [40, 20, -1], max: [55, 35, 0] };
+  const thick = { min: [0, 0, -4], max: [100, 60, 5.6] };
+  const faces = [{ min: [0, 0, 1.6], max: [100, 60, 1.6] }, { min: [0, 0, 0], max: [100, 60, 0] },
+    { min: [0, 0, -4], max: [0, 60, 5.6] }];
+  const bodies = [{ i: 0, box: thick }];
+  // the box alone holds the chip's points, so it never counts: any side will
+  // do, and the preferred one is from above, through the board
+  let r = clearestDirection(chip, up, centre, obstaclesFor(chip, bodies, () => null));
+  assert.ok(r.dir[2] > 0, `box only: ${r.dir}`);
+  // by its faces: the board's faces stand in the way above, so from below
+  const obs = obstaclesFor(chip, bodies, () => faces);
+  assert.deepEqual(obs, faces);
+  r = clearestDirection(chip, up, centre, obs);
+  assert.ok(r.dir[2] < 0, `by faces: ${r.dir}`);
+  assert.equal(r.blocked, 0);
+  // a body whose box holds none of the chip's points stays its box
+  const far = { min: [70, 0, 1.6], max: [90, 10, 8] };
+  assert.deepEqual(obstaclesFor(chip, [{ i: 1, box: far }], () => faces), [far]);
+  // the faces' boxes from the cadmesh sections: two faces, one triangle each
+  const position = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 3, 0, 2, 0, 4, 2]);
+  const index = new Uint32Array([0, 1, 2, 3, 4, 5]);
+  const fc = new Uint32Array([0, 1, 1, 1]);
+  assert.deepEqual(meshFaceBoxes({ faceStart: 0, faceCount: 2 }, position, index, fc),
+    [{ min: [0, 0, 0], max: [1, 1, 0] }, { min: [0, 0, 2], max: [3, 4, 2] }]);
 });
 
 test('tour-names', () => {

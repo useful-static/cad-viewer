@@ -29,7 +29,7 @@ import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
-import { clearestDirection } from './tour-sight.js';
+import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1647,12 +1647,17 @@ function outsideQuat(box, ids = null, step = null) {
       const c = (b.min[k] + b.max[k]) / 2;
       return c >= box.min[k] && c <= box.max[k];
     });
-    const obstacles = [];
+    const bodies = [];
     h.meshes.forEach((mesh, i) => {
       const b = mesh.bbox;
       if (!b || mine.has(i + 1) || hidden.has(i + 1) || within(b)) return;
-      obstacles.push(b);
+      bodies.push({ i, box: b });
     });
+    // (a body whose box holds the part, a board thickened by what is fused
+    // to it, counts by its faces' boxes: js/tour-sight.js obstaclesFor)
+    const bm = app.baseMesh;
+    const obstacles = obstaclesFor(box, bodies, (i) => (bm && bm.faces && h.meshes[i].faceCount
+      ? meshFaceBoxes(h.meshes[i], bm.position, bm.index, bm.faces) : null));
     z = { dir: clearestDirection(box, up, m, obstacles).dir, orient: app.cam.orient };
     if (step) sightOf.set(step, z);
   }
