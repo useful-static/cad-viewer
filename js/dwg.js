@@ -114,7 +114,9 @@ class Bits {
   }
   MS() { let v = 0, sh = 0, x; do { x = this.RSu(); v += (x & 0x7fff) * 2 ** sh; sh += 15; } while (x & 0x8000); return v; }
   OT() { if (this.v < 24) return this.BS(); switch (this.BB()) { case 0: return this.RC(); case 1: return this.RC() + 0x1f0; default: return this.RSu(); } }
-  T() { const n = this.BS(); const t = new Uint8Array(Math.max(0, n)); for (let k = 0; k < n; k++) t[k] = this.RC(); let e = t.length; while (e && !t[e - 1]) e--; return (this.dec || LATIN1).decode(t.subarray(0, e)); }
+  // T: to R2004 a character outside the drawing's code page is stored as \U+XXXX (AutoCAD shows
+  // the character; R2007 stores it as itself): decoded here, so every version reads the same text
+  T() { const n = this.BS(); const t = new Uint8Array(Math.max(0, n)); for (let k = 0; k < n; k++) t[k] = this.RC(); let e = t.length; while (e && !t[e - 1]) e--; return (this.dec || LATIN1).decode(t.subarray(0, e)).replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, x) => String.fromCharCode(parseInt(x, 16))); }
   TU() { const n = this.BS(); let s = ''; for (let k = 0; k < n; k++) { const c = this.RSu(); if (c) s += String.fromCharCode(c); } return s; }
   // TV: T to R2004, TU from the string stream after
   TV() { if (this.v < 21) return this.T(); return this.str ? this.str.TU() : ''; }
@@ -1201,7 +1203,8 @@ export function dwgToPairs(dwg) {
         d.c.forEach((p, k) => { put(10 + k, p[0]); put(20 + k, p[1]); put(30 + k, d.z); });
         ext(d.ext); break;
       case 'TEXT': {
-        common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, d.text);
+        // a DXF value is one line: a line break in single-line text becomes a space
+        common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, d.text.replace(/\r\n|\r|\n/g, ' '));
         if (d.rot) put(50, deg(d.rot));
         if (d.wf !== 1) put(41, d.wf);
         if (d.ha) put(72, d.ha);
@@ -1212,8 +1215,11 @@ export function dwgToPairs(dwg) {
       }
       case 'MTEXT': {
         common('MTEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); put(40, d.h); put(41, d.width); put(71, d.attach); put(72, d.dir);
-        for (let k = 0; k + 250 < d.text.length; k += 250) put(3, d.text.slice(k, k + 250));
-        put(1, d.text.slice(Math.floor(Math.max(0, d.text.length - 1) / 250) * 250));
+        // a DXF value is one line: a raw line break in MTEXT (some writers store one) is its
+        // paragraph code \P, which the drawing reads as a new line
+        const mt = d.text.replace(/\r\n|\r|\n/g, '\\P');
+        for (let k = 0; k + 250 < mt.length; k += 250) put(3, mt.slice(k, k + 250));
+        put(1, mt.slice(Math.floor(Math.max(0, mt.length - 1) / 250) * 250));
         ext(d.ext); put(11, d.xdir[0]); put(21, d.xdir[1]); put(31, d.xdir[2]);
         break;
       }
@@ -1297,20 +1303,32 @@ export function dwgToPairs(dwg) {
     if (rec.d.entities) { const pos = new Map(rec.d.entities.map((h, k) => [h, k])); return list.slice().sort((a, b) => (pos.get(a.handle) ?? 1e15) - (pos.get(b.handle) ?? 1e15) || a.handle - b.handle); }
     return list.slice().sort((a, b) => a.handle - b.handle);
   };
+  // what the adapter did with every decoded entity a block record owns: emitted, or not and why
+  // (a type it does not draw, a reference whose block is not in the file): P.stats
+  const stats = { owned: 0, emitted: 0, dropped: {} };
+  const emit = (o, inPaper) => {
+    stats.owned++;
+    const n = P.length;
+    emitEntity(o, inPaper);
+    if (P.length > n) stats.emitted++;
+    else { const why = ['ATTRIB', 'ATTDEF', 'VERTEX', 'SEQEND'].includes(o.name) ? `${o.name} (not drawn)` : `${o.name}${o.d && o.d.block !== undefined && !bname(o.d.block) ? ' (block not in the file)' : ''}`; stats.dropped[why] = (stats.dropped[why] || 0) + 1; }
+  };
   put(0, 'SECTION'); put(2, 'BLOCKS');
   for (const rec of blocks) {
     if (rec === model || rec === paper) continue;
     const nm = bname(rec.handle);
     put(0, 'BLOCK'); put(5, hex(rec.handle)); put(8, '0'); put(2, nm); put(70, (rec.d.anonymous ? 1 : 0) | (rec.d.xref ? 4 : 0)); put(10, rec.d.base[0]); put(20, rec.d.base[1]); put(30, rec.d.base[2]); put(3, nm);
-    for (const o of ordered(rec)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emitEntity(o, false);
+    for (const o of ordered(rec)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, false);
     put(0, 'ENDBLK'); put(8, '0');
   }
   put(0, 'ENDSEC');
   put(0, 'SECTION'); put(2, 'ENTITIES');
-  if (model) for (const o of ordered(model)) emitEntity(o, false);
-  if (paper) for (const o of ordered(paper)) emitEntity(o, true);
+  // (a layout's own BLOCK / ENDBLK markers are structure, not drawn: left out, as in a block)
+  if (model) for (const o of ordered(model)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, false);
+  if (paper) for (const o of ordered(paper)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, true);
   put(0, 'ENDSEC');
   put(0, 'EOF');
+  P.stats = stats;
   return P;
 }
 
