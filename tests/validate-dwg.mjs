@@ -71,9 +71,9 @@ export function validate(std, path) {
     res.keys[src] = compare(byHandle(key), B, (h) => d.objects.has(h), d.v, (h) => d.objects.get(h), { ...(src === 'oda' ? { knotTol: 1e-8 } : {}), oldNames: d.v <= 14 });
   }
   if (res.keys.dxf) res.twin = res.keys.dxf;
-  // a difference counts against the reader when every other key that has the object disagrees
-  // with us on the same field too; one a key holds alone, while another key agrees with us
-  // there, is that key's own reading (counted apart: res.loneKey, by key)
+  // a difference counts against the reader when every key that has the object holds it; one
+  // that a key with the object contradicts (it agrees with us there: AutoCAD's own DXF, or the
+  // other reader) is the reading of the keys that hold it (counted apart: res.loneKey, by key)
   res.loneKey = {};
   const confirmed = new Set();
   const srcs = Object.keys(res.keys);
@@ -82,8 +82,8 @@ export function validate(std, path) {
     for (const id of ids[s]) {
       const h = hexHandle(id.split('|')[0]);
       const others = srcs.filter((t) => t !== s && res.keys[t].keyHas.has(h));
-      const lone = others.length && others.every((t) => !ids[t].has(id));
-      if (lone) res.loneKey[s] = (res.loneKey[s] || 0) + 1; else confirmed.add(id);
+      const contradicted = others.some((t) => !ids[t].has(id));
+      if (contradicted) res.loneKey[s] = (res.loneKey[s] || 0) + 1; else confirmed.add(id);
     }
   }
   for (const s of srcs) delete res.keys[s].keyHas;
@@ -124,7 +124,7 @@ function main() {
     for (const [src, n] of Object.entries(r.loneKey || {})) (s.lone ||= {})[src] = (s.lone[src] || 0) + n;
   }
   const rng = (a) => (a.length ? `${Math.min(...a)}–${Math.max(...a)}` : '-');
-  const lines = ['| | Standard | Files passing | Saved by (the file\'s AppInfo) | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | Files with answer keys (keys by source) | Key fields compared | Differences every key holds | Differences one key holds alone (the other agrees with us) | Key drift, or a key contradicting itself (not compared) |',
+  const lines = ['| | Standard | Files passing | Saved by (the file\'s AppInfo) | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | Files with answer keys (keys by source) | Key fields compared | Differences every key holds | Differences a key holds that another key contradicts (by key) | Key drift, or a key contradicting itself (not compared) |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
   for (const [std, s] of Object.entries(by)) {
     const ws = Object.entries(s.writers).sort((a, b) => b[1] - a[1]).map(([w, n]) => `${w} ${n}`).join(', ');

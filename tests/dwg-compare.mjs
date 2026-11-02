@@ -114,6 +114,10 @@ export function splineAtKnots(r) {
   const ts = [...new Set(U.slice(p, U.length - p))].filter((t) => t >= lo && t <= hi);
   return ts.map((t) => at(t === hi ? hi - 1e-12 * Math.max(1, Math.abs(hi)) : t));
 }
+// a hatch pattern's identity: without AutoCAD's "_" mark of a language-neutral name and the
+// island-style suffix (",_O"), on which writers differ (AutoCAD keeps "SOLID,_O"; ODA writes a
+// solid fill "SOLID" and keeps "_USER"; others drop the "_")
+export const patternId = (s) => String(s).toUpperCase().replace(/^_/, '').replace(/,_?[NOI]$/, '');
 export function same(a, b, c) {
   if (c === 1 || c === 2 || c === 6) return a === b || a.toUpperCase() === b.toUpperCase();
   const x = Number(a), y = Number(b);
@@ -160,7 +164,20 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     if (!b) { cmp.missing++; ex(`missing ${a.type} ${h.toString(16)}`); continue; }
     // a fit-point spline: the DWG holds its fit points; AutoCAD's DXF adds control points it
     // computes, which the file does not hold: compare the fit points
-    if (a.type === 'SPLINE' && Number(vals(b, 73)[0] || 0) === 0) groups = [71, 74, 11, 21];
+    if (a.type === 'SPLINE' && Number(vals(b, 73)[0] || 0) === 0) {
+      groups = [71, 74, 11, 21];
+      // the key wrote the spline as control points it computed, and no fit points (AutoCAD's
+      // own DXF of the acadsharp R2013/R2018 samples, SPLINE 434: 4 control points, 74 = 0):
+      // our fit points must lie on its curve, at its distinct knots (de Boor, 1e-9)
+      if (Number(vals(a, 74)[0] || 0) === 0 && Number(vals(a, 73)[0] || 0) > 0) {
+        const at = splineAtKnots(a), fx = vals(b, 11).map(Number), fy = vals(b, 21).map(Number);
+        const tol = (x) => 1e-9 * Math.max(1, Math.abs(x));
+        const ok = at && at.length === fx.length && at.every((q, k) => Math.abs(q[0] - fx[k]) <= tol(fx[k]) && Math.abs(q[1] - fy[k]) <= tol(fy[k]));
+        cmp.matched++; cmp.fieldsCompared += 2 * fx.length;
+        if (ok) cmp.keyDerived = (cmp.keyDerived || 0) + 1; else { cmp.valueDiff++; ex(`SPLINE ${h.toString(16)} group 11: our fit points are not the key's curve at its knots`); }
+        continue;
+      }
+    }
     // a key that lists fit points (74/11/21) beside control points for a spline whose DWG holds
     // none (an R2010 file stores one or the other): the key's writer derived them, as the curve
     // at each distinct knot (ODA's DXF of AutoCAD-saved KoiPond: 19 points, within 1e-12). They
@@ -226,7 +243,8 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
       cmp.fieldsCompared += xa.length;
       let bad = xa.length !== xb.length;
       for (let k = 0; k < Math.min(xa.length, xb.length) && !bad; k++) {
-        const ok = opts.oldNames && (c === 2 || c === 6) ? oldName(xa[k]) === oldName(xb[k]) : same(xa[k], xb[k], c);
+        const ok = a.type === 'HATCH' && c === 2 ? patternId(xa[k]) === patternId(xb[k])
+          : opts.oldNames && (c === 2 || c === 6) ? oldName(xa[k]) === oldName(xb[k]) : same(xa[k], xb[k], c);
         if (!ok) bad = true;
       }
       // opts.knotTol (a save made by another writer): a knot vector of the same length whose knots

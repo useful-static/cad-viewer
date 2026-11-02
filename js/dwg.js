@@ -1440,11 +1440,10 @@ export function dwgToPairs(dwg) {
         ext(d.ext); break;
       }
       case 'HATCH': {
-        // a solid fill is "SOLID" in DXF whatever name is stored ("SOLID,_O" in acadsharp
-        // sample_base 371, "_SOLID" in an AutoCAD R2010 file); a pattern's name is written as
-        // stored, island-style suffix included ("ANSI31,_O", "AR-RROOF,_O": ODA's DXF of
-        // AutoCAD-saved R2010/R2013 drawings)
-        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.solid ? 'SOLID' : d.name); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
+        // the pattern name as stored: AutoCAD's own DXF writes "SOLID,_O" so (acadsharp sample
+        // 371, 376); writers differ on the "_" mark and the island-style suffix (ODA writes a
+        // solid fill as "SOLID" and keeps "_USER"), which the validation compares without
+        common('HATCH'); put(10, 0); put(20, 0); put(30, d.z); ext(d.ext); put(2, d.name); put(70, d.solid ? 1 : 0); put(71, d.assoc ? 1 : 0); put(91, d.loops.length);
         for (const L of d.loops) {
           put(92, L.flag);
           if (L.flag & 2) {
