@@ -99,6 +99,11 @@ test('colours on paper: ACI 7 black, yellow darkened to 3:1', () => {
   assert.notEqual(y, '#ffff00');
   assert.equal(aciColour(250).r, 51);
 });
+test('the ACI palette: the standard shades and greys (truncated levels)', () => {
+  const hex = (i) => { const c = aciColour(i); return [c.r, c.g, c.b].map((x) => x.toString(16).padStart(2, '0')).join(''); };
+  const want = { 10: 'ff0000', 11: 'ff7f7f', 12: 'cc0000', 13: 'cc6666', 14: '990000', 15: '994c4c', 16: '7f0000', 17: '7f3f3f', 18: '4c0000', 19: '4c2626', 20: 'ff3f00', 251: '5b5b5b', 253: 'adadad', 254: 'd6d6d6' };
+  for (const [i, h] of Object.entries(want)) assert.equal(hex(Number(i)), h, `ACI ${i}`);
+});
 test('line types and weights: BYLAYER pattern x $LTSCALE, the layer weight, an entity override', () => {
   const L = [
     [0, 'SECTION'], [2, 'HEADER'], [9, '$LTSCALE'], [40, 2], [0, 'ENDSEC'],

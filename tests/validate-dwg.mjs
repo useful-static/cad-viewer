@@ -53,17 +53,47 @@ export function validate(std, path) {
   if (unexplained.length || !res.adapter.roundTrip) res.ok = false;
   if (!res.adapter.drawn) res.notes.push('nothing 2D to draw (3D solids are not read)');
   res.complexity = { entities: st.owned, entityTypes: entTypes.size, blocks, layers };
-  // 4: the answer key
-  const twin = path.replace(/\.dwg$/i, '.dxf');
-  if (existsSync(twin)) {
-    const key = dxfPairs(twin);
-    if (key) {
-      res.twin = compare(byHandle(key), byHandle(P), (h) => d.objects.has(h), d.v, (h) => d.objects.get(h));
-      if (res.twin.differences) res.ok = false;
-    } else res.notes.push('twin DXF is binary: not compared');
+  // 4: the answer keys beside the file: NAME.dxf (the drawing's own DXF: AutoCAD's, or the
+  // writer's), NAME.oda.dxf (ODA's reading of the DWG), NAME.libredwg.dxf (LibreDWG's reading),
+  // each compared on its own (res.keys[source]); res.twin is NAME.dxf's
+  const base = path.replace(/\.dwg$/i, '');
+  res.keys = {};
+  const B = byHandle(P);
+  for (const [src, f] of [['dxf', `${base}.dxf`], ['oda', `${base}.oda.dxf`], ['libredwg', `${base}.libredwg.dxf`]]) {
+    if (!existsSync(f)) continue;
+    const key = dxfPairs(f);
+    if (!key) { res.notes.push(`${src} key is binary: not compared`); continue; }
+    // ODA's DXF writer parts a spline's repeated knots by 1e-9 (as its DWG writer does: the
+    // LibreDWG key and the drawing's own DXF hold them unmoved): counted apart (knotMoved)
+    // an R13/R14 file holds names as R13/R14 can (upper case, "_" for what they cannot hold);
+    // a key may give the original (ODA restores it from AutoCAD's EXTNAMES data): names are
+    // compared the R13/R14 way (dwg-compare.mjs opts.oldNames)
+    res.keys[src] = compare(byHandle(key), B, (h) => d.objects.has(h), d.v, (h) => d.objects.get(h), { ...(src === 'oda' ? { knotTol: 1e-8 } : {}), oldNames: d.v <= 14 });
   }
+  if (res.keys.dxf) res.twin = res.keys.dxf;
+  // a difference counts against the reader when every other key that has the object disagrees
+  // with us on the same field too; one a key holds alone, while another key agrees with us
+  // there, is that key's own reading (counted apart: res.loneKey, by key)
+  res.loneKey = {};
+  const confirmed = new Set();
+  const srcs = Object.keys(res.keys);
+  const ids = Object.fromEntries(srcs.map((s) => [s, new Set(res.keys[s].diffIds)]));
+  for (const s of srcs) {
+    for (const id of ids[s]) {
+      const h = parseInt(id.split('|')[0], 16);
+      const others = srcs.filter((t) => t !== s && res.keys[t].keyHas.has(h));
+      const lone = others.length && others.every((t) => !ids[t].has(id));
+      if (lone) res.loneKey[s] = (res.loneKey[s] || 0) + 1; else confirmed.add(id);
+    }
+  }
+  for (const s of srcs) delete res.keys[s].keyHas;
+  res.confirmed = confirmed.size;
+  res.confirmedIds = [...confirmed].slice(0, 20);
+  if (res.confirmed) res.ok = false;
   return res;
 }
+
+const KEYNAME = { dxf: 'own DXF', oda: 'ODA', libredwg: 'LibreDWG' };
 
 function main() {
   const args = process.argv.slice(2);
@@ -84,21 +114,28 @@ function main() {
     if (r.decoded) { s.decoded += r.decoded[0]; s.decodable += r.decoded[1]; }
     for (const [, [p, t]] of Object.entries(r.checks || {})) { s.checks += t; s.checkFail += t - p; }
     if (r.adapter) { s.owned += r.adapter.owned; s.emitted += r.adapter.emitted; s.unexplained += r.adapter.unexplained; if (r.adapter.roundTrip) s.roundTrip++; }
-    if (r.twin) { s.twins++; s.matched += r.twin.matched; s.fields += r.twin.fieldsCompared; s.diffs += r.twin.differences; s.drift += r.twin.notInFile + r.twin.represented + (r.twin.keyInconsistent || 0); }
+    const ks = Object.entries(r.keys || {});
+    if (ks.length) s.twins++;
+    for (const [src, k] of ks) {
+      (s.keySrc ||= {})[src] = (s.keySrc[src] || 0) + 1;
+      s.matched += k.matched; s.fields += k.fieldsCompared; s.drift += k.notInFile + k.represented + (k.keyInconsistent || 0);
+    }
+    s.diffs += r.confirmed || 0;
+    for (const [src, n] of Object.entries(r.loneKey || {})) (s.lone ||= {})[src] = (s.lone[src] || 0) + n;
   }
   const rng = (a) => (a.length ? `${Math.min(...a)}–${Math.max(...a)}` : '-');
-  const lines = ['| | Standard | Files passing | Saved by (the file\'s AppInfo) | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | DXF twins | Twin fields compared | Twin differences | Twin drift, or the key contradicting itself (not compared) |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
+  const lines = ['| | Standard | Files passing | Saved by (the file\'s AppInfo) | Entities per file | Entity types per file | Objects decoded (of decodable) | Format checks failed (of run) | Adapter: emitted (of owned), unexplained drops | Adapter round trip | Files with answer keys (keys by source) | Key fields compared | Differences every key holds | Differences one key holds alone (the other agrees with us) | Key drift, or a key contradicting itself (not compared) |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|'];
   for (const [std, s] of Object.entries(by)) {
     const ws = Object.entries(s.writers).sort((a, b) => b[1] - a[1]).map(([w, n]) => `${w} ${n}`).join(', ');
-    lines.push(`| ${s.pass === s.files ? '🟢' : '🔴'} | ${std} | ${s.pass} of ${s.files} | ${ws} | ${rng(s.ent)} | ${rng(s.types)} | ${s.decoded} of ${s.decodable} | ${s.checkFail} of ${s.checks} | ${s.emitted} of ${s.owned}, ${s.unexplained} | ${s.roundTrip} of ${s.files} | ${s.twins} | ${s.fields} | ${s.diffs} | ${s.drift} |`);
+    lines.push(`| ${s.pass === s.files ? '🟢' : '🔴'} | ${std} | ${s.pass} of ${s.files} | ${ws} | ${rng(s.ent)} | ${rng(s.types)} | ${s.decoded} of ${s.decodable} | ${s.checkFail} of ${s.checks} | ${s.emitted} of ${s.owned}, ${s.unexplained} | ${s.roundTrip} of ${s.files} | ${s.twins} of ${s.files}${s.keySrc ? ` (${Object.entries(s.keySrc).map(([k, n]) => `${KEYNAME[k]} ${n}`).join(', ')})` : ''} | ${s.fields} | ${s.diffs} | ${s.lone ? Object.entries(s.lone).map(([k, n]) => `${KEYNAME[k]} ${n}`).join(', ') : 0} | ${s.drift} |`);
   }
   console.log(lines.join('\n'));
-  for (const r of results) if (!r.ok) console.log(`FAIL ${r.std} ${r.path}: ${r.error || [...(r.checkFailures || []), ...Object.entries(r.decodeErrors || {}).map(([k, n]) => `decode ${k} x${n}`), ...(r.adapter && r.adapter.unexplained ? [`adapter drops ${JSON.stringify(r.adapter.dropped)}`] : []), ...(r.adapter && !r.adapter.roundTrip ? ['adapter round trip differs'] : []), ...((r.twin && r.twin.examples) || [])].join('; ')}`);
+  for (const r of results) if (!r.ok) console.log(`FAIL ${r.std} ${r.path}: ${r.error || [...(r.checkFailures || []), ...Object.entries(r.decodeErrors || {}).map(([k, n]) => `decode ${k} x${n}`), ...(r.adapter && r.adapter.unexplained ? [`adapter drops ${JSON.stringify(r.adapter.dropped)}`] : []), ...(r.adapter && !r.adapter.roundTrip ? ['adapter round trip differs'] : []), ...(r.confirmed ? [`differences every key holds: ${r.confirmed} (${r.confirmedIds.join(', ')})`] : []), ...Object.entries(r.keys || {}).flatMap(([src, k]) => k.examples.map((e) => `[${src}] ${e}`))].join('; ')}`);
   const mi = args.indexOf('--md');
   if (mi >= 0) {
-    const per = ['', '| Standard | File | Saved by | Entities | Entity types | Blocks | Layers | DXF twin |', '|---|---|---|---|---|---|---|---|',
-      ...results.map((r) => `| ${r.std} | ${r.path.split('/').slice(-2).join('/')} | ${r.writer || '-'} | ${r.complexity ? r.complexity.entities : '-'} | ${r.complexity ? r.complexity.entityTypes : '-'} | ${r.complexity ? r.complexity.blocks : '-'} | ${r.complexity ? r.complexity.layers : '-'} | ${r.twin ? `${r.twin.matched} matched, ${r.twin.differences} differ` : '-'} |`)];
+    const per = ['', '| Standard | File | Saved by | Entities | Entity types | Blocks | Layers | Answer keys |', '|---|---|---|---|---|---|---|---|',
+      ...results.map((r) => `| ${r.std} | ${r.path.split('/').slice(-2).join('/')} | ${r.writer || '-'} | ${r.complexity ? r.complexity.entities : '-'} | ${r.complexity ? r.complexity.entityTypes : '-'} | ${r.complexity ? r.complexity.blocks : '-'} | ${r.complexity ? r.complexity.layers : '-'} | ${Object.keys(r.keys || {}).length ? Object.entries(r.keys).map(([k, c]) => `${KEYNAME[k]}: ${c.matched} matched, ${c.differences} differ`).join('; ') : '-'} |`)];
     writeFileSync(args[mi + 1], lines.join('\n') + '\n' + per.join('\n') + '\n');
   }
   process.exit(results.every((r) => r.ok) ? 0 : 1);

@@ -139,6 +139,15 @@ class Bits {
     // lines up only so); the index (its ACI, 42 there, as the DXF's 62) is kept
     if ((cn & 0x8000) && !(cn & 0x4000)) { const rgb = this.BL() >>> 0; Object.assign(c, colourOfRgb(c.aci, rgb)); }
     if (cn & 0x2000) this.BL();
+    // with 0x4000, bits 0x0100 / 0x0200 say a colour name / a book name follow (as the CMC flags
+    // 1 / 2), and are not part of the index: LibreCAD's ordinary_enc_AC1018 LINE 32 (0xC300,
+    // "Linked" / "Book"; LibreDWG reads it so); AutoCAD's colour-book entities have neither
+    // (acadsharp circle 99F: 0xC02A). The index is then BYLAYER: the colour is the DBCOLOR's
+    if ((cn & 0x4000) && (cn & 0x300)) {
+      if (cn & 0x100) this.TV();
+      if (cn & 0x200) this.TV();
+      c.aci = 256;
+    }
     return c;
   }
   align() { this.p = (this.p + 7) & ~7; }
@@ -184,15 +193,18 @@ export function decompress18(src, from, len, outLen) {
     let comp, off, l;
     if (op === 0x11) break;
     if (op >= 0x40) { comp = (op >> 4) - 1; const op2 = src[i++]; off = (op2 << 2) | ((op & 0x0c) >> 2); l = op & 3; } else {
-      if (op === 0x10) comp = longOff() + 9;
-      else if (op >= 0x12 && op <= 0x1f) comp = (op & 0x0f) + 2;
-      else if (op === 0x20) comp = longOff() + 0x21;
+      // 4.7 reads 0x12-0x1F as length (op & 0x0F) + 2, offset + 0x3FFF. Bit 3 is an offset bit
+      // (+0x4000) and bits 0-2 the length (0: extended, as 0x10): the two readings agree on
+      // every page up to 0x7400 bytes (no file here uses 0x18-0x1F there), and only this one
+      // decodes a section map past 0x7FFF bytes (AutoCAD R2018 files of 34 MB: 36,916 bytes)
+      let hi = 0;
+      if (op >= 0x10 && op <= 0x1f) { hi = (op & 8) << 11; comp = op & 7 ? (op & 7) + 2 : longOff() + 9; } else if (op === 0x20) comp = longOff() + 0x21;
       else if (op >= 0x21) comp = op - 0x1e;
       else throw new Error(`R2004 opcode 0x${op.toString(16)}`);
       const f = src[i++];
       off = (f >> 2) | (src[i++] << 6);
       l = f & 3;
-      if (op < 0x20) off += 0x3fff;
+      if (op < 0x20) off += 0x3fff + hi;
     }
     const from2 = o - off - 1;
     if (from2 < 0 || o + comp > outLen) throw new Error('R2004 back reference out of range');
@@ -408,7 +420,8 @@ function container18(b, chk) {
       chk.ok('data page header checksum', checksum04(dataSum, hz, 0, 32) === u32(hdr, 0x18));
       if (s.enc === 1) throw new Error('an encrypted (password) DWG is not read');
       const want = Math.min(s.maxSize, s.size - start);
-      const page = s.compressed === 2 ? decompress18(b, at + 32, dsize, s.maxSize).out : b.subarray(at + 32, at + 32 + s.maxSize);
+      let page;
+      try { page = s.compressed === 2 ? decompress18(b, at + 32, dsize, s.maxSize).out : b.subarray(at + 32, at + 32 + s.maxSize); } catch (e) { throw new Error(`${e.message} (${name}, page ${pg.num} at 0x${at.toString(16)}, ${dsize} bytes)`); }
       out.set(page.subarray(0, want), start);
     }
     return out;
@@ -427,9 +440,11 @@ function appInfoStrings(s, v) {
   const b = s.b, out = [];
   let cur = '';
   const flush = () => { if (cur.trim().length >= 3) out.push(cur.trim()); cur = ''; };
-  if (v >= 21) {
-    for (let k = 0; k + 1 < b.length; k += 2) { const c = b[k] | (b[k + 1] << 8); if (c >= 0x20 && c !== 0xfffd && c < 0xd800) cur += String.fromCharCode(c); else flush(); }
-  } else for (let k = 0; k < b.length; k++) { const c = b[k]; if (c >= 0x20 && c < 0x7f) cur += String.fromCharCode(c); else flush(); }
+  // both readings, whatever the version: the strings are UTF-16 when a newer AutoCAD wrote the
+  // file (an R2004 save from AutoCAD 2018: "22.0.48.M.294"), one-byte when an older one did
+  for (let k = 0; k + 1 < b.length; k += 2) { const c = b[k] | (b[k + 1] << 8); if (c >= 0x20 && c !== 0xfffd && c < 0xd800) cur += String.fromCharCode(c); else flush(); }
+  flush();
+  for (let k = 0; k < b.length; k++) { const c = b[k]; if (c >= 0x20 && c < 0x7f) cur += String.fromCharCode(c); else flush(); }
   flush();
   return out;
 }
@@ -442,7 +457,11 @@ function writerOf(strs) {
   if (/Trusted DWG last saved by an Autodesk/.test(all)) return 'Autodesk';
   if (/Open Design Alliance|Teigha/.test(all)) return 'ODA';
   const m = /ProductInformation name\s*=\s*\\?"([^"\\]+)/.exec(all);
-  return m ? m[1] : '';
+  if (m) return m[1];
+  // otherwise the first plain name after the list's own name (LibreCAD writes "LibreCAD")
+  const k = strs.indexOf('AppInfoDataList');
+  const nm = k >= 0 ? strs.slice(k + 1).find((s) => /^[A-Za-z][\w .+-]{2,40}$/.test(s)) : null;
+  return nm || '';
 }
 
 // 5: R2007 (Reed-Solomon, its own compression)
@@ -495,16 +514,22 @@ function container21(b, chk) {
     const out = new Uint8Array(s.size);
     for (const pg of s.list) {
       const p = pages.get(pg.id);
-      const blocks = Math.floor(p.size / 255);
-      const d = deRS(b, p.at, blocks, 251, s.encoding === 4);
+      // 5.2 encoding 4: Reed-Solomon (255, 251), interleaved; encoding 1: the page is stored as
+      // it is, no parity (example_2007's AppInfo: read as 255-byte blocks it lost 4 bytes at
+      // 251-254 and failed its page checksum; read as stored it passes)
+      const d = s.encoding === 1 ? b.subarray(p.at, p.at + p.size) : deRS(b, p.at, Math.floor(p.size / 255), 251, s.encoding === 4);
       const data = pg.csize < pg.usize ? decompress21(d, 0, pg.csize, pg.usize).out : d.subarray(0, pg.usize);
-      chk.ok('R2007 page checksum', checksum21(0, d, 0, pg.csize) === pg.sum % 2 ** 32 || checksum21(0, data, 0, pg.usize) === pg.sum % 2 ** 32, true);
+      // a hard check since stored (encoding 1) pages are read as stored: every page of all 294
+      // R2007 files at hand passes
+      chk.ok('R2007 page checksum', checksum21(0, d, 0, pg.csize) === pg.sum % 2 ** 32 || checksum21(0, data, 0, pg.usize) === pg.sum % 2 ** 32);
       out.set(data.subarray(0, Math.min(pg.usize, s.size - pg.start)), pg.start);
     }
     return out;
   };
   const sec = (name) => { const d = read(name); return d ? { b: d, at: 0, size: d.length } : null; };
-  return { header: sec('AcDb:Header'), classes: sec('AcDb:Classes'), handles: sec('AcDb:Handles'), objects: sec('AcDb:AcDbObjects'), codepage: b[0x13] | (b[0x14] << 8) };
+  let appInfo = null;
+  try { appInfo = sec('AcDb:AppInfo'); } catch { appInfo = null; }
+  return { header: sec('AcDb:Header'), classes: sec('AcDb:Classes'), handles: sec('AcDb:Handles'), objects: sec('AcDb:AcDbObjects'), appInfo, codepage: b[0x13] | (b[0x14] << 8) };
 }
 
 // --- 10: classes --------------------------------------------------------------------------------
@@ -760,7 +785,7 @@ class ObjectReader {
     e.ltscale = r.BD();
     if (v >= 15) {
       e.ltflags = r.BB(); e.psflags = r.BB();
-      if (v >= 21) { e.matflags = r.BB(); r.RC(); }
+      if (v >= 21) { e.matflags = r.BB(); e.shadow = r.RC(); }
       if (v >= 24) { e.vs = [r.B(), r.B(), r.B()]; }
     } else e.ltflags = bylayerlt ? 0 : 3;
     e.invisible = r.BS() & 1;
@@ -783,6 +808,11 @@ class ObjectReader {
       if (e.ltflags === 3) e.ltype = h.Ha(handle);
       if (v >= 21 && e.matflags === 3) h.H();
       if (e.psflags === 3) h.H();
+      // 20.4.1 "shadow flags" RC (R2007+): 3 is followed by a handle, as the BB flags are
+      // (AutoCAD-saved R2018 Drawing1: 196 polylines with 3 carry handle F before their vertex
+      // list; ODA's DXF writes it as 390, LibreDWG's 284 = 3). Placed before the visual-style
+      // handles: no file here has both
+      if (v >= 21 && e.shadow === 3) h.H();
       if (v >= 24) for (const x of e.vs) if (x) h.H();
     }
   }
@@ -1133,7 +1163,14 @@ export function readDWG(buf) {
   if (!v) throw new Error(/^AC\d{4}$/.test(tag) ? `a ${tag} DWG (older than R13) is not read` : 'not a DWG file');
   const chk = new Checks();
   const maint = b[0x0b];
-  const cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk);
+  // a file too short for its file header, or whose container cannot be walked, is refused by name
+  // (cad-extractor-ir's corrupt_01_truncated_header: 16 bytes)
+  if (b.length < 0x100) throw new Error(`not a complete DWG: ${b.length} bytes, shorter than a file header`);
+  let cont;
+  try { cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk); } catch (e) {
+    if (e instanceof TypeError || e instanceof RangeError) throw new Error(`a damaged or truncated DWG: its container cannot be read (${e.message})`);
+    throw e;
+  }
   // a file without the four sections every drawing has is refused by name (dwg-rs's 1440-byte
   // synthetic_2010/2013 fixtures: a container with no drawing in it)
   const missing = ['header', 'classes', 'handles', 'objects'].filter((k) => !cont[k]);
@@ -1199,7 +1236,9 @@ export function dwgToPairs(dwg) {
     const d = o.d;
     put(0, 'LAYER'); put(5, hex(o.handle)); put(2, d.name);
     put(70, (d.frozen ? 1 : 0) | (d.locked ? 4 : 0));
-    const aci = d.colour.aci >= 1 && d.colour.aci <= 255 ? d.colour.aci : 7;
+    // the index as stored, out-of-range ones included (a layer of BYLAYER, 256, in an R2000 file:
+    // ODA's DXF writes 256 too; it draws white either way)
+    const aci = Number.isInteger(d.colour.aci) && d.colour.aci >= 0 ? d.colour.aci : 7;
     put(62, d.on ? aci : -aci);
     if (d.colour.rgb !== undefined) put(420, d.colour.rgb);
     put(6, name(d.ltype) || 'CONTINUOUS');

@@ -14,16 +14,39 @@ export const GROUPS = {
   DIMENSION: [2, 10, 20], POLYLINE: [70], VERTEX: [10, 20, 30, 42], LAYER: [2, 62, 6],
 };
 
+// DXF defaults of compared groups a writer may leave out
+const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' } };
+
+// a DXF $DWGCODEPAGE (ANSI_936...) as a TextDecoder label
+const CP = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5' };
+const cpLabel = (cp) => CP[cp] || (/^ANSI_(125\d)$/.test(cp) ? `windows-${cp.slice(5)}` : 'windows-1252');
+
+// \M+N: 1 Japanese, 2 Traditional Chinese, 3 Korean, 5 Simplified Chinese (DXF reference)
+const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
+export function unescapeDxf(s) {
+  if (s.indexOf('\\') < 0) return s;
+  return s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, x) => String.fromCharCode(parseInt(x, 16)))
+    .replace(/\\M\+([1-5])([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})/g, (m, n, a, b) => (MBCS[n] ? new TextDecoder(MBCS[n]).decode(new Uint8Array([parseInt(a, 16), parseInt(b, 16)])) : m));
+}
+
 export function dxfPairs(path) {
   // DXF from AutoCAD 2007 (AC1021) on is UTF-8; before, the drawing's ANSI code page
-  const head = readFileSync(path, 'latin1').slice(0, 400);
+  // ($DWGCODEPAGE: a Chinese drawing's DXF is GBK, ANSI_936)
+  const buf = readFileSync(path);
+  const head = buf.subarray(0, 4000).toString('latin1');
   const m = /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/.exec(head);
-  const t = readFileSync(path, m && Number(m[1]) >= 1021 ? 'utf8' : 'latin1').split(/\r?\n/);
+  const cp = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/.exec(head);
+  const old = !(m && Number(m[1]) >= 1021);
+  const t = new TextDecoder(old ? cpLabel(cp ? cp[1].toUpperCase() : '') : 'utf-8').decode(buf).split(/\r?\n/);
   const out = [];
   for (let i = 0; i + 1 < t.length; i += 2) {
     const c = Number(t[i].trim());
     if (!Number.isInteger(c)) return null; // binary or malformed: no answer key
-    out.push([c, valueKind(c) === 's' ? uncaret(t[i + 1]) : t[i + 1]]);
+    // DXF escapes a character as \U+XXXX (outside the code page; the DWG stores it so to R2004,
+    // and LibreDWG writes it in UTF-8 DXF too) or \M+NXXXX (a double-byte character of code
+    // page N: ODA's R14 DXF of a Chinese drawing): the reader shows the characters
+    const s = valueKind(c) === 's' ? uncaret(t[i + 1]) : t[i + 1];
+    out.push([c, valueKind(c) === 's' ? unescapeDxf(s) : s]);
   }
   return out;
 }
@@ -46,6 +69,10 @@ export function byHandle(P) {
     }
     if (!cur) continue;
     const s = String(v).trim();
+    // R2018 DXF: an MTEXT's embedded object (101 "Embedded Object") repeats 10/20/40/71 with
+    // other meanings: the record ends there
+    if (c === 101) { cur.embedded = true; continue; }
+    if (cur.embedded) continue;
     if (c === 5 && cur.h === undefined) { cur.h = parseInt(s, 16); if (cur.keep) m.set(cur.h, cur); }
     if (c === 2 && cur.rec && cur.h !== undefined) blocks.set(s.toUpperCase(), cur.h);
     if (cur.of && c === 10) cur.of.pts.push([s]);
@@ -96,7 +123,19 @@ export function same(a, b, c) {
 const oldName = (s) => s.toUpperCase().replace(/[^A-Z0-9_$-]/g, '_');
 export function compare(A, B, inFile, dwgV, src, opts = {}) {
   const cmp = { matched: 0, missing: 0, notInFile: 0, represented: 0, typeDiff: 0, layerDiff: 0, valueDiff: 0, fieldsCompared: 0, examples: [] };
-  const ex = (s) => { if (cmp.examples.length < 8) cmp.examples.push(s); };
+  // every difference is tallied by "TYPE group" (cmp.byField) as well as up to 8 examples
+  cmp.byField = {};
+  // every difference's identity, "handle|field", so two keys' differences can be matched
+  cmp.diffIds = [];
+  cmp.keyHas = new Set(A.keys());
+  const ex = (s) => {
+    if (cmp.examples.length < 8) cmp.examples.push(s);
+    const id = /^\S+ ([0-9a-f]+) group (\d+)/.exec(s) || /^(?:missing|layer) \S+ ([0-9a-f]+)/.exec(s) || /^type ([0-9a-f]+)/.exec(s) || /^\S+ ([0-9a-f]+)/.exec(s);
+    cmp.diffIds.push(id ? `${id[1]}|${id[2] || s.split(' ')[0]}` : s);
+    const m = /^(\S+) [0-9a-f]+ group (\d+)/.exec(s) || /^(missing|type|layer) (\S+)/.exec(s) || [null, s.split(' ')[0], ''];
+    const k = `${m[1]} ${m[2]}`.trim();
+    cmp.byField[k] = (cmp.byField[k] || 0) + 1;
+  };
   const keyRecs = new Set(A.blocks.values());
   const blockOf = (r, M) => M.blocks.get(String(vals(r, 2)[0] || '').toUpperCase());
   for (const [h, a] of A) {
@@ -164,7 +203,14 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     const la = vals(a, 8)[0], lb = vals(b, 8)[0];
     if (a.type !== 'LAYER' && la !== undefined && lb !== undefined && nm(la) !== nm(lb)) { cmp.layerDiff++; ex(`layer ${a.type} ${h.toString(16)}: ${la} vs ${lb}`); }
     for (const c of groups) {
-      const xa = vals(a, c), xb = vals(b, c);
+      // an LWPOLYLINE's bulge (42) belongs to the vertex before it and may be left out when 0
+      // (ours and ODA's leave zeros out, LibreDWG's writes every one): compared per vertex
+      const perVertex = (r) => { const out = []; for (const [cc, vv] of r.g) { if (cc === 10) out.push('0'); else if (cc === 42 && out.length) out[out.length - 1] = vv; } return out; };
+      let xa = a.type === 'LWPOLYLINE' && c === 42 ? perVertex(a) : vals(a, c), xb = a.type === 'LWPOLYLINE' && c === 42 ? perVertex(b) : vals(b, c);
+      // a group DXF may leave out at its default (an INSERT's scale 41/42 at 1, rotation 50 at
+      // 0: AutoCAD's and ODA's DXF leave them out, LibreDWG's writes them): absent = default
+      const dflt = DEFAULTS[a.type] && DEFAULTS[a.type][c];
+      if (dflt !== undefined) { if (!xa.length && xb.length === 1) xa = [dflt]; if (!xb.length && xa.length === 1) xb = [dflt]; }
       if (!xa.length) continue;
       cmp.fieldsCompared += xa.length;
       let bad = xa.length !== xb.length;

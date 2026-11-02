@@ -598,8 +598,11 @@ function extentsOf(out) {
 
 // ---------- colours ----------
 const ACI_BASE = { 1: [255, 0, 0], 2: [255, 255, 0], 3: [0, 255, 0], 4: [0, 255, 255], 5: [0, 0, 255], 6: [255, 0, 255], 7: [255, 255, 255], 8: [128, 128, 128], 9: [192, 192, 192] };
-// ACI 10-249: 24 hues 15° apart, each in 5 brightnesses at full and half
-// saturation (the standard table, to within a few levels); 250-255 greys
+// ACI 10-249: 24 hues 15° apart, each at brightness 255, 204, 153, 127, 76 and
+// full or half saturation, levels truncated (11 #FF7F7F, 12 #CC0000, 16 #7F0000,
+// 17 #7F3F3F, 20 #FF3F00); 250-255 greys 51, 91, 132, 173, 214, 255. The index a
+// DWG true colour shows as is the nearest of these (js/dwg.js), as ODA's DXF of
+// AutoCAD-saved drawings gives it (grey 166 is 253; (125,33,79) is 247)
 export function aciColour(i) {
   let c;
   if (ACI_BASE[i]) c = ACI_BASE[i];
@@ -608,13 +611,13 @@ export function aciColour(i) {
     const bright = [1, 1, 0.8, 0.8, 0.6, 0.6, 0.5, 0.5, 0.3, 0.3][v];
     const sat = v % 2 ? 0.5 : 1;
     c = hsv(h, sat, bright);
-  } else if (i >= 250 && i <= 255) c = [51, 80, 105, 130, 190, 255].map((g) => [g, g, g])[i - 250];
+  } else if (i >= 250 && i <= 255) c = [51, 91, 132, 173, 214, 255].map((g) => [g, g, g])[i - 250];
   else c = [255, 255, 255];
   return { r: c[0], g: c[1], b: c[2], aci: i };
 }
 const trueColour = (n) => ({ r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, aci: null });
 function hsv(h, s, v) {
-  const f = (n) => { const k = (n + h / 60) % 6; return Math.round(255 * v * (1 - s * Math.max(0, Math.min(k, 4 - k, 1)))); };
+  const f = (n) => { const k = (n + h / 60) % 6; return Math.floor(255 * v * (1 - s * Math.max(0, Math.min(k, 4 - k, 1))) + 1e-9); };
   return [f(5), f(3), f(1)];
 }
 
