@@ -58,8 +58,10 @@ function magic(n) {
 
 // --- 2: bit codes -------------------------------------------------------------------------------
 
-const VER = { AC1012: 13, AC1014: 14, AC1015: 15, AC1018: 18, AC1021: 21, AC1024: 24, AC1027: 27, AC1032: 32 };
-export const VERSION_NAMES = { AC1012: 'R13', AC1014: 'R14', AC1015: 'R2000', AC1018: 'R2004', AC1021: 'R2007', AC1024: 'R2010', AC1027: 'R2013', AC1032: 'R2018' };
+// AC1013: the R14 pre-release stamp, in which AutoCAD R14 shipped most of its own sample drawings;
+// read by the R14 rules (all 81 on the R14 media pass every check so)
+const VER = { AC1012: 13, AC1013: 14, AC1014: 14, AC1015: 15, AC1018: 18, AC1021: 21, AC1024: 24, AC1027: 27, AC1032: 32 };
+export const VERSION_NAMES = { AC1012: 'R13', AC1013: 'R14 (AC1013)', AC1014: 'R14', AC1015: 'R2000', AC1018: 'R2004', AC1021: 'R2007', AC1024: 'R2010', AC1027: 'R2013', AC1032: 'R2018' };
 
 class Bits {
   // b: the bytes; p: the bit position; v: the version number (13 .. 32)
@@ -99,13 +101,32 @@ class Bits {
   BD3() { return [this.BD(), this.BD(), this.BD()]; }
   RD2() { return [this.RD(), this.RD()]; }
   RD3() { return [this.RD(), this.RD(), this.RD()]; }
-  H() { const x = this.RC(); const code = x >> 4, n = x & 15; let v = 0; for (let k = 0; k < n; k++) v = v * 256 + this.RC(); return { code, v }; }
+  // a handle's value is exact: a Number to 2^53, a BigInt past it (AutoCAD LT 2000's own
+  // "BUILDING SECTION AND DETAILS" sample has 64-bit handles: as Numbers they lost their low bits
+  // and 2,386 of 3,253 objects no longer matched the object map)
+  H() {
+    const x = this.RC(); const code = x >> 4, n = x & 15;
+    if (n <= 6) { let v = 0; for (let k = 0; k < n; k++) v = v * 256 + this.RC(); return { code, v }; }
+    let v = 0n; for (let k = 0; k < n; k++) v = v * 256n + BigInt(this.RC());
+    return { code, v: hnorm(v) };
+  }
   // a handle as an absolute value, its relative codes resolved against ref (2.13)
   Ha(ref) {
     const h = this.H();
-    switch (h.code) { case 6: return ref + 1; case 8: return ref - 1; case 0xa: return ref + h.v; case 0xc: return ref - h.v; default: return h.v; }
+    switch (h.code) { case 6: return hadd(ref, 1); case 8: return hadd(ref, -1); case 0xa: return hadd(ref, h.v); case 0xc: return hadd(ref, -h.v); default: return h.v; }
   }
-  MC() { let v = 0, sh = 0, x; do { x = this.RC(); v += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80); return v; }
+  MC() {
+    let v = 0, sh = 0, x;
+    do {
+      x = this.RC();
+      if (sh >= 49) { // past 2^53: exact from here on
+        let w = BigInt(v);
+        for (;;) { w += BigInt(x & 0x7f) << BigInt(sh); sh += 7; if (!(x & 0x80)) return hnorm(w); x = this.RC(); }
+      }
+      v += (x & 0x7f) * 2 ** sh; sh += 7;
+    } while (x & 0x80);
+    return v;
+  }
   MCs() {
     let v = 0, sh = 0, x;
     for (;;) {
@@ -153,6 +174,14 @@ class Bits {
   align() { this.p = (this.p + 7) & ~7; }
 }
 const LATIN1 = new TextDecoder('windows-1252');
+// a handle value as a Number when exact (to 2^53), else a BigInt; and a sum of two such
+const hnorm = (v) => (v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= -BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v);
+// handle order across Number and BigInt (subtraction would throw on a mix)
+const hcmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+function hadd(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') { const s = a + b; if (Number.isSafeInteger(s)) return s; }
+  return hnorm(BigInt(a) + BigInt(b));
+}
 // The index a true colour shows as where only an index is read (DXF group 62 beside 420): the
 // nearest of ACI 1-255. From R2004 the CMC of a true colour stores index 0, and AutoCAD's and
 // ODA's DXF of such a file carry this nearest index (sample_base layers: 150, 31, 247)
@@ -606,7 +635,7 @@ function readHandles(s, chk) {
     // each chunk's offsets start again from 0 (23.1 says "set once"; the files say per chunk:
     // a chunk's first entry is absolute, one past the last handle of the chunk before)
     h = 0; loc = 0;
-    while (r.p < stop) { h += r.MC(); loc += r.MCs(); map.push([h, loc]); }
+    while (r.p < stop) { h = hadd(h, r.MC()); loc += r.MCs(); map.push([h, loc]); }
     const c = (b[o + size] << 8) | b[o + size + 1];
     chk.ok('object map CRC', crc16(0xc0c1, b, o, o + size) === c);
     o += size + 2;
@@ -890,7 +919,12 @@ const DECODE = {
     if (o.type === 15) { d.flags = r.BS(); d.curve = r.BS(); d.sw = r.BD(); d.ew = r.BD(); d.thick = r.BT(); d.elev = r.BD(); d.ext = r.BE(); } else if (o.type === 16) {
       const f1 = r.RC(), f2 = r.RC();
       d.flags = 8 | (f2 & 1 ? 1 : 0) | (f1 & 3 ? 4 : 0);
-    } else if (o.type === 29) { d.flags = 64; r.BS(); r.BS(); } else { d.flags = 16; r.BS(); r.BS(); r.BS(); r.BS(); r.BS(); r.BS(); }
+    } else if (o.type === 29) { d.flags = 64; d.nv = r.BS(); d.nf = r.BS(); } else {
+      // 20.4.17 MESH: flags BS (closed in M 1, in N 32: DXF 70 with the mesh bit 16 added; it was
+      // dropped, so AutoCAD R13's SEXTANT meshes read as open: 16 where LibreDWG and ODA give 48),
+      // curve type 75, M and N vertex counts 71/72, M and N densities 73/74
+      d.flags = 16 | r.BS(); d.curve = r.BS(); d.m = r.BS(); d.n = r.BS(); d.md = r.BS(); d.nd = r.BS();
+    }
     const owned = v >= 18 ? r.BL() : 0;
     this.entityHandles(o);
     if (v >= 18) { d.vertices = []; for (let k = 0; k < owned; k++) d.vertices.push(o.h.Ha(o.handle)); } else { d.first = o.h.Ha(o.handle); d.last = o.h.Ha(o.handle); }
@@ -966,6 +1000,7 @@ const DECODE = {
     d.text = r.TV();
     // the rest (line spacing, background, columns) is not drawn
     this.entityHandles(o);
+    d.style = o.h.Ha(o.handle);
   },
   LWPOLYLINE(o, r, v) {
     const d = (o.d = { pts: [], bulges: [] });
@@ -1083,6 +1118,14 @@ const DECODE = {
     if (v >= 21) h.H();
     d.ltype = h.Ha(o.handle);
   },
+  // 20.4.56: a text style; its big font decides how a text's bytes read (see bigFontDecoder)
+  STYLE(o, r, v) {
+    const d = (o.d = { name: r.TV() });
+    tableFlags(r, v);
+    d.vertical = r.B(); d.shape = r.B(); d.fixedH = r.BD(); d.wf = r.BD(); d.oblique = r.BD(); d.gen = r.RC(); d.lastH = r.BD();
+    d.font = r.TV(); d.bigfont = r.TV();
+    this.objectHandles(o);
+  },
   LTYPE(o, r, v) {
     const d = (o.d = { name: r.TV(), dashes: [] });
     tableFlags(r, v);
@@ -1192,12 +1235,30 @@ export function readDWG(buf) {
     types[o.name] = (types[o.name] || 0) + 1;
     objects.set(o.handle, o);
   }
-  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length, appInfo, writer: writerOf(appInfo) };
+  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length, appInfo, writer: writerOf(appInfo), encoding: dec.encoding };
 }
 function codepageDecoder(cp) {
   // the DWG code page numbers of the common ANSI pages
   const names = { 30: 'windows-1252', 31: 'windows-1251', 32: 'windows-1250', 29: 'windows-874', 33: 'windows-1253', 34: 'windows-1254', 35: 'windows-1255', 36: 'windows-1256', 37: 'windows-1257', 38: 'shift_jis', 39: 'gbk', 40: 'euc-kr', 41: 'big5' };
   try { return names[cp] ? new TextDecoder(names[cp]) : LATIN1; } catch { return LATIN1; }
+}
+
+// A text whose style has an Asian big font is drawn by that font from the text's bytes, two at a
+// time: AutoCAD LT 2000's own HOME FLOOR PLAN (code page 1252) writes "Ｘ１" as 82 77 82 50 in a
+// romans + extfont style (ODA's DXF shows Ｘ１). The big fonts AutoCAD ships, and their pages:
+const BIGFONT_PAGES = [[/^@?extfont|^bigfont/i, 'shift_jis'], [/^chineset/i, 'big5'], [/^gbcbig/i, 'gbk'], [/^wh[gt][a-z]*txt/i, 'euc-kr']];
+function bigFontDecoder(file) {
+  const base = String(file || '').split(/[\\/]/).pop();
+  for (const [re, label] of BIGFONT_PAGES) if (re.test(base)) { try { return new TextDecoder(label); } catch { return null; } }
+  return null;
+}
+// the bytes a windows-1252 reading came from (every byte maps to one character there), or null
+let CP1252_BYTES = null;
+function cp1252Bytes(s) {
+  if (!CP1252_BYTES) { CP1252_BYTES = new Map(); for (let b = 0; b < 256; b++) CP1252_BYTES.set(LATIN1.decode(new Uint8Array([b])), b); }
+  const out = [];
+  for (const ch of s) { const b = CP1252_BYTES.get(ch); if (b === undefined) return null; out.push(b); }
+  return new Uint8Array(out);
 }
 
 // --- DXF pairs: what js/dxf.js reads --------------------------------------------------------------
@@ -1212,11 +1273,22 @@ export function dwgToPairs(dwg) {
   const P = [];
   const put = (c, x) => P.push([c, typeof x === 'number' ? String(Number.isFinite(x) ? x : 0) : String(x ?? '')]);
   const name = (h) => { const o = objects.get(h); return o && o.d ? o.d.name : undefined; };
+  // a pre-R2007 text in a style with an Asian big font, in a drawing of code page 1252: its
+  // bytes read by the big font's page (bigFontDecoder); unchanged when they do not form one
+  const styleText = (s, styleH) => {
+    if (dwg.v >= 21 || dwg.encoding !== 'windows-1252' || !/[\x80-\xffŒ-™]/.test(s)) return s;
+    const st = objects.get(styleH);
+    const bd = st && st.d && bigFontDecoder(st.d.bigfont);
+    const bytes = bd && cp1252Bytes(s);
+    if (!bytes) return s;
+    const t = new TextDecoder(bd.encoding, { fatal: true });
+    try { return t.decode(bytes); } catch { return s; }
+  };
   // anonymous blocks are stored as "*D", "*U", "*T", "*X" ...; a drawing has many with one
   // name, so each gets a number, one counter in handle order (AutoCAD numbers them on output too)
   const blockName = new Map();
   let anon = 1;
-  for (const o of [...objects.values()].filter((x) => x.decoded && x.name === 'BLOCK_RECORD').sort((a, b) => a.handle - b.handle)) {
+  for (const o of [...objects.values()].filter((x) => x.decoded && x.name === 'BLOCK_RECORD').sort((a, b) => hcmp(a.handle, b.handle))) {
     blockName.set(o.handle, /^\*[A-Za-z]$/.test(o.d.name) ? `${o.d.name}${anon++}` : o.d.name);
   }
   const bname = (h) => blockName.get(h);
@@ -1295,7 +1367,7 @@ export function dwgToPairs(dwg) {
         ext(d.ext); break;
       case 'TEXT': {
         // a DXF value is one line: a line break in single-line text becomes a space
-        common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, d.text.replace(/\r\n|\r|\n/g, ' '));
+        common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' '));
         if (d.rot) put(50, deg(d.rot));
         if (d.wf !== 1) put(41, d.wf);
         if (d.ha) put(72, d.ha);
@@ -1308,7 +1380,7 @@ export function dwgToPairs(dwg) {
         common('MTEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); put(40, d.h); put(41, d.width); put(71, d.attach); put(72, d.dir);
         // a DXF value is one line: a raw line break in MTEXT (some writers store one) is its
         // paragraph code \P, which the drawing reads as a new line
-        const mt = d.text.replace(/\r\n|\r|\n/g, '\\P');
+        const mt = styleText(d.text, d.style).replace(/\r\n|\r|\n/g, '\\P');
         for (let k = 0; k + 250 < mt.length; k += 250) put(3, mt.slice(k, k + 250));
         put(1, mt.slice(Math.floor(Math.max(0, mt.length - 1) / 250) * 250));
         ext(d.ext); put(11, d.xdir[0]); put(21, d.xdir[1]); put(31, d.xdir[2]);
@@ -1322,9 +1394,12 @@ export function dwgToPairs(dwg) {
         ext(d.ext); break;
       }
       case 'POLYLINE': {
-        common('POLYLINE'); put(66, 1); put(10, 0); put(20, 0); put(30, d.elev || 0); put(70, d.flags); ext(d.ext);
+        common('POLYLINE'); put(66, 1); put(10, 0); put(20, 0); put(30, d.elev || 0); put(70, d.flags);
+        if (d.flags & 16) { put(71, d.m); put(72, d.n); put(73, d.md); put(74, d.nd); put(75, d.curve); }
+        if (d.flags & 64) { put(71, d.nv); put(72, d.nf); }
+        ext(d.ext);
         const kids = new Map((children.get(o.handle) || []).map((c) => [c.handle, c]));
-        const order = d.vertices || [...kids.keys()].sort((a, b) => a - b);
+        const order = d.vertices || [...kids.keys()].sort(hcmp);
         for (const vh of order) {
           const vx = kids.get(vh) || objects.get(vh);
           if (!vx || vx.name !== 'VERTEX' || !vx.d) continue;
@@ -1395,8 +1470,8 @@ export function dwgToPairs(dwg) {
   };
   const ordered = (rec) => {
     const list = owned.get(rec.handle) || [];
-    if (rec.d.entities) { const pos = new Map(rec.d.entities.map((h, k) => [h, k])); return list.slice().sort((a, b) => (pos.get(a.handle) ?? 1e15) - (pos.get(b.handle) ?? 1e15) || a.handle - b.handle); }
-    return list.slice().sort((a, b) => a.handle - b.handle);
+    if (rec.d.entities) { const pos = new Map(rec.d.entities.map((h, k) => [h, k])); return list.slice().sort((a, b) => (pos.get(a.handle) ?? 1e15) - (pos.get(b.handle) ?? 1e15) || hcmp(a.handle, b.handle)); }
+    return list.slice().sort((a, b) => hcmp(a.handle, b.handle));
   };
   // what the adapter did with every decoded entity a block record owns: emitted, or not and why
   // (a type it does not draw, a reference whose block is not in the file): P.stats

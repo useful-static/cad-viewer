@@ -20,7 +20,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { readDWG, dwgToPairs, pairsToDXF } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
-import { dxfPairs, byHandle, compare } from './dwg-compare.mjs';
+import { dxfPairs, byHandle, compare, hexHandle } from './dwg-compare.mjs';
 
 const summary = (dr) => JSON.stringify({ paths: dr.paths.length, texts: dr.texts.length, layers: dr.layers.length, extents: dr.extents, layouts: dr.layouts.length });
 
@@ -80,7 +80,7 @@ export function validate(std, path) {
   const ids = Object.fromEntries(srcs.map((s) => [s, new Set(res.keys[s].diffIds)]));
   for (const s of srcs) {
     for (const id of ids[s]) {
-      const h = parseInt(id.split('|')[0], 16);
+      const h = hexHandle(id.split('|')[0]);
       const others = srcs.filter((t) => t !== s && res.keys[t].keyHas.has(h));
       const lone = others.length && others.every((t) => !ids[t].has(id));
       if (lone) res.loneKey[s] = (res.loneKey[s] || 0) + 1; else confirmed.add(id);

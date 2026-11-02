@@ -11,11 +11,11 @@ export const GROUPS = {
   ELLIPSE: [10, 20, 30, 11, 21, 31, 40, 41, 42], TEXT: [10, 20, 40, 50, 1], MTEXT: [10, 20, 40, 71],
   INSERT: [2, 10, 20, 30, 41, 42, 50], LWPOLYLINE: [90, 10, 20, 42], SPLINE: [71, 72, 73, 74, 40, 10, 20],
   SOLID: [10, 20, 11, 21, 12, 22, 13, 23], TRACE: [10, 20, 11, 21, 12, 22, 13, 23], HATCH: [2, 70, 91],
-  DIMENSION: [2, 10, 20], POLYLINE: [70], VERTEX: [10, 20, 30, 42], LAYER: [2, 62, 6],
+  DIMENSION: [2, 10, 20], POLYLINE: [70, 71, 72], VERTEX: [10, 20, 30, 42], LAYER: [2, 62, 6],
 };
 
 // DXF defaults of compared groups a writer may leave out
-const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' } };
+const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' }, POLYLINE: { 71: '0', 72: '0' } };
 
 // a DXF $DWGCODEPAGE (ANSI_936...) as a TextDecoder label
 const CP = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5' };
@@ -51,6 +51,14 @@ export function dxfPairs(path) {
   return out;
 }
 
+// a hex handle as js/dwg.js holds it: a Number to 2^53, a BigInt past it (64-bit handles)
+export function hexHandle(s) {
+  const t = String(s).trim();
+  if (t.length <= 13) return parseInt(t, 16);
+  const v = BigInt(`0x${t}`);
+  return v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v;
+}
+
 // records keyed by handle from TABLES (LAYER), BLOCKS and ENTITIES; .blocks: block name -> record handle
 export function byHandle(P) {
   const m = new Map();
@@ -73,7 +81,7 @@ export function byHandle(P) {
     // other meanings: the record ends there
     if (c === 101) { cur.embedded = true; continue; }
     if (cur.embedded) continue;
-    if (c === 5 && cur.h === undefined) { cur.h = parseInt(s, 16); if (cur.keep) m.set(cur.h, cur); }
+    if (c === 5 && cur.h === undefined) { cur.h = hexHandle(s); if (cur.keep) m.set(cur.h, cur); }
     if (c === 2 && cur.rec && cur.h !== undefined) blocks.set(s.toUpperCase(), cur.h);
     if (cur.of && c === 10) cur.of.pts.push([s]);
     if (cur.of && c === 20) cur.of.pts[cur.of.pts.length - 1].push(s);
@@ -202,6 +210,9 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     const nm = (s) => (opts.oldNames ? oldName(s) : s.toUpperCase());
     const la = vals(a, 8)[0], lb = vals(b, 8)[0];
     if (a.type !== 'LAYER' && la !== undefined && lb !== undefined && nm(la) !== nm(lb)) { cmp.layerDiff++; ex(`layer ${a.type} ${h.toString(16)}: ${la} vs ${lb}`); }
+    // a 2D polyline's vertex z means nothing in DXF (the polyline's 30 is its elevation, compared
+    // there): LibreDWG writes the stored z, ODA the elevation (AutoCAD R13 EX09, R14 R300-20)
+    if (a.type === 'VERTEX' && a.of && !(Number(vals(a.of, 70)[0] || 0) & (8 | 16 | 64))) groups = groups.filter((c) => c !== 30);
     for (const c of groups) {
       // an LWPOLYLINE's bulge (42) belongs to the vertex before it and may be left out when 0
       // (ours and ODA's leave zeros out, LibreDWG's writes every one): compared per vertex
