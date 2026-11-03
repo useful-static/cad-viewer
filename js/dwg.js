@@ -147,7 +147,9 @@ class Bits {
   OT() { if (this.v < 24) return this.BS(); switch (this.BB()) { case 0: return this.RC(); case 1: return this.RC() + 0x1f0; default: return this.RSu(); } }
   // T: to R2004 a character outside the drawing's code page is stored as \U+XXXX (AutoCAD shows
   // the character; R2007 stores it as itself): decoded here, so every version reads the same text
-  T() { const n = this.BS(); const t = new Uint8Array(Math.max(0, n)); for (let k = 0; k < n; k++) t[k] = this.RC(); let e = t.length; while (e && !t[e - 1]) e--; return (this.dec || LATIN1).decode(t.subarray(0, e)).replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, x) => String.fromCharCode(parseInt(x, 16))); }
+  // -- not after an escaped backslash ("\\U+00B0", a typed backslash before "U+00B0", which the
+  // DXF of the same MTEXT keeps as text: the DWG read "\°")
+  T() { const n = this.BS(); const t = new Uint8Array(Math.max(0, n)); for (let k = 0; k < n; k++) t[k] = this.RC(); let e = t.length; while (e && !t[e - 1]) e--; return (this.dec || LATIN1).decode(t.subarray(0, e)).replace(/\\\\|\\U\+([0-9A-Fa-f]{4})/g, (m, x) => (x ? String.fromCharCode(parseInt(x, 16)) : m)); }
   TU() { const n = this.BS(); let s = ''; for (let k = 0; k < n; k++) { const c = this.RSu(); if (c) s += String.fromCharCode(c); } return s; }
   // TV: T to R2004, TU from the string stream after
   TV() { if (this.v < 21) return this.T(); return this.str ? this.str.TU() : ''; }
@@ -1224,7 +1226,10 @@ function text(r, v) {
   const f = r.RC();
   d.elev = f & 1 ? 0 : r.RD();
   d.p = r.RD2();
-  d.a = f & 2 ? d.p.slice() : [r.DD(d.p[0]), r.DD(d.p[1])];
+  // (no alignment point stored: (0, 0), as ODA's, LibreDWG's and AutoCAD's own DXF of the same
+  // drawing all write it -- read as the insertion point, a right-aligned text in 062-B drew 94.79
+  // units off; present, its DDs default to the insertion point)
+  d.a = f & 2 ? [0, 0] : [r.DD(d.p[0]), r.DD(d.p[1])];
   d.ext = r.BE(); d.thick = r.BT();
   d.oblique = f & 4 ? 0 : r.RD(); d.rot = f & 8 ? 0 : r.RD(); d.h = r.RD(); d.wf = f & 0x10 ? 1 : r.RD();
   d.text = r.TV();
@@ -1469,6 +1474,7 @@ export function dwgToPairs(dwg) {
         common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' '));
         if (d.rot) put(50, deg(d.rot));
         if (d.wf !== 1) put(41, d.wf);
+        if (d.gen) put(71, d.gen); // (backward / upside down: the drawing reads it)
         if (d.ha) put(72, d.ha);
         if (d.ha || d.va) { put(11, d.a[0]); put(21, d.a[1]); put(31, d.elev); }
         ext(d.ext);
@@ -1549,6 +1555,7 @@ export function dwgToPairs(dwg) {
           put(1, styleText(ad.text, ad.style).replace(/\r\n|\r|\n/g, ' ')); put(2, ad.tag); put(70, ad.flags);
           if (ad.rot) put(50, deg(ad.rot));
           if (ad.wf !== 1) put(41, ad.wf);
+          if (ad.gen) put(71, ad.gen);
           if (ad.ha) put(72, ad.ha);
           if (ad.ha || ad.va) { put(11, ad.a[0]); put(21, ad.a[1]); put(31, ad.elev); }
           ext(ad.ext);

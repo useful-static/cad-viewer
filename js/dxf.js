@@ -3,7 +3,11 @@
 // counted, not drawn), flattened to what a 2D canvas strokes:
 //   { units, sourceUnits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill }],
-//     texts: [{ layer, colour, x, y, h, rot, text, align }] }
+//     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode? }] }
+//   (align left / center / right; valign baseline / bottom / middle / top for a TEXT, top / middle /
+//   bottom for an MTEXT, which hangs its lines from the point; fit: an aligned / fit text's
+//   baseline length, fitMode 'aligned' (both ways) or 'fit' (width): js/dxf-view.js draws them so,
+//   and textCorners boxes them so for the extents)
 // LINE, LWPOLYLINE (bulges), POLYLINE / VERTEX, CIRCLE, ARC, ELLIPSE, SPLINE
 // (evaluated: weights, fit points as the polyline when no control points),
 // POINT, TEXT, MTEXT (formatting stripped), INSERT and MINSERT (nested,
@@ -18,7 +22,7 @@
 // Pure ES module, no DOM.
 
 import { looksLikeDxf } from './formats.js';
-import { codePageLabel, decoderFor } from './codepages.js';
+import { MBCS, codePageLabel, decoderFor, isDoubleByte } from './codepages.js';
 import { LENGTH_MM } from './units.js';
 import { PAPER, contrast } from './styles.js';
 
@@ -69,8 +73,12 @@ function binaryPairs(buf) {
   const b = new Uint8Array(buf);
   // R12 writes the first code (0) as one byte, then "SECTION"; R13+ as two
   const oneByte = b[22] === 0 && b[23] !== 0;
-  // (UTF-8: R2007 and later write their strings so)
-  const dec = new TextDecoder('utf-8');
+  // Strings in the drawing's encoding: UTF-8 from R2007, its $DWGCODEPAGE before (always UTF-8, an
+  // R2000 1252 drawing's "Ø20 ±0.1 90°" read "�20 �0.1 90�"). Each string's bytes are kept and
+  // decoded once the header has said which; names the header itself uses ($ACADVER's value, the
+  // page's name) are ASCII, read as Latin-1 meanwhile
+  const ascii = new TextDecoder('latin1');
+  const strs = []; // [index in out, start, end]
   const out = [];
   let o = 22;
   // every read checked first: a truncated file is "ends inside a value", not the engine's
@@ -88,7 +96,8 @@ function binaryPairs(buf) {
       let e = o;
       while (e < b.length && b[e] !== 0) e++;
       need(e - o + 1);
-      v = dec.decode(b.subarray(o, e));
+      v = ascii.decode(b.subarray(o, e));
+      strs.push([out.length, o, e]);
       o = e + 1;
     } else if (k === 'bin') { need(1); const n = b[o]; need(1 + n); v = ''; o += 1 + n; }
     else if (k === 'd') { need(8); v = String(dv.getFloat64(o, true)); o += 8; }
@@ -99,6 +108,16 @@ function binaryPairs(buf) {
     out.push([c, v]);
     if (c === 0 && v === 'EOF') break;
   }
+  // the header's version and code page (the first $ACADVER / $DWGCODEPAGE pairs), then the strings
+  let ver = 0, page = null;
+  for (let i = 0; i + 1 < out.length; i++) {
+    if (out[i][0] === 0 && out[i][1] === 'ENDSEC') break; // (the header is the first section)
+    if (out[i][0] !== 9) continue;
+    if (out[i][1] === '$ACADVER') ver = Number((/AC(\d{4})/.exec(out[i + 1][1]) || [])[1]) || 0;
+    if (out[i][1] === '$DWGCODEPAGE') page = out[i + 1][1];
+  }
+  const dec = ver >= 1021 ? new TextDecoder('utf-8') : decoderFor(codePageLabel(page)) || decoderFor('windows-1252');
+  for (const [i, s, e] of strs) out[i][1] = dec.decode(b.subarray(s, e));
   return out;
 }
 
@@ -136,12 +155,25 @@ export const UNITS = Object.fromEntries(INSUNITS.flatMap((n, code) => (n ? [[cod
 // page ($DWGCODEPAGE: ANSI_1252 for most, GBK for a Chinese drawing); with neither stated, UTF-8
 // when the bytes are valid UTF-8, else Windows-1252. (Read as UTF-8, a pre-2007 file's ° ± Ø
 // became U+FFFD; read as Latin-1, a UTF-8 one's accents were mangled.)
+// the first place an ASCII name occurs in bytes, or -1
+function indexOfBytes(u8, name) {
+  const n = name.length, first = name.charCodeAt(0);
+  for (let i = u8.indexOf(first); i >= 0 && i + n <= u8.length; i = u8.indexOf(first, i + 1)) {
+    let k = 1;
+    while (k < n && u8[i + k] === name.charCodeAt(k)) k++;
+    if (k === n) return i;
+  }
+  return -1;
+}
 export function dxfText(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 8000)));
-  const ver = /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/.exec(head);
+  // the header variable's value, wherever the header is (a byte search, then a short window read:
+  // the first 8000 bytes missed a header behind a long 999 comment, which parseDXF still read --
+  // the text in one code page, its %%nnn in another)
+  const at = (name, re) => { const i = indexOfBytes(u8, name); return i < 0 ? null : re.exec(new TextDecoder('latin1').decode(u8.subarray(i, i + 200))); };
+  const ver = at('$ACADVER', /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/);
   if (ver && Number(ver[1]) >= 1021) return new TextDecoder('utf-8').decode(u8);
-  const cp = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/.exec(head);
+  const cp = at('$DWGCODEPAGE', /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/);
   if (cp) {
     // (js/codepages.js: the one table, 850 included)
     const dec = decoderFor(codePageLabel(cp[1]));
@@ -279,7 +311,9 @@ export function parseDXF(s) {
       charge(budget, lo.paths.length - p0, coords);
       for (const t of out.texts) {
         const [x, y] = ap(M, t.x, t.y);
-        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) addItem(budget, lo.texts, { ...t, x, y, h: t.h * s, rot: t.rot + tw }, 2);
+        // (every size of it scaled by the viewport: its height and an aligned / fit text's width --
+        // the width unscaled drew it 10 times too long through a 0.1 viewport)
+        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) addItem(budget, lo.texts, { ...t, x, y, h: t.h * s, ...(t.fit ? { fit: t.fit * s } : {}), rot: t.rot + tw }, 2);
       }
       const layer = get(v, 8, '0');
       lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
@@ -638,9 +672,11 @@ function emit(recs, M, byBlock, depth, ctx) {
         // Object": that MTEXT is what is drawn -- its text, point, height and attachment (its own
         // group 1 is the first line only; drawn as a TEXT it stood 3.8 heights too high), the
         // ATTRIB's own groups read only before the 101. (Made once per entity, as the text is.)
+        // (and an R2018 MTEXT's own groups end at its "101 Embedded Object": what follows -- a
+        // point in its 11 -- was read as its direction, and 334 MTEXTs at hand drew turned 73.83°)
         if (r.src === undefined) {
-          const emb = r.type === 'ATTRIB' ? r.g.findIndex((x) => x[0] === 101) : -1;
-          r.src = emb >= 0 ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : r;
+          const emb = r.type === 'ATTRIB' || r.type === 'MTEXT' ? r.g.findIndex((x) => x[0] === 101) : -1;
+          r.src = emb < 0 ? r : r.type === 'ATTRIB' ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : { type: 'MTEXT', g: r.g.slice(0, emb) };
         }
         const e = r.src;
         const mt = e.type === 'MTEXT';
@@ -688,6 +724,14 @@ function emit(recs, M, byBlock, depth, ctx) {
             item.align = ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left';
             item.valign = al === 4 ? 'middle' : ['baseline', 'bottom', 'middle', 'top'][va] || 'baseline';
           }
+          // 71, its generation: 2 backward (mirrored in x), 4 upside down (in y) -- drawn normally,
+          // they stood on the wrong side of their point (277 at hand); 41, its width factor (an
+          // aligned / fit text's width is its fit already)
+          const gen = num(e, 71, 0) | 0;
+          if (gen & 2) item.mirrorX = true;
+          if (gen & 4) item.mirrorY = true;
+          const wf = num(e, 41, 1);
+          if (!item.fit && Number.isFinite(wf) && wf > 0 && wf !== 1) item.widthFactor = wf;
         }
         ctx.addText(item);
         break;
@@ -945,21 +989,15 @@ const PCT = { c: 'Ø', d: '°', p: '±', u: '', o: '', k: '', '%': '%' };
 function pageChar(n, codepage) {
   if (n < 128 || n > 255) return String.fromCharCode(n);
   // (a double-byte page has no character for one byte: 1252 then)
-  const single = codepage && !['shift_jis', 'gbk', 'euc-kr', 'big5'].includes(codepage);
+  const single = codepage && !isDoubleByte(codepage);
   return (decoderFor(single ? codepage : 'windows-1252') || decoderFor('windows-1252')).decode(Uint8Array.of(n));
 }
 const percentCodes = (s, codepage = 'windows-1252') => s.replace(/%%(\d{3})|%%([cdpuok%])/gi, (m, n, k) => (n ? pageChar(Number(n), codepage) : PCT[k.toLowerCase()]));
-// \M+NXXXX: a double-byte character of code page N (DXF reference: 1 Japanese, 2 Traditional
-// Chinese, 3 Korean, 5 Simplified Chinese), as an R14 drawing's DXF writes them
-export const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
-const mbcsDecoders = {};
+// \M+NXXXX: a double-byte character of code page N (js/codepages.js MBCS), as an R14 drawing's DXF
+// writes them
 function mbcsChar(nxxxx) {
-  const enc = MBCS[nxxxx[0]];
-  if (!enc) return null;
-  try {
-    mbcsDecoders[enc] ||= new TextDecoder(enc);
-    return mbcsDecoders[enc].decode(Uint8Array.of(parseInt(nxxxx.slice(1, 3), 16), parseInt(nxxxx.slice(3, 5), 16)));
-  } catch { return null; }
+  const dec = decoderFor(MBCS[nxxxx[0]]);
+  return dec ? dec.decode(Uint8Array.of(parseInt(nxxxx.slice(1, 3), 16), parseInt(nxxxx.slice(3, 5), 16))) : null;
 }
 // A character escape at s[i] (a backslash): \U+XXXX or \M+NXXXX -> [the character, its length],
 // else null. The one decoder: mtextPlain's scanner and unescapeDxf both call it (they held a copy
@@ -995,11 +1033,42 @@ function extentsOf(out) {
     min[0] = Math.min(min[0], p.pts[k]); max[0] = Math.max(max[0], p.pts[k]);
     min[1] = Math.min(min[1], p.pts[k + 1]); max[1] = Math.max(max[1], p.pts[k + 1]);
   }
-  for (const t of out.texts) {
-    min[0] = Math.min(min[0], t.x); max[0] = Math.max(max[0], t.x + t.h * t.text.length * 0.6);
-    min[1] = Math.min(min[1], t.y); max[1] = Math.max(max[1], t.y + t.h);
+  for (const t of out.texts) for (const [x, y] of textCorners(t)) {
+    min[0] = Math.min(min[0], x); max[0] = Math.max(max[0], x);
+    min[1] = Math.min(min[1], y); max[1] = Math.max(max[1], y);
   }
   return min[0] === Infinity ? null : { min, max };
+}
+
+// A drawing with nothing to show: no path or text in model space or any layout. The one rule for
+// the page (it refuses the file) and dwg-check.mjs (it reports it)
+export const drawsNothing = (d) => !d.paths.length && !d.texts.length && !d.layouts.some((l) => l.paths.length || l.texts.length);
+
+// A text's corners as js/dxf-view.js places it: its lines (1.4 heights apart), its width (its
+// fit, else 0.6 of a height per character of the longest line), shifted by its alignment and
+// vertical alignment, turned by its rotation. The extents took every text as left-aligned on its
+// baseline, one line high: a 20-line MTEXT drawn below its point was cut off by Fit
+export function textCorners(t) {
+  const lines = t.text.split('\n');
+  const lh = t.h * 1.4;
+  const w = t.fit > 0 ? t.fit : t.h * 0.6 * (t.widthFactor || 1) * Math.max(...lines.map((l) => l.length));
+  const hBlock = (lines.length - 1) * lh + t.h;
+  const x0 = t.fit > 0 ? 0 : t.align === 'center' ? -w / 2 : t.align === 'right' ? -w : 0;
+  // (y up: the top of the block and its bottom, from the point)
+  let top, bottom;
+  if (t.mtext) {
+    const y0 = t.valign === 'middle' ? hBlock / 2 : t.valign === 'bottom' ? hBlock : 0;
+    top = y0; bottom = y0 - hBlock;
+  } else {
+    // the last line's baseline (or its bottom / middle / top) on the point, the lines above it
+    const base = t.valign === 'top' ? -t.h : t.valign === 'middle' ? -t.h / 2 : 0;
+    bottom = base - (t.valign === 'bottom' ? 0 : t.h * 0.25);
+    top = base + t.h + (lines.length - 1) * lh;
+  }
+  const c = Math.cos(t.rot || 0), s = Math.sin(t.rot || 0);
+  // (a backward / upside-down text is mirrored about its point, as the view draws it)
+  const mx = t.mirrorX ? -1 : 1, my = t.mirrorY ? -1 : 1;
+  return [[x0, bottom], [x0 + w, bottom], [x0, top], [x0 + w, top]].map(([u0, v0]) => { const u = u0 * mx, v = v0 * my; return [t.x + u * c - v * s, t.y + u * s + v * c]; });
 }
 
 // ---------- colours ----------

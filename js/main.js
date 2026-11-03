@@ -6,7 +6,7 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
-import { onPaper } from './dxf.js';
+import { drawsNothing, onPaper } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
@@ -4437,8 +4437,7 @@ async function loadDxf(buf, name, seq) {
   const got = await readInWorker({ kind: '2d', buf, dwg }, name);
   if (stale(seq)) return;
   const drawing = got ? got.drawing : readDrawing({ buf, dwg });
-  const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
-  if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
+  if (drawsNothing(drawing)) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
 }

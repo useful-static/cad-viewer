@@ -204,6 +204,8 @@ test('a layout: its paper space, and model space through its viewport, scaled an
     // model: a line 0..100 along x, and one far off to the right (outside the viewport's view)
     [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 100], [21, 0],
     [0, 'LINE'], [8, '0'], [10, 1000], [20, 0], [11, 1100], [21, 0],
+    // an aligned text from (40, 10) along 20: through the 0.5 viewport, 10 wide (round 13)
+    [0, 'TEXT'], [8, '0'], [10, 40], [20, 10], [11, 60], [21, 10], [40, 4], [72, 3], [1, 'FIT'],
     // paper: the sheet's own viewport (id 1, not drawn), a title frame, a viewport
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
     [0, 'LWPOLYLINE'], [8, 'TITLE'], [67, 1], [90, 4], [70, 1], [10, 0], [20, 0], [10, 297], [20, 0], [10, 297], [20, 210], [10, 0], [20, 210],
@@ -226,6 +228,9 @@ test('a layout: its paper space, and model space through its viewport, scaled an
   assert.ok(Math.abs(xs[0] - 25) < 1e-9 && Math.abs(xs[1] - 75) < 1e-9, `x ${xs}`);
   assert.ok(Math.abs(line.pts[1] - 40) < 1e-9, `y ${line.pts[1]}`);
   assert.ok(L.extents.max[0] <= 297 + 1e-9, 'the sheet');
+  // the aligned text's height and width both scaled (its width unscaled drew it twice too long)
+  const ft = L.texts.find((t) => t.text === 'FIT');
+  assert.deepEqual([ft.h, ft.fit], [2, 10]);
   // a layer only a layout uses (no LAYER table here) is in the drawing's list
   assert.ok(d.layers.some((l) => l.name === 'TITLE'), `layers ${d.layers.map((l) => l.name)}`);
 });
@@ -419,6 +424,48 @@ test('code pages: the DWG numbers the drawings at hand show, 850 decoded, and a 
     [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, '%%192'], [0, 'ENDSEC'], [0, 'EOF']]));
   assert.equal(ru.texts[0].text, 'А');
   assert.equal(textCodes('%%192'), 'À');
+});
+test('round 13: a binary R2000 DXF in its code page, a header behind a long comment, text extents', () => {
+  // binary R2000, 1252: its strings in the drawing's code page, not UTF-8
+  const G = [[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, 'AC1015'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1252'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'Ø20 ±0.1'], [0, 'ENDSEC'], [0, 'EOF']];
+  const parts = binaryDXF(G.map(([c, v]) => [c, v]));
+  // (the writer encodes strings as UTF-8: re-encode the TEXT's value as 1252 bytes in place)
+  const u8 = new Uint8Array(parts);
+  const at = Buffer.from(u8).indexOf(Buffer.from('Ø20 ±0.1', 'utf8'));
+  const latin = Buffer.from('Ø20 ±0.1', 'latin1');
+  const fixed = Buffer.concat([Buffer.from(u8.subarray(0, at)), latin, Buffer.from(u8.subarray(at + Buffer.byteLength('Ø20 ±0.1', 'utf8')))]);
+  assert.equal(parseDXF(fixed.buffer.slice(fixed.byteOffset, fixed.byteOffset + fixed.length)).texts[0].text, 'Ø20 ±0.1');
+  // an ASCII DXF whose header (1251) follows a 9000-byte comment: its text read in 1251
+  const body = dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1251'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'X'], [0, 'ENDSEC'], [0, 'EOF']]);
+  const head = `999\n${'c'.repeat(9000)}\n`;
+  // (the text's value as 1251 bytes: "При")
+  const [before, after] = body.split('\nX\n');
+  const bytes = Buffer.concat([Buffer.from(head + before + '\n', 'latin1'), Buffer.from([0xcf, 0xf0, 0xe8]), Buffer.from(`\n${after}`, 'latin1')]);
+  assert.equal(parseDXF(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length)).texts[0].text, 'При');
+  // text extents: a right-aligned text extends left of its point, a 20-line MTEXT below its point
+  const right = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 100], [21, 0]],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [11, 100], [21, 0], [40, 2], [72, 2], [1, 'NOTE']]));
+  assert.ok(right.extents.max[0] <= 100 + 1e-9, `right-aligned text ends at its point: ${right.extents.max[0]}`);
+  const tall = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 1], [1, Array(20).fill('l').join('\\P')]]));
+  assert.ok(tall.extents.min[1] < -26 && tall.extents.max[1] <= 1e-9, `the block hangs below: ${tall.extents.min[1]}..${tall.extents.max[1]}`);
+});
+test('round 13 (quality): an R2018 MTEXT\'s own groups end at its 101; a TEXT\'s 71 (backward / upside down) and 41 (width) are read', () => {
+  const d = parseDXF(ents(
+    // an MTEXT whose embedded object's 11 is a point, not its direction
+    [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 1], [1, 'BB707'], [11, 1], [21, 0], [101, 'Embedded Object'], [70, 1], [10, 1], [20, 0], [11, 120.5], [21, 415.9]],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 2], [1, 'BACK']],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 6], [1, 'BOTH']],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [41, 0.7], [1, 'NARROW']],
+  ));
+  const by = Object.fromEntries(d.texts.map((t) => [t.text, t]));
+  assert.ok(Math.abs(by.BB707.rot) < 1e-12, `MTEXT direction from its own 11: rot ${by.BB707.rot}`);
+  assert.deepEqual([!!by.BACK.mirrorX, !!by.BACK.mirrorY, !!by.BOTH.mirrorX, !!by.BOTH.mirrorY], [true, false, true, true]);
+  assert.equal(by.NARROW.widthFactor, 0.7);
+  // a backward text stands left of its point (the extents follow it)
+  const back = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 2], [1, 'BACK']]));
+  assert.ok(back.extents.max[0] <= 1e-9 && back.extents.min[0] < -1, `backward: ${back.extents.min[0]}..${back.extents.max[0]}`);
 });
 test('looksLikeDxf on blank lines and 999s that never reach SECTION: linear, not exponential (27 s for 127 bytes)', () => {
   const head = `${'999\n\n\n\n'.repeat(400)}solid x\n`;

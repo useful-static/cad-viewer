@@ -9,7 +9,7 @@
 
 import { fetchModelLists, readCapped } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
+import { FORMATS, SNIFF_BYTES, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -58,7 +58,9 @@ async function head(res, n) {
 }
 
 // gunzip the start of a gzip stream (a partial stream decodes what it has)
-async function gunzipStart(bytes, n = 512) {
+// (as much as the page's sniff reads: SNIFF_BYTES -- 512 called a gzipped DXF behind a 1000-byte
+// comment "format unknown" where the page opens it)
+async function gunzipStart(bytes, n = SNIFF_BYTES) {
   if (typeof DecompressionStream !== 'function') return null;
   try {
     const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));

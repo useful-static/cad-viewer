@@ -36,6 +36,12 @@ const ibm850 = {
   },
 };
 
+// \M+NXXXX: a double-byte character of code page N (DXF reference: 1 Japanese, 2 Traditional
+// Chinese, 3 Korean, 5 Simplified Chinese)
+export const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
+// the double-byte pages: no character for one byte (a %%nnn in such a drawing reads as 1252)
+export const isDoubleByte = (label) => Object.values(MBCS).includes(label);
+
 // a decoder for a label (a TextDecoder, or the 850 table), or null when there is none
 const made = {};
 export function decoderFor(label) {

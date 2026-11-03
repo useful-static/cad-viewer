@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF } from './js/dwg.js';
-import { parseDXF } from './js/dxf.js';
+import { drawsNothing, parseDXF } from './js/dxf.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 const args = process.argv.slice(2);
@@ -42,12 +42,13 @@ for (const f of files) {
     const P = dwgToPairs(d);
     rep.pairs = P.length;
     if (dxfOut) writeFileSync(dxfOut, pairsToDXF(P));
-    // and drawn as the page draws it (parseDXF over the pairs, js/read-file.js readDrawing): a DWG
-    // the page refuses, or that draws nothing, is not "all checks pass"
+    // and drawn as the page draws it (parseDXF over these pairs, as js/read-file.js readDrawing
+    // does over the same reader's), refused by the page's own rule (drawsNothing): a DWG the page
+    // refuses, or that draws nothing, is not "all checks pass"
     try {
       const dr = parseDXF(P);
       rep.drawn = { paths: dr.paths.length, texts: dr.texts.length, layouts: dr.layouts.length };
-      if (!dr.paths.length && !dr.texts.length && !dr.layouts.some((l) => l.paths.length || l.texts.length)) rep.drawError = 'has nothing to draw';
+      if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
     if (d.failures.length || rep.drawError) bad++;
   } catch (err) {

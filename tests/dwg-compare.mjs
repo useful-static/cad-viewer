@@ -8,15 +8,18 @@ import { uncaret, unescapeDxf, valueKind, dxfText } from '../js/dxf.js';
 // the groups compared per DXF type (a group absent from the key is not compared)
 export const GROUPS = {
   LINE: [10, 20, 30, 11, 21, 31], CIRCLE: [10, 20, 30, 40], ARC: [10, 20, 30, 40, 50, 51], POINT: [10, 20, 30],
-  ELLIPSE: [10, 20, 30, 11, 21, 31, 40, 41, 42], TEXT: [10, 20, 40, 50, 1], MTEXT: [10, 20, 40, 71],
+  // (a text's placement too: its alignment point, alignments, generation and width factor; an
+  // MTEXT's direction -- round 13: a misread alignment point passed every corpus run)
+  ELLIPSE: [10, 20, 30, 11, 21, 31, 40, 41, 42], TEXT: [10, 20, 40, 50, 1, 11, 21, 72, 73, 71, 41], MTEXT: [10, 20, 40, 71, 11, 21],
   INSERT: [2, 10, 20, 30, 41, 42, 50], LWPOLYLINE: [90, 10, 20, 42], SPLINE: [71, 72, 73, 74, 40, 10, 20],
   SOLID: [10, 20, 11, 21, 12, 22, 13, 23], TRACE: [10, 20, 11, 21, 12, 22, 13, 23], HATCH: [2, 70, 91],
   DIMENSION: [2, 10, 20], POLYLINE: [70, 71, 72], VERTEX: [10, 20, 30, 42], LAYER: [2, 62, 6],
-  ATTRIB: [10, 20, 40, 50, 1, 2, 70], '3DFACE': [10, 20, 30, 11, 21, 31, 12, 22, 32, 13, 23, 33, 70],
+  ATTRIB: [10, 20, 40, 50, 1, 2, 70, 11, 21, 72, 74, 71, 41], '3DFACE': [10, 20, 30, 11, 21, 31, 12, 22, 32, 13, 23, 33, 70],
 };
 
 // DXF defaults of compared groups a writer may leave out
-const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' }, POLYLINE: { 71: '0', 72: '0' } };
+const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' }, POLYLINE: { 71: '0', 72: '0' },
+  TEXT: { 72: '0', 73: '0', 71: '0', 41: '1' }, ATTRIB: { 72: '0', 74: '0', 71: '0', 41: '1' } };
 
 // (\U+ and \M+ escapes: the viewer's own rule, js/dxf.js unescapeDxf -- this file's copy decoded
 // what the page drew raw, so the comparisons passed over a fault)
@@ -78,7 +81,17 @@ export function byHandle(P) {
   m.blocks = blocks;
   return m;
 }
-export const vals = (r, c) => r.g.filter((x) => x[0] === c).map((x) => x[1]);
+// (an ATTRIB's text placement -- 11 / 21, 41, 71, 72 -- from its AcDbText part only: an R2018
+// key's AcDbAttribute part writes these codes again with other meanings, 71 its attribute type)
+const ATTRIB_TEXT_CODES = new Set([11, 21, 41, 71, 72]);
+export const vals = (r, c) => {
+  let g = r.g;
+  if (r.type === 'ATTRIB' && ATTRIB_TEXT_CODES.has(c)) {
+    const k = g.findIndex((x) => x[0] === 100 && x[1] === 'AcDbAttribute');
+    if (k >= 0) g = g.slice(0, k);
+  }
+  return g.filter((x) => x[0] === c).map((x) => x[1]);
+};
 
 // a SPLINE record's curve (71 degree, 40 knots, 10/20 control points; weights ignored: only a
 // non-rational spline is evaluated) at each distinct knot of its domain, by de Boor; null if
@@ -214,6 +227,20 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
       const ka = blockOf(a, A), kb = blockOf(b, B);
       if ((ka !== undefined && !inFile(ka)) || (kb !== undefined && !keyRecs.has(kb))) cmp.notInFile++;
       else { cmp.fieldsCompared++; if (ka !== kb) { cmp.valueDiff++; ex(`${a.type} ${h.toString(16)} block: ${vals(a, 2)[0]} vs ${vals(b, 2)[0]}`); } }
+    }
+    // a text's alignment point means something only when it is aligned (72 / 73 or 74 not 0): a
+    // writer may write it anyway, or not, at its insertion point or at 0,0 -- compared only then
+    if (a.type === 'TEXT' || a.type === 'ATTRIB') {
+      const aligned = Number(vals(a, 72)[0] || 0) || Number(vals(a, a.type === 'TEXT' ? 73 : 74)[0] || 0);
+      if (!aligned) groups = groups.filter((c) => c !== 11 && c !== 21);
+      // R13 / R14: the file's vertical alignment and the keys' disagree -- STRUCTUR's 96 centred
+      // texts hold 73 = 2 (middle), and their alignment point stands exactly half a height above
+      // the insertion point, as a middle-aligned text's does; ODA's and LibreDWG's DXF of it both
+      // leave 73 out (0). Not compared, counted apart (no AutoCAD-written DXF of it to settle it)
+      if (a.type === 'TEXT' && dwgV <= 14 && !Number(vals(a, 73)[0] || 0) && Number(vals(b, 73)[0] || 0)) {
+        groups = groups.filter((c) => c !== 73);
+        cmp.keyOmitsValign = (cmp.keyOmitsValign || 0) + 1;
+      }
     }
     const nm = (s) => (opts.oldNames ? oldName(s) : s.toUpperCase());
     const la = vals(a, 8)[0], lb = vals(b, 8)[0];

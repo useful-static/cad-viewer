@@ -101,6 +101,10 @@ const decodeData = (type, v, s) => {
   _internal.DECODE[type].call({ entityHandles() {} }, o, new Bits(bits(s), v), v);
   return o.d;
 };
+t('T (to R2004): \\U+XXXX decoded, but not after an escaped backslash (a typed "\\\\U+00B0" stays text, as its DXF keeps it)', () => {
+  assert.equal(new Bits(bits(tv('45\\U+00B0')), 15).T(), '45°');
+  assert.equal(new Bits(bits(tv('C:\\\\U+00B0')), 15).T(), 'C:\\\\U+00B0');
+});
 t('20.4.32 3DFACE, R14: four 3BD corners and the invisible-edge flags', () => {
   // corners (0,0,0) (1,0,0) (1,1,0) (0,1,0) as BD codes (10 = 0.0, 01 = 1.0); flags BS 01 + 5
   const d = decodeData('3DFACE', 14, '101010 011010 010110 100110 01' + b8(5));
@@ -110,6 +114,11 @@ t('20.4.32 3DFACE, R2000+: the first corner raw, each next as DDs on the one bef
   // no flags, z zero; (2.5, -1); then x 11+RD(4), y 00, z 00; x 00, y 11+RD(3), z 00; x 11+RD(2.5), y 00, z 00
   const s = `1 1 ${rd(2.5)} ${rd(-1)} 11${rd(4)} 00 00  00 11${rd(3)} 00  11${rd(2.5)} 00 00`;
   assert.deepEqual(decodeData('3DFACE', 15, s), { c: [[2.5, -1, 0], [4, -1, 0], [4, 3, 0], [2.5, 3, 0]], flags: 0 });
+});
+t('20.4.3 TEXT, R2000+: with no alignment point stored (DataFlags 0x02), it is 0,0 -- as the keys write it, not the insertion point', () => {
+  // DataFlags FF: every optional field absent, the alignment point (0x02) among them
+  const d = decodeData('TEXT', 15, `11111111 ${rd(5)} ${rd(6)} 1 1 ${rd(2.5)} ${tv('T')}`);
+  assert.deepEqual([d.p, d.a], [[5, 6], [0, 0]]);
 });
 t('20.4.4 ATTRIB, R2000: the text data, then its tag and flags (1: invisible)', () => {
   // DataFlags FF (no elevation, alignment, oblique, rotation, width, generation, alignments);

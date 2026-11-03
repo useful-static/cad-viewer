@@ -71,11 +71,6 @@ function utf8Length(s) {
   return n;
 }
 
-// A tour (as parseTour gives it) at the size a mesh is read in now: a tour made with the file read
-// in inches holds cameras, frame boxes and callout points 25.4 times those of the mm reading, so
-// its sizes are scaled by the ratio of the two units (fractions -- a section's t, explode, margin --
-// are not sizes). `unit` null: the model has no reading to choose (a STEP, a .cadmesh): as made.
-// One rule for the player (main.js startTourIn) and the tour maker (a tour read back)
 // The factor from sizes written for one reading of a unit-less mesh to another: the inch
 // reading's coordinates are the mm reading's x 25.4. The one rule for a tour (tourAt) and a model
 // list's note points (written for the mm reading: main.js applyListEntry). 1 with no reading
@@ -83,6 +78,11 @@ export function readingScale(unit, from = 'mm') {
   return unit && unit !== from && MM_PER[unit] && MM_PER[from] ? MM_PER[unit] / MM_PER[from] : 1;
 }
 
+// A tour (as parseTour gives it) at the size a mesh is read in now: a tour made with the file read
+// in inches holds cameras, frame boxes and callout points 25.4 times those of the mm reading, so
+// its sizes are scaled by the ratio of the two units (fractions -- a section's t, explode, margin --
+// are not sizes). `unit` null: the model has no reading to choose (a STEP, a .cadmesh): as made.
+// One rule for the player (main.js startTourIn) and the tour maker (a tour read back)
 export function tourAt(tour, unit) {
   const from = tour.unit || 'mm';
   const k = readingScale(unit, from);

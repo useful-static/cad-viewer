@@ -78,6 +78,14 @@ export function createTourRecorder(api) {
   const model = () => (api.model ? api.model() : null);
   const sameModel = (what) => {
     const m = model();
+    // a tour read back while another model was open waits for its own (by URL): opened, the draft
+    // is bound to it, its steps at that model's reading (the key it waited on never matched a
+    // model's, and it stayed refused after its model was opened)
+    if (draft.model && draft.model.url && m && api.modelUrl() === draft.model.url) {
+      if (m.unit && draft.unit && m.unit !== draft.unit) draft.steps = tourAt({ unit: draft.unit, steps: draft.steps }, m.unit).steps;
+      draft.unit = m.unit || draft.unit;
+      draft.model = m;
+    }
     // (no model open -- a drawing shown, a load failed -- is not the steps' model either: a save
     // named the drawing as the tour's model)
     if (!draft.steps.length || !draft.model || (m && draft.model.key === m.key)) return true;
@@ -274,18 +282,17 @@ export function createTourRecorder(api) {
     // (a tour read back is edited over the model open now, at this reading's size: made in another
     // unit, its steps are scaled to it (js/tour.js tourAt, as the player does) -- an inch tour took
     // mm steps, 25.4 times off one another; a model with no reading to choose takes it as made)
-    const m = model();
+    // (and its own model: saved again, it names the model it was made for, not whatever is open;
+    // a tour of another model than the one open waits for that one (sameModel), its steps as made,
+    // so a step taken here is not added to it -- it was, and saved under the other model's name)
+    draft.modelUrl = tour.model || null;
+    const open = api.modelUrl();
+    const other = draft.modelUrl && open && draft.modelUrl !== open;
+    const m = other ? null : model();
     const t = m && m.unit ? tourAt(tour, m.unit) : tour;
     draft.steps = t.steps.map((s) => ({ ...s }));
     draft.unit = (m && m.unit) || tour.unit || null;
-    // (and its own model: saved again, it names the model it was made for, not whatever is open;
-    // a tour of another model than the one open is tied to that one, so a step taken here is not
-    // added to it -- it was, and saved under the other model's name)
-    draft.modelUrl = tour.model || null;
-    const open = api.modelUrl();
-    draft.model = draft.modelUrl && open && draft.modelUrl !== open
-      ? { key: `tour model ${draft.modelUrl}`, unit: draft.unit, name: draft.modelUrl.split('/').pop() }
-      : m;
+    draft.model = other ? { key: null, url: draft.modelUrl, unit: draft.unit, name: draft.modelUrl.split('/').pop() } : model();
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;
     el.mode.value = draft.mode;

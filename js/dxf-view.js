@@ -127,7 +127,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (t.fit > 0) {
         const w = Math.max(...lines.map((l) => ctx.measureText(l).width));
         if (w > 0) { const k = t.fit / w; ctx.scale(k, t.fitMode === 'aligned' ? k : 1); }
-      }
+      } else if (t.widthFactor) ctx.scale(t.widthFactor, 1); // (its width factor, 41)
+      // backward / upside down (a TEXT's 71): mirrored about its point
+      if (t.mirrorX || t.mirrorY) ctx.scale(t.mirrorX ? -1 : 1, t.mirrorY ? -1 : 1);
       if (t.mtext) {
         // an MTEXT block hangs from its point (top), or is centred on it (middle), or stands on it
         // (bottom): the attachment's row -- every row was drawn hanging, a dimension's value
