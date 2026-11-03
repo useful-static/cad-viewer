@@ -7,8 +7,8 @@
 // tried. Pure apart from fetch, which the caller passes (tests pass a fake):
 // tests/test-list-check.mjs.
 
-import { fetchModelLists } from './model-list.js';
-import { parseTour } from './tour.js';
+import { fetchModelLists, readCapped } from './model-list.js';
+import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
 
@@ -162,7 +162,7 @@ export async function checkTour(url, fetchFn = fetch) {
   }
   if (!res.ok) return { level: 'bad', detail: `${res.status === 404 ? 'not found' : 'refused'} (${res.status})`, url };
   try {
-    const t = parseTour(await res.text(), url);
+    const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), url);
     return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}`, url };
   } catch (e) {
     return { level: 'bad', detail: `not a tour cad.place reads: ${e.message}`, url };
@@ -190,7 +190,9 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
   const lists = urls.map((u) => {
     let abs = u;
     try { abs = new URL(u, base).href; } catch { /* as given */ }
-    const err = r.errors.find((e) => e.url === abs || e.url === u);
+    // (a list named by a share page is read -- and its error filed -- under the file's own
+    // address, js/open-url.js fileUrl: matched under it too)
+    const err = r.errors.find((e) => e.url === abs || e.url === u || e.url === fileUrl(abs));
     return { url: abs, error: err ? err.message || String(err.error || err) : null };
   });
   const n = r.entries.length;

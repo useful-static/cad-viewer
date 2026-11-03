@@ -2,28 +2,28 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
-import { meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { meshFormatOf, unzip } from './mesh-formats.js';
+import { readDrawing, readMeshFile } from './read-file.js';
 import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
-import { onPaper, parseDXF } from './dxf.js';
-import { readDWG, dwgToPairs } from './dwg.js';
+import { onPaper } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
-import { directUrl, fileUrl } from './open-url.js';
+import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { entryByName, fetchModelLists } from './model-list.js';
+import { entryByName, fetchModelLists, readCapped } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
-import { EXPORTS } from './export-mesh.js';
+import { EXPORTS, exportBasis } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges } from './scene.js';
@@ -31,7 +31,7 @@ import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
-import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
+import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
@@ -1023,12 +1023,14 @@ function touchHintOnce() {
 function currentView() {
   const c = app.cam;
   return {
-    cam: { target: c.target, dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient), ortho: !!c.ortho, orient: c.orient },
+    // (copies, never the live objects: a view kept -- a tour's starting view, put back as it
+    // ends -- must not change as the viewer moves on)
+    cam: { target: [...c.target], dist: c.dist, q: [...(c.q || presetQuat(c.yaw, c.pitch, c.orient))], ortho: !!c.ortho, orient: c.orient },
     // always the style shown, the default too: a link without one opens in
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
     aspect: stageAspectNow(), // (a link opened on another shape is reframed)
-    section: app.section, hidden: [...app.hidden], selected: [...app.selected],
+    section: { ...app.section }, hidden: [...app.hidden], selected: [...app.selected],
     // Explode: how far and how, while it is on for this model
     explode: app.explode.on && app.explode.for === app.header ? { t: app.explode.t, mode: app.explode.mode } : null,
     keys: app.bodyKeys,
@@ -1061,7 +1063,9 @@ function applyView(v, link = false) {
   // a link leaves out "section off" and "nothing hidden": a whole link (one
   // with a camera) means those where it names none, or a link pasted into a
   // tab keeps that tab's cut and hidden parts
-  if (v.section) Object.assign(app.section, v.section, { last: v.section.axis });
+  // (the Section button's axis -- last -- is only ever a real axis: set to "off" it turned the
+  // button into one that does nothing)
+  if (v.section) Object.assign(app.section, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   // Explode as the link has it (a whole link without it: off), how far
@@ -1109,8 +1113,6 @@ function applyView(v, link = false) {
   }
 }
 
-// Copy a link to this model at this view. A model opened from this device has
-// no URL: the link then holds the view alone, and the note says so.
 app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
 // in their drawn colours, turned the way the model opens: Z up for STL and
@@ -1119,9 +1121,6 @@ async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
   const ids = app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
   if (!ids.length) { flashHover('nothing shown to export'); return; }
-  const b = orientBasis(app.cam.orient);
-  const zUp = [b.right, b.front.map((v) => -v), b.up];
-  const yUp = [b.right, b.up, b.front];
   const model = { ...app.baseMesh, color: app.mesh.color };
   const names = ids.map((id) => meshLabel(id));
   const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
@@ -1129,7 +1128,7 @@ async function exportMesh(fmt) {
   await new Promise((r) => setTimeout(r, 0)); // the status line paints first
   let bytes;
   try {
-    bytes = await EXPORTS[fmt].write(model, ids, EXPORTS[fmt].up === 'z' ? zUp : yUp, { names, base });
+    bytes = await EXPORTS[fmt].write(model, ids, exportBasis(app.cam.orient, EXPORTS[fmt].up), { names, base });
   } catch (e) {
     setStatus('ready', readyText());
     flashHover(`export failed: ${e.message || e}`);
@@ -1483,6 +1482,8 @@ function viewLink() {
   return u.toString();
 }
 
+// Copy a link to this model at this view. A model opened from this device has
+// no URL: the link then holds the view alone, and the note says so.
 async function shareView() {
   if (!app.header && !(app.dxf && app.dxf.url)) return;
   const link = viewLink();
@@ -1527,7 +1528,8 @@ async function readTour(url) {
   try {
     const r = await fetch(abs, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
     if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
-    text = await r.text();
+    // (read up to its limit, as it arrives: js/model-list.js readCapped, js/tour.js MAX_TOUR_BYTES)
+    try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: `${e.message}: ${abs}` }; }
   } catch (e) {
     // (the site answered without CORS -- the tour is not there, or not
     // shared -- or did not answer: fetchFailedText tells which)
@@ -1541,7 +1543,10 @@ async function readTour(url) {
 function stepPose(s) {
   const c = app.cam;
   let q = c.q || presetQuat(c.yaw, c.pitch, c.orient);
-  let ortho = !!c.ortho;
+  // the projection: the step's own ("ortho", or its view's camera), else the visitor's as the
+  // tour began -- never the step before's, so stepping back gives the same picture
+  const base = app.tour && app.tour.base && app.tour.base.view && app.tour.base.view.cam;
+  let ortho = s.ortho !== undefined ? s.ortho : base ? !!base.ortho : !!c.ortho;
   let pose = null;
   const preset = (v) => { const [y, p] = presetView(v); return presetQuat(y, p, c.orient); };
   if (typeof s.view === 'string') q = preset(s.view);
@@ -1904,6 +1909,7 @@ function captureStep({ camera = 'exact' } = {}) {
     s.frame = names([...app.selected]);
     s.from = q;
     s.margin = 1.3;
+    s.ortho = !!c.ortho; // (the projection it was taken in: a framed step carries no camera)
   } else {
     s.view = { cam: { target: c.target.map((v) => r(v, 4)), dist: +c.dist.toPrecision(6), q, ortho: !!c.ortho } };
   }
@@ -4209,19 +4215,9 @@ async function meshFromSource(src, unit, seq) {
   // a re-read in another unit), else here
   const got = await readInWorker({ kind: 'mesh', buf: src.buf, format: src.format, name: src.name, extras: src.extras, unit }, src.name);
   if (stale(seq)) return;
-  let raw, unitless;
-  if (got) ({ raw, unitless } = got);
-  else {
-    const model = await parseMesh(src.format, src.buf, src.name, src.extras);
-    if (stale(seq)) return;
-    unitless = !model.sourceUnits;
-    if (unitless && unit !== 'mm') {
-      const k = MM_PER[unit];
-      for (const m of model.meshes) for (let i = 0; i < m.positions.length; i++) m.positions[i] *= k;
-    }
-    if (unitless) model.sourceUnits = unit;
-    raw = encodeCadmesh(model);
-  }
+  // (the same read, js/read-file.js, here where no worker could be made)
+  const { raw, unitless } = got || await readMeshFile({ ...src, unit });
+  if (stale(seq)) return;
   await loadBuffer(raw, src.name, seq, raw);
   // (a model added to a scene keeps the scene's units: no choice there)
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
@@ -4280,7 +4276,7 @@ async function loadDxf(buf, name, seq) {
   // Off the page's thread (readInWorker), else here.
   const got = await readInWorker({ kind: '2d', buf, dwg }, name);
   if (stale(seq)) return;
-  const drawing = got ? got.drawing : parseDXF(dwg ? dwgToPairs(readDWG(buf)) : buf);
+  const drawing = got ? got.drawing : readDrawing({ buf, dwg });
   const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
   if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
@@ -4520,9 +4516,19 @@ function readInWorker(msg, name) {
     const cancel = () => done(reject, new Error('superseded by a newer load'));
     app.cancelTess = cancel;
     const timer = setTimeout(() => done(reject, new Error(`${name} took over ${READ_LIMIT_S} s to read, and was stopped: a damaged file, or one too large for this viewer`)), READ_LIMIT_S * 1000);
-    w.onmessage = (ev) => (ev.data.ok ? done(resolve, ev.data) : done(reject, new Error(ev.data.message)));
-    // (a worker that dies -- out of memory -- or cannot load its modules)
-    w.onerror = (e) => { if (e.preventDefault) e.preventDefault(); done(reject, new Error(`${name} could not be read: the reader stopped (${e.message || 'it ran out of memory'})`)); };
+    let ready = false;
+    w.onmessage = (ev) => {
+      if (ev.data.ready) { ready = true; return; }
+      if (ev.data.ok) done(resolve, ev.data); else done(reject, new Error(ev.data.message));
+    };
+    // A worker that dies before it is ready could not load its modules (an installed app offline
+    // before the worker was ever fetched, a deploy without it): the file is read here instead.
+    // One that dies after ran out of memory on this file.
+    w.onerror = (e) => {
+      if (e.preventDefault) e.preventDefault();
+      if (!ready) { app.lastReadVia = 'page'; done(resolve, null); return; }
+      done(reject, new Error(`${name} could not be read: the reader stopped (${e.message || 'it ran out of memory'})`));
+    };
     w.postMessage(msg);
   });
 }
@@ -4705,7 +4711,8 @@ async function loadUrl(url) {
   app.fetchAbort = ac;
   // a host's share page (a GitHub blob, a Dropbox ?dl=0, a Drive file page)
   // fetched as the file it shares (js/open-url.js); the address keeps the link
-  const direct = /^https?:/i.test(url) ? directUrl(url) : { url, from: null };
+  // (fileUrl's own rule, with the host it was rewritten from, for the message: js/open-url.js)
+  const direct = directFor(url);
   if (direct.from) announce(`${direct.from} link: opening the file it shares`);
   try {
     res = await fetch(direct.url, ac ? { signal: ac.signal } : {});
@@ -4916,6 +4923,13 @@ function buildTree() {
   const root = $('tree');
   root.textContent = '';
   app.rowOf = new Map(); // body id -> the most specific row holding only it (picks reveal it)
+  // a node's bodies, gathered once (kidsOf's filter and mk both asked for every node's)
+  const gathered = new Map();
+  const idsOf = (node) => {
+    let ids = gathered.get(node);
+    if (!ids) gathered.set(node, (ids = collect(node)));
+    return ids;
+  };
   // A node's own bodies get a row each when the node also has children or
   // several bodies: otherwise a pick of one of them has no row to show (the
   // rack's 19-body assembly node had none).
@@ -4923,10 +4937,10 @@ function buildTree() {
     const own = node.meshes.length && (node.children.length || node.meshes.length > 1)
       ? node.meshes.map((i) => ({ name: app.header.meshes[i].name || `body ${i + 1}`, meshes: [i], children: [] }))
       : [];
-    return [...node.children, ...own].filter((c) => collect(c).length);
+    return [...node.children, ...own].filter((c) => idsOf(c).length);
   };
   const mk = (node, depth, name) => {
-    const ids = collect(node);
+    const ids = idsOf(node);
     if (!ids.length) return null;
     const li = document.createElement('li');
     const row = document.createElement('div');

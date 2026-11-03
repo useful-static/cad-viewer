@@ -249,8 +249,9 @@ export function joinModelLists(lists) {
 }
 
 // The body as text, refused once it passes max BYTES (counted as they
-// arrive, so a list that declares no size is never read whole first)
-async function readCapped(res, max) {
+// arrive, so a list -- or a tour -- that declares no size is never read whole first; a 171 KB
+// gzipped tour unpacked to 172 MB on the page's thread)
+export async function readCapped(res, max) {
   const over = () => new Error(`over ${max / 2 ** 20} MB`);
   if (!res.body || typeof res.body.getReader !== 'function') {
     const text = await res.text();

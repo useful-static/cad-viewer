@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, idToBytes, inflateCadmesh,
+  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflateCadmesh,
   isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader,
 } from '../js/cadmesh.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
@@ -111,6 +111,21 @@ test('decode rejects a tree that names a mesh out of range (review r5)', () => {
   const root = { name: 'asm', meshes: [], children: [{ name: 'x', meshes: [5], children: [] }] };
   const buf = encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2), quad('c', 4)], root });
   assert.throws(() => decodeCadmesh(buf), /names mesh 5 of 3/);
+});
+
+test('decode rejects a tree that names one body twice, in one node or across two (a 3 KB file built a million tree rows)', () => {
+  for (const root of [
+    { name: 'asm', meshes: [0, 0], children: [] },
+    { name: 'asm', meshes: [0], children: [{ name: 'x', meshes: [1, 0], children: [] }] },
+  ]) {
+    const { header, data } = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2)] }));
+    header.root = root;
+    assert.throws(() => withHeader(header, data), /names mesh 0 more than once/);
+  }
+  // a tree naming each body once still decodes
+  const { header, data } = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2)] }));
+  header.root = { name: 'asm', meshes: [1], children: [{ name: 'x', meshes: [0], children: [] }] };
+  assert.equal(decodeCadmesh(withHeader(header, data)).header.root.children[0].meshes[0], 0);
 });
 
 test('decode rejects mesh ranges that overlap (3000 meshes on one range cost meshes x indices), fast', () => {
@@ -372,6 +387,25 @@ await test('a gzip that unpacks past the limit stops and says why (review r14)',
   const gz = new Uint8Array(gzipSync(Buffer.alloc(1 << 20))).buffer;
   await assert.rejects(gunzip(gz, 1000), /the gzip file is too big: it unpacks to over/);
   assert.equal((await gunzip(gz)).byteLength, 1 << 20);
+});
+
+await test('gunzip sizes ONE buffer from the gzip trailer (no chunk list + copy); a lying trailer costs a regrow, never the bytes', async () => {
+  const data = Buffer.alloc(3 << 20, 7);
+  const gz = new Uint8Array(gzipSync(data));
+  assert.equal(firstSize(gz.buffer, 'gzip', 2 ** 31), 3 << 20, 'an honest trailer sizes the output exactly');
+  assert.equal(firstSize(gz.subarray(0), 'gzip', 2 ** 31), 3 << 20, 'a Uint8Array view reads the same trailer');
+  for (const lie of [1, 100, 0xffffffff]) {
+    const g = gz.slice();
+    new DataView(g.buffer).setUint32(g.length - 4, lie, true);
+    // (the decompressor checks ISIZE at the end: a lie is refused as corrupt, or -- where it is not
+    // checked -- the true bytes come back; never a wrong answer)
+    let got = null;
+    try { got = Buffer.from(await gunzip(g.buffer)); } catch (e) { assert.match(e.message, /corrupt or truncated/); }
+    if (got) assert.ok(got.equals(data), `trailer ${lie}: wrong bytes`);
+  }
+  // a 20-byte file claiming 4 GB allocates what deflate could make of 20 bytes, not 2 GB
+  const tiny = new Uint8Array(20); tiny.set([0x1f, 0x8b]); new DataView(tiny.buffer).setUint32(16, 0xffffffff, true);
+  assert.ok(firstSize(tiny.buffer, 'gzip', 2 ** 31) < 64 * 1024);
 });
 
 await test('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {

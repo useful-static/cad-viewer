@@ -267,6 +267,17 @@ test('a clockwise hatch arc edge, 0° to 90° stored, is the quarter from 360° 
   assert.ok(Math.abs(p[p.length - 2]) < 1e-9 && Math.abs(p[p.length - 1] + 1) < 1e-9, `end ${p[p.length - 2]},${p[p.length - 1]}`);
   for (let k = 0; k < p.length; k += 2) assert.ok(p[k] >= -1e-9 && p[k + 1] <= 1e-9, `point ${p[k]},${p[k + 1]}`);
 });
+test('a clockwise hatch ELLIPSE edge, 0° to 90° stored, is the quarter from 360° down to 270° (it drew the mirrored quarter)', () => {
+  // major axis (2, 0), ratio 0.5: the ellipse x = 2 cos t, y = sin t
+  const d = parseDXF(ents([[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 3], [10, 0], [20, 0], [11, 2], [21, 0], [40, 0.5], [50, 0], [51, 90], [73, 0]]));
+  const p = d.paths[0].pts;
+  assert.ok(Math.abs(p[0] - 2) < 1e-9 && Math.abs(p[1]) < 1e-9, `start ${p[0]},${p[1]}`);
+  assert.ok(Math.abs(p[p.length - 2]) < 1e-9 && Math.abs(p[p.length - 1] + 1) < 1e-9, `end ${p[p.length - 2]},${p[p.length - 1]}`);
+  for (let k = 0; k < p.length; k += 2) assert.ok(p[k] >= -1e-9 && p[k + 1] <= 1e-9, `point ${p[k]},${p[k + 1]}`);
+  // and counter-clockwise (73 = 1) is the first quadrant, from (2, 0) to (0, 1)
+  const c = parseDXF(ents([[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 3], [10, 0], [20, 0], [11, 2], [21, 0], [40, 0.5], [50, 0], [51, 90], [73, 1]])).paths[0].pts;
+  assert.ok(Math.abs(c[c.length - 2]) < 1e-9 && Math.abs(c[c.length - 1] - 1) < 1e-9, `ccw end ${c[c.length - 2]},${c[c.length - 1]}`);
+});
 test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
   const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));
   assert.equal(d.paths.length, 1);

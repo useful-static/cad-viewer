@@ -498,14 +498,16 @@ function parsePLY(buf, base) {
   }
   const body = { name: base, pos, tri };
   if (hasCol) {
-    // vertex colours (0-255) become each triangle's mean, so the weld keeps them
-    // (the largest by a loop: spread into Math.max, a 200 k-vertex file overflowed the stack)
-    let top = 0;
-    for (const c of vcol) if (c) for (const x of c) if (x > top) top = x;
-    const scale = top > 1 ? 255 : 1;
+    // vertex colours become each triangle's mean, so the weld keeps them. Their scale is the red
+    // property's TYPE: a float is 0..1, an integer its type's top (uchar 255, ushort 65535; a
+    // 32-bit integer is taken as bytes). Judged by the values, a uchar model whose channels were
+    // all 0 or 1 (a near-black part) opened as 0..1 fractions, white / yellow.
+    const vel = els.find((e) => e.name === 'vertex');
+    const rt = vel && vel.props.find((pr) => pr.name === 'red' && !pr.list);
+    const scale = !rt || /^Float/.test(rt.t) ? 1 : /16$/.test(rt.t) ? 65535 : 255;
     body.col = [];
     for (let t = 0; t < tri.length / 3; t++) {
-      const cs = [0, 1, 2].map((c) => vcol[tri[t * 3 + c]] || [scale * 0.72, scale * 0.74, scale * 0.78]);
+      const cs = [0, 1, 2].map((c) => vcol[tri[t * 3 + c]] || DEFAULT_GREY.map((x) => x * scale));
       body.col.push([0, 1, 2].map((k) => (cs[0][k] + cs[1][k] + cs[2][k]) / 3 / scale));
     }
   }
@@ -513,44 +515,94 @@ function parsePLY(buf, base) {
 }
 
 // ---------- OFF ----------
+// Geomview OFF: the header [ST][C][N]OFF, then per vertex "x y z [nx ny nz] [r g b [a]] [s t]"
+// and per face "n i1 .. in [colour]", a colour running to the end of its line. A colour of
+// integers is 0-255, of decimals 0..1 (Geomview); one value (a colormap index) is not read.
+// The normals are not kept (the weld makes its own from the winding). 4OFF / nOFF (4-D and
+// n-D vertices) are not read.
 function parseOFF(s, base) {
-  const toks = s.replace(/#[^\n]*/g, '').trim().split(/\s+/);
+  // the tokens, and where each non-empty line's tokens start (a colour is the rest of a line)
+  const toks = [], lineAt = [];
+  for (const raw of s.split('\n')) {
+    const h = raw.indexOf('#');
+    const l = (h < 0 ? raw : raw.slice(0, h)).trim();
+    if (!l) continue;
+    lineAt.push(toks.length);
+    for (const t of l.split(/\s+/)) toks.push(t);
+  }
+  lineAt.push(toks.length);
+  // the end of the line holding token q (li only moves forward: the reads are in order)
+  let li = 0;
+  const lineEnd = (q) => { while (lineAt[li + 1] <= q) li++; return lineAt[li + 1]; };
   let p = 0;
-  if (/^[CN]?OFF$/.test(toks[0])) p++;
+  const hm = /^(ST)?(C)?(N)?OFF$/.exec(toks[0] || '');
+  if (hm) p++;
+  const hasST = !!(hm && hm[1]), hasC = !!(hm && hm[2]), hasN = !!(hm && hm[3]);
   const nv = +toks[p++], nf = +toks[p++];
   p++; // edges
+  // the values each vertex holds before a colour (all of them without one)
+  const fixed = 3 + (hasN ? 3 : 0) + (hasC ? 0 : hasST ? 2 : 0);
+  const least = fixed + (hasC ? 3 + (hasST ? 2 : 0) : 0);
   // counts checked before they are looped on: 1e999 vertices looped until the tab ran out of
-  // memory; each vertex takes 3 tokens and each face at least 4
+  // memory; each vertex takes its tokens and each face at least 4
   if (!Number.isInteger(nv) || !Number.isInteger(nf) || nv < 0 || nf < 0) throw new Error(`${base}.off: not an OFF file (no vertex and face counts)`);
-  if (nv * 3 + nf * 4 > toks.length - p) throw new Error(`${base}.off is damaged: it counts ${nv} vertices and ${nf} faces, more than the file holds`);
+  if (nv * least + nf * 4 > toks.length - p) throw new Error(`${base}.off is damaged: it counts ${nv} vertices and ${nf} faces, more than the file holds`);
   // held to the caps the 3MF and glTF readers use: the vertices by their count, the faces'
-  // triangles by a walk over the face counts alone, both before anything is built (a face's
-  // count that is not a whole number the file holds is left to the loop below to refuse)
+  // triangles as each face's count is read, before its triangles are built
   const who = `${base}.off`;
   if (nv > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
-  {
-    let q = p + nv * 3, nt = 0;
-    for (let i = 0; i < nf; i++) {
-      const c = +toks[q++];
-      if (!Number.isInteger(c) || c < 0 || c > toks.length - q) break;
-      if (c > 2) nt += c - 2;
-      q += c;
+  const hold = counter(who);
+  // a colour from its tokens: 3 or 4 values, integers 0-255 or decimals 0..1; else null
+  const colour = (ts) => {
+    if (ts.length < 3 || ts.length > 4) return null;
+    const v = ts.slice(0, 3).map(Number);
+    if (!v.every(Number.isFinite)) return null;
+    const ints = ts.slice(0, 3).every((t) => /^[+-]?\d+$/.test(t));
+    return v.map((x) => Math.min(1, Math.max(0, ints ? x / 255 : x)));
+  };
+  const pos = [], vcol = hasC ? [] : null;
+  for (let i = 0; i < nv; i++) {
+    pos.push(+toks[p], +toks[p + 1], +toks[p + 2]);
+    p += fixed;
+    if (hasC) {
+      // the colour: the rest of the vertex's line, less its texture pair
+      const e = Math.max(p, lineEnd(p - 1));
+      vcol.push(colour(toks.slice(p, hasST ? Math.max(p, e - 2) : e)));
+      p = e;
     }
-    if (nt > MAX_PLACED_TRIANGLES) throw tooMany(who, 'triangles', MAX_PLACED_TRIANGLES);
   }
-  const pos = [];
-  for (let i = 0; i < nv; i++) { pos.push(+toks[p], +toks[p + 1], +toks[p + 2]); p += 3; }
-  const tri = [];
+  const tri = [], tcol = [];
+  let anyCol = false;
   for (let i = 0; i < nf; i++) {
     const c = +toks[p++];
     if (!Number.isInteger(c) || c < 0 || c > toks.length - p) throw new Error(`${base}.off is damaged: face ${i + 1} counts ${toks[p - 1]} vertices`);
+    if (c > 2) hold('triangles', c - 2);
     const ids = toks.slice(p, p + c).map(Number);
     p += c;
-    // an optional colour to the end of the line is not separable from the next
-    // face once split on whitespace: OFF colours are left out
-    for (let k = 1; k + 1 < ids.length; k++) tri.push(ids[0], ids[k], ids[k + 1]);
+    // the rest of the face's line is its colour (a face with none: the next face starts there)
+    const e = Math.max(p, lineEnd(p - 1));
+    const fc = colour(toks.slice(p, e));
+    p = e;
+    for (let k = 1; k + 1 < ids.length; k++) {
+      tri.push(ids[0], ids[k], ids[k + 1]);
+      // the face's colour, else its corners' mean (COFF), else none
+      let tc = fc;
+      if (!tc && vcol) {
+        const cs = [ids[0], ids[k], ids[k + 1]].map((v) => vcol[v] || DEFAULT_GREY);
+        if ([ids[0], ids[k], ids[k + 1]].some((v) => vcol[v])) tc = [0, 1, 2].map((j) => (cs[0][j] + cs[1][j] + cs[2][j]) / 3);
+      }
+      if (tc) anyCol = true;
+      tcol.push(tc);
+    }
   }
-  return [{ name: base, pos, tri, col: null }];
+  const body = { name: base, pos, tri, col: null };
+  if (anyCol) {
+    // one colour for the body when its triangles agree, else per triangle (uncoloured ones grey)
+    const cs = new Set(tcol.map((c) => (c ? c.join(',') : '')));
+    if (cs.size === 1) body.color = tcol[0];
+    else body.col = tcol.map((c) => c || DEFAULT_GREY);
+  }
+  return [body];
 }
 
 // ---------- 3MF ----------
@@ -646,8 +698,10 @@ async function parse3MF(buf, base) {
   let zip;
   try { zip = await unzip(buf); } catch (e) { throw named(e); }
   // an XML part is read as one string: refused past the text limit before it is inflated
-  const xmlPart = async (p, what) => {
-    try { return await zip.get(p, MAX_TEXT_BYTES, (size) => new Error(`${who}: its ${what} ${p} unpacks to ${size}, ${TEXT_LIMIT_WORDS}`)); } catch (e) { throw named(e); }
+  // (max: the text left once the model parts before it are counted)
+  const xmlPart = async (p, what, max = MAX_TEXT_BYTES) => {
+    const also = max < MAX_TEXT_BYTES ? ' with the model parts before it' : '';
+    try { return await zip.get(p, max, (size) => new Error(`${who}: its ${what} ${p} unpacks to ${size}${also}, ${TEXT_LIMIT_WORDS}`)); } catch (e) { throw named(e); }
   };
   let path = '3D/3dmodel.model';
   const rels = await xmlPart('_rels/.rels', 'relationships part');
@@ -658,50 +712,87 @@ async function parse3MF(buf, base) {
       return true;
     });
   }
-  const xml = await xmlPart(path, 'model part');
-  if (!xml) throw new Error(`${who} has no model part (${path})`);
-  // what the model part holds is counted as it is read, and refused past the viewer's caps
+  // a part's key: its path without case or a leading / (as the zip matches it)
+  const partKey = (p) => p.replace(/^\//, '').toLowerCase();
+  const rootKey = partKey(path);
+  // what the model parts hold is counted as it is read, and refused past the viewer's caps
   // before it is kept (each vertex, triangle, placement, material and object costs memory)
   const caps = { vertices: MAX_PLACED_VERTICES, triangles: MAX_PLACED_TRIANGLES, 'parts and placements': MAX_PLACED_PARTS,
     'base materials': MAX_PLACED_PARTS, objects: MAX_PLACED_PARTS };
   const held = Object.fromEntries(Object.keys(caps).map((c) => [c, 0]));
   const hold = (what) => { if (++held[what] > caps[what]) throw tooMany(who, what, caps[what]); };
-  let unit = null, k = 1;
-  const objects = new Map(); // id -> { name, verts, tris, pids, comps }
-  const mats = new Map();    // basematerials id -> [[r,g,b], ...]
+  let unit = null;
+  // objects and materials keyed by part and id ("<part>#<id>"): with the production extension
+  // (Bambu Studio, OrcaSlicer) a component names its object in another model part by p:path,
+  // and each part numbers its own objects
+  const objects = new Map(); // key -> { name, verts, tris, tcol, comps }
+  const mats = new Map();    // key -> [[r,g,b], ...]
   const build = [];
-  let obj = null, matGroup = null;
-  xmlWalk(text(xml, `${base}.3mf's model part`), ['model', 'basematerials', 'base', 'object', 'vertex', 'triangle', 'component', 'item'], (t) => {
-    if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials') matGroup = null; return false; }
-    switch (t.tag) {
-      // (the first model tag gives the unit, as before)
-      case 'model': if (unit === null) { unit = t.attrs.unit || 'millimeter'; k = LENGTH_MM[UNIT_NAME[unit]] ?? 1; } break;
-      case 'basematerials': hold('objects'); matGroup = []; mats.set(t.attrs.id, matGroup); break;
-      case 'base': if (matGroup) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
-      case 'object': hold('objects'); obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(t.attrs.id, obj); break;
-      case 'vertex': if (obj) { hold('vertices'); obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); } break;
-      case 'triangle': if (obj) {
-        hold('triangles');
-        obj.tris.push(+t.attrs.v1, +t.attrs.v2, +t.attrs.v3);
-        const pid = t.attrs.pid ?? obj.pid, pi = t.attrs.p1 !== undefined ? +t.attrs.p1 : obj.pindex;
-        obj.tcol.push(pid !== undefined && mats.get(pid) ? mats.get(pid)[pi] || null : null);
-      } break;
-      case 'component': if (obj) { hold('parts and placements'); obj.comps.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); } break;
-      case 'item': hold('parts and placements'); build.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); break;
-      default:
+  const partsRead = new Set(), wantedKeys = new Set(), partsWanted = [], partsMissing = new Map(); // key -> path as named
+  let textLeft = MAX_TEXT_BYTES;
+  // one model part read: the root (its build, the unit) or one a p:path names, each once; the
+  // text of all of them held to the one text limit
+  const readPart = async (p, isRoot) => {
+    const pk = partKey(p);
+    partsRead.add(pk);
+    const xml = await xmlPart(p, 'model part', textLeft);
+    if (!xml) {
+      if (isRoot) throw new Error(`${who} has no model part (${p})`);
+      partsMissing.set(pk, p);
+      return;
     }
-    return false;
-  });
+    textLeft -= xml.byteLength;
+    let k = 1, seenModel = false;
+    const key = (id, at = null) => `${at === null ? pk : partKey(at)}#${id}`;
+    const want = (at) => { if (at && !partsRead.has(partKey(at)) && !wantedKeys.has(partKey(at))) { wantedKeys.add(partKey(at)); partsWanted.push(at); } };
+    let obj = null, matGroup = null;
+    xmlWalk(text(xml, `${base}.3mf's model part`), ['model', 'basematerials', 'base', 'object', 'vertex', 'triangle', 'component', 'item'], (t) => {
+      if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials') matGroup = null; return false; }
+      switch (t.tag) {
+        // (each part's first model tag gives its unit; the root's is the model's)
+        case 'model': if (!seenModel) {
+          seenModel = true;
+          const u = t.attrs.unit || 'millimeter';
+          k = LENGTH_MM[UNIT_NAME[u]] ?? 1;
+          if (isRoot) unit = u;
+        } break;
+        case 'basematerials': hold('objects'); matGroup = []; mats.set(key(t.attrs.id), matGroup); break;
+        case 'base': if (matGroup) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
+        case 'object': hold('objects'); obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(key(t.attrs.id), obj); break;
+        case 'vertex': if (obj) { hold('vertices'); obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); } break;
+        case 'triangle': if (obj) {
+          hold('triangles');
+          obj.tris.push(+t.attrs.v1, +t.attrs.v2, +t.attrs.v3);
+          const pid = t.attrs.pid ?? obj.pid, pi = t.attrs.p1 !== undefined ? +t.attrs.p1 : obj.pindex;
+          const g = pid !== undefined ? mats.get(key(pid)) : undefined;
+          obj.tcol.push(g ? g[pi] || null : null);
+        } break;
+        // (path: the production extension's p:path, the prefix dropped by the walker)
+        case 'component': if (obj) { hold('parts and placements'); want(t.attrs.path); obj.comps.push({ id: key(t.attrs.objectid, t.attrs.path ?? null), m: mat3mf(t.attrs.transform, k) }); } break;
+        case 'item': if (isRoot) { hold('parts and placements'); want(t.attrs.path); build.push({ id: key(t.attrs.objectid, t.attrs.path ?? null), m: mat3mf(t.attrs.transform, k) }); } break;
+        default:
+      }
+      return false;
+    });
+  };
+  await readPart(path, true);
+  while (partsWanted.length) { const p = partsWanted.shift(); if (!partsRead.has(partKey(p))) await readPart(p, false); }
   if (unit === null) unit = 'millimeter';
+  // an object's key in words: its id, and its part when that is not the root
+  const said = (key) => {
+    const at = key.lastIndexOf('#');
+    const pk = key.slice(0, at), id = key.slice(at + 1);
+    return pk === rootKey ? id : `${id} in ${partsMissing.get(pk) ?? `/${pk}`}`;
+  };
   // the component tree counted before it is built: a missing object, a cycle or a tree over 32
   // deep is a damaged file (they were dropped without a word), and a shared object placed past
   // the caps is refused (each object holding two of the next, 30 deep, ran the tab out of memory)
   placements(build.map((it) => it.id), (id, from) => {
     const o = objects.get(id);
-    if (!o) throw new Error(`${who} is damaged: ${from === null ? 'its build' : `object ${from}`} names object ${id}, which is not there`);
+    if (!o) throw new Error(`${who} is damaged: ${from === null ? 'its build' : `object ${said(from)}`} names object ${said(id)}, which is not there`);
     return o.comps.map((c) => c.id);
   }, (id) => { const o = objects.get(id); return { tris: o.tris.length / 3, verts: o.tris.length ? o.verts.length / 3 : 0 }; }, 32,
-  (why, id) => new Error(why === 'cycle' ? `${who} is damaged: object ${id} is its own ancestor` : `${who} is damaged: its component tree is more than 32 deep`), who);
+  (why, id) => new Error(why === 'cycle' ? `${who} is damaged: object ${said(id)} is its own ancestor` : `${who} is damaged: its component tree is more than 32 deep`), who);
   const bodies = [];
   const node = (id, m, depth) => {
     const o = objects.get(id);
@@ -715,10 +806,17 @@ async function parse3MF(buf, base) {
         pos[i + 1] = x * m[1] + y * m[4] + z * m[7] + m[10];
         pos[i + 2] = x * m[2] + y * m[5] + z * m[8] + m[11];
       }
+      // a mirroring placement (the 3x3's determinant negative) flips the winding back, as the
+      // glTF reader does: kept, every normal of a mirrored part pointed inward
+      let tri = o.tris;
+      if (det3x3(m) < 0) {
+        tri = o.tris.slice();
+        for (let t = 0; t < tri.length; t += 3) [tri[t + 1], tri[t + 2]] = [tri[t + 2], tri[t + 1]];
+      }
       const cs = new Set(o.tcol.map((c) => (c ? c.join(',') : '')));
       const one = cs.size === 1;
       n.meshes.push(bodies.length);
-      bodies.push({ name: o.name, pos, tri: o.tris, color: one ? o.tcol[0] : null, col: one ? null : o.tcol.map((c) => c || DEFAULT_GREY) });
+      bodies.push({ name: o.name, pos, tri, color: one ? o.tcol[0] : null, col: one ? null : o.tcol.map((c) => c || DEFAULT_GREY) });
     }
     for (const c of o.comps) { const ch = node(c.id, mulAffine(c.m, m), depth + 1); if (ch) n.children.push(ch); }
     return n;
@@ -741,6 +839,8 @@ function mat3mf(s, k) {
   const v = (s || '1 0 0 0 1 0 0 0 1 0 0 0').trim().split(/\s+/).map(Number);
   return [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9] * k, v[10] * k, v[11] * k];
 }
+// the determinant of a row-vector 3x4's 3x3 (negative: the placement mirrors)
+const det3x3 = (m) => m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
 // p (a M) then b: the affine a followed by b, both row-vector 3x4
 function mulAffine(a, b) {
   const r = new Array(12);
@@ -752,6 +852,8 @@ function mulAffine(a, b) {
 // ---------- glTF / GLB ----------
 const COMP = { 5120: [Int8Array, 127], 5121: [Uint8Array, 255], 5122: [Int16Array, 32767], 5123: [Uint16Array, 65535], 5125: [Uint32Array, 0], 5126: [Float32Array, 0] };
 const NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+// the primitive modes drawn: TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN (points and lines are not)
+const TRI_MODES = [4, 5, 6];
 
 // a glTF's JSON, or a plain "damaged" in place of the engine's parse error
 function parseJSON(s, what) {
@@ -892,10 +994,11 @@ async function parseGLTF(buf, format, base, files) {
     const me = at(meshDefs, mi);
     let tris = 0, verts = 0;
     for (const pr of (me && Array.isArray(me.primitives) ? me.primitives : [])) {
-      if (!isObj(pr) || (pr.mode ?? 4) !== 4) continue;
+      if (!isObj(pr) || !TRI_MODES.includes(pr.mode ?? 4)) continue;
       const p = isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
       const a = pr.indices !== undefined ? at(accessors, pr.indices) : p;
-      if (a && nat(a.count)) tris += Math.floor(a.count / 3);
+      // a list: a triangle per 3 corners; a strip or fan: one per corner past the second
+      if (a && nat(a.count)) tris += (pr.mode ?? 4) === 4 ? Math.floor(a.count / 3) : Math.max(0, a.count - 2);
       if (p && nat(p.count)) verts += p.count;
     }
     return { tris, verts };
@@ -919,7 +1022,8 @@ async function parseGLTF(buf, format, base, files) {
       if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
       list(me.primitives, `mesh ${nd.mesh}'s "primitives"`).forEach((pr, k) => {
         if (!isObj(pr)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} is not an object`);
-        if ((pr.mode ?? 4) !== 4) return; // points, lines, strips: not drawn
+        const mode = pr.mode ?? 4;
+        if (!TRI_MODES.includes(mode)) return; // points and lines: not drawn
         if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${file} uses Draco compression, which this viewer does not decode`);
         if (!isObj(pr.attributes)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} has no attributes`);
         const P = acc(pr.attributes.POSITION);
@@ -943,7 +1047,18 @@ async function parseGLTF(buf, format, base, files) {
           pos[v * 3 + 1] = (m[1] * x + m[5] * y + m[9] * z + m[13]) * 1000;
           pos[v * 3 + 2] = (m[2] * x + m[6] * y + m[10] * z + m[14]) * 1000;
         }
-        const idx = I !== undefined ? Array.from(I) : Array.from({ length: nv }, (_, i) => i);
+        let idx = I !== undefined ? Array.from(I) : Array.from({ length: nv }, (_, i) => i);
+        // a strip or fan expanded to a list (glTF 2.0 3.7.2.1): strip triangle i is
+        // {p_i, p_i+(1+i%2), p_i+(2-i%2)} (every other one turned, so all wind alike), fan
+        // triangle i {p_i+1, p_i+2, p_0}; counted against the caps above as count - 2
+        if (mode !== 4) {
+          const list = new Array(Math.max(0, idx.length - 2) * 3);
+          for (let i = 0; i + 2 < idx.length; i++) {
+            if (mode === 5) { list[i * 3] = idx[i]; list[i * 3 + 1] = idx[i + 1 + (i % 2)]; list[i * 3 + 2] = idx[i + 2 - (i % 2)]; }
+            else { list[i * 3] = idx[i + 1]; list[i * 3 + 1] = idx[i + 2]; list[i * 3 + 2] = idx[0]; }
+          }
+          idx = list;
+        }
         // a mirroring transform flips the winding back
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
         n.meshes.push(bodies.length);

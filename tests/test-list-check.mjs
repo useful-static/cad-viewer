@@ -138,6 +138,11 @@ await test('a STEP the site sends without CORS is a warning (a download link nee
   const model = await checkFile('https://other.example/x.cadmesh.gz', { fetchFn: fakeFetch, sniff: true });
   assert.equal(model.level, 'bad');
 });
+await test('a broken list named by a GitHub page is reported broken, not "read, 0 failed"', async () => {
+  const r = await checkLists(['https://github.com/o/r/blob/main/missing.json'], 'https://cad.place/', { fetchFn: fakeFetch });
+  assert.equal(r.lists.length, 1);
+  assert.ok(r.lists[0].error, JSON.stringify(r.lists));
+});
 await test('a model named in the query: named as the viewer names it', async () => {
   assert.equal(namedFormat(`${B}get?file=board.stl`), 'STL');
   assert.equal(namedFormat(`${B}get.php?file=board.stl`), 'STL');

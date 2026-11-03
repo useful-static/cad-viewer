@@ -13,6 +13,7 @@
 // which glTF fixes in metres.
 
 import { crc32 } from './crc32.js';
+import { orientBasis } from './orient.js';
 
 const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 
@@ -220,6 +221,14 @@ export function toGLB(model, ids, basis, names = []) {
 // printing convention, 'y' glTF's own), and its writer, all called alike:
 // write(model, ids, basis, { names, base }) -> bytes (or a promise of them). main.js File >
 // Export reads this; a new format is a row here and its button.
+// The axes an export takes, as model-frame unit vectors [x, y, z], for the model's orientation
+// (js/orient.js, "+z-y") and the file's up ('z': the printing convention, STL and 3MF; 'y':
+// glTF's): the page's File > Export and cadmesh-export.mjs alike
+export function exportBasis(orient, up) {
+  const b = orientBasis(orient);
+  return up === 'z' ? [b.right, b.front.map((v) => -v), b.up] : [b.right, b.up, b.front];
+}
+
 // (about: what the file holds, for its button's title)
 export const EXPORTS = {
   stl: { label: 'STL', about: 'triangles, no colour', type: 'model/stl', up: 'z', write: (m, ids, b, { base }) => toSTL(m, ids, b, base) },

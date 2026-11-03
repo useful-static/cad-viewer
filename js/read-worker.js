@@ -2,38 +2,27 @@
 // (STL, OBJ, PLY, OFF, 3MF, glTF / GLB; DXF, DWG) is read here, so a slow or hostile file never
 // freezes the tab. The page (main.js readInWorker) gives each read a time limit and terminates
 // this worker past it, or on Cancel; a worker that runs out of memory dies alone, and the page
-// says so. A module worker: the readers are the page's own modules.
+// says so. A module worker: the read is the page's own (js/read-file.js).
 //
-//   { kind: 'mesh', buf, format, name, extras, unit } -> { ok, raw (a .cadmesh), unitless }
+//   (on start)                                         -> { ready: true }
+//   { kind: 'mesh', buf, format, name, extras, unit }  -> { ok, raw (a .cadmesh), unitless }
 //   { kind: '2d', buf, dwg }                           -> { ok, drawing }
 //   a refusal                                          -> { ok: false, message }
+
+import { readDrawing, readMeshFile } from './read-file.js';
 
 onmessage = async (ev) => {
   const m = ev.data;
   try {
     if (m.kind === 'mesh') {
-      const { parseMesh } = await import('./mesh-formats.js');
-      const { encodeCadmesh } = await import('./cadmesh.js');
-      const { MM_PER } = await import('./units.js');
-      const model = await parseMesh(m.format, m.buf, m.name, m.extras);
-      // a file that stores no unit (STL, OBJ, PLY, OFF) is read in the unit the page names
-      const unitless = !model.sourceUnits;
-      if (unitless && m.unit !== 'mm') {
-        const k = MM_PER[m.unit];
-        for (const b of model.meshes) for (let i = 0; i < b.positions.length; i++) b.positions[i] *= k;
-      }
-      if (unitless) model.sourceUnits = m.unit;
-      const raw = encodeCadmesh(model);
+      const { raw, unitless } = await readMeshFile(m);
       postMessage({ ok: true, raw, unitless }, [raw]);
     } else {
-      const { parseDXF } = await import('./dxf.js');
-      const { readDWG, dwgToPairs } = await import('./dwg.js');
-      // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
-      // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's code page
-      const drawing = parseDXF(m.dwg ? dwgToPairs(readDWG(m.buf)) : m.buf);
-      postMessage({ ok: true, drawing });
+      postMessage({ ok: true, drawing: readDrawing(m) });
     }
   } catch (e) {
     postMessage({ ok: false, message: String((e && e.message) || e) });
   }
 };
+// (its modules loaded: from here an error is the read's, not a worker that could not start)
+postMessage({ ready: true });

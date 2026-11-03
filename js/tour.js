@@ -30,7 +30,7 @@ export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' }
 // field a step may hold (version 2 adds "id")
 export const TOUR_VERSION = 2;
 export const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
-  'explode', 'explodeAlong', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
+  'explode', 'explodeAlong', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit', 'ortho'];
 export const STEP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
 
@@ -47,7 +47,11 @@ const isNames = (v) => Array.isArray(v) && v.length <= 500 && v.every((s) => typ
 
 // text -> the tour, every default filled in; throws an Error naming what is wrong.
 // base: the URL the tour was read from (its model URL is resolved against it).
+// the largest tour read (200 steps of the longest texts and views fit many times over); it is
+// read on the page's own thread, so the bound is the page's
+export const MAX_TOUR_BYTES = 4 * 2 ** 20;
 export function parseTour(text, base = undefined) {
+  if (typeof text === 'string' && text.length > MAX_TOUR_BYTES) throw new Error(`over ${MAX_TOUR_BYTES / 2 ** 20} MB: not a tour this viewer reads`);
   let t;
   try { t = JSON.parse(text); } catch (e) { throw new Error(`not JSON: ${e.message}`); }
   if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('a tour is a JSON object');
@@ -142,6 +146,9 @@ function parseStep(s, where, defaults, bad, version) {
     else throw bad(at('from'), `must be one of ${PRESETS.join(', ')}, "outside", or a camera orientation [x, y, z, w]`);
   }
   if (s.margin !== undefined) { if (!isNum(s.margin, 1, 10)) throw bad(at('margin'), 'must be 1 to 10 (1: the parts fill the view)'); out.margin = s.margin; }
+  // the projection (a framed step's: a view object's camera says its own); left out, the
+  // visitor's as the tour began
+  if (s.ortho !== undefined) { if (typeof s.ortho !== 'boolean') throw bad(at('ortho'), 'must be true or false'); out.ortho = s.ortho; }
   if (s.colour !== undefined) {
     const c = s.colour;
     if (!c || typeof c !== 'object' || Array.isArray(c) || Object.keys(c).length > 500

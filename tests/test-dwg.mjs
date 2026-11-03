@@ -9,7 +9,7 @@
 //   DWG_CORPUS=DIR node tests/test-dwg.mjs   -> "RESULT: N passed, 0 failed[, M skipped]"
 import { readFileSync, existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { readDWG, dwgToPairs, pairsToDXF, decompress18, _internal, crc16, crc32 } from '../js/dwg.js';
+import { readDWG, dwgToPairs, pairsToDXF, decompress18, decompress21, _internal, crc16, crc32 } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { test as t, skip, done } from './harness.mjs';
 
@@ -69,6 +69,26 @@ t('4.7 R2004 decompression: a literal run, then a back reference', () => {
 t('4.7 R2004 decompression refuses a back reference before the start', () => {
   const src = Uint8Array.of(0x01, 0x61, 0x62, 0x63, 0x64, 0x5c, 0xff, 0x11);
   assert.throws(() => decompress18(src, 0, src.length, 8), /back reference out of range/);
+});
+t('5.10 R2007 decompression: a straight literal, a back reference, a shuffled literal (no corpus needed)', () => {
+  // 0x00: a literal of 0 + 8 bytes (a run of 8 is stored in order); 0x47 0x03: copy 4 from 7 + 1
+  // back (offset 7, + ((0x03 & 0xf8) << 1) + 1), then 0x03 & 7 = 3 literal bytes, which a run of 3
+  // stores reversed ("ZYX" is "XYZ")
+  const src = Uint8Array.of(0x00, ...new TextEncoder().encode('ABCDEFGH'), 0x47, 0x03, ...new TextEncoder().encode('ZYX'));
+  const { out, n } = decompress21(src, 0, src.length, 15);
+  assert.equal(new TextDecoder().decode(out.subarray(0, n)), 'ABCDEFGHABCDXYZ');
+  // a stream starting inside a larger buffer reads the same
+  const pad = Uint8Array.of(9, 9, ...src);
+  assert.equal(new TextDecoder().decode(decompress21(pad, 2, src.length, 15).out), 'ABCDEFGHABCDXYZ');
+});
+t('5.10 R2007 decompression refuses a back reference before the start and a literal past the end', () => {
+  const lit = new TextEncoder().encode('ABCDEFGH');
+  // offset 9 + 1 = 10 back from byte 8
+  assert.throws(() => decompress21(Uint8Array.of(0x00, ...lit, 0x49, 0x00), 0, 11, 16), /back reference out of range/);
+  // the last literal claims 3 bytes and the stream ends after 1
+  assert.throws(() => decompress21(Uint8Array.of(0x00, ...lit, 0x47, 0x03, 0x5a), 0, 12, 15), /literal past the end/);
+  // and an output shorter than the stream says
+  assert.throws(() => decompress21(Uint8Array.of(0x00, ...lit), 0, 9, 4), /literal past the end/);
 });
 t('pairsToDXF writes control characters and carets in caret notation, and parseDXF reads them back', () => {
   const P = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, '0'], [20, '0'], [40, '1'], [1, 'a\x03b^c'], [0, 'ENDSEC'], [0, 'EOF']];

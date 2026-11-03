@@ -777,10 +777,20 @@ function hatchLoops(r) {
             for (let k = ccwPts.length - 2; k >= 0; k -= 2) pts.push(ccwPts[k], ccwPts[k + 1]);
           }
         } else if (et === 3) {
-          const cx = at(10), cy = at(20), mx = at(11), my = at(21), ratio = at(40); let t0 = (at(50) * Math.PI) / 180, t1 = (at(51) * Math.PI) / 180;
-          at(73);
+          const cx = at(10), cy = at(20), mx = at(11), my = at(21), ratio = at(40);
+          const a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
+          // counter-clockwise from a0 to a1; clockwise stores its parameters mirrored, as the
+          // circular arc above does: the edge runs -a0 down to -a1, so it is the counter-clockwise
+          // run -a1 .. -a0 with its points reversed (drawn as stored, it came out mirrored about
+          // the major axis)
+          const ccw = at(73);
+          const t0 = ccw ? a0 : -a1;
+          let t1 = ccw ? a1 : -a0;
           if (t1 <= t0) t1 += 2 * Math.PI;
-          for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; pts.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
+          const run = [];
+          for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; run.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
+          if (ccw) append(pts, run);
+          else for (let k = run.length - 2; k >= 0; k -= 2) pts.push(run[k], run[k + 1]);
         } else if (et === 4) {
           // a spline edge: its control points
           at(94); const nk = count(at(95)), nc = count(at(96));

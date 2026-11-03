@@ -38,4 +38,5 @@ export function directUrl(url) {
 // The address a file is fetched from, for every reader that fetches one (a model, a model
 // list, a tour, a list's picture, STEP and tours, check.html's checks): a share page's file,
 // an http(s) URL otherwise as it is, any other URL untouched
-export const fileUrl = (url) => (/^https?:/i.test(url) ? directUrl(url).url : url);
+export const directFor = (url) => (/^https?:/i.test(url) ? directUrl(url) : { url, from: null });
+export const fileUrl = (url) => directFor(url).url;

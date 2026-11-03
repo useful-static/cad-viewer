@@ -267,27 +267,48 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES) {
     throw new Error(`this file is ${what}-compressed, and this browser cannot decompress (no DecompressionStream)`);
   }
   const rd = new Blob([buf]).stream().pipeThrough(new DecompressionStream(format)).getReader();
-  const chunks = [];
+  // ONE output buffer, filled as the chunks arrive: holding the chunks and then copying them into
+  // their total kept two copies of the whole file at the peak (a 1.9 GB model needed 3.8 GB). Its
+  // first size is the gzip trailer's (ISIZE: the length mod 4 GB -- right for any file this opens,
+  // and only a hint: a lie costs a regrow, never a wrong answer), grown x2 when the data runs past.
+  let out = new Uint8Array(firstSize(buf, format, max));
   let n = 0;
   try {
     for (;;) {
       const { done, value } = await rd.read();
       if (done) break;
-      n += value.byteLength;
-      if (n > max) {
+      if (n + value.byteLength > max) {
         await rd.cancel();
         throw new RangeError(`it unpacks to over ${(max / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
       }
-      chunks.push(value);
+      if (n + value.byteLength > out.length) {
+        const grown = new Uint8Array(Math.min(max, Math.max(2 * out.length, n + value.byteLength)));
+        grown.set(out.subarray(0, n));
+        out = grown;
+      }
+      out.set(value, n);
+      n += value.byteLength;
     }
   } catch (e) {
     if (e instanceof RangeError) throw new Error(`the ${format === 'gzip' ? 'gzip file' : 'zip entry'} is too big: ${e.message}`);
     throw new Error(`the ${what} data is corrupt or truncated (${e.message || e})`);
   }
-  const out = new Uint8Array(n);
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.byteLength; }
-  return out.buffer;
+  if (n === out.length) return out.buffer;
+  // (a buffer too long for its data: transfer() shrinks it without a second copy where it can)
+  return typeof out.buffer.transfer === 'function' ? out.buffer.transfer(n) : out.buffer.slice(0, n);
+}
+
+// The output buffer's first size: the gzip trailer's length, else 4x the input -- never past what
+// deflate can produce from this input (1032:1), so a 20-byte file claiming 2 GB allocates 20 KB
+export function firstSize(buf, format, max) {
+  const len = buf.byteLength;
+  const most = Math.min(max, 1032 * len + 1024);
+  if (format === 'gzip' && len >= 18) {
+    const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const isize = (b[len - 4] | (b[len - 3] << 8) | (b[len - 2] << 16) | (b[len - 1] << 24)) >>> 0;
+    return Math.min(most, isize);
+  }
+  return Math.min(most, 4 * len);
 }
 
 // buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
@@ -459,6 +480,9 @@ function validateHeader(h) {
     }
   }
   const seen = new Set();
+  // each body is named by at most one tree node, once (the encoder writes each once): a tree
+  // naming one body a million times is 3 KB gzipped and built a million rows on the page's thread
+  const named = new Uint8Array(n);
   const walk = (node, depth) => {
     if (depth > 256) bad('assembly tree deeper than 256 levels (cycle?)');
     if (!node || !Array.isArray(node.meshes) || !Array.isArray(node.children)) bad('malformed assembly tree node');
@@ -467,6 +491,8 @@ function validateHeader(h) {
     if (node.name !== undefined && node.name !== null && typeof node.name !== 'string') bad('an assembly tree node name is not text');
     for (const i of node.meshes) {
       if (!Number.isInteger(i) || i < 0 || i >= n) bad(`assembly tree names mesh ${i} of ${n}`);
+      if (named[i]) bad(`assembly tree names mesh ${i} more than once`);
+      named[i] = 1;
     }
     if (seen.has(node)) bad('assembly tree node repeated');
     seen.add(node);

@@ -7,7 +7,8 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES } from '../js/tour.js';
+import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES } from '../js/tour.js';
+import { checkTour } from '../js/list-check.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
 import { draftToTour, stepFromView } from '../js/tour-recorder.js';
 import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
@@ -44,6 +45,21 @@ test('parse-example', () => {
   assert.ok(Math.abs(Math.hypot(...t.steps[3].view.cam.q) - 1) < 1e-12);
 });
 
+await test('a tour over MAX_TOUR_BYTES is refused before it is parsed, in words; checkTour stops reading at the cap', async () => {
+  const big = '{"cadtour":1,"steps":[{"title":"' + 'x'.repeat(MAX_TOUR_BYTES) + '"}]}';
+  assert.throws(() => parseTour(big), /over 4 MB/);
+  // a streamed body: the reader is cancelled at the cap, not read whole
+  let pulled = 0, cancelled = false;
+  const chunk = new Uint8Array(2 ** 20).fill(32);
+  const res = { ok: true, status: 200, body: { getReader: () => ({
+    read: async () => { pulled++; return pulled > 64 ? { done: true } : { done: false, value: chunk }; },
+    cancel: async () => { cancelled = true; } }) } };
+  const r = await checkTour('https://example.org/t.cadtour.json', async () => res);
+  assert.equal(r.level, 'bad');
+  assert.match(r.detail, /over 4 MB/);
+  assert.ok(cancelled && pulled <= 6, `read ${pulled} MB before refusing`);
+});
+
 test('parse-defaults', () => {
   const t = parseTour(JSON.stringify({ cadtour: 1, steps: [{ title: 'one' }] }));
   assert.equal(t.mode, 'static');
@@ -71,6 +87,8 @@ test('recorder-round-trip of the field forms: section "off" and a cut, explode, 
     { view: 'top', section: { axis: 'z', t: 0.3, flip: true }, isolate: ['board'], dim: 'grey', transition: 2, hold: 1 },
     // "show": "all" -- a step taken with nothing hidden, whatever the page hides
     { view: 'iso', show: 'all', section: 'off' },
+    // a framed step's projection
+    { frame: ['fan'], from: 'top', margin: 1.3, ortho: true },
   ] };
   const t = parseTour(JSON.stringify(src));
   assert.equal(t.steps[0].explodeAlong, 'z');

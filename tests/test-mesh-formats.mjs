@@ -627,4 +627,114 @@ await test('r5-11 every refusal names the file with its extension: STL, OBJ, glT
   assert.equal(m.root.name, 'n');
 });
 
+// --- review round 6: valid files read wrongly ---
+// the distinct colours (bytes) of a welded body's vertices, sorted
+const colourSet = (m) => {
+  assert.ok(m.colors, 'per-vertex colours');
+  const s = new Set();
+  for (let i = 0; i < m.colors.length; i += 4) s.add(`${m.colors[i]},${m.colors[i + 1]},${m.colors[i + 2]}`);
+  return [...s].sort();
+};
+const offText = (head, vtx, face) => enc(`${head}\n8 12 0\n${C.map((p, i) => `${p.join(' ')}${vtx(i)}`).join('\n')}\n${TRIS.map((t, i) => `3 ${t.join(' ')}${face(i)}`).join('\n')}\n`);
+await test('r6-1 OFF faces carrying a colour after their indices: all 12 triangles, the colour used (0-255 integers and 0..1 floats)', async () => {
+  // (the colour was read as the next face's count: 4 of 12 triangles, or refused as damaged)
+  const red = cube(await parseMesh('off', offText('OFF', () => '', () => ' 255 0 0 255'), 'c.off'));
+  assert.ok(near(red.color, [1, 0, 0]), `colour ${red.color}`);
+  const blue = cube(await parseMesh('off', offText('OFF', () => '', () => ' 0.0 0.0 1.0'), 'c.off'));
+  assert.ok(near(blue.color, [0, 0, 1]), `colour ${blue.color}`);
+  // two colours: the first 6 triangles red, the rest green, kept apart per vertex
+  const two = cube(await parseMesh('off', offText('OFF', () => '', (i) => (i < 6 ? ' 255 0 0' : ' 0 255 0')), 'c.off'));
+  assert.deepEqual(colourSet(two), ['0,255,0', '255,0,0']);
+  // (a face with a colour on some faces only: the others the default grey)
+  const some = cube(await parseMesh('off', offText('OFF', () => '', (i) => (i < 6 ? ' 255 0 0' : '')), 'c.off'));
+  assert.deepEqual(colourSet(some), ['184,189,199', '255,0,0']);
+});
+await test('r6-2 COFF / NOFF / CNOFF / STCNOFF: the per-vertex normal, colour and texture values skipped, the vertex colours used', async () => {
+  // (every such file was refused: the extras were read as the next vertex and the faces)
+  const coff = cube(await parseMesh('off', offText('COFF', () => ' 0 255 0 255', () => ''), 'c.off'));
+  assert.ok(near(coff.color, [0, 1, 0]), `COFF colour ${coff.color}`);
+  const coff3 = cube(await parseMesh('off', offText('COFF', () => ' 0.0 0.0 1.0', () => ''), 'c.off'));
+  assert.ok(near(coff3.color, [0, 0, 1]), `COFF float colour ${coff3.color}`);
+  const noff = cube(await parseMesh('off', offText('NOFF', () => ' 0 0 1', () => ''), 'c.off'));
+  assert.equal(noff.color, null);
+  // normal (3) before colour (4); then texture (2)
+  const cnoff = cube(await parseMesh('off', offText('CNOFF', () => ' 0 0 1 255 0 0 255', () => ''), 'c.off'));
+  assert.ok(near(cnoff.color, [1, 0, 0]), `CNOFF colour ${cnoff.color}`);
+  const st = cube(await parseMesh('off', offText('STCNOFF', () => ' 0 0 1 255 255 0 255 0.5 0.5', () => ''), 'c.off'));
+  assert.ok(near(st.color, [1, 1, 0]), `STCNOFF colour ${st.color}`);
+  // a face colour wins over the vertex colours
+  const both = cube(await parseMesh('off', offText('COFF', () => ' 0 255 0 255', () => ' 0 0 255'), 'c.off'));
+  assert.ok(near(both.color, [0, 0, 1]), `face over vertex ${both.color}`);
+});
+await test('r6-3 3MF production extension (Bambu / Orca): a component naming its object in another model part by p:path is read from that part', async () => {
+  const NS = 'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"';
+  const main = enc(`<?xml version="1.0"?><model unit="millimeter" ${NS}><resources><object id="2" name="plate part" type="model"><components>`
+    + '<component p:path="/3D/Objects/object_1.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/></components></object></resources>'
+    + '<build><item objectid="2" transform="1 0 0 0 1 0 0 0 1 100 100 0"/></build></model>');
+  // (the part has its own ids: an object 2 there is not the main part's object 2)
+  const part = enc(`<?xml version="1.0"?><model unit="millimeter" ${NS}><resources><basematerials id="5"><base name="green" displaycolor="#00FF00"/></basematerials>`
+    + `<object id="2" name="decoy"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>`
+    + `<object id="1" name="cube" type="model" pid="5" pindex="0"><mesh><vertices>${C.map((p) => `<vertex x="${p[0]}" y="${p[1]}" z="${p[2]}"/>`).join('')}</vertices>`
+    + `<triangles>${TRIS.map((t) => `<triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>`).join('')}</triangles></mesh></object></resources><build/></model>`);
+  const model = await parseMesh('3mf', zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', main], ['3D/Objects/object_1.model', part]]), 'bambu.3mf');
+  const m = cube(model, [100, 100, 0]);
+  assert.ok(near(m.color, [0, 1, 0]), `colour ${m.color}`);
+  assert.equal(model.root.children[0].name, 'plate part');
+  assert.equal(model.root.children[0].children[0].name, 'cube');
+  // a part that is not in the zip: refused in words naming it
+  await refusedFast(() => parseMesh('3mf', zipStored([['3D/3dmodel.model', main]]), 'b.3mf'), /b\.3mf is damaged: object 2 names object 1 in \/3D\/Objects\/object_1\.model, which is not there/);
+});
+await test('r6-4 3MF mirrored placements (negative determinant): the winding flipped, so every normal points out; two mirrors cancel', async () => {
+  const m3 = (comp, item) => zipStored([['3D/3dmodel.model', enc(`<model unit="millimeter"><resources>
+<object id="1" name="cube"><mesh><vertices>${C.map((p) => `<vertex x="${p[0]}" y="${p[1]}" z="${p[2]}"/>`).join('')}</vertices>
+<triangles>${TRIS.map((t) => `<triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>`).join('')}</triangles></mesh></object>
+<object id="2"><components><component objectid="1" transform="${comp}"/></components></object></resources>
+<build><item objectid="2" transform="${item}"/></build></model>`)]]);
+  const I = '1 0 0 0 1 0 0 0 1 0 0 0', MX = '-1 0 0 0 1 0 0 0 1 0 0 0', MZ = '1 0 0 0 1 0 0 0 -1 0 0 0';
+  cube(await parseMesh('3mf', m3(I, MX), 'a.3mf'), [-10, 0, 0]); // the item mirrored
+  cube(await parseMesh('3mf', m3(MZ, I), 'a.3mf'), [0, 0, -10]); // the component mirrored
+  cube(await parseMesh('3mf', m3(MZ, MX), 'a.3mf'), [-10, 0, -10]); // both: no flip
+  // the mirrored part's triangle 0 is wound reversed from the file's (0 2 3 -> 0 3 2), by its geometric normal
+  const m = (await parseMesh('3mf', m3(I, MX), 'a.3mf')).meshes[0];
+  const P = (i) => [0, 1, 2].map((k) => m.positions[m.indices[i] * 3 + k]);
+  const [a, b, c] = [P(0), P(1), P(2)];
+  const u = [0, 1, 2].map((k) => b[k] - a[k]), v = [0, 1, 2].map((k) => c[k] - a[k]);
+  assert.ok(u[0] * v[1] - u[1] * v[0] < 0, 'the bottom face (z = 0) faces -z');
+});
+await test('r6-5 glTF triangle strips (mode 5) and fans (mode 6): expanded to triangles facing the way the file winds them, beside a list in one mesh', async () => {
+  // a unit square in z = 0 facing +z: strip order 0 (0,0) 1 (1,0) 2 (0,1) 3 (1,1); fan order around (0,0)
+  const strip = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]), fan = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const sidx = new Uint16Array([0, 1, 2, 3]);
+  const tri = new Float32Array([5, 0, 0, 6, 0, 0, 5, 1, 0]);
+  const bin = new Uint8Array(48 + 48 + 8 + 36);
+  bin.set(new Uint8Array(strip.buffer), 0); bin.set(new Uint8Array(fan.buffer), 48); bin.set(new Uint8Array(sidx.buffer), 96); bin.set(new Uint8Array(tri.buffer), 104);
+  const base = { buffers: [{ byteLength: bin.length, uri: b64uri(bin) }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 48 }, { buffer: 0, byteOffset: 48, byteLength: 48 }, { buffer: 0, byteOffset: 96, byteLength: 8 }, { buffer: 0, byteOffset: 104, byteLength: 36 }],
+    accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 4 }, { bufferView: 1, componentType: 5126, type: 'VEC3', count: 4 },
+      { bufferView: 2, componentType: 5123, type: 'SCALAR', count: 4 }, { bufferView: 3, componentType: 5126, type: 'VEC3', count: 3 }],
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] };
+  const upward = (m, n) => {
+    assert.equal(m.indices.length, 3 * n, 'triangle corners');
+    for (let v = 0; v < m.normals.length; v += 3) assert.ok(Math.abs(m.normals[v + 2] - 1) < 1e-6, `normal ${[...m.normals.slice(v, v + 3)]}`);
+  };
+  // the indexed strip, and the unindexed fan
+  const s = await parseMesh('gltf', gltf({ ...base, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 2, mode: 5 }] }] }), 's.gltf');
+  upward(s.meshes[0], 2);
+  assert.equal(s.meshes[0].positions.length / 3, 4, 'vertices');
+  const f = await parseMesh('gltf', gltf({ ...base, meshes: [{ primitives: [{ attributes: { POSITION: 1 }, mode: 6 }] }] }), 'f.gltf');
+  upward(f.meshes[0], 2);
+  // one mesh of a list, a strip and a fan: three bodies, none dropped
+  const mix = await parseMesh('gltf', gltf({ ...base, meshes: [{ primitives: [{ attributes: { POSITION: 3 } }, { attributes: { POSITION: 0 }, indices: 2, mode: 5 }, { attributes: { POSITION: 1 }, mode: 6 }] }] }), 'm.gltf');
+  assert.equal(mix.meshes.length, 3, 'bodies');
+  upward(mix.meshes[0], 1); upward(mix.meshes[1], 2); upward(mix.meshes[2], 2);
+  // (points and lines are still not drawn)
+  await refusedFast(() => parseMesh('gltf', gltf({ ...base, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 2, mode: 1 }] }] }), 'l.gltf'), /l\.gltf has no triangles to show/);
+});
+await test('r6-6 PLY colour scale by the property type: uchar 0/1 values are bytes (near black), float 1 is full, ushort is out of 65535', async () => {
+  const ply = (ty, vals) => enc(`ply\nformat ascii 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nproperty ${ty} red\nproperty ${ty} green\nproperty ${ty} blue\nelement face 12\nproperty list uchar int vertex_indices\nend_header\n${C.map((p) => `${p.join(' ')} ${vals}`).join('\n')}\n${TRIS.map((t) => `3 ${t.join(' ')}`).join('\n')}\n`);
+  assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('uchar', '1 1 0'), 'd.ply'))), ['1,1,0']);
+  assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('float', '1 1 0'), 'd.ply'))), ['255,255,0']);
+  assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('ushort', '65535 0 32896'), 'd.ply'))), ['255,0,128']);
+});
+
 done();

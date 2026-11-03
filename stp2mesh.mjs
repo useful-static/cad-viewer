@@ -171,11 +171,14 @@ async function main() {
   const declared = sourceUnits(bytes, format);
   const result = occt.ReadFile(format, bytes, args.params);
   const t1 = Date.now();
-  if (!result || !result.success) {
-    process.stderr.write(`FAIL: OpenCascade could not import ${args.input}\n`);
+  // (a failed import said in the page's own words: js/cadmesh.js occtResultToModel)
+  let model;
+  try {
+    model = conversionModel(result, { sourceUnits: declared, angularDeflection: args.params.angularDeflection });
+  } catch (e) {
+    process.stderr.write(`FAIL: ${args.input}: ${e.message}\n`);
     return 1;
   }
-  const model = conversionModel(result, { sourceUnits: declared, angularDeflection: args.params.angularDeflection });
   // no faces (curves or points only): nothing to show, as the viewer refuses
   // it, not an empty .cadmesh written as OK (review r22)
   if (!model.meshes.some((m) => m.indices.length)) {
