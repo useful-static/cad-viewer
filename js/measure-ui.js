@@ -18,7 +18,7 @@ import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid 
 import { faceOfTri, makeCaster } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
-import { NOTES_MAX, NOTE_TEXT_MAX } from './view-link.js';
+import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
 
 const SVG = 'http://www.w3.org/2000/svg';
 const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
@@ -270,7 +270,7 @@ export function createMeasure(deps) {
       // (as many as a model list or a tour step holds: js/view-link.js NOTES_MAX)
       deps.flash(`${NOTES_MAX} notes is the most a view holds`, 4000);
     } else if (p && text.trim()) {
-      st.results.push({ mode: 'note', pts: [p.p], main: text.trim().slice(0, NOTE_TEXT_MAX), sub: '', value: null });
+      st.results.push({ mode: 'note', pts: [p.p], main: cutText(text.trim(), NOTE_TEXT_MAX), sub: '', value: null });
       deps.announce(`note: ${text.trim()}`);
     }
     syncRow();
@@ -285,7 +285,7 @@ export function createMeasure(deps) {
       if (n && Array.isArray(n.p) && n.p.length === 3 && n.p.every(Number.isFinite) && n.text) {
         // (given: the page's, not the user's -- it does not open the bar; a
         // note of the user's own, put back as a tour ends, stays theirs)
-        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, NOTE_TEXT_MAX), sub: '', value: null, given: n.own !== true });
+        st.results.push({ mode: 'note', pts: [n.p.slice()], main: cutText(String(n.text), NOTE_TEXT_MAX), sub: '', value: null, given: n.own !== true });
       }
     }
     syncRow();

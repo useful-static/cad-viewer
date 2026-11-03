@@ -2,10 +2,15 @@
 // parser, ASCII or binary, model space only (paper-space entities are
 // counted, not drawn), flattened to what a 2D canvas strokes:
 //   { units, sourceUnits, layers: [{ name, colour, on }], extents, paperSpace,
-//     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill }],
-//     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?, widthFactor? }] }
-//   (mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text, or one in
-//   a mirroring block; widthFactor: its width x that, its 41 and its block's stretch)
+//     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, width? }],
+//     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?,
+//               widthFactor?, oblique?, wrap?, clip? }],
+//     layouts: [{ name, paths, texts, extents }], notDrawn: { KIND: count } }
+//   (a path's width: a polyline's, in drawing units -- a tapering one is its line plus filled
+//   outlines; mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text,
+//   or one in a mirroring block; widthFactor: its width x that, its 41 and its block's stretch
+//   along it; oblique: its slant in radians; wrap: an MTEXT's reference width; clip: a layout
+//   viewport's frame [x0, y0, x1, y1] it is cut to. h, fit and wrap are lengths: TEXT_LENGTHS)
 //   (align left / center / right; valign baseline / bottom / middle / top for a TEXT, top / middle /
 //   bottom for an MTEXT, which hangs its lines from the point; fit: an aligned / fit text's
 //   baseline length, fitMode 'aligned' (both ways) or 'fit' (width): js/dxf-view.js draws them so,
@@ -176,7 +181,10 @@ export function dxfText(buf) {
   const ver = headerValue(u8, '$ACADVER', /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/);
   const cp = headerValue(u8, '$DWGCODEPAGE', /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/);
   const dec = dxfDecoder(ver, cp, () => { try { new TextDecoder('utf-8', { fatal: true }).decode(u8); return true; } catch { return false; } });
-  return dec.decode(u8);
+  // (a UTF-8 byte-order mark is not text in any code page, as the sniff in js/formats.js passes it
+  // over: decoded as 1252 it read "ï»¿0", and a file the sniff took for a DXF was refused)
+  const bom = u8.length >= 3 && u8[0] === 0xef && u8[1] === 0xbb && u8[2] === 0xbf;
+  return dec.decode(bom ? u8.subarray(3) : u8);
 }
 
 // A header variable's value in an ASCII DXF's bytes: each place its name stands as a group-9 value
@@ -332,9 +340,10 @@ export function parseDXF(s) {
       charge(budget, lo.paths.length - p0, coords);
       for (const t of out.texts) {
         const [x, y] = ap(M, t.x, t.y);
-        // (every size of it scaled by the viewport: its height and an aligned / fit text's width --
-        // the width unscaled drew it 10 times too long through a 0.1 viewport)
-        const seen = { ...t, x, y, h: t.h * s, ...(t.fit ? { fit: t.fit * s } : {}), rot: t.rot + tw };
+        // (every length of it scaled by the viewport, TEXT_LENGTHS: a fit width unscaled drew it 10
+        // times too long through a 0.1 viewport, and a wrap width unscaled ran it on in one line)
+        const seen = { ...t, x, y, rot: t.rot + tw };
+        for (const k of TEXT_LENGTHS) if (t[k]) seen[k] = t[k] * s;
         // kept when its box meets the viewport's frame, and clipped to it as the paths are (kept or
         // dropped whole by its point, a text ran past the frame, or vanished though half inside)
         const c = textCorners(seen);
@@ -360,6 +369,10 @@ export function parseDXF(s) {
     layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts, notDrawn };
 }
 
+// A drawing text's fields that are lengths in drawing units (the text contract): what a
+// change of scale -- a layout viewport -- multiplies
+const TEXT_LENGTHS = ['h', 'fit', 'wrap'];
+
 // One model path seen through a viewport (transform M, scale s) onto paper,
 // clipped to rect [x0, y0, x1, y1]: a filled one by Sutherland-Hodgman, a
 // line by Liang-Barsky segment by segment, its kept runs as open paths
@@ -367,7 +380,8 @@ function clipPath(p, M, s, rect, out) {
   const n = p.pts.length / 2;
   const P = [];
   for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
-  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null };
+  // (its lengths scaled as the drawing is: the dash pattern and a polyline's width)
+  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
   if (p.fill) {
     let poly = P;
     const edges = [[0, rect[0], 1], [0, rect[2], -1], [1, rect[1], 1], [1, rect[3], -1]];
@@ -503,6 +517,19 @@ function walk(budget, n) {
 // goes), once per block name: an INSERT whose walk would pass the budget is refused before it
 // starts, not after minutes of walking empty blocks. A block inside its own insert chain counts
 // what one pass of it holds (emit's depth limit ends the real walk).
+// An entity that draws a block, as the record that names it (its group 2) and places it -- an
+// INSERT, a dimension of any kind, a table (its block-reference groups only: its AcDbTable part
+// writes 70 / 71 / 41 again with other meanings) -- or null. The one rule for emit and walkSize
+const DIM_KINDS = new Set(['DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION']);
+function blockRef(r) {
+  if (r.type === 'INSERT' || DIM_KINDS.has(r.type)) return r;
+  if (r.type !== 'ACAD_TABLE') return null;
+  if (r.ins === undefined) {
+    const k = r.g.findIndex((x) => x[0] === 100 && x[1] === 'AcDbTable');
+    r.ins = { type: 'INSERT', g: (k < 0 ? r.g : r.g.slice(0, k)).filter((x) => !(x[0] >= 41 && x[0] <= 45) && x[0] !== 70 && x[0] !== 71) };
+  }
+  return r.ins;
+}
 function walkSize(ctx, name, depth = 0, open = new Set()) {
   const memo = ctx.walkSizes || (ctx.walkSizes = new Map());
   if (memo.has(name)) return memo.get(name);
@@ -513,8 +540,9 @@ function walkSize(ctx, name, depth = 0, open = new Set()) {
   if (!b || depth > 16) return b ? b.recs.length : 0;
   open.add(name);
   let n = b.recs.length;
-  for (const r of b.recs) {
-    if (r.type !== 'INSERT' && r.type !== 'DIMENSION') continue;
+  for (const r0 of b.recs) {
+    const r = blockRef(r0);
+    if (!r) continue;
     const cells = r.type === 'INSERT' ? Math.max(1, num(r, 70, 1)) * Math.max(1, num(r, 71, 1)) : 1;
     n += cells * walkSize(ctx, get(r, 2, ''), depth + 1, open);
     if (!(n <= MAX_WALKED)) { n = Infinity; break; }
@@ -587,6 +615,12 @@ function emit(recs, M, byBlock, depth, ctx) {
       const w = width > 0 ? width * Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) : 0;
       ctx.add({ layer, colour, ...sty, pts: f, closed, fill, ...(w > 0 ? { width: w } : {}) });
     };
+    // a polyline with its widths (widthsOf): one width, stroked at it; else its line (1 px: what a
+    // click and a snap find) and each wide segment's outline, filled
+    const drawWide = (sh) => {
+      path(sh.pts, sh.closed, false, sh.width || 0);
+      if (sh.outlines) for (const o of sh.outlines) if (o.every(Number.isFinite)) path(o, true, true);
+    };
     switch (r.type) {
       case 'LINE': {
         // LINE's points are in world coordinates, not its OCS
@@ -636,38 +670,41 @@ function emit(recs, M, byBlock, depth, ctx) {
           const xs = all(r, 10), ys = all(r, 20);
           // bulges, in order, belong to the vertex before them
           const bul = new Array(xs.length).fill(0);
+          // each vertex's start / end width (40 / 41), else the constant width (43)
+          const cw = num(r, 43, 0) > 0 ? num(r, 43, 0) : 0;
+          const w0 = new Array(xs.length).fill(cw), w1 = new Array(xs.length).fill(cw);
           let vi = -1;
-          for (const [c, v] of r.g) { if (c === 10) vi++; else if (c === 42 && vi >= 0) bul[vi] = Number(v); }
+          for (const [c, v] of r.g) {
+            if (c === 10) vi++;
+            else if (vi >= 0 && c === 42) bul[vi] = Number(v);
+            else if (vi >= 0 && c === 40) w0[vi] = Number(v) || 0;
+            else if (vi >= 0 && c === 41) w1[vi] = Number(v) || 0;
+          }
           const closed = (num(r, 70) & 1) === 1;
           const pts = bulgePts(xs, ys, bul, closed);
-          // its width: the constant width (43), else its vertices' start width when they all have
-          // the same one (a tapering width is drawn at its widest) -- a wide polyline was 1 px
-          let width = num(r, 43, 0) > 0 ? num(r, 43, 0) : 0;
-          if (!width) for (const [c, v] of r.g) if ((c === 40 || c === 41) && Number(v) > width) width = Number(v);
-          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed, width };
+          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed, ...widthsOf(xs, ys, bul, w0, w1, closed) };
         }
-        if (r.shape.pts) path(r.shape.pts, r.shape.closed, false, r.shape.width);
+        if (r.shape.pts) drawWide(r.shape);
         break;
       }
       case 'POLYLINE': {
         // its VERTEX records follow it to SEQEND
-        const xs = [], ys = [], bul = [];
-        let j = i + 1, vertexWidth = 0;
+        // (a 2D polyline's widths: each vertex's start / end (40 / 41), else the polyline's)
+        const xs = [], ys = [], bul = [], w0 = [], w1 = [];
+        const d0 = num(r, 40, 0) || 0, d1 = num(r, 41, 0) || 0;
+        let j = i + 1;
         for (; j < recs.length && recs[j].type !== 'SEQEND'; j++) {
           if (recs[j].type !== 'VERTEX') continue;
           if (num(recs[j], 70) & 16) continue; // a spline frame control point
           xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); bul.push(num(recs[j], 42));
-          vertexWidth = Math.max(vertexWidth, num(recs[j], 40, 0) || 0, num(recs[j], 41, 0) || 0);
+          w0.push(num(recs[j], 40, d0) || 0); w1.push(num(recs[j], 41, d1) || 0);
         }
         i = j;
         const flags = num(r, 70);
         if (flags & (16 | 64)) break; // a 3D mesh or a polyface: not drawn in 2D
         const closed = (flags & 1) === 1;
-        // (a 2D polyline's width: its default start / end width (40 / 41), else its vertices',
-        // drawn at its widest)
-        const width = Math.max(num(r, 40, 0) || 0, num(r, 41, 0) || 0) || vertexWidth;
         if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
-        else path(bulgePts(xs, ys, bul, closed), closed, false, width);
+        else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, ...widthsOf(xs, ys, bul, w0, w1, closed) });
         break;
       }
       case 'SPLINE': {
@@ -727,7 +764,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         const mt = e.type === 'MTEXT';
         // (the plain text, made once per entity: a block's text inserted many times is the same)
         if (r.plain === undefined) {
-          const raw = mt ? e.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(e, 1, '');
+          // (as written, as an MTEXT's is: a TEXT's leading spaces are part of it -- trimmed, a
+          // DWG's text lost its leading U+3000 while the same text escaped as \U+3000 kept it)
+          const raw = mt ? e.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : firstOf(e).get(1) ?? '';
           r.plain = mt ? mtextPlain(raw, ctx.codepage) : textCodes(raw, ctx.codepage);
         }
         const t = r.plain;
@@ -735,8 +774,11 @@ function emit(recs, M, byBlock, depth, ctx) {
         // MTEXT's point (10) and direction (11) are in WORLD coordinates, TEXT's in its own (the
         // OCS): an MTEXT at world (50, 0) with extrusion 0,0,-1 was drawn at (-50, 0)
         const P = mt ? M : O;
-        const h = num(e, 40, 1) * Math.hypot(P[2], P[3]);
-        const item = { layer, colour, h, text: t, mtext: mt };
+        const item = { layer, colour, h: num(e, 40, 1), text: t, mtext: mt };
+        // the text's own direction (dv) in the frame it is given in (F): its sizes are taken
+        // along it, after the branches below
+        let F = O, dv;
+        let rw = 0;
         if (mt) {
           // attachment 1..9: top / middle / bottom rows of left / centre / right
           const a = Math.min(9, Math.max(1, num(e, 71, 1) | 0));
@@ -744,10 +786,9 @@ function emit(recs, M, byBlock, depth, ctx) {
           item.align = mtextAlign(a);
           item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
           // 41, its reference width: its lines wrap at it (they ran on in one line)
-          const rw = num(e, 41, 0);
-          if (Number.isFinite(rw) && rw > 0) item.wrap = rw * Math.hypot(P[0], P[1]);
-          if (get(e, 11, null) !== null) item.dir = dirThrough(M, num(e, 11), num(e, 21));
-          else { const a = (num(e, 50) * Math.PI) / 180; item.dir = dirThrough(O, Math.cos(a), Math.sin(a)); }
+          rw = num(e, 41, 0);
+          if (get(e, 11, null) !== null) { F = M; dv = [num(e, 11), num(e, 21)]; } else { const a = (num(e, 50) * Math.PI) / 180; dv = [Math.cos(a), Math.sin(a)]; }
+          item.dir = dirThrough(F, dv[0], dv[1]);
         } else {
           // TEXT / ATTRIB: 72 the horizontal alignment (0 left, 1 centre, 2 right, 3 aligned, 4
           // middle, 5 fit), 73 (an ATTRIB's 74) the vertical (0 baseline, 1 bottom, 2 middle,
@@ -755,7 +796,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const al = num(e, 72, 0) | 0;
           const va = num(e, e.type === 'ATTRIB' ? 74 : 73, 0) | 0;
           const p10 = ap(O, num(e, 10), num(e, 20)), p11 = ap(O, num(e, 11), num(e, 21));
-          { const a = (num(e, 50) * Math.PI) / 180; item.dir = dirThrough(O, Math.cos(a), Math.sin(a)); }
+          { const a = (num(e, 50) * Math.PI) / 180; dv = [Math.cos(a), Math.sin(a)]; item.dir = dirThrough(O, dv[0], dv[1]); }
           if (al === 3 || al === 5) {
             // aligned / fit: drawn from the first point along the baseline to the second, its width
             // fitted to it (aligned keeps its proportions, fit its height) -- it was drawn from the
@@ -784,12 +825,18 @@ function emit(recs, M, byBlock, depth, ctx) {
         }
         // Through the transform it is drawn by (its block's, its OCS): its direction is the
         // transformed one; a mirroring transform (det < 0) mirrors it -- drawn backward, along the
-        // transformed direction -- and a stretch (x scale not y) widens it. Only the insert's
-        // rotation and y scale were taken: a block mirrored in x drew its text upside down, one
-        // mirrored in y upright, one stretched in x at its own width
+        // transformed direction -- and a stretch widens it. Only the insert's rotation and y scale
+        // were taken: a block mirrored in x drew its text upside down, one mirrored in y upright,
+        // one stretched in x at its own width. The stretch is taken ALONG THE TEXT (sx) and across
+        // it (sy, the area scale over sx): taken along the block's axes, a text turned 90° in a
+        // block stretched in x was widened instead of made taller
         {
           const det = P[0] * P[3] - P[1] * P[2];
-          const sx = Math.hypot(P[0], P[1]), sy = Math.hypot(P[2], P[3]);
+          const dl = Math.hypot(dv[0], dv[1]) || 1;
+          const sx = Math.hypot(F[0] * dv[0] + F[2] * dv[1], F[1] * dv[0] + F[3] * dv[1]) / dl;
+          const sy = sx > 0 ? Math.abs(F[0] * F[3] - F[1] * F[2]) / sx : Math.hypot(F[2], F[3]);
+          item.h *= sy;
+          if (Number.isFinite(rw) && rw > 0) item.wrap = rw * sx;
           if (det < 0) { item.rot = item.dir - Math.PI; item.mirrorX = !item.mirrorX; } else item.rot = item.dir;
           if (!item.mirrorX) delete item.mirrorX;
           delete item.dir;
@@ -798,23 +845,27 @@ function emit(recs, M, byBlock, depth, ctx) {
         ctx.addText(item);
         break;
       }
-      case 'INSERT': case 'DIMENSION': {
-        const b = ctx.blocks.get(get(r, 2, ''));
-        if (!b) break;
-        const isDim = r.type === 'DIMENSION';
-        const sx = isDim ? 1 : num(r, 41, 1), sy = isDim ? 1 : num(r, 42, 1);
-        const rot = isDim ? 0 : (num(r, 50) * Math.PI) / 180;
-        const cols = isDim ? 1 : Math.max(1, num(r, 70, 1)), rows = isDim ? 1 : Math.max(1, num(r, 71, 1));
+      case 'INSERT': case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': case 'ACAD_TABLE': {
+        // A table is drawn as its block (*T…) inserted at its point, as the DWG adapter writes it;
+        // a dimension of any kind draws its block (blockRef). (A DXF's tables and arc dimensions
+        // were counted "not drawn", while the same drawing's DWG drew them)
+        const q = blockRef(r);
+        const b = ctx.blocks.get(get(q, 2, ''));
+        if (!b) { if (r.type === 'ACAD_TABLE') ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1; break; }
+        const isDim = q.type !== 'INSERT';
+        const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
+        const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
+        const cols = isDim ? 1 : Math.max(1, num(q, 70, 1)), rows = isDim ? 1 : Math.max(1, num(q, 71, 1));
         // an array of more cells than a drawing can draw is refused before it is walked (an
         // empty block's cells would otherwise loop without drawing anything to count)
         if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols * rows > MAX_DRAWN_ITEMS) {
           throw new Error(`the drawing is too large to draw here (an array of ${cols} × ${rows} inserts)`);
         }
-        if ((ctx.budget.walked || 0) + cols * rows * walkSize(ctx, get(r, 2, '')) > MAX_WALKED) {
-          throw new Error(`the drawing is too large to draw here (block ${get(r, 2, '')}, inserted ${cols * rows} times, walks over ${MAX_WALKED / 1e6} million entities: nested blocks multiply it)`);
+        if ((ctx.budget.walked || 0) + cols * rows * walkSize(ctx, get(q, 2, '')) > MAX_WALKED) {
+          throw new Error(`the drawing is too large to draw here (block ${get(q, 2, '')}, inserted ${cols * rows} times, walks over ${MAX_WALKED / 1e6} million entities: nested blocks multiply it)`);
         }
-        const dc = num(r, 44), dr = num(r, 45);
-        const ix = isDim ? 0 : num(r, 10), iy = isDim ? 0 : num(r, 20);
+        const dc = num(q, 44), dr = num(q, 45);
+        const ix = isDim ? 0 : num(q, 10), iy = isDim ? 0 : num(q, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
         for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
           const c = Math.cos(rot), s = Math.sin(rot);
@@ -832,7 +883,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const pts = [];
           for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0));
           if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: false, fill: false });
-        }
+        } else ctx.notDrawn.LEADER = (ctx.notDrawn.LEADER || 0) + 1; // (one without its vertices: a DWG's, whose are not decoded)
         break;
       }
       default:
@@ -843,8 +894,8 @@ function emit(recs, M, byBlock, depth, ctx) {
   }
 }
 // entity kinds a drawing holds that this does not draw (structure -- VERTEX, SEQEND, ATTDEF,
-// VIEWPORT -- is not counted)
-const NOT_DRAWN = new Set(['MULTILEADER', 'MLEADER', 'WIPEOUT', 'MLINE', 'TOLERANCE', 'IMAGE', 'OLE2FRAME', 'OLEFRAME', '3DSOLID', 'BODY', 'REGION', 'SURFACE', 'MESH', 'RAY', 'XLINE', 'SHAPE', 'ACAD_TABLE', 'ACAD_PROXY_ENTITY', 'ARC_DIMENSION', 'HELIX', 'UNDERLAY', 'PDFUNDERLAY', 'DWFUNDERLAY', 'DGNUNDERLAY']);
+// VIEWPORT -- is not counted). The one list: js/dwg.js names a DWG's of these kinds from it
+export const NOT_DRAWN = new Set(['MULTILEADER', 'MLEADER', 'WIPEOUT', 'MLINE', 'TOLERANCE', 'IMAGE', 'OLE2FRAME', 'OLEFRAME', '3DSOLID', 'BODY', 'REGION', 'SURFACE', 'MESH', 'RAY', 'XLINE', 'SHAPE', 'ACAD_PROXY_ENTITY', 'HELIX', 'UNDERLAY', 'PDFUNDERLAY', 'PDFREFERENCE', 'DWFUNDERLAY', 'DGNUNDERLAY']);
 
 // an arc as points: radius r about (cx, cy) from a0 to a1 (radians, CCW)
 function arcPts(cx, cy, r, a0, a1) {
@@ -854,6 +905,46 @@ function arcPts(cx, cy, r, a0, a1) {
   const n = Math.max(8, Math.ceil((a1 - a0) / SEG_RAD));
   const out = [];
   for (let k = 0; k <= n; k++) { const t = a0 + ((a1 - a0) * k) / n; out.push(cx + r * Math.cos(t), cy + r * Math.sin(t)); }
+  return out;
+}
+
+// A polyline's widths, per segment start (w0) and end (w1): { width } when every segment has the
+// one width (0: none), else { outlines } (taperOutlines)
+function widthsOf(xs, ys, bul, w0, w1, closed) {
+  const segs = closed ? xs.length : xs.length - 1;
+  let one = segs > 0 ? w0[0] : 0, same = true;
+  for (let i = 0; i < segs && same; i++) same = w0[i] === one && w1[i] === one;
+  if (same) return Number.isFinite(one) && one > 0 ? { width: one } : {};
+  return { outlines: taperOutlines(xs, ys, bul, w0, w1, closed) };
+}
+
+// A polyline whose width changes (an arrowhead 0 to 5, a segment wider than the next): each segment
+// as a filled outline from its start width to its end width, straight or along its bulge, butt
+// ended (drawn as one stroke at its widest, an arrowhead was a bar). -> [pts, ...] closed outlines
+export function taperOutlines(xs, ys, bul, w0, w1, closed) {
+  const n = xs.length, segs = closed ? n : n - 1, out = [];
+  for (let i = 0; i < segs; i++) {
+    const j = (i + 1) % n;
+    const a = w0[i] || 0, b = w1[i] || 0;
+    if (!(a > 0 || b > 0)) continue; // (a segment of no width: in the outline path, drawn 1 px)
+    const p = bulgePts([xs[i], xs[j]], [ys[i], ys[j]], [bul[i] || 0], false);
+    const m = p.length / 2;
+    const cum = [0];
+    for (let k = 1; k < m; k++) cum.push(cum[k - 1] + Math.hypot(p[2 * k] - p[2 * k - 2], p[2 * k + 1] - p[2 * k - 1]));
+    const L = cum[m - 1];
+    if (!(L > 0)) continue;
+    const left = [], right = [];
+    for (let k = 0; k < m; k++) {
+      const k0 = Math.max(0, k - 1), k1 = Math.min(m - 1, k + 1);
+      const dx = p[2 * k1] - p[2 * k0], dy = p[2 * k1 + 1] - p[2 * k0 + 1], d = Math.hypot(dx, dy) || 1;
+      const hw = (a + ((b - a) * cum[k]) / L) / 2;
+      left.push(p[2 * k] - (dy / d) * hw, p[2 * k + 1] + (dx / d) * hw);
+      right.push(p[2 * k] + (dy / d) * hw, p[2 * k + 1] - (dx / d) * hw);
+    }
+    const poly = left;
+    for (let k = m - 1; k >= 0; k--) poly.push(right[2 * k], right[2 * k + 1]);
+    out.push(poly);
+  }
   return out;
 }
 
@@ -1020,13 +1111,19 @@ export function mtextPlain(s, codepage = 'windows-1252') {
   // the ";" ending a code from j on, or -1 when a backslash (or the end) comes first -- a character
   // escape (\U+XXXX, \M+NXXXX) is part of the code (a font name written outside the code page: the
   // code did not end, and showed as text)
-  const endOf = (j) => {
-    for (; j < n; j++) {
-      if (s[j] === ';') return j;
-      if (s[j] === '\\') { const esc = escapeAt(s, j); if (!esc) return -1; j += esc[1] - 1; }
+  // (the one step for both scans below: from j to the first of `stops` or a backslash that is not
+  // a character escape, stepping over escapes -- the stack's first part stopped at the escape, and
+  // "5\S+0.1\U+00B0^-0.1\U+00B0;" stayed as written)
+  const scan = (j, stops) => {
+    while (j < n && !stops.includes(s[j])) {
+      if (s[j] !== '\\') { j++; continue; }
+      const esc = escapeAt(s, j);
+      if (!esc) break;
+      j += esc[1];
     }
-    return -1;
+    return j;
   };
+  const endOf = (j) => { j = scan(j, ';'); return j < n && s[j] === ';' ? j : -1; };
   for (let i = 0; i < n; i++) {
     const c = s[i];
     if (c === '{' || c === '}') continue;
@@ -1043,14 +1140,13 @@ export function mtextPlain(s, codepage = 'windows-1252') {
       continue;
     }
     if (k === 'S') {
-      let j = i + 2;
-      while (j < n && !'^#/;\\'.includes(s[j])) j++;
+      const j = scan(i + 2, '^#/;');
       const e = j < n && '^#/'.includes(s[j]) ? endOf(j + 1) : -1;
       if (e >= 0) {
         // "/" and "#" stack a fraction (a/b); "^" a tolerance or, one side empty, a super- or
         // subscript: its non-empty parts, a space apart ("m\S2^;" is m2, "+0.1^-0" is +0.1 -0;
         // as a/b they read "m2/" and "+0.1/-0")
-        const a = s.slice(i + 2, j), b = s.slice(j + 1, e);
+        const a = unescapeDxf(s.slice(i + 2, j)), b = unescapeDxf(s.slice(j + 1, e));
         // (a two-part tolerance set off from the value before it: "0,2 +0.1 -0", not "0,2+0.1 -0")
         const both = a.trim() && b.trim();
         out += s[j] === '^' ? `${both && out && !/\s$/.test(out) ? ' ' : ''}${[a, b].filter((x) => x.trim()).join(' ')}` : `${a}/${b}`;
@@ -1114,14 +1210,24 @@ const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 
 function extentsOf(out) {
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
-  for (const p of out.paths) for (let k = 0; k < p.pts.length; k += 2) {
-    if (!Number.isFinite(p.pts[k]) || !Number.isFinite(p.pts[k + 1])) continue;
-    min[0] = Math.min(min[0], p.pts[k]); max[0] = Math.max(max[0], p.pts[k]);
-    min[1] = Math.min(min[1], p.pts[k + 1]); max[1] = Math.max(max[1], p.pts[k + 1]);
+  for (const p of out.paths) {
+    // (a wide polyline reaches half its width past its points: Fit cut it at the edge)
+    const r = p.width > 0 ? p.width / 2 : 0;
+    for (let k = 0; k < p.pts.length; k += 2) {
+      if (!Number.isFinite(p.pts[k]) || !Number.isFinite(p.pts[k + 1])) continue;
+      min[0] = Math.min(min[0], p.pts[k] - r); max[0] = Math.max(max[0], p.pts[k] + r);
+      min[1] = Math.min(min[1], p.pts[k + 1] - r); max[1] = Math.max(max[1], p.pts[k + 1] + r);
+    }
   }
-  for (const t of out.texts) for (const [x, y] of textCorners(t)) {
-    min[0] = Math.min(min[0], x); max[0] = Math.max(max[0], x);
-    min[1] = Math.min(min[1], y); max[1] = Math.max(max[1], y);
+  for (const t of out.texts) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of textCorners(t)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    // (a text clipped to a viewport's frame counts only what is drawn of it: its whole box made a
+    // sheet's extents 6.5 times what it shows)
+    if (t.clip) { x0 = Math.max(x0, t.clip[0]); y0 = Math.max(y0, t.clip[1]); x1 = Math.min(x1, t.clip[2]); y1 = Math.min(y1, t.clip[3]); }
+    if (!(x0 <= x1 && y0 <= y1)) continue;
+    min[0] = Math.min(min[0], x0); max[0] = Math.max(max[0], x1);
+    min[1] = Math.min(min[1], y0); max[1] = Math.max(max[1], y1);
   }
   return min[0] === Infinity ? null : { min, max };
 }
@@ -1143,14 +1249,23 @@ export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws)
 
 // Lines wrapped at a width, at spaces (a word longer than the width stands alone): width(line)
 // measures a line -- the view by the font, the extents by an estimate. The one wrap for both
+// Each word is measured once and a line's width is the sum of its words and spaces: measuring the
+// growing line at every word was quadratic, and one 600 kB paragraph froze the page for minutes
+// A line breaks at a space, or between two CJK characters (written without spaces: a Chinese or
+// Japanese paragraph never wrapped); the spaces at a break are dropped
+const WRAP_TOKEN = /[⺀-鿿가-힯豈-﫿＀-￯]|[^ ⺀-鿿가-힯豈-﫿＀-￯]+| +/g;
 export function wrapLines(lines, width, max) {
   const out = [];
+  const seen = new Map();
+  const w = (s) => { let v = seen.get(s); if (v === undefined) { v = width(s); if (seen.size < 4096) seen.set(s, v); } return v; };
   for (const line of lines) {
     if (width(line) <= max) { out.push(line); continue; }
-    let cur = '';
-    for (const word of line.split(' ')) {
-      const next = cur ? `${cur} ${word}` : word;
-      if (cur && width(next) > max) { out.push(cur); cur = word; } else cur = next;
+    let cur = '', cw = 0, pend = '', pw = 0; // pend: spaces after cur, kept only if a token follows
+    for (const tok of line.match(WRAP_TOKEN) || []) {
+      if (tok[0] === ' ') { if (cur) { pend += tok; pw += w(tok); } continue; }
+      const tw = w(tok);
+      if (cur && cw + pw + tw > max) { out.push(cur); cur = tok; cw = tw; } else { cur += pend + tok; cw += pw + tw; }
+      pend = ''; pw = 0;
     }
     out.push(cur);
   }
@@ -1186,7 +1301,13 @@ export function textCorners(t) {
   const c = Math.cos(t.rot || 0), s = Math.sin(t.rot || 0);
   // (a backward / upside-down text is mirrored about its point, as the view draws it)
   const mx = t.mirrorX ? -1 : 1, my = t.mirrorY ? -1 : 1;
-  return [[x0, bottom], [x0 + w, bottom], [x0, top], [x0 + w, top]].map(([u0, v0]) => { const u = u0 * mx, v = v0 * my; return [t.x + u * c - v * s, t.y + u * s + v * c]; });
+  // (an oblique text slanted as the view slants it, before the mirror: its tops moved along the
+  // baseline -- its box left the slant 0.58 heights outside at 30°)
+  // (slanted before its width is scaled, as the view does: the slant widens with the width factor,
+  // or with a fit text's stretch)
+  const sxs = t.fit > 0 ? (longest > 0 ? t.fit / (t.h * 0.6 * longest) : 1) : t.widthFactor || 1;
+  const k = t.oblique ? Math.tan(t.oblique) * sxs : 0;
+  return [[x0, bottom], [x0 + w, bottom], [x0, top], [x0 + w, top]].map(([u0, v0]) => { const u = (u0 + v0 * k) * mx, v = v0 * my; return [t.x + u * c - v * s, t.y + u * s + v * c]; });
 }
 
 // ---------- colours ----------

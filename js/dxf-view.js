@@ -10,7 +10,7 @@
 // jitter when zoomed in), stroked under the view transform with lineWidth =
 // 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { onPaper, wrapLines } from './dxf.js';
+import { onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unitWord } from './units.js';
 
@@ -241,7 +241,24 @@ export function createDxfView(canvas, drawing, cb = {}) {
         if (d2 < bd) { bd = d2; best = p.layer; }
       }
     }
-    return best;
+    if (best !== null) return best;
+    // else a text under the point (inside its box, as the extents take it): a layer only texts
+    // use could not be picked
+    for (const t of drawing.texts) {
+      if (st.off.has(t.layer)) continue;
+      const c = textCorners(t).map(([x, y]) => [x - o[0], y - o[1]]);
+      // the corners are bottom-left, bottom-right, top-left, top-right: inside when on one side of
+      // each edge of the quad taken in order
+      const q = [c[0], c[1], c[3], c[2]];
+      let pos = 0, neg = 0;
+      for (let i = 0; i < 4; i++) {
+        const [ax, ay] = q[i], [bx, by] = q[(i + 1) % 4];
+        const cr = (bx - ax) * (uy - ay) - (by - ay) * (ux - ax);
+        if (cr > 0) pos++; else if (cr < 0) neg++;
+      }
+      if (!(pos && neg)) return t.layer;
+    }
+    return null;
   }
 
   // ---- input ----

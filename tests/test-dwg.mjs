@@ -334,6 +334,41 @@ t('an object\'s count past its own end stops at the object, and a map naming it 
   assert.ok(d.failures.some((x) => x.startsWith('object handle matches the map')), JSON.stringify(d.failures));
 });
 
+t('a class list numbered with a gap (a record misread) is a failed check, not a silent pass', () => {
+  // an R2004 classes section: maxClass, then records num / flags / app / cpp / dxf / zombie / item
+  // and the R2004 tail (BL BS BS BL BL)
+  const bs16 = (n) => `00${b8(n & 255)}${b8(n >> 8)}`;
+  const rec = (num, name) => `${bs16(num)} 10 ${tv('A')} ${tv('B')} ${tv(name)} 0 ${bs16(0x1f2)} 10 10 10 10 10`;
+  const section = (max, recs) => {
+    const data = bits(`${bs16(max)} ${b8(0)} ${b8(0)} 0 ${recs.join(' ')}`);
+    const b = new Uint8Array(20 + data.length + 2);
+    new DataView(b.buffer).setUint32(16, data.length, true);
+    b.set(data, 20);
+    return b;
+  };
+  const run = (max, recs) => { const chk = new _internal.Checks(); const cl = _internal.readClasses({ b: section(max, recs), at: 0 }, 18, 0, chk); return { cl, f: chk.failures }; };
+  const good = run(501, [rec(500, 'X'), rec(501, 'Y')]);
+  assert.deepEqual([...good.cl.keys()], [500, 501]);
+  assert.ok(!good.f.some((x) => x.startsWith('classes numbered') || x.startsWith('classes reach')), good.f.join('; '));
+  const gap = run(502, [rec(500, 'X'), rec(502, 'Y')]);
+  assert.ok(gap.f.some((x) => x.startsWith('classes numbered 500 on without a gap')), gap.f.join('; '));
+  const short = run(503, [rec(500, 'X'), rec(501, 'Y')]);
+  assert.ok(short.f.some((x) => x.startsWith('classes reach the stated last class number')), short.f.join('; '));
+});
+
+// --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:
+// an R14 / R2000 drawing holding leaders; their count and the page's "not drawn" must agree) ---
+{
+  const p = process.env.DWG_LEADER_FILE || '';
+  if (!p || !existsSync(p)) skip('a DWG\'s leaders counted as not drawn', 'DWG_LEADER_FILE unset or absent');
+  else t('a DWG\'s leaders, not decoded, are counted as not drawn (they vanished without a word)', () => {
+    const d = readDWG(new Uint8Array(readFileSync(p)));
+    const n = [...d.objects.values()].filter((o) => o.name === 'LEADER').length;
+    assert.ok(n > 0, 'the file holds leaders');
+    assert.equal(parseDXF(dwgToPairs(d)).notDrawn.LEADER, n);
+  });
+}
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };

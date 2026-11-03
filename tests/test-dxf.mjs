@@ -512,8 +512,11 @@ test('round 14 (quality): oblique, polyline widths, LEADER drawn and the rest co
   ));
   const slant = d.texts.find((t) => t.text === 'SLANT');
   assert.ok(Math.abs(slant.oblique - (12 * Math.PI) / 180) < 1e-12);
-  assert.deepEqual(d.paths.slice(0, 3).map((p) => p.width), [2.5, 3, 4]);
-  assert.deepEqual([...d.paths[3].pts], [0, 20, 5, 25, 9, 25], 'the LEADER as its vertices');
+  // one width: stroked at it; a taper (1 to 3, then 0): its line and its outline from 1 to 3 wide
+  assert.deepEqual(d.paths.filter((p) => !p.fill).slice(0, 3).map((p) => p.width), [2.5, undefined, 4]);
+  const taper = d.paths.find((p) => p.fill);
+  assert.deepEqual([...taper.pts], [0, 5.5, 10, 6.5, 10, 3.5, 0, 4.5], 'half of 1 at its start, half of 3 at its end');
+  assert.deepEqual([...d.paths.find((p) => p.pts[1] === 20).pts], [0, 20, 5, 25, 9, 25], 'the LEADER as its vertices');
   assert.deepEqual(d.notDrawn, { WIPEOUT: 1, MLINE: 2 });
   // the MTEXT wraps at 20 units (12 words of 4, ~0.6 a character): more than one line in the extents
   const m = d.texts.find((t) => t.mtext);
@@ -537,6 +540,66 @@ test('a text seen through a layout viewport is kept when its box meets the frame
   assert.ok(long && long.clip, 'the long text kept, clipped to the frame');
   assert.deepEqual(long.clip, [0, 0, 10, 10]);
   assert.ok(!L.texts.some((t) => t.text === 'ACROSS'), 'a text wholly outside is left out');
+  // the layout's extents count only what is drawn of a clipped text (its whole box made them 65 wide)
+  assert.deepEqual([L.extents.min[0], L.extents.max[0]], [0, 10], `extents ${JSON.stringify(L.extents)}`);
+});
+test('round 15: a block stretch taken along the text; a viewport scales width and wrap; clipped extents; tables and arc dimensions drawn', () => {
+  const blk = (ent) => [[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], ...ent, [0, 'ENDBLK'], [0, 'ENDSEC']];
+  const ins = (ent, g) => parseDXF(dxf([...blk(ent), [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], ...g, [0, 'ENDSEC'], [0, 'EOF']]));
+  // a TEXT turned 90° in a block stretched 2 in x: twice as TALL (its height lies along x), not wider
+  const t = ins([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [50, 90], [1, 'T']], [[41, 2]]).texts[0];
+  assert.ok(Math.abs(t.h - 2) < 1e-9 && Math.abs(t.widthFactor - 0.5) < 1e-9, `h ${t.h}, widthFactor ${t.widthFactor}`);
+  // an MTEXT turned 90° likewise; its wrap width lies along y, unstretched
+  const m = ins([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [41, 10], [11, 0], [21, 1], [1, 'M']], [[41, 2]]).texts[0];
+  assert.ok(Math.abs(m.h - 2) < 1e-9 && Math.abs(m.wrap - 10) < 1e-9, `h ${m.h}, wrap ${m.wrap}`);
+  // a uniform scale: no width factor
+  assert.equal(ins([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [50, 30], [1, 'T']], [[41, 3], [42, 3]]).texts[0].widthFactor, undefined);
+  // through a 0.1 viewport: a polyline's width and an MTEXT's wrap scaled with it
+  const V = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [43, 5], [10, 0], [20, 0], [10, 10], [20, 0],
+    [0, 'MTEXT'], [8, '0'], [10, 0], [20, 20], [40, 5], [41, 40], [71, 1], [1, 'w'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 100], [41, 100], [69, 2], [12, 0], [22, 0], [45, 1000],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.ok(Math.abs(V.paths.find((p) => p.width).width - 0.5) < 1e-9, 'the width scaled');
+  assert.ok(Math.abs(V.texts[0].wrap - 4) < 1e-9 && Math.abs(V.texts[0].h - 0.5) < 1e-9, `wrap ${V.texts[0].wrap}`);
+  // a table: its *T block inserted at its point (its AcDbTable 41 / 70 / 71 are not a scale or an array)
+  const T = parseDXF(dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, '*T1'], [70, 1], [10, 0], [20, 0],
+    [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'ACAD_TABLE'], [8, '0'], [100, 'AcDbBlockReference'], [2, '*T1'], [10, 5], [20, 5],
+    [100, 'AcDbTable'], [41, 9], [70, 4], [71, 4], [91, 2], [92, 2], [0, 'ARC_DIMENSION'], [8, '0'], [2, '*T1'], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.equal(T.paths.length, 2, 'the table and the arc dimension each draw their block');
+  assert.deepEqual([...T.paths[0].pts], [5, 5, 6, 5]);
+  assert.deepEqual(T.notDrawn, {});
+});
+test('round 15: an escaped stack, a byte-order mark under a named code page, a linear wrap, an oblique box', () => {
+  assert.equal(mtextPlain('5\\S+0.1\\U+00B0^-0.1\\U+00B0;'), '5 +0.1° -0.1°');
+  assert.equal(mtextPlain('\\S\\U+00B1 0.1^;'), '± 0.1');
+  // a TEXT's leading space is part of it, written as itself or escaped (one was trimmed, one not)
+  const lead = (v) => parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, v]])).texts[0].text;
+  assert.equal(lead('　１台'), '　１台');
+  assert.equal(lead('\\U+3000１台'), '　１台');
+  // a UTF-8 BOM before an R2000 DXF naming ANSI_1252: drawn
+  const B = new TextEncoder().encode(`﻿${dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, 'AC1015'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1252'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDSEC'], [0, 'EOF']])}`);
+  assert.equal(B[0], 0xef);
+  assert.equal(parseDXF(B.buffer).paths.length, 1);
+  // the wrap measures each word once: 200,000 words, about as many measures (it was one per word
+  // of the growing line, quadratic in characters)
+  let chars = 0;
+  const words = Array(200000).fill('abc').join(' ');
+  wrapLines([words], (l) => { chars += l.length; return l.length; }, words.length - 1);
+  assert.ok(chars < 4 * words.length, `${chars} characters measured`);
+  // an oblique text's box leans with it, the lean scaled by its width factor (as the view slants
+  // before it scales)
+  const c = textCorners({ x: 0, y: 0, h: 1, rot: 0, text: 'X', align: 'left', valign: 'baseline', oblique: Math.PI / 6 });
+  assert.ok(Math.max(...c.map((q) => q[0])) > 0.6 + 0.5, 'the top right corner moved along by tan 30° per unit height');
+  const c2 = textCorners({ x: 0, y: 0, h: 1, rot: 0, text: 'X', align: 'left', valign: 'baseline', oblique: Math.PI / 4, widthFactor: 2 });
+  assert.ok(Math.abs(Math.max(...c2.map((q) => q[0])) - (1.2 + 2)) < 1e-9, `${JSON.stringify(c2)}`);
+  // CJK breaks between characters (it has no spaces); spaces at a break are dropped
+  assert.deepEqual(wrapLines(['平面図配置図'], (l) => l.length, 4), ['平面図配', '置図']);
+  assert.deepEqual(wrapLines(['ab  cd'], (l) => l.length, 3), ['ab', 'cd']);
+  assert.deepEqual(wrapLines(['图 A1 平面'], (l) => l.length, 5), ['图 A1', '平面']);
 });
 test('looksLikeDxf on blank lines and 999s that never reach SECTION: linear, not exponential (27 s for 127 bytes)', () => {
   const head = `${'999\n\n\n\n'.repeat(400)}solid x\n`;

@@ -4606,7 +4606,9 @@ function fillInfo2D(el) {
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
-    row('selection', `layer ${l}: ${fmtInt(d.paths.filter((p) => p.layer === l).length)} lines and shapes`);
+    // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines")
+    const np = d.paths.filter((p) => p.layer === l).length, nt = d.texts.filter((t) => t.layer === l).length;
+    row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
   }
 }
 

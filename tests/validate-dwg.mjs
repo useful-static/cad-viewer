@@ -23,7 +23,11 @@ import { readDWG, dwgToPairs, pairsToDXF } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { dxfPairs, byHandle, compare, hexHandle } from './dwg-compare.mjs';
 
-const summary = (dr) => JSON.stringify({ paths: dr.paths.length, texts: dr.texts.length, layers: dr.layers.length, extents: dr.extents, layouts: dr.layouts.length });
+// (what the drawing shows, not only how much of it: the texts' strings and the paths' widths too --
+// counts alone passed an escape the written DXF read back wrong, "5\S+0.1°^-0.1°;" for "5 +0.1° -0.1°")
+const hashOf = (parts) => { let h = 0x811c9dc5; for (const s of parts) for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0; return h; };
+const sheet = (s) => ({ paths: s.paths.length, texts: s.texts.length, text: hashOf(s.texts.map((t) => `${t.layer}\u0000${t.text}\u0001`)), widths: hashOf(s.paths.map((p) => `${p.width || 0},`)), extents: s.extents });
+const summary = (dr) => JSON.stringify({ ...sheet(dr), layers: dr.layers.length, layouts: dr.layouts.map(sheet), notDrawn: dr.notDrawn });
 
 export function validate(std, path) {
   const res = { std, path, ok: true, notes: [] };

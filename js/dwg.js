@@ -13,7 +13,7 @@
 //
 // No other reader's code was consulted: the clean-room rule of the project.
 
-import { caret, valueKind, aciColour } from './dxf.js';
+import { caret, valueKind, aciColour, NOT_DRAWN } from './dxf.js';
 import { crc32 } from './crc32.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
 
@@ -631,10 +631,21 @@ function readClasses(s, v, maint, chk) {
     const flags = r.BS();
     const app = r.TV(), cpp = r.TV(), dxf = r.TV();
     const zombie = r.B(), item = r.BS();
-    if (v >= 18) { r.BL(); r.BS(); r.BS(); r.BL(); r.BL(); }
+    // (its instance count, version, maintenance release and two unknowns, all BL -- the spec's
+    // R2007 classes section. Its R2004 section says BS for the two versions, and the files
+    // disagree: read as BS, a class whose version needs more than 8 bits threw every later record
+    // off -- an R2004, an R2010, an R2013 and an R2018 drawing at hand lost 10 to 34 classes, and
+    // their objects their names. BS and BL agree on a value under 256, so no file needs BS)
+    if (v >= 18) { r.BL(); r.BL(); r.BL(); r.BL(); r.BL(); }
     classes.set(num, { num, flags, app, cpp, dxf, zombie, item });
     if (num >= maxClass || classes.size > 10000) break;
   }
+  // the numbers run 500, 501, ... without a gap, to the last class number the section states (from
+  // R2004): a record misread throws every later one off, and their objects lost their names while
+  // every check passed
+  const nums = [...classes.keys()];
+  chk.ok('classes numbered 500 on without a gap', nums.every((n, k) => n === 500 + k));
+  if (maxClass !== Infinity) chk.ok('classes reach the stated last class number', !nums.length ? maxClass < 500 : nums[nums.length - 1] === maxClass);
   if (v < 21) {
     const crcAt = dataAt + size;
     chk.ok('classes CRC', crc16(0xc0c1, b, at + 16, crcAt) === (b[crcAt] | (b[crcAt + 1] << 8)));
@@ -914,7 +925,17 @@ class ObjectReader {
     const o = this.open(loc);
     if (!o) return null;
     const fn = DECODE[o.name];
-    if (!fn || (o.name === 'ACAD_TABLE' && this.v >= 24)) return o; // a type not decoded (not an error)
+    if (!fn || (o.name === 'ACAD_TABLE' && this.v >= 24)) {
+      // a type not decoded (not an error). An entity kind the drawing does not draw keeps its
+      // common data and handles (its owner and layer), so the adapter can name it and the page
+      // count it as not drawn -- a DWG's leaders and solids vanished without a word, where the
+      // same drawing's DXF listed them. Only what every entity shares is read: its own data is
+      // passed over
+      if (HEAD_ONLY.has(o.name)) {
+        try { this.entity(o); this.entityHandles(o); o.headOnly = true; } catch { delete o.e; }
+      }
+      return o;
+    }
     try {
       if (ENTITY_NAMES.has(o.name)) { this.entity(o); fn.call(this, o, o.r, this.v); } else { this.object(o); fn.call(this, o, o.r, this.v); }
       o.decoded = true;
@@ -928,6 +949,10 @@ class ObjectReader {
     return o;
   }
 }
+// entity kinds not decoded whose common entity part is read (DWG.read): the kinds js/dxf.js
+// counts as not drawn (its NOT_DRAWN, the one list: kept apart here, the two already differed),
+// and LEADER, which it draws from a DXF (its vertices are not decoded here)
+const HEAD_ONLY = new Set([...NOT_DRAWN, 'LEADER']);
 const ENTITY_NAMES = new Set(['TEXT', 'ATTRIB', 'ATTDEF', 'BLOCK', 'ENDBLK', 'SEQEND', 'INSERT', 'MINSERT', 'VERTEX', 'POLYLINE', 'ARC', 'CIRCLE', 'LINE', 'DIMENSION', 'POINT', 'SOLID', 'TRACE',
   'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', '3DFACE']);
 
@@ -1431,7 +1456,7 @@ export function dwgToPairs(dwg) {
   const owned = new Map(); // block record handle -> [entity]
   const children = new Map(); // owner handle -> [entity] (vertices, attributes)
   for (const o of objects.values()) {
-    if (!o.decoded || !o.e) continue;
+    if (!(o.decoded || o.headOnly) || !o.e) continue;
     let ownerH = o.e.owner;
     if (o.e.entmode === 2 && model) ownerH = model.handle;
     if (o.e.entmode === 1 && paper) ownerH = paper.handle;
@@ -1443,7 +1468,7 @@ export function dwgToPairs(dwg) {
   }
   const emitEntity = (o, inPaper) => {
     const e = o.e, d = o.d;
-    if (!d && !['ENDBLK', 'SEQEND'].includes(o.name)) return;
+    if (!d && !o.headOnly && !['ENDBLK', 'SEQEND'].includes(o.name)) return;
     const common = (type) => {
       put(0, type); put(5, hex(o.handle));
       if (inPaper) put(67, 1);
@@ -1456,6 +1481,9 @@ export function dwgToPairs(dwg) {
       if (e.invisible) put(60, 1);
     };
     const ext = (x) => { if (x && (x[0] || x[1] || x[2] !== 1)) { put(210, x[0]); put(220, x[1]); put(230, x[2]); } };
+    // a kind read only to its common part (DWG.read's HEAD_ONLY): named, with its layer, and
+    // nothing else -- what the DXF reader needs to count it as not drawn
+    if (o.headOnly) { common(o.name); return; }
     switch (o.name) {
       case 'LINE': common('LINE'); put(10, d.p0[0]); put(20, d.p0[1]); put(30, d.p0[2]); put(11, d.p1[0]); put(21, d.p1[1]); put(31, d.p1[2]); ext(d.ext); break;
       case 'CIRCLE': common('CIRCLE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.rad); ext(d.ext); break;
