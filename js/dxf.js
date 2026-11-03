@@ -1342,17 +1342,18 @@ export function attribTextGroups(g) {
   return k < 0 ? g : g.filter((x, i) => i < k || !ATTRIB_TEXT_CODES.has(x[0]));
 }
 
-// A drawing with nothing to show: no path or text in model space or any layout. The one rule for
-// the page (it refuses the file) and dwg-check.mjs (it reports it)
 // a drawing path that is one of its lines and shapes: not a wide polyline's outline (its
 // polyline's), not a viewport's frame. The one rule for the info panel and dwg-check
 export const isShape = (p) => !p.outline && !p.frame;
-// (a viewport's frame alone is not a drawing: a sheet of frames passed as one)
-export const sheetDraws = (s) => s.paths.some(isShape) || s.texts.length > 0; // (model space, or a layout)
+// whether a sheet (model space, or a layout) draws anything (a viewport's frame alone is not a
+// drawing: a sheet of frames passed as one)
+export const sheetDraws = (s) => s.paths.some(isShape) || s.texts.length > 0;
 // The layouts a drawing offers -- those that draw something -- with their index: the one rule for
 // the Sheet menu, the info panel's paper-space row and dwg-check (the row pointed at a menu the
 // page hid, and the CLI counted every layout)
 export const sheetsOf = (d) => d.layouts.map((l, i) => ({ l, i })).filter(({ l }) => sheetDraws(l));
+// A drawing with nothing to show: no path or text in model space or any layout. The one rule for
+// the page (it refuses the file) and dwg-check.mjs (it reports it)
 export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws);
 
 // Lines wrapped at a width, at spaces (a word longer than the width stands alone): width(line)

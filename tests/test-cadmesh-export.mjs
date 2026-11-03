@@ -70,8 +70,10 @@ await test('--skip leaves out the bodies it matches; --out names the files', () 
   // help is not an error; a bad --skip is an option's error
   assert.equal(run('-h').status, 0);
   assert.equal(run(inp, '--skip', '(').status, 2);
-  // an option with no value is a usage error; a write that fails is one line, exit 1
+  // an option with no value, or one it does not know, is a usage error; a write that fails is one line, exit 1
   assert.equal(run(inp, '--to').status, 2);
+  assert.equal(run(inp, '--skp', 'part').status, 2);
+  assert.equal(run(inp, '--model_up', 'y').status, 2);
   const w = run(inp, '--to', 'stl', '--out', join(dir, 'no-such-dir', 'x'));
   assert.equal(w.status, 1);
   assert.match(w.stderr, /^cadmesh-export: could not write .*x\.stl: /);

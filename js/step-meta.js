@@ -66,6 +66,8 @@ export function decodeStepString(s) {
     if (pg) { page = pg; return ''; }
     return x2 ? run(4)(m, x2) : x4 ? run(8)(m, x4) : x1 ? String.fromCharCode(parseInt(x1, 16)) : upper(s1);
   };
+  // (and, as the converter: a \X2\ / \X4\ run not closed by \X0\ read to its end, a bare \X0\ no
+  // text -- both stayed in the name, "A\X0\B" for "AB")
   return s.replace(/''/g, "'")
-    .replace(/\\\\|\\X2\\((?:[0-9A-Fa-f]{4})+)\\X0\\|\\X4\\((?:[0-9A-Fa-f]{8})+)\\X0\\|\\X\\([0-9A-Fa-f]{2})|\\S\\(.)|\\P([A-I])\\/g, one);
+    .replace(/\\\\|\\X2\\((?:[0-9A-Fa-f]{4})+)(?:\\X0\\|$)|\\X4\\((?:[0-9A-Fa-f]{8})+)(?:\\X0\\|$)|\\X\\([0-9A-Fa-f]{2})|\\S\\(.)|\\P([A-I])\\|\\X0\\/g, (m, ...g) => (m === '\\X0\\' ? '' : one(m, ...g)));
 }

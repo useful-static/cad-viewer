@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
@@ -21,9 +21,9 @@ import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft }
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
-import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundFraction, roundNotePoint } from './view-link.js';
+import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
-import { EXPORTS, exportBasis, exportable } from './export-mesh.js';
+import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges } from './scene.js';
@@ -1144,7 +1144,8 @@ app.openUrl = (u) => loadUrl(u);
 // 3MF (a printer's convention), Y up for GLB (glTF's)
 // A saved file's name from the model's: its .gz, then its extension, off ("board.stp.gz" ->
 // "board"). The one rule for exports and Save .cadmesh (which named it "board.stp.cadmesh")
-const saveBase = (name) => (name || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+// (a scene of several models, "a.stp + b.stl": each name's base, joined -- "a.stp + b" before)
+const saveBase = (name) => (name || 'model').split(' + ').map((n) => n.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '')).filter(Boolean).join('+') || 'model';
 // a picture's name: the model's or the drawing's, and when it was taken (a drawing's had its own
 // rule, no time and its .gz kept)
 function pictureName(source) {
@@ -1157,7 +1158,7 @@ async function exportMesh(fmt) {
   const model = { ...app.baseMesh, color: app.mesh.color };
   // (the bodies shown that have a triangle: what is written, counted and said -- js/export-mesh.js)
   const ids = exportable(model, app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id)));
-  if (!ids.length) { flashHover('nothing shown to export'); return; }
+  if (!ids.length) { flashHover(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
   setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
@@ -1979,8 +1980,9 @@ function captureStep({ camera = 'exact' } = {}) {
   const n = app.header.meshes.length;
   tourParts([]); // (the name index for this model)
   const names = (ids) => namesFor(ids, app.header, app.tourIdx, app.partLabels);
-  const r = (v, d) => +v.toFixed(d);
-  const q = (c.q || presetQuat(c.yaw, c.pitch, c.orient)).map((v) => r(v, 6));
+  // (rounded as a link rounds it: roundCamera, the one rule)
+  const rc = roundCamera({ target: c.target, dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient) });
+  const q = rc.q;
   const s = {};
   if (camera === 'frame') {
     if (!app.selected.size) return null;
@@ -1989,7 +1991,7 @@ function captureStep({ camera = 'exact' } = {}) {
     s.margin = 1.3;
     s.ortho = !!c.ortho; // (the projection it was taken in: a framed step carries no camera)
   } else {
-    s.view = { cam: { target: c.target.map((v) => r(v, 4)), dist: +c.dist.toPrecision(6), q, ortho: !!c.ortho } };
+    s.view = { cam: { target: rc.target, dist: rc.dist, q, ortho: !!c.ortho } };
   }
   // with a tour shown (the maker's Show or Preview), the view is the step as played: what its dim
   // did (every other part grey, or hidden) is the dim field's, which the editor keeps, not a
@@ -3753,13 +3755,9 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // a file with no surfaces (a STEP or IGES of curves or points only) is
   // refused in plain words, the model on screen kept: it opened "ready" with
   // 0 bodies, an empty tree and a blank view (review r22)
-  if (!base.header.indexCount) {
-    // (faces the converter could not mesh are not "no faces": r23)
-    const unmeshed = conversion && conversion.unmeshedFaces;
-    throw new Error(unmeshed
-      ? `none of the ${fmtInt(unmeshed)} faces of ${name} could be meshed: the converter failed on them, or this device ran out of memory`
-      : `${name} has no surfaces to show: it holds no faces (only curves or points, or nothing). Export the solids or surfaces from the CAD program`);
-  }
+  // (faces the converter could not mesh are not "no faces": r23; the words js/cadmesh.js noSurfaces)
+  const none = noSurfaces(base.header.indexCount, name, conversion && conversion.unmeshedFaces);
+  if (none) throw new Error(none);
   // File > Add model… (or ?add=): merged into the scene beside the shown model
   if (app.adding && app.adding.seq === seq) return addToScene(base, name, seq);
   // one holder, shared by every palette copy made from base (they spread it)
@@ -4087,7 +4085,10 @@ async function runClearance() {
   await nextPaint();
   const t0 = performance.now();
   const base = app.baseMesh;
-  const r = clearance(base.position, base.index, tris(A), tris(B));
+  // (each set's closed bodies, for a part lying wholly inside one: the facts' closed flags)
+  const closed = base.edgeInfo?.value?.facts?.closed;
+  const solids = (ids) => (closed ? tris(ids.filter((id) => closed[id - 1])) : []);
+  const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B) });
   if (app.baseMesh !== base || !r) return;
   const ms = Math.round(performance.now() - t0);
   // the bodies the two nearest triangles belong to
@@ -5742,6 +5743,8 @@ function wireInput() {
   // Measure (js/measure-ui.js): this input feeds it while it is on
   app.measure = createMeasure({
     $, view: measureView, sectionPlane,
+    // whether a body is closed (the facts, as the cut fill reads them): only a closed one shows a cut face
+    closed: (mi) => { const c = app.baseMesh?.edgeInfo?.value?.facts?.closed; return c ? !!c[mi] : true; },
     // the model as Measure reads it, at the time it reads it
     scene: {
       get mesh() { return app.baseMesh; },

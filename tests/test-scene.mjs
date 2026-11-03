@@ -105,4 +105,19 @@ test('clearance: many triangles, the tree agrees with every pair', () => {
   assert.ok(r.pairs < 36 * 12 * 36 * 12 / 10, `${r.pairs} pairs tested (the tree should skip most)`);
 });
 
+test('a pin wholly inside a solid block overlaps it: 0, not the gap between their surfaces', () => {
+  const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
+  const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
+  const s = mergeModels([{ base: block, name: 'block.stp' }, { base: pin, name: 'pin.stp' }]);
+  const plain = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]));
+  assert.ok(Math.abs(plain.distance - 4) < 1e-9, 'the surfaces are 4 apart');
+  const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]) });
+  assert.deepEqual([r.distance, r.inside], [0, true]);
+  // a pin beside the block, not in it: its gap
+  const beside = file('pin', [['pin', [12, 4, 4], [14, 6, 6]]]);
+  const s2 = mergeModels([{ base: block, name: 'block.stp' }, { base: beside, name: 'pin.stp' }]);
+  const r2 = clearance(s2.position, s2.index, trisOf(s2, [2]), trisOf(s2, [1]), { solidA: trisOf(s2, [2]), solidB: trisOf(s2, [1]) });
+  assert.ok(Math.abs(r2.distance - 2) < 1e-9 && !r2.inside, JSON.stringify(r2));
+});
+
 done();

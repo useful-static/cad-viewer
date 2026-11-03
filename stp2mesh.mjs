@@ -9,7 +9,7 @@ import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
-import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, noSurfaces, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
@@ -181,13 +181,9 @@ async function main() {
   }
   // no faces (curves or points only): nothing to show, as the viewer refuses
   // it, not an empty .cadmesh written as OK (review r22)
-  if (!model.meshes.some((m) => m.indices.length)) {
-    // (faces the converter could not mesh are not "no faces": r23)
-    process.stderr.write(model.unmeshedFaces
-      ? `FAIL: none of the ${model.unmeshedFaces} faces of ${args.input} could be meshed (the converter failed on them, or ran out of memory)\n`
-      : `FAIL: ${args.input} has no surfaces to show: it holds no faces (only curves or points, or nothing)\n`);
-    return 1;
-  }
+  // (faces the converter could not mesh are not "no faces": r23; the page's words, noSurfaces)
+  const none = noSurfaces(model.meshes.reduce((s, m) => s + m.indices.length, 0), args.input, model.unmeshedFaces);
+  if (none) { process.stderr.write(`FAIL: ${none}\n`); return 1; }
   // the statuses are reported (and digested for compare.sh) even when
   // --no-kind leaves them out of the header
   // the converter's own strings, not the filtered kind, so a status the JS
@@ -201,7 +197,8 @@ async function main() {
   const buf = encodeCadmesh(model, { edges: !args.noEdges });
   // (the page saves a conversion only once it loads; decoded here first too -- written and printed
   // OK before, a model past the viewer's bound left its file behind with an OK line, then FAIL)
-  const h = decodeCadmesh(buf).header;
+  let h;
+  try { h = decodeCadmesh(buf).header; } catch (e) { process.stderr.write(`FAIL: ${args.input}: ${e.message}\n`); return 1; } // (one line, not node's stack)
   if (model.unmeshedFaces) {
     process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }

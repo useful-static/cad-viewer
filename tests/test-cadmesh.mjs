@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflate, inflateCadmesh,
-  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader,
+  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels,
 } from '../js/cadmesh.js';
 import { deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
 import { test, skip, done } from './harness.mjs';
@@ -455,6 +455,21 @@ if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
   skip('stp2mesh conversion', 'needs fetch-deps.sh + CADV_STEP_FIXTURE=<file.stp>');
 }
 
+await test('noSurfaces: the one refusal for the page and stp2mesh; bodyLabels: owner › body', () => {
+  assert.equal(noSurfaces(3, 'a.stp'), null);
+  assert.match(noSurfaces(0, 'a.stp'), /^a\.stp has no surfaces to show: it holds no faces/);
+  assert.match(noSurfaces(0, 'a.stp', 7), /^none of the 7 faces of a\.stp could be meshed/);
+  const h = { meshes: [{ name: 'COMPONENT1' }, { name: 'BOARD' }, { name: 'loose' }], root: { name: '', meshes: [2], children: [{ name: 'BOARD', meshes: [0, 1], children: [] }] } };
+  assert.deepEqual(bodyLabels(h), ['BOARD › COMPONENT1', 'BOARD', 'loose']);
+});
+await test('dwg-check refuses an option it does not know, and --dxf with no file (exit 2)', () => {
+  const cli = join(HERE, '..', 'dwg-check.mjs');
+  for (const args of [['x.dwg', '--jsn'], ['x.dwg', '--dxf']]) {
+    let status = 0;
+    try { execFileSync(process.execPath, [cli, ...args], { stdio: 'pipe' }); } catch (e) { status = e.status; }
+    assert.equal(status, 2, args.join(' '));
+  }
+});
 await test('a .cadmesh with a coordinate past 10^15 is refused as the mesh readers refuse it (it decoded at 1e20)', () => {
   const q = quad('far', 0);
   q.positions[0] = 1e20;

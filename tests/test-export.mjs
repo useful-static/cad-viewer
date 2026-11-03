@@ -124,6 +124,7 @@ await test('an empty body is left out of the GLB and the 3MF (it made a count-0 
   // the one count the page and the CLI say and refuse by; none left: refused, not an empty file
   assert.deepEqual(exportable(m3, [1, 2, 3]), [1, 2]);
   assert.throws(() => toGLB(m3, [3], YUP, ['empty']), /nothing to export/);
+  assert.throws(() => toSTL(m3, [3], IDENT, 'empty'), /nothing to export/); // (it wrote an 84-byte STL)
   await assert.rejects(to3MF(m3, [3], IDENT, ['empty']), /nothing to export/);
 });
 

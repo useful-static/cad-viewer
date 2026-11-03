@@ -54,6 +54,9 @@ test('a STEP name written as raw UTF-8, \\S\\ or \\X4\\ decodes as the converter
   // \PA\ (a page directive) is no text; \PB\ makes the \S\ that follow ISO 8859-2 (0xB1 is ą there)
   assert.equal(decodeStepString('\\PA\\Caf\\S\\i'), 'Café');
   assert.equal(decodeStepString('\\PB\\\\S\\1'), 'ą');
+  // malformed, as the converter reads them: a bare \X0\ is nothing, an unclosed \X2\ run read to its end
+  assert.equal(decodeStepString('A\\X0\\B'), 'AB');
+  assert.equal(decodeStepString('A\\X2\\00E9'), 'Aé');
   // bytes that are not UTF-8 stay as read
   assert.equal(decodeStepString('na\xefve'), 'na\xefve');
 });

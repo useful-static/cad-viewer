@@ -259,6 +259,16 @@ export const MAX_FILE_BYTES = 2 * 2 ** 30;
 export const MAX_COORD = 1e15;
 export const MAX_COORD_WORDS = '10^15 mm';
 
+// A conversion that shows nothing, in words, or null: no triangle at all -- faces the converter
+// could not mesh (unmeshed: their count), else no faces (curves or points only). The one refusal
+// for the page and stp2mesh.mjs (each had its own, drifted)
+export function noSurfaces(triangles, name, unmeshed = 0) {
+  if (triangles > 0) return null;
+  return unmeshed
+    ? `none of the ${unmeshed} faces of ${name} could be meshed: the converter failed on them, or ran out of memory`
+    : `${name} has no surfaces to show: it holds no faces (only curves or points, or nothing). Export the solids or surfaces from the CAD program`;
+}
+
 // Each body's label as the page shows it: "owner › body", its nearest named tree node and its own
 // name (CAD exporters name bodies generically -- COMPONENT1..n -- while the tree carries the part's
 // name), or its name alone. The one rule for the page and cadmesh-export.mjs (the CLI named

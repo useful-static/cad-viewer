@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed } from '../js/dxf-view.js';
+import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentGrid } from '../js/dxf-view.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
@@ -675,6 +675,47 @@ test('round 19: a sheet of viewport frames alone draws nothing; a Uint8Array or 
   const text = dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDSEC'], [0, 'EOF']]);
   assert.equal(parseDXF(new TextEncoder().encode(text)).paths.length, 1);
   assert.equal(parseDXF(Buffer.from(text)).paths.length, 1);
+});
+test('the 2D snaps and the hover\'s line: the index finds what a scan of every one finds, at every radius, with a layer hidden', () => {
+  let s = 11;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  // clustered: most points in a small patch, some on cell-like edges (whole numbers)
+  const pts = [];
+  for (let i = 0; i < 20000; i++) {
+    const c = i % 4 === 0;
+    pts.push([c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5, c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5, 'end', i % 3 === 0 ? 'HID' : 'A']);
+  }
+  const tree = pointTree(pts);
+  const ok = (p) => p[3] !== 'HID';
+  for (let q = 0; q < 300; q++) {
+    const x = rnd() * 100, y = rnd() * 100, r = [0.01, 0.3, 3, 40][q % 4];
+    let best = null, bd = r * r;
+    for (const p of pts) { const d = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (d < bd && ok(p)) { bd = d; best = p; } }
+    const got = nearestPoint(tree, x, y, r, ok);
+    assert.equal(got === null ? null : (got[0] - x) ** 2 + (got[1] - y) ** 2, best === null ? null : bd, `query ${q}`);
+  }
+  // segments: polylines, one long line across everything, a hidden layer
+  const paths = [];
+  for (let i = 0; i < 400; i++) { const x = rnd() * 100, y = rnd() * 100; paths.push({ layer: i % 5 ? 'A' : 'HID', closed: i % 7 === 0, pts: Float64Array.of(x, y, x + rnd() * 3, y + rnd() * 3, x + rnd() * 3, y - rnd() * 2) }); }
+  paths.push({ layer: 'A', closed: false, pts: Float64Array.of(-500, 37, 600, 38) });
+  const grid = segmentGrid(paths, [0, 0], 100);
+  const okP = (pi) => paths[pi].layer !== 'HID';
+  for (let q = 0; q < 300; q++) {
+    const x = rnd() * 100, y = rnd() * 100, r = [0.05, 1, 8][q % 3];
+    let best = -1, bd = r * r;
+    paths.forEach((p, pi) => {
+      const n = p.pts.length / 2;
+      for (let i = 0; i < n; i++) {
+        const j = i + 1 < n ? i + 1 : p.closed ? 0 : -1;
+        const ax = p.pts[2 * i], ay = p.pts[2 * i + 1], bx = j < 0 ? ax : p.pts[2 * j], by = j < 0 ? ay : p.pts[2 * j + 1];
+        const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+        const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+        const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
+        if (d2 < bd && okP(pi)) { bd = d2; best = pi; }
+      }
+    });
+    assert.equal(nearestSegment(grid, x, y, r, okP), best, `segment query ${q}`);
+  }
 });
 test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {
   const texts = [], vps = [];

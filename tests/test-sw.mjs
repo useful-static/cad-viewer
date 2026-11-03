@@ -28,16 +28,21 @@ test('every module reached from index.html by import is kept', () => {
     if (seen.has(f)) return;
     seen.add(f);
     const src = readFileSync(join(root, 'js', f), 'utf8');
-    for (const x of src.matchAll(/(?:import|export)\s[^'"]*?from\s+['"]\.\/([\w.-]+\.js)['"]|new (?:Worker|URL)\(\s*['"]\.\/([\w.-]+\.js)['"]/g)) visit(x[1] || x[2]);
+    // (static imports, dynamic import('./x.js'), workers and URLs)
+    for (const x of src.matchAll(/(?:import|export)\s[^'"]*?from\s+['"]\.\/([\w.-]+\.js)['"]|(?:new (?:Worker|URL)|import)\(\s*['"]\.\/([\w.-]+\.js)['"]/g)) visit(x[1] || x[2]);
   };
-  const html = readFileSync(join(root, 'index.html'), 'utf8');
-  for (const x of html.matchAll(/src="js\/([\w.-]+\.js)"/g)) visit(x[1]);
-  assert.ok(seen.has('main.js') && seen.size > 10, `reached ${seen.size}`);
+  // the pages kept: index.html and check.html, and the scripts each loads
+  for (const page of ['index.html', 'check.html']) {
+    assert.ok(new RegExp(`'${page.replace('.', '\\.')}'`).test(sw), `${page} kept`);
+    const html = readFileSync(join(root, page), 'utf8');
+    for (const x of html.matchAll(/src="js\/([\w.-]+\.js)"|from '\.\/js\/([\w.-]+\.js)'/g)) visit(x[1] || x[2]);
+  }
+  assert.ok(seen.has('main.js') && seen.has('renderer-webgpu.js') && seen.size > 10, `reached ${seen.size}`);
   for (const f of seen) assert.ok(listed.has(f), `${f} is imported but not kept`);
 });
 
-test('the cache name moved with the list (a client keeps the old cache until the name changes)', () => {
-  assert.match(sw, /const CACHE = 'cadv-app-v2'/);
+test('the cache name is made from the list (a client keeps an old cache until the name changes)', () => {
+  assert.match(sw, /const CACHE = `cadv-app-\$\{\[\.\.\.SHELL\.join/);
 });
 
 done();

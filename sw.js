@@ -6,7 +6,6 @@
 // model lists are never cached here (a visitor's files are theirs, and a
 // site's lists change): only the app.
 
-const CACHE = 'cadv-app-v2';
 // The page and every module it can load, kept at install: with the shell alone, a visitor offline
 // after one visit got the page and not js/main.js -- a dead page. (The converter, vendor/, is kept
 // once fetched: a STEP file opens offline after one has been converted online.) APP_JS is every
@@ -17,7 +16,10 @@ const APP_JS = ['cadmesh.js', 'camera.js', 'check-page.js', 'clearance.js', 'cod
   'model-list.js', 'open-url.js', 'orient.js', 'palettes.js', 'prefs.js', 'raycast.js', 'read-file.js', 'read-worker.js', 'renderer-webgl.js',
   'renderer-webgpu.js', 'same-place.js', 'scene.js', 'source-units.js', 'step-features.js', 'step-meta.js', 'step-text.js', 'step-worker.js',
   'styles.js', 'tour-path.js', 'tour-recorder.js', 'tour-sight.js', 'tour.js', 'units.js', 'vec3.js', 'view-link.js'];
-const SHELL = ['./', 'index.html', 'favicon.svg', 'manifest.webmanifest', ...APP_JS.map((f) => `js/${f}`)];
+const SHELL = ['./', 'index.html', 'check.html', 'favicon.svg', 'manifest.webmanifest', ...APP_JS.map((f) => `js/${f}`)];
+// the cache's name follows the list (a client keeps an old cache until the name changes: written by
+// hand, a new list under the old name left the new files out)
+const CACHE = `cadv-app-${[...SHELL.join('\n')].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7).toString(36)}`;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -47,10 +49,9 @@ self.addEventListener('fetch', (e) => {
     const key = url.pathname.slice(scope.length) === '' || url.pathname.endsWith('/index.html') ? new Request(new URL('index.html', self.location.href)) : req;
     try {
       const res = await fetch(req);
-      if (res.ok) {
-        const c = await caches.open(CACHE);
-        c.put(key, res.clone());
-      }
+      // (the copy kept before the worker may stop: put, unawaited, could be lost -- the 12 MB
+      // converter then not there offline after one conversion online)
+      if (res.ok) { const copy = res.clone(); e.waitUntil(caches.open(CACHE).then((c) => c.put(key, copy))); }
       return res;
     } catch (err) {
       const hit = await caches.match(key);

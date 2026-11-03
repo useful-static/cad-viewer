@@ -22,7 +22,7 @@
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
-import { EXPORTS, exportBasis, exportable } from './js/export-mesh.js';
+import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
 
 // --model-up's two names for orientations
@@ -43,7 +43,7 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
   const labels = bodyLabels(model.header);
   const named = model.header.meshes.map((m, i) => i + 1).filter((id) => !(skip && (skip.test(labels[id - 1] || '') || skip.test(model.header.meshes[id - 1].name || ''))));
   const ids = exportable(model, named);
-  if (!ids.length) throw new Error('nothing to export (no body left has a triangle)');
+  if (!ids.length) throw new Error(NOTHING_TO_EXPORT);
   const names = ids.map((id) => labels[id - 1]);
   const out = [];
   for (const kind of to) {
@@ -60,6 +60,9 @@ async function main() {
   const a = process.argv.slice(2);
   if (!a.length) usage();
   if (a.includes('-h') || a.includes('--help')) usage(null, 0); // (help is not an error, as the other CLIs)
+  // (an option it does not know is a usage error, as stp2mesh's are: --skp exported every body)
+  const KNOWN = ['--to', '--out', '--orient', '--model-up', '--skip'];
+  a.forEach((x, i) => { if (x.startsWith('-') && !KNOWN.includes(x) && !(i > 0 && KNOWN.includes(a[i - 1]))) usage(`unknown option ${x}`); });
   // (an option given with no value is a usage error: --to or --out alone fell back to the default)
   const opt = (k) => { const i = a.indexOf(k); if (i < 0) return undefined; const v = a[i + 1]; if (v === undefined || v.startsWith('--')) usage(`${k} needs a value`); return v; };
   const inp = a.find((x, i) => !x.startsWith('--') && !(i > 0 && a[i - 1].startsWith('--')));

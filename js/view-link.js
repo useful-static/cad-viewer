@@ -16,12 +16,13 @@
 //   m  the model's body names, fingerprinted (8 hex): ids mean the bodies
 //      they meant only while it matches
 //   a  notes pinned to points (at most MAX_NOTES): x,y,z (to the micrometre,
-//      roundNotePoint),text as base64url, "~" between them
-// Every number is read by linkNumber: an empty value is none, never 0.
+//      roundNotePoint), text as base64url, "~" between them
 //   n  the selected bodies by name (at most MAX_NAMED), each its key
 //      (bodyKeys) as base64url: a link made before the model's file was
 //      regenerated or revised, whose ids now name other bodies, still selects
 //      the part it pointed at (feature review 2026-10-29)
+//
+// Every number is read by linkNumber: an empty value is none, never 0.
 //
 // Pure, no DOM. Unknown or malformed fields are dropped, never thrown: a link
 // edited by hand still opens the model.
@@ -48,6 +49,10 @@ const near = (v, dist) => {
   const d = Math.min(12, Math.max(0, -Math.floor(Math.log10(dist * 1e-6))));
   return Number(v.toFixed(d));
 };
+// A camera as a link or a tour keeps it: the target to a millionth of the distance, the distance
+// and the turn to 6 significant figures (a tour kept 4 decimals of the target and 6 of the turn:
+// a view far from the origin came back moved). The one rule for both (js/main.js tour steps)
+export const roundCamera = (c) => ({ target: c.target.map((t) => near(t, c.dist)), dist: num(c.dist), q: c.q.map(num) });
 
 export function runs(ids) {
   const s = [...new Set(ids)].filter((i) => Number.isInteger(i) && i > 0).sort((a, b) => a - b);
@@ -150,7 +155,8 @@ export function resolveBodies(v, keys) {
 export function encodeView(v) {
   const f = [];
   const c = v.cam;
-  f.push(`c:${[...c.target.map((t) => near(t, c.dist)), num(c.dist), ...c.q.map(num)].join(',')}`);
+  const rc = roundCamera(c);
+  f.push(`c:${[...rc.target, rc.dist, ...rc.q].join(',')}`);
   if (c.ortho) f.push('p:o');
   // the view's shape (width / height) when the link was made: opened on
   // another shape (a desktop link on a phone), the view is reframed

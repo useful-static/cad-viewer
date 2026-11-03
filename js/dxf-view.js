@@ -21,6 +21,123 @@ const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
 
+// The nearest of many points to (x, y) within r, that accept(point) takes: a 2-d tree over them,
+// built once (a grid sized from the drawing's extents held 397,389 points in one cell of a
+// clustered drawing, 46 ms a move; past it, every point, 110 ms). pts: [[x, y, ...], ...]
+export function pointTree(pts) {
+  const n = pts.length, ids = new Uint32Array(n);
+  const xy = [new Float64Array(n), new Float64Array(n)];
+  for (let i = 0; i < n; i++) { ids[i] = i; xy[0][i] = pts[i][0]; xy[1][i] = pts[i][1]; }
+  const key = (i, ax) => xy[ax][i];
+  // ids[lo, hi) arranged so its middle is the median on the axis, the halves either side, down
+  const place = (lo, hi, ax) => {
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      // quickselect for mid on ax
+      let a = lo, b = hi - 1;
+      while (a < b) {
+        const pv = key(ids[(a + b) >> 1], ax);
+        let i = a, j = b;
+        while (i <= j) {
+          while (key(ids[i], ax) < pv) i++;
+          while (key(ids[j], ax) > pv) j--;
+          if (i <= j) { const t = ids[i]; ids[i] = ids[j]; ids[j] = t; i++; j--; }
+        }
+        if (mid <= j) b = j; else if (mid >= i) a = i; else break;
+      }
+      place(lo, mid, ax ^ 1);
+      lo = mid + 1; ax ^= 1;
+    }
+  };
+  place(0, n, 0);
+  return { pts, ids, xy };
+}
+export function nearestPoint(tree, x, y, r, accept = () => true) {
+  const { pts, ids, xy } = tree;
+  let best = null, bd = r * r;
+  const q = [x, y];
+  // the near half first, the far one only while it can hold a nearer point
+  const walk = (lo, hi, ax) => {
+    if (lo >= hi) return;
+    const mid = (lo + hi) >> 1, i = ids[mid];
+    const px = xy[0][i], py = xy[1][i];
+    const d = (px - x) ** 2 + (py - y) ** 2;
+    if (d < bd && accept(pts[i])) { bd = d; best = pts[i]; }
+    const diff = q[ax] - (ax ? py : px);
+    if (diff < 0) { walk(lo, mid, ax ^ 1); if (diff * diff < bd) walk(mid + 1, hi, ax ^ 1); }
+    else { walk(mid + 1, hi, ax ^ 1); if (diff * diff < bd) walk(lo, mid, ax ^ 1); }
+  };
+  walk(0, ids.length, 0);
+  return best;
+}
+
+// A drawing's line segments in a grid, for the nearest line within r (the hover, a click's layer):
+// each segment in the cells its box covers, a long one in a list of its own -- every segment was
+// tested on every pointer move, 200 ms a move on 5.2 million. paths: the drawing's; o: the offset
+export function segmentGrid(paths, o, span, div = 512) {
+  const cell = (span || 1) / div;
+  const cells = new Map(), long = [];
+  const segs = [];
+  paths.forEach((p, pi) => {
+    const n = p.pts.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = i + 1 < n ? i + 1 : p.closed ? 0 : -1;
+      const ax = p.pts[i * 2] - o[0], ay = p.pts[i * 2 + 1] - o[1];
+      const bx = j < 0 ? ax : p.pts[j * 2] - o[0], by = j < 0 ? ay : p.pts[j * 2 + 1] - o[1];
+      const s = segs.length;
+      segs.push([ax, ay, bx, by, pi]);
+      const x0 = Math.floor(Math.min(ax, bx) / cell), x1 = Math.floor(Math.max(ax, bx) / cell);
+      const y0 = Math.floor(Math.min(ay, by) / cell), y1 = Math.floor(Math.max(ay, by) / cell);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64 || !Number.isFinite(x0 + x1 + y0 + y1)) { long.push(s); continue; }
+      for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+        const k = `${gx},${gy}`;
+        let c = cells.get(k);
+        if (!c) cells.set(k, (c = []));
+        c.push(s);
+      }
+    }
+  });
+  return { cell, cells, long, segs, paths, o, span, div };
+}
+// -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
+export function nearestSegment(grid, x, y, r, accept = () => true) {
+  // (a radius of many cells -- zoomed far out -- is searched in a grid 32 times coarser, made then)
+  if (r / grid.cell > 64 && grid.div > 16) {
+    if (!grid.coarse) grid.coarse = segmentGrid(grid.paths, grid.o, grid.span, grid.div / 32);
+    return nearestSegment(grid.coarse, x, y, r, accept);
+  }
+  let best = -1, bd = r * r;
+  const seen = new Set();
+  const test = (s) => {
+    if (seen.has(s)) return;
+    seen.add(s);
+    const [ax, ay, bx, by, pi] = grid.segs[s];
+    const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+    const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
+    if (d2 < bd && accept(pi)) { bd = d2; best = pi; }
+  };
+  for (const s of grid.long) test(s);
+  // rings of cells outward from the point's, until the ring lies past the nearest found (or r):
+  // zoomed far out, a box of every cell within r scanned every segment, 1.7 s a move
+  const { cell } = grid;
+  const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
+  const look = (gx, gy) => { const c = grid.cells.get(`${gx},${gy}`); if (c) for (const s of c) test(s); };
+  const kmax = Math.ceil(r / cell) + 1;
+  for (let k = 0; k <= kmax; k++) {
+    if (k > 0 && ((k - 1) * cell) ** 2 > bd) break;
+    if (k === 0) { look(cx, cy); continue; }
+    for (let i = -k; i <= k; i++) { look(cx + i, cy - k); look(cx + i, cy + k); }
+    for (let i = -k + 1; i <= k - 1; i++) { look(cx - k, cy + i); look(cx + k, cy + i); }
+    // (an empty region far from everything: past as many rings as cells, every cell instead)
+    if (k * k * 8 > grid.cells.size && best < 0) {
+      for (const [key, c] of grid.cells) { const [gx, gy] = key.split(',').map(Number); if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) > k) for (const s of c) test(s); }
+      break;
+    }
+  }
+  return best;
+}
+
 // whether a path is added to its group reversed: a fill (not a hatch's even-odd loops) wound
 // clockwise, so every such fill runs counter-clockwise and a group's non-zero fill is their union
 export function addedReversed(p) {
@@ -244,36 +361,17 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // The snap points within 10 px, by a grid over them (drawing units, built on the first snap):
   // every point scanned on every pointer move, with two layout reads each, was 0.6 s a move on a
   // drawing of 5.2 million points
-  let grid = null;
+  // (built when Measure is turned on, not on the first move: pointTree, js/dxf-view.js)
+  let tree = null;
   const SNAP_PX = 10;
-  function snapGrid() {
-    const span0 = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
-    const g = { cell: span0 / 1024, cells: new Map() };
-    for (const s of snaps) {
-      const k = `${Math.floor(s[0] / g.cell)},${Math.floor(s[1] / g.cell)}`;
-      let c = g.cells.get(k);
-      if (!c) g.cells.set(k, (c = []));
-      c.push(s);
-    }
-    return g;
-  }
+  const snapTree = () => tree || (tree = pointTree(snaps));
   function snapAt(px, py) {
-    if (!grid) grid = snapGrid();
     const [ux, uy] = toUnits(px, py);
-    const r = SNAP_PX / st.s;
-    let best = null, bd = r * r;
-    const look = (s) => {
-      if (st.off.has(s[3])) return;
-      const d = (s[0] - ux) ** 2 + (s[1] - uy) ** 2;
-      if (d < bd) { bd = d; best = s; }
-    };
-    const x0 = Math.floor((ux - r) / grid.cell), x1 = Math.floor((ux + r) / grid.cell);
-    const y0 = Math.floor((uy - r) / grid.cell), y1 = Math.floor((uy + r) / grid.cell);
-    // (zoomed far out, more cells than points: every point once instead)
-    if ((x1 - x0 + 1) * (y1 - y0 + 1) > grid.cells.size) { for (const s of snaps) look(s); return best; }
-    for (let i = x0; i <= x1; i++) for (let j = y0; j <= y1; j++) { const c = grid.cells.get(`${i},${j}`); if (c) for (const s of c) look(s); }
-    return best;
+    return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !st.off.has(s[3]));
   }
+  // the lines, indexed once for the hover and a click's layer
+  let segGrid = null;
+  const segments = () => segGrid || (segGrid = segmentGrid(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
   // 6 significant figures; a value a billionth of the drawing's size is float
   // noise (a circle centre averaged from its points), shown as 0
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
@@ -296,26 +394,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the layer of the line nearest css px (x, y), within HIT_PX
   function layerAt(px, py) {
     const [ux, uy] = toUnits(px, py);
-    const lim = HIT_PX / st.s;
-    let best = null, bd = lim * lim;
-    for (const p of drawing.paths) {
-      if (st.off.has(p.layer)) continue;
-      const n = p.pts.length / 2;
-      for (let i = 0; i < n; i++) {
-        const j = i + 1 < n ? i + 1 : p.closed ? 0 : -1;
-        const ax = p.pts[i * 2] - o[0], ay = p.pts[i * 2 + 1] - o[1];
-        let d2;
-        if (j < 0) d2 = (ux - ax) ** 2 + (uy - ay) ** 2;
-        else {
-          const bx = p.pts[j * 2] - o[0], by = p.pts[j * 2 + 1] - o[1];
-          const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
-          const t = l2 ? Math.max(0, Math.min(1, ((ux - ax) * vx + (uy - ay) * vy) / l2)) : 0;
-          d2 = (ux - ax - t * vx) ** 2 + (uy - ay - t * vy) ** 2;
-        }
-        if (d2 < bd) { bd = d2; best = p.layer; }
-      }
-    }
-    if (best !== null) return best;
+    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i) => !st.off.has(drawing.paths[i].layer));
+    if (pi >= 0) return drawing.paths[pi].layer;
     // else a text under the point (inside its box, as the extents take it): a layer only texts
     // use could not be picked
     // (the box drawn: the text's measured lines, cut to its viewport's frame, and only when it is
@@ -414,7 +494,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     get selected() { return st.selected; }, get scale() { return st.s; },
     setLayerOn(name, on) { if (on) st.off.delete(name); else st.off.add(name); draw(); },
     // 2D Measure: on / off; Esc drops a pending point first (true when it did)
-    setMeasure(on) { st.measure = on; st.pending = null; st.snap = null; draw(); },
+    setMeasure(on) { if (on) snapTree(); st.measure = on; st.pending = null; st.snap = null; draw(); }, // (the snaps indexed as Measure turns on, not on its first move)
     get measuring() { return st.measure; },
     get results() { return st.results; },
     clearMeasure() { st.results = []; st.pending = null; draw(); },

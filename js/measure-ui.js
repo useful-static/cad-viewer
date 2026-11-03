@@ -16,7 +16,7 @@
 
 import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
 import { faceOfTri, makeCaster } from './raycast.js';
-import { add, dot, len, mul, sub } from './vec3.js';
+import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
 
@@ -146,7 +146,7 @@ export function createMeasure(deps) {
       const g = geomOf(mi, deadline);
       if (!g) { pending = true; continue; }
       const consider = (p, kind, info) => {
-        if (skip && dot(p, deps.sectionPlane()) > deps.sectionPlane()[3] + 1e-9) return;
+        if (skip && skip(p)) return; // (the one cut test, skipCut's: written here a third time, with a 1e-9 of its own)
         const s = v.toScreen(p);
         if (!s) return;
         const dd = Math.hypot(s[0] - x, s[1] - y);
@@ -190,8 +190,27 @@ export function createMeasure(deps) {
     const ray = v.rayAt(x, y);
     const hit = st.caster.cast(bodiesNear(v, x, y, 0), ray.o, ray.d, Infinity, skip);
     if (!hit) return pending ? { pending: true } : null;
+    const c = cutAt(hit, ray);
+    if (c) return { p: c, kind: 'cut', mesh: hit.mesh, pending };
     const p = add(ray.o, mul(ray.d, hit.t));
     return { p, kind: 'surface', mesh: hit.mesh, tri: hit.tri, pending };
+  }
+
+  // Where a hit is a closed body's inside seen through the section's cut -- what the view draws as
+  // the cut face -- the point on the plane, else null. (The far inside wall was taken: two clicks on
+  // a cube's cut face measured 9.615 for 7.211)
+  function cutAt(hit, ray) {
+    const pl = deps.sectionPlane();
+    if (!pl) return null;
+    if (deps.closed && !deps.closed(hit.mesh)) return null; // (an open sheet: no cut face drawn)
+    const P = st.model.position, I = st.model.index, t = hit.tri;
+    const q = [0, 1, 2].map((j) => [P[3 * I[3 * t + j]], P[3 * I[3 * t + j] + 1], P[3 * I[3 * t + j] + 2]]);
+    const n = cross(sub(q[1], q[0]), sub(q[2], q[0]));
+    if (dot(n, ray.d) <= 0) return null; // (its outside: a surface, not the cut)
+    const den = dot(pl, ray.d);
+    if (Math.abs(den) < 1e-12) return null;
+    const tp = (pl[3] - dot(pl, ray.o)) / den;
+    return tp > 0 && tp <= hit.t ? add(ray.o, mul(ray.d, tp)) : null;
   }
 
   // the b-rep face under (x, y): { plane, points, mesh, face, p } | null
@@ -201,7 +220,7 @@ export function createMeasure(deps) {
     const ray = v.rayAt(x, y);
     const skip = skipCut();
     const hit = st.caster.cast(bodiesNear(v, x, y, 0), ray.o, ray.d, Infinity, skip);
-    if (!hit) return null;
+    if (!hit || cutAt(hit, ray)) return null; // (a cut face is no b-rep face: Face to face and Paint took the far wall)
     const m = scene.header.meshes[hit.mesh];
     const f = faceOfTri(st.model.faces, m, hit.tri);
     if (f < 0) return null;
@@ -628,7 +647,10 @@ export function createMeasure(deps) {
   function holeRows(ids, ref) {
     model();
     const list = [];
-    for (const id of ids) for (const h of holesOf(geomOf(id - 1, Infinity))) list.push({ ...h, mesh: id - 1 });
+    // (each body's holes once, kept with its geometry: the info panel rebuilt an open table on every
+    // selection, visibility or unit change, and a 11,438-rim panel froze the page each time)
+    const holesFor = (g) => g.holes || (g.holes = holesOf(g));
+    for (const id of ids) for (const h of holesFor(geomOf(id - 1, Infinity))) list.push({ ...h, mesh: id - 1 });
     list.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
     // the axes across each hole: the same for all (a board's X, Y) puts them
     // in the column's head, numbers only in the cells (the 300 px panel

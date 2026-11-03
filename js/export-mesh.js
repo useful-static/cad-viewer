@@ -32,7 +32,8 @@ function bodyOf(model, id, basis, scale) {
 }
 
 // ---- STL ----
-export function toSTL(model, ids, basis, name = 'model') {
+export function toSTL(model, ids0, basis, name = 'model') {
+  const [ids] = withTriangles(model, ids0, []);
   let n = 0;
   for (const id of ids) n += model.header.meshes[id - 1].idxCount / 3;
   const buf = new ArrayBuffer(84 + 50 * n);
@@ -124,10 +125,14 @@ const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/
 // counts and refuses by it -- counted before the writers dropped the empty ones, a GLB of 1 node
 // said 2 bodies, and one of none was written: invalid glTF, a 3MF without a material)
 export const exportable = (model, ids) => ids.filter((id) => model.header.meshes[id - 1].idxCount > 0);
+// (the one refusal, said one way, by every writer -- STL's too, which wrote an 84-byte file)
+export const NOTHING_TO_EXPORT = 'nothing to export (no body shown has a triangle)';
 function withTriangles(model, ids, names) {
-  const keep = ids.map((id, j) => [id, names[j]]).filter(([id]) => model.header.meshes[id - 1].idxCount > 0);
-  if (!keep.length) throw new Error('nothing to export (no shown body has a triangle)');
-  return [keep.map((x) => x[0]), keep.map((x) => x[1])];
+  const keep = ids.map((id, j) => [id, names[j]]);
+  const ok = new Set(exportable(model, ids));
+  const kept = keep.filter(([id]) => ok.has(id));
+  if (!kept.length) throw new Error(NOTHING_TO_EXPORT);
+  return [kept.map((x) => x[0]), kept.map((x) => x[1])];
 }
 
 export async function to3MF(model, ids0, basis, names0 = []) {

@@ -11,9 +11,14 @@ import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 const args = process.argv.slice(2);
 if (!args.length || args.includes('-h') || args.includes('--help')) { console.log(USAGE); process.exit(args.length ? 0 : 2); }
+// (an option it does not know, or --dxf with no value, is a usage error: --jsn was taken for a file
+// name and ignored, exit 0)
+const usageError = (msg) => { console.error(`dwg-check: ${msg}\n${USAGE}`); process.exit(2); };
+for (const a of args) if (a.startsWith('-') && !['--json', '--dxf'].includes(a)) usageError(`unknown option ${a}`);
 const json = args.includes('--json');
 const di = args.indexOf('--dxf');
 const dxfOut = di >= 0 ? args[di + 1] : null;
+if (di >= 0 && (dxfOut === undefined || dxfOut.startsWith('--'))) usageError('--dxf needs a file name');
 const files = args.filter((a, k) => !a.startsWith('--') && !(di >= 0 && k === di + 1));
 let bad = 0;
 const reports = [];

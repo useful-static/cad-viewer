@@ -23,7 +23,7 @@ const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
 // what float32 positions can tell apart near a coordinate of size `far`: 2^-23 of it, eight times
-// over (a sum of a few rounded terms). The one floor for planeOf and circleOf
+// over (a sum of a few rounded terms). The one floor for planeOf, circleOf and wallJoins
 const storedFloor = (far) => 8 * 2 ** -23 * far;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
@@ -316,16 +316,48 @@ export function faceGap(a, b) {
 // ---- holes (the hole table) ----
 
 // Whether the body's curved faces lying on rim a's cylinder (its axis, its radius) cover the axis
-// from a to rim b: the hole's wall. A geometry without its positions (geom.P) is taken as joined
+// from a to rim b: the hole's wall (bodyGeometry gives geom.P / geom.I)
+// (the curved faces' boxes made once per body, and a face whose box misses the hole's -- rim to
+// rim, its radius round -- passed over: each pair scanned every curved face's vertices)
+function curvedBoxes(geom) {
+  if (geom.curvedBoxes) return geom.curvedBoxes;
+  const { P, I } = geom;
+  geom.curvedBoxes = geom.faces.map((f, fi) => {
+    if (f.plane || !f.ntri) return null;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let t = f.tri0; t < f.tri0 + f.ntri; t++) for (let j = 0; j < 3; j++) {
+      const v = I[3 * t + j] * 3;
+      for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], P[v + k]); hi[k] = Math.max(hi[k], P[v + k]); }
+    }
+    return { lo, hi, fi };
+  }).filter(Boolean).sort((p, q) => p.lo[0] - q.lo[0]);
+  // (sorted by their low x, with the widest's width: a hole's x range finds its faces by search)
+  geom.curvedBoxes.wide = geom.curvedBoxes.reduce((w, x) => Math.max(w, x.hi[0] - x.lo[0]), 0);
+  return geom.curvedBoxes;
+}
+// the curved faces (their indices) whose boxes meet [lo, hi]
+function curvedNear(geom, lo, hi) {
+  const bs = curvedBoxes(geom);
+  let a = 0, b = bs.length;
+  const from = lo[0] - bs.wide;
+  while (a < b) { const mid = (a + b) >> 1; if (bs[mid].lo[0] < from) a = mid + 1; else b = mid; }
+  const out = [];
+  for (let i = a; i < bs.length && bs[i].lo[0] <= hi[0]; i++) {
+    const x = bs[i];
+    if ([0, 1, 2].every((k) => x.hi[k] >= lo[k] && x.lo[k] <= hi[k])) out.push(x.fi);
+  }
+  return out;
+}
 function wallJoins(geom, a, b) {
   const { P, I } = geom;
-  if (!P || !I) return true;
   const n = a.normal, c = a.centre;
   const end = dot(sub(b.centre, c), n);
   const lo = Math.min(0, end), hi = Math.max(0, end);
   const spans = [];
-  for (const f of geom.faces) {
-    if (f.plane || !f.ntri) continue;
+  const m = a.radius * (1 + 2 * RADIUS_TOL) + PLANE_FLOOR_MM;
+  const hlo = [0, 1, 2].map((k) => Math.min(a.centre[k], b.centre[k]) - m), hhi = [0, 1, 2].map((k) => Math.max(a.centre[k], b.centre[k]) + m);
+  for (const fi of curvedNear(geom, hlo, hhi)) {
+    const f = geom.faces[fi];
     let t0 = Infinity, t1 = -Infinity, on = true;
     for (let t = f.tri0; t < f.tri0 + f.ntri && on; t++) {
       for (let j = 0; j < 3; j++) {
@@ -364,13 +396,33 @@ export function holesOf(geom) {
   // face looks the other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
   const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
+  // (the candidates by their axis line: its direction, rounded and signed one way, and where the
+  // line crosses the plane across it, in cells -- every rim against every other was 8.8 s of a
+  // 6,400-hole plate's 14.4 s on the page's thread)
+  const CELL = 0.5;
+  const lineOf = (c) => {
+    let n = c.normal.map((v) => Math.round(v * 100) / 100);
+    const k = n.findIndex((v) => v !== 0);
+    if (k < 0) n = [0, 0, 1]; else if (n[k] < 0) n = n.map((v) => -v);
+    const nn = unit(n);
+    const u = unit(Math.abs(nn[0]) < 0.9 ? cross(nn, [1, 0, 0]) : cross(nn, [0, 1, 0])), v = cross(nn, u);
+    return { dir: n.join(','), x: Math.floor(dot(c.centre, u) / CELL), y: Math.floor(dot(c.centre, v) / CELL) };
+  };
+  const index = new Map();
+  const lines = rims.map(lineOf);
+  lines.forEach((l, i) => { const k = `${l.dir}|${l.x},${l.y}`; let a = index.get(k); if (!a) index.set(k, (a = [])); a.push(i); });
+  const near = (i) => {
+    const l = lines[i], out2 = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const a = index.get(`${l.dir}|${l.x + dx},${l.y + dy}`); if (a) out2.push(...a); }
+    return out2;
+  };
   const out = [];
   const used = new Set();
   for (let i = 0; i < rims.length; i++) {
     if (used.has(i)) continue;
     const r = rims[i];
     let best = -1, bestAlong = Infinity;
-    for (let j = 0; j < rims.length; j++) {
+    for (const j of near(i)) {
       if (j === i || used.has(j)) continue;
       const s = rims[j];
       if (Math.abs(s.radius - r.radius) > RADIUS_TOL * r.radius) continue;

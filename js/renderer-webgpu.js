@@ -145,7 +145,9 @@ fn lit(i : VOut, ff : bool) -> vec3f {
   // normal facing away from the eye) is the inside of a solid showing through
   // the cut. It is shaded flat, lit as the plane would be, so a cut part reads
   // as solid instead of a hollow shell.
-  if (u.params.z > 0.5 && dot(i.nrm, v) < 0.0) {
+  // (a CLOSED body's only, as fsFill fills: an open sheet seen from behind -- a board's pads,
+  // anywhere on the model -- turned cut-face colour in Shaded whenever a section was on)
+  if (u.params.z > 0.5 && dot(i.nrm, v) < 0.0 && stateOf(meshId(i.idc)).a > 0.5) {
     let pn = normalize(u.clip.xyz);
     c = i.col * 0.8 * (0.35 + 0.5 * max(dot(pn, l), 0.0) + 0.15 * (0.5 + 0.5 * dot(pn, up)));
   }

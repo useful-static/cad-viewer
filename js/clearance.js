@@ -144,10 +144,47 @@ export function triangleDistance(A, B) {
   return best;
 }
 
+// Whether point p lies inside the closed surface made of tris: the crossings of a ray from p (a
+// direction no model's axes follow), counted -- odd is inside
+export function insideClosed(pos, index, tris, p) {
+  const d = [0.5773, 0.5774, 0.5775];
+  let n = 0;
+  for (const [t0, c] of tris) {
+    for (let t = t0; t < t0 + c; t++) {
+      const v = [0, 1, 2].map((k) => { const i = index[t * 3 + k] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; });
+      // Moller-Trumbore, t > 0
+      const e1 = v[1].map((x, k) => x - v[0][k]), e2 = v[2].map((x, k) => x - v[0][k]);
+      const h = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+      const a = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+      if (Math.abs(a) < 1e-14) continue;
+      const s = p.map((x, k) => x - v[0][k]);
+      const u = (s[0] * h[0] + s[1] * h[1] + s[2] * h[2]) / a;
+      if (u < 0 || u > 1) continue;
+      const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
+      const w = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / a;
+      if (w < 0 || u + w > 1) continue;
+      if ((e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) / a > 0) n++;
+    }
+  }
+  return n % 2 === 1;
+}
+
 // pos: Float32Array xyz, index: Uint32Array triangles; trisA, trisB:
 // [[firstTriangle, count], ...]. Returns { distance, pa, pb, triA, triB,
-// pairs } (pairs: triangle pairs tested), or null when a set is empty.
-export function clearance(pos, index, trisA, trisB) {
+// pairs, inside } (pairs: triangle pairs tested), or null when a set is empty. opts.solidA /
+// solidB: the triangle ranges of that set's closed bodies -- then a gap above 0 is tested for a
+// part of one set lying wholly in a solid of the other (a pin inside a block read "1 mm from the
+// pin to the block"): distance 0, inside: true
+export function clearance(pos, index, trisA, trisB, opts = {}) {
+  const r = clearanceOfSurfaces(pos, index, trisA, trisB);
+  if (!r || r.distance === 0) return r;
+  const vertexOf = ([t0]) => { const i = index[t0 * 3] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; };
+  const within = (parts, solids) => solids && solids.length && parts.some((t) => t[1] > 0 && insideClosed(pos, index, solids, vertexOf(t)));
+  if (within(trisA, opts.solidB) || within(trisB, opts.solidA)) return { ...r, distance: 0, inside: true };
+  return r;
+}
+
+function clearanceOfSurfaces(pos, index, trisA, trisB) {
   const TA = buildIter(...prep(pos, index, trisA));
   const TB = buildIter(...prep(pos, index, trisB));
   if (TA.root < 0 || TB.root < 0) return null;

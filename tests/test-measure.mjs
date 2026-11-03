@@ -103,6 +103,18 @@ test('a board with four mounting holes: four holes, their spacing', () => {
   assert.deepEqual(at, [[3.5, 3.5], [3.5, 52.5], [61.5, 3.5], [61.5, 52.5]]);
   assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2));
 });
+test('the hole table of 8,000 rims pairs them by their axis lines, fast (every rim against every other froze the page)', () => {
+  // 4,000 holes' top and bottom rims on faces of their own, no walls (so every pair is tried and refused)
+  const faces = [];
+  for (let i = 0; i < 4000; i++) {
+    const x = (i % 80) * 5, y = Math.floor(i / 80) * 5;
+    for (const [z, nz] of [[1.6, 1], [0, -1]]) faces.push({ plane: { normal: [0, 0, nz], d: nz * z }, ntri: 0, circles: [{ centre: [x, y, z], normal: [0, 0, 1], radius: 1, inner: true, face: faces.length }] });
+  }
+  const t0 = Date.now();
+  const h = holesOf({ faces, P: new Float32Array(0), I: new Uint32Array(0) });
+  assert.equal(h.length, 8000);
+  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+});
 test('two blind holes drilled from either side, material between, are two holes, not one through-hole', () => {
   // a round block 0..10 high, radius 6; a hole of radius 2 from the top 3 deep and one from the
   // bottom 3 deep (their walls: z 7..10 and 0..3; 4 of material between)

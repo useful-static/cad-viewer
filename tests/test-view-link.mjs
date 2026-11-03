@@ -2,7 +2,7 @@
 // The shareable view (js/view-link.js).   node tests/test-view-link.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { MAX_LINK_IDS, MAX_NAMED, MAX_NOTES, NOTE_TEXT_MAX, bodyKeys, cutText, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
+import { MAX_LINK_IDS, MAX_NAMED, MAX_NOTES, NOTE_TEXT_MAX, bodyKeys, cutText, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, roundCamera, runs } from '../js/view-link.js';
 
 import { test, done } from './harness.mjs';
 
@@ -49,6 +49,11 @@ test('defaults stay out of the link', () => {
   assert.equal(d.cam.ortho, false);
   assert.equal(d.cam.orient, '+y+z');
   assert.equal(d.section, undefined);
+  // the camera rounded one way for a link and a tour: far from the origin, the target to a millionth
+  // of the distance (a tour kept 4 decimals), the turn to 6 figures
+  const rc = roundCamera({ target: [123456.7891234, 0.00012345678, -5], dist: 0.5, q: [0.123456789, 0, 0, 0.9923] });
+  // (a millionth of 0.5 is the 7th decimal)
+  assert.deepEqual(rc, { target: [123456.7891234, 0.0001235, -5], dist: 0.5, q: [0.123457, 0, 0, 0.9923] });
   // an empty section value is none (it read 0: the cut at the model's minimum), as e:'s is
   assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z,').section, undefined);
   assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z, ,f').section, undefined);
