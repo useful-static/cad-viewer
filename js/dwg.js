@@ -15,6 +15,7 @@
 
 import { caret, valueKind, aciColour } from './dxf.js';
 import { crc32 } from './crc32.js';
+import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
 
 // --- checks -------------------------------------------------------------------------------------
 
@@ -1326,12 +1327,11 @@ export function readDWG(buf) {
     types[o.name] = (types[o.name] || 0) + 1;
     objects.set(o.handle, o);
   }
-  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length, appInfo, writer: writerOf(appInfo), encoding: dec.encoding };
+  return { version: tag, release: VERSION_NAMES[tag], v, maint, header, classes, objects, types, checks: chk.counts, failures: chk.failures, mapCount: map.length, appInfo, writer: writerOf(appInfo), encoding: dec.encoding, codepage: cont.codepage };
 }
+// the header's code page number -> its decoder (js/codepages.js: the one table; 29 was read as Thai)
 function codepageDecoder(cp) {
-  // the DWG code page numbers of the common ANSI pages
-  const names = { 30: 'windows-1252', 31: 'windows-1251', 32: 'windows-1250', 29: 'windows-874', 33: 'windows-1253', 34: 'windows-1254', 35: 'windows-1255', 36: 'windows-1256', 37: 'windows-1257', 38: 'shift_jis', 39: 'gbk', 40: 'euc-kr', 41: 'big5' };
-  try { return names[cp] ? new TextDecoder(names[cp]) : LATIN1; } catch { return LATIN1; }
+  return decoderFor(codePageLabel(DWG_CODEPAGES[cp])) || LATIN1;
 }
 
 // A text whose style has an Asian big font is drawn by that font from the text's bytes, two at a
@@ -1387,6 +1387,9 @@ export function dwgToPairs(dwg) {
   put(9, '$ACADVER'); put(1, dwg.version);
   if (Number.isFinite(header.INSUNITS)) { put(9, '$INSUNITS'); put(70, header.INSUNITS); }
   if (Number.isFinite(header.LTSCALE)) { put(9, '$LTSCALE'); put(40, header.LTSCALE); }
+  // its code page, as a DXF names it: a TEXT's %%nnn is a byte of it (js/dxf.js reads it so; a
+  // DWG's text read %%192 as 1252's "À" where its 1251 means "А")
+  if (DWG_CODEPAGES[dwg.codepage]) { put(9, '$DWGCODEPAGE'); put(3, DWG_CODEPAGES[dwg.codepage]); }
   if (header.EXTMIN) { put(9, '$EXTMIN'); put(10, header.EXTMIN[0]); put(20, header.EXTMIN[1]); put(9, '$EXTMAX'); put(10, header.EXTMAX[0]); put(20, header.EXTMAX[1]); }
   put(0, 'ENDSEC');
   put(0, 'SECTION'); put(2, 'TABLES');

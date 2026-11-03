@@ -78,12 +78,26 @@ export const isDWGBytes = (b) => b.length >= 6 && b[0] === 0x41 && b[1] === 0x43
 // "zip" here, and a 3MF by its name.
 // An ASCII DXF's start: its first SECTION, after any 999 comments (LibreDWG writes one first; 174
 // of 1178 DXFs at hand) -- one rule for the sniff here and the reader (js/dxf.js parseDXF)
-const DXF_HEAD = /^\s*(?:999\s*\r?\n[^\r\n]*\r?\n\s*)*(\d+\s*\r?\n\s*)?0\s*\r?\n\s*SECTION/;
-export const looksLikeDxf = (text) => DXF_HEAD.test(text);
+// (a plain walk over the lines: a regex with a repeated comment group split blank lines many
+// ways, and a 127-byte "999" + newlines file took 27 s to fail -- exponential backtracking)
+function dxfHead(text) {
+  const lines = text.split(/\r?\n/, 4096);
+  let i = 0;
+  const blank = () => { while (i < lines.length && !lines[i].trim()) i++; };
+  blank();
+  while (i + 1 < lines.length && lines[i].trim() === '999') { i += 2; blank(); }
+  // (a stray number line before the first pair, as before)
+  if (/^\d+$/.test((lines[i] || '').trim()) && (lines[i] || '').trim() !== '0' && (lines[i + 1] || '').trim() === '0') i++;
+  return (lines[i] || '').trim() === '0' && (lines[i + 1] || '').trim() === 'SECTION';
+}
+// how much of a file's start the sniff reads (every caller passes this much): room for a DXF's
+// 999 comments or an OBJ's comment header, which ran past 400 bytes and left a valid file unnamed
+export const SNIFF_BYTES = 4096;
+export const looksLikeDxf = (text) => dxfHead(text);
 export function sniffFormat(bytes) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (isDWGBytes(b)) return BY_EXT.get('dwg');
-  const text = new TextDecoder('latin1').decode(b.subarray(0, Math.min(400, b.length))).replace(/^ï»¿/, '');
+  const text = new TextDecoder('latin1').decode(b.subarray(0, Math.min(SNIFF_BYTES, b.length))).replace(/^ï»¿/, '');
   const f = (e) => BY_EXT.get(e);
   if (text.startsWith('CADM')) return f('cadmesh');
   if (/^\s*ISO-10303-21\s*;/.test(text)) return f('stp');

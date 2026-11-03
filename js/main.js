@@ -5,7 +5,7 @@
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
-import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
+import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
 import { onPaper } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directFor, fileUrl } from './open-url.js';
@@ -31,7 +31,7 @@ import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
-import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, resolveParts, tourAt, tourNames } from './tour.js';
+import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
@@ -1122,8 +1122,9 @@ function applyView(v, link = false) {
 app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
 // (for tests/ui-checks.py tour-leaves-no-state: a tour from an object, the tour maker's capture,
 // a load from a URL without leaving the page)
-app.playTour = (t) => startTour(parseTour(JSON.stringify(t), location.href), null);
-app.playTourIn = (t) => startTourIn(parseTour(JSON.stringify(t), location.href), null);
+// (both through the page's one start, startTourIn: an arm that took startTour tested a path the page never takes)
+app.playTour = (t) => startTourIn(parseTour(JSON.stringify(t), location.href), null);
+app.playTourIn = app.playTour;
 app.captureStep = (o) => captureStep(o);
 app.openUrl = (u) => loadUrl(u);
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
@@ -2090,7 +2091,7 @@ const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
 // the pictures zipped, in order. -> the number of pictures
 async function tourPictures(tour) {
   endTour();
-  startTour(tour, null);
+  startTourIn(tour, null); // (scaled to the reading, as Show and Preview are: js/tour.js tourAt)
   if (!app.tour) return 0;
   setTourPlaying(false);
   app.tour.cut = true;
@@ -2129,7 +2130,7 @@ async function tourVideo(tour) {
   const mime = window.MediaRecorder && types.find((t) => MediaRecorder.isTypeSupported(t));
   if (!mime || !HTMLCanvasElement.prototype.captureStream) return 'this browser cannot record video';
   endTour();
-  startTour(tour, null);
+  startTourIn(tour, null); // (scaled to the reading, as Show and Preview are)
   if (!app.tour) return 'no model';
   const t = app.tour;
   t.recording = true;
@@ -3122,7 +3123,10 @@ function applyListEntry() {
   }
   // its notes, where the model has none yet (a view link's come first)
   if (app.header && e && e.notes && app.measure && !app.measure.notes().length) {
-    app.measure.setNotes(e.notes.map((n) => ({ p: n.at || notePoint(n.part), text: n.text })).filter((n) => n.p));
+    // (a note's "at" is written for the mm reading: scaled to this one, as a tour's callouts are --
+    // after "this file is in: in" it floated 25.4 times off its part)
+    const k = readingScale(tourReading());
+    app.measure.setNotes(e.notes.map((n) => ({ p: n.at ? n.at.map((x) => x * k) : notePoint(n.part), text: n.text })).filter((n) => n.p));
   }
   // its style, where this browser has no choice of its own
   if (app.header) {
@@ -4188,7 +4192,7 @@ async function loadAny(buf, name, seq) {
   if (!formatOfName(name)) {
     let body = buf;
     if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
-    const said = sniffFormat(new Uint8Array(body, 0, Math.min(400, body.byteLength)));
+    const said = sniffFormat(new Uint8Array(body, 0, Math.min(SNIFF_BYTES, body.byteLength)));
     if (said) name = `${name.replace(/\.gz$/i, '')}.${said.ext[0]}`;
     buf = body;
   }
@@ -4326,6 +4330,7 @@ async function meshFromSource(src, unit, seq) {
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
     app.meshSource = unitless ? { ...src, unit } : null;
     app.scene[0].unit = unitless ? unit : undefined;
+    app.scene[0].unitless = unitless; // (it HAS a reading -- tours scale to it -- even in a scene, where it cannot be re-read)
     syncUnitParam();
     showInfo();
   }
@@ -4385,7 +4390,9 @@ function setMeshUnit(u) {
 // reading's size: its cameras, frames and callouts scaled (js/tour.js tourAt). The file is not read
 // again: that reset the visitor's view before the tour saved it, and left the model in the tour's
 // unit after ✕. A model with no reading to choose (no meshSource: a STEP, a .cadmesh) plays it as made.
-const tourReading = () => (app.meshSource ? readUnit() : null);
+// (whether the first model has a reading at all -- a unit-less mesh, alone or in a scene -- not
+// whether it can be re-read now, meshSource: a scene's tour was saved with no unit and played 25.4x off)
+const tourReading = () => (app.scene && app.scene[0] && app.scene[0].unitless ? readUnit() : null);
 function startTourIn(tour, url, only = null) {
   return startTour(tourAt(tour, tourReading()), url, only);
 }

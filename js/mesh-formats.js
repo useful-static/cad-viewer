@@ -16,7 +16,7 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
-import { FORMATS, extOf, sniffFormat } from './formats.js';
+import { FORMATS, SNIFF_BYTES, extOf, sniffFormat } from './formats.js';
 import { LENGTH_MM } from './units.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
@@ -75,7 +75,7 @@ function placements(roots, kids, own, maxDepth, refuse, who) {
 // where the first bytes are conclusive (a PLY header, a GLB's "glTF": these win over the name,
 // as check.html judges them), else by the name
 export function meshFormatOf(name, buf) {
-  const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, 400));
+  const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, SNIFF_BYTES));
   const s = sniffFormat(u8);
   if (s && s.magic && s.kind === 'mesh') return s.ext[0];
   const ext = extOf(name);

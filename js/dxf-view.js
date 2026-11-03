@@ -120,9 +120,27 @@ export function createDxfView(canvas, drawing, cb = {}) {
       ctx.fillStyle = t.layer === sel ? SELECTED : sel && t.layer !== st.hover ? FADED : onPaper(t.colour);
       ctx.font = `${t.h}px sans-serif`;
       ctx.textAlign = t.align;
-      ctx.textBaseline = t.mtext ? 'top' : 'alphabetic';
       const lines = t.text.split('\n');
-      lines.forEach((l, i) => ctx.fillText(l, 0, (t.mtext ? i : i - (lines.length - 1)) * t.h * 1.4));
+      const lh = t.h * 1.4;
+      // aligned / fit (js/dxf.js): the text fitted to its baseline's length -- aligned in both
+      // directions, fit in width only
+      if (t.fit > 0) {
+        const w = Math.max(...lines.map((l) => ctx.measureText(l).width));
+        if (w > 0) { const k = t.fit / w; ctx.scale(k, t.fitMode === 'aligned' ? k : 1); }
+      }
+      if (t.mtext) {
+        // an MTEXT block hangs from its point (top), or is centred on it (middle), or stands on it
+        // (bottom): the attachment's row -- every row was drawn hanging, a dimension's value
+        // (middle) half a block low, across the line it labels
+        const H = (lines.length - 1) * lh + t.h;
+        const y0 = t.valign === 'middle' ? -H / 2 : t.valign === 'bottom' ? -H : 0;
+        ctx.textBaseline = 'top';
+        lines.forEach((l, i) => ctx.fillText(l, 0, y0 + i * lh));
+      } else {
+        // a TEXT's vertical alignment: its baseline, bottom, middle or top on the point
+        ctx.textBaseline = { bottom: 'bottom', middle: 'middle', top: 'top' }[t.valign] || 'alphabetic';
+        lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1)) * lh));
+      }
       ctx.restore();
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);

@@ -4,7 +4,9 @@
 // how many objects of the drawn types decoded. --dxf FILE writes the drawing as
 // DXF (one file only); --json prints the report as JSON.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF } from './js/dwg.js';
+import { parseDXF } from './js/dxf.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 const args = process.argv.slice(2);
@@ -19,7 +21,10 @@ for (const f of files) {
   const rep = { file: f };
   try {
     const t0 = Date.now();
-    const d = readDWG(readFileSync(f));
+    // (a .dwg.gz, as the page opens one)
+    let buf = readFileSync(f);
+    if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf);
+    const d = readDWG(buf);
     rep.ms = Date.now() - t0;
     // savedBy: the AppInfo writer (Autodesk, ODA, another product's name; '' when not stated)
     Object.assign(rep, { version: d.version, release: d.release, savedBy: d.writer, objects: d.objects.size, mapped: d.mapCount, failures: d.failures,
@@ -37,14 +42,21 @@ for (const f of files) {
     const P = dwgToPairs(d);
     rep.pairs = P.length;
     if (dxfOut) writeFileSync(dxfOut, pairsToDXF(P));
-    if (d.failures.length) bad++;
+    // and drawn as the page draws it (parseDXF over the pairs, js/read-file.js readDrawing): a DWG
+    // the page refuses, or that draws nothing, is not "all checks pass"
+    try {
+      const dr = parseDXF(P);
+      rep.drawn = { paths: dr.paths.length, texts: dr.texts.length, layouts: dr.layouts.length };
+      if (!dr.paths.length && !dr.texts.length && !dr.layouts.some((l) => l.paths.length || l.texts.length)) rep.drawError = 'has nothing to draw';
+    } catch (e) { rep.drawError = e.message; }
+    if (d.failures.length || rep.drawError) bad++;
   } catch (err) {
     rep.error = String(err.stack || err);
     bad++;
   }
   reports.push(rep);
   if (!json) {
-    console.log(`${f}: ${rep.release || '?'} ${rep.error ? 'ERROR ' + rep.error.split('\n')[0] : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : 'all checks pass'}`}`);
+    console.log(`${f}: ${rep.release || '?'} ${rep.error ? 'ERROR ' + rep.error.split('\n')[0] : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts`}`}`);
   }
 }
 if (json) console.log(JSON.stringify(reports, null, 1));

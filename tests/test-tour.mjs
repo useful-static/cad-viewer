@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeCadmesh } from '../js/cadmesh.js';
-import { parseTour, partIndex, resolveParts, tourAt, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
+import { parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
 import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
@@ -185,6 +185,11 @@ test('tourAt: a tour made in inches, played over the mm reading, has its sizes s
   assert.equal(tourAt(t, null), t);
   // and back: mm to inches
   assert.ok(near(tourAt(m, 'in').steps[0].view.cam.target, [254, 0, 25.4]));
+  // the same rule for a model list's note points, written for the mm reading
+  assert.equal(readingScale('in'), 25.4);
+  assert.equal(readingScale('mm'), 1);
+  assert.equal(readingScale(null), 1);
+  assert.equal(readingScale('mm', 'in'), 1 / 25.4);
 });
 
 test('a tour made over a mesh read in inches says so ("unit"), and the parser takes only a known unit', () => {

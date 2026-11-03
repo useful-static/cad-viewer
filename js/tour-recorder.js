@@ -278,9 +278,14 @@ export function createTourRecorder(api) {
     const t = m && m.unit ? tourAt(tour, m.unit) : tour;
     draft.steps = t.steps.map((s) => ({ ...s }));
     draft.unit = (m && m.unit) || tour.unit || null;
-    draft.model = m;
-    // (and its own model: saved again, it names the model it was made for, not whatever is open)
+    // (and its own model: saved again, it names the model it was made for, not whatever is open;
+    // a tour of another model than the one open is tied to that one, so a step taken here is not
+    // added to it -- it was, and saved under the other model's name)
     draft.modelUrl = tour.model || null;
+    const open = api.modelUrl();
+    draft.model = draft.modelUrl && open && draft.modelUrl !== open
+      ? { key: `tour model ${draft.modelUrl}`, unit: draft.unit, name: draft.modelUrl.split('/').pop() }
+      : m;
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;
     el.mode.value = draft.mode;

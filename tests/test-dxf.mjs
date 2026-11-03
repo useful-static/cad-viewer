@@ -6,9 +6,10 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, textCodes, unescapeDxf, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, bulgePts, mtextPlain, textCodes, unescapeDxf, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
+import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
 
@@ -131,17 +132,24 @@ test('not a DXF: refused in words', () => {
 // value typed by the code (strings null-terminated, doubles, int16/32, bools)
 function binaryDXF(groups, oneByte = false) {
   const parts = [new TextEncoder().encode('AutoCAD Binary DXF\r\n\x1a\x00')];
-  const kind = (c) => (c <= 9 || (c >= 100 && c <= 109) || (c >= 300 && c <= 369) || (c >= 390 && c <= 399) || (c >= 410 && c <= 419)
-    || (c >= 430 && c <= 439) || (c >= 470 && c <= 481) || c === 999 || (c >= 1000 && c <= 1009) ? 's'
-    : (c >= 10 && c <= 59) || (c >= 110 && c <= 149) || (c >= 210 && c <= 239) || (c >= 460 && c <= 469) || (c >= 1010 && c <= 1059) ? 'd'
-      : (c >= 90 && c <= 99) || (c >= 420 && c <= 429) || (c >= 440 && c <= 459) || c === 1071 ? 'i32'
-        : (c >= 290 && c <= 299) ? 'b' : 'i16');
+  // (the reader's own table of value kinds: this writer's copy wrote 310 chunks as strings and 160
+  // int64s as int16, so the reader's 'bin' and 'i64' branches were never run)
+  const kind = valueKind;
   for (const [c, v] of groups) {
     const code = oneByte ? (c < 255 ? Uint8Array.of(c) : Uint8Array.of(255, c & 255, c >> 8)) : Uint8Array.of(c & 255, c >> 8);
     parts.push(code);
     const k = kind(c);
     if (k === 's') parts.push(new TextEncoder().encode(`${v}\0`));
-    else {
+    else if (k === 'bin') {
+      // a binary chunk: a length byte, then the bytes (the value given as hex)
+      const hex = String(v);
+      const bytes = Uint8Array.from(hex.match(/../g) || [], (h) => parseInt(h, 16));
+      parts.push(Uint8Array.of(bytes.length), bytes);
+    } else if (k === 'i64') {
+      const b = new DataView(new ArrayBuffer(8));
+      b.setBigInt64(0, BigInt(v), true);
+      parts.push(new Uint8Array(b.buffer));
+    } else {
       const b = new DataView(new ArrayBuffer(k === 'd' ? 8 : k === 'i32' ? 4 : k === 'b' ? 1 : 2));
       if (k === 'd') b.setFloat64(0, Number(v), true);
       else if (k === 'i32') b.setInt32(0, Number(v), true);
@@ -169,6 +177,17 @@ test('a binary DXF reads as its ASCII twin (R13+ two-byte codes, R12 one-byte)',
   }
 });
 
+test('a binary DXF with 310 binary chunks and 160 int64 values between drawn entities reads them as data', () => {
+  const G = [[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, '0'], [160, '123456789012'], [10, 0], [20, 0], [11, 3], [21, 4],
+    [0, 'OLE2FRAME'], [8, '0'], [310, '0001020304ff'], [310, 'deadbeef'], [1004, 'cafe'],
+    [0, 'LINE'], [8, '0'], [10, 1], [20, 1], [11, 2], [21, 2],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  const d = parseDXF(binaryDXF(G));
+  assert.equal(d.paths.length, 2, 'both lines, the chunks and the int64 read past as their own lengths');
+  assert.deepEqual([...d.paths[0].pts], [0, 0, 3, 4]);
+  assert.deepEqual([...d.paths[1].pts], [1, 1, 2, 2]);
+});
 test('paper space is not drawn in the model: a 67 = 1 entity is left out and counted', () => {
   const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
     [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0],
@@ -349,7 +368,7 @@ test('round 11: \\M+ double-byte escapes, ^ stacks, %%nnn in the code page, a 99
   assert.equal(mtextPlain('{\\M+18277}x'), `${new TextDecoder('shift_jis').decode(Uint8Array.of(0x82, 0x77))}x`);
   assert.equal(dwgCompareUnescape, unescapeDxf, 'tests/dwg-compare.mjs uses the viewer\'s own unescapeDxf');
   // ^ stacks: a superscript, a subscript, a tolerance; / and # stay fractions
-  assert.deepEqual(['6,5 m\\S2^;', '\\S^2;', '0,2\\S+0.1^-0;', '\\S1/2;', '\\S3#4;'].map((x) => mtextPlain(x)), ['6,5 m2', '2', '0,2+0.1 -0', '1/2', '3/4']);
+  assert.deepEqual(['6,5 m\\S2^;', '\\S^2;', '0,2\\S+0.1^-0;', '\\S1/2;', '\\S3#4;'].map((x) => mtextPlain(x)), ['6,5 m2', '2', '0,2 +0.1 -0', '1/2', '3/4']);
   // %%nnn above 127: the drawing's code page (1252 unless it says otherwise)
   assert.equal(textCodes('%%128'), '€');
   assert.equal(textCodes('%%065'), 'A');
@@ -362,6 +381,50 @@ test('round 11: \\M+ double-byte escapes, ^ stacks, %%nnn in the code page, a 99
     [[0, 'ATTRIB'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'LINE ONE'], [2, 'T'], [70, 0], [101, 'Embedded Object'], [10, 0], [20, 0], [40, 1], [1, 'LINE ONE\\PLINE TWO']],
     [[0, 'SEQEND'], [8, '0']]));
   assert.deepEqual(d.texts.map((t) => t.text), ['LINE ONE\nLINE TWO']);
+});
+test('round 12: text placement -- aligned / fit from the first point, vertical alignment, MTEXT attachment, a multi-line ATTRIB as its MTEXT', () => {
+  const d = parseDXF(ents(
+    // aligned (72=3): from (0,0) along to (10,0), fitted to 10
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0], [40, 1], [72, 3], [1, 'ABCDE']],
+    // fit (72=5) along a slope
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 5], [11, 3], [21, 9], [40, 1], [72, 5], [1, 'FIT']],
+    // middle (73=2) and top (73=3), left, by the second point
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [11, 7], [21, 8], [40, 1], [73, 2], [1, 'MID']],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 2], [40, 1], [72, 2], [73, 3], [1, 'TOPRIGHT']],
+    // an MTEXT attached middle-centre (71=5: a dimension's value), and bottom-right (9)
+    [[0, 'MTEXT'], [8, '0'], [10, 20], [20, 30], [40, 2], [71, 5], [1, 'dim']],
+    [[0, 'MTEXT'], [8, '0'], [10, 20], [20, 30], [40, 2], [71, 9], [1, 'br']],
+    // a multi-line ATTRIB: placed as its embedded MTEXT (point, height, attachment), not its own
+    [[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 100], [20, 100], [40, 9], [1, 'one'], [2, 'T'], [70, 0], [72, 1],
+      [101, 'Embedded Object'], [10, 5], [20, 6], [40, 2], [71, 1], [72, 1], [1, 'one\\Ptwo']],
+    [[0, 'SEQEND'], [8, '0']],
+  ));
+  const by = Object.fromEntries(d.texts.map((t) => [t.text, t]));
+  assert.deepEqual([by.ABCDE.x, by.ABCDE.y, by.ABCDE.align, by.ABCDE.fit, by.ABCDE.fitMode], [0, 0, 'left', 10, 'aligned']);
+  assert.deepEqual([by.FIT.x, by.FIT.y, by.FIT.fit, by.FIT.fitMode], [0, 5, 5, 'fit']);
+  assert.ok(Math.abs(by.FIT.rot - Math.atan2(4, 3)) < 1e-12);
+  assert.deepEqual([by.MID.x, by.MID.y, by.MID.valign, by.MID.align], [7, 8, 'middle', 'left']);
+  assert.deepEqual([by.TOPRIGHT.x, by.TOPRIGHT.y, by.TOPRIGHT.valign, by.TOPRIGHT.align], [1, 2, 'top', 'right']);
+  assert.deepEqual([by.dim.valign, by.dim.align, by.br.valign, by.br.align], ['middle', 'center', 'bottom', 'right']);
+  const m = by['one\ntwo'];
+  assert.deepEqual([m.x, m.y, m.h, m.mtext, m.align, m.valign], [5, 6, 2, true, 'left', 'top']);
+});
+test('code pages: the DWG numbers the drawings at hand show, 850 decoded, and a DWG writes its $DWGCODEPAGE for %%nnn', () => {
+  assert.deepEqual([12, 28, 29, 30, 39].map((n) => DWG_CODEPAGES[n]), ['DOS850', 'ANSI_1250', 'ANSI_1251', 'ANSI_1252', 'ANSI_936']);
+  assert.equal(decoderFor(codePageLabel('dos850')).decode(Uint8Array.of(0x48, 0x99)), 'HÖ');
+  assert.equal(codePageLabel('ANSI_1251'), 'windows-1251');
+  // %%192 in a 1251 drawing is "А" (Cyrillic), in a 1252 one "À"
+  const ru = parseDXF(dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1251'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, '%%192'], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.equal(ru.texts[0].text, 'А');
+  assert.equal(textCodes('%%192'), 'À');
+});
+test('looksLikeDxf on blank lines and 999s that never reach SECTION: linear, not exponential (27 s for 127 bytes)', () => {
+  const head = `${'999\n\n\n\n'.repeat(400)}solid x\n`;
+  const t0 = Date.now();
+  assert.equal(sniffFormat(new TextEncoder().encode(head)), null);
+  assert.ok(Date.now() - t0 < 200, `${Date.now() - t0} ms`);
 });
 test('an invisible INSERT of a block that exists draws nothing of the block', () => {
   const s = dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [0, 'ENDBLK'], [0, 'ENDSEC'],

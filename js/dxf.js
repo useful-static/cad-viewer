@@ -18,6 +18,7 @@
 // Pure ES module, no DOM.
 
 import { looksLikeDxf } from './formats.js';
+import { codePageLabel, decoderFor } from './codepages.js';
 import { LENGTH_MM } from './units.js';
 import { PAPER, contrast } from './styles.js';
 
@@ -135,7 +136,6 @@ export const UNITS = Object.fromEntries(INSUNITS.flatMap((n, code) => (n ? [[cod
 // page ($DWGCODEPAGE: ANSI_1252 for most, GBK for a Chinese drawing); with neither stated, UTF-8
 // when the bytes are valid UTF-8, else Windows-1252. (Read as UTF-8, a pre-2007 file's ° ± Ø
 // became U+FFFD; read as Latin-1, a UTF-8 one's accents were mangled.)
-const DXF_CP = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5' };
 export function dxfText(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 8000)));
@@ -143,9 +143,9 @@ export function dxfText(buf) {
   if (ver && Number(ver[1]) >= 1021) return new TextDecoder('utf-8').decode(u8);
   const cp = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/.exec(head);
   if (cp) {
-    const c = cp[1].toUpperCase();
-    const label = DXF_CP[c] || (/^ANSI_(125\d)$/.test(c) ? `windows-${c.slice(5)}` : null);
-    if (label) { try { return new TextDecoder(label).decode(u8); } catch { /* an unknown page: below */ } }
+    // (js/codepages.js: the one table, 850 included)
+    const dec = decoderFor(codePageLabel(cp[1]));
+    if (dec) return dec.decode(u8);
   }
   try { return new TextDecoder('utf-8', { fatal: true }).decode(u8); } catch { return new TextDecoder('windows-1252').decode(u8); }
 }
@@ -185,7 +185,7 @@ export function parseDXF(s) {
       if (ps[i][1].trim() === '$LTSCALE') ltscale = Number(ps[i + 1][1]) || 1;
       if (ps[i][1].trim() === '$DWGCODEPAGE') {
         const c = String(ps[i + 1][1]).trim().toUpperCase();
-        if (/^ANSI_(125\d|874)$/.test(c)) codepage = `windows-${c.slice(5)}`;
+        codepage = codePageLabel(c) || codepage;
       }
     }
   }
@@ -634,36 +634,62 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (an ATTRIB is a TEXT that follows its INSERT -- a title block's values -- and one
         // flagged invisible (70 bit 1) is not drawn; its vertical alignment is 74, not 73)
         if (r.type === 'ATTRIB' && (num(r, 70) & 1)) break;
-        // (the plain text, made once per entity: a block's text inserted many times is the same)
-        // (an R2018 multi-line ATTRIB holds its value as an embedded MTEXT after "101 Embedded
-        // Object": read as MTEXT -- its own group 1 is the first line only, which was drawn)
-        if (r.plain === undefined) {
+        // An R2018 multi-line ATTRIB holds its value as an embedded MTEXT after "101 Embedded
+        // Object": that MTEXT is what is drawn -- its text, point, height and attachment (its own
+        // group 1 is the first line only; drawn as a TEXT it stood 3.8 heights too high), the
+        // ATTRIB's own groups read only before the 101. (Made once per entity, as the text is.)
+        if (r.src === undefined) {
           const emb = r.type === 'ATTRIB' ? r.g.findIndex((x) => x[0] === 101) : -1;
-          const asM = r.type === 'MTEXT' || emb >= 0;
-          const raw = asM ? r.g.slice(emb >= 0 ? emb : 0).filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
-          r.plain = asM ? mtextPlain(raw, ctx.codepage) : textCodes(raw, ctx.codepage);
+          r.src = emb >= 0 ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : r;
+        }
+        const e = r.src;
+        const mt = e.type === 'MTEXT';
+        // (the plain text, made once per entity: a block's text inserted many times is the same)
+        if (r.plain === undefined) {
+          const raw = mt ? e.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(e, 1, '');
+          r.plain = mt ? mtextPlain(raw, ctx.codepage) : textCodes(raw, ctx.codepage);
         }
         const t = r.plain;
         if (!t.trim()) break;
-        // TEXT with an alignment uses its second point
-        const al = r.type !== 'MTEXT' ? num(r, 72, 0) : 0;
-        const useB = r.type !== 'MTEXT' && (al || num(r, r.type === 'ATTRIB' ? 74 : 73, 0));
         // MTEXT's point (10) and direction (11) are in WORLD coordinates, TEXT's in its own (the
         // OCS): an MTEXT at world (50, 0) with extrusion 0,0,-1 was drawn at (-50, 0)
-        const mt = r.type === 'MTEXT';
         const P = mt ? M : O;
-        const [x, y] = ap(P, useB ? num(r, 11) : num(r, 10), useB ? num(r, 21) : num(r, 20));
-        let rot;
-        if (mt && get(r, 11, null) !== null) {
-          // the world direction, through the insert transform
-          const dx = num(r, 11), dy = num(r, 21);
-          rot = Math.atan2(M[1] * dx + M[3] * dy, M[0] * dx + M[2] * dy);
+        const h = num(e, 40, 1) * Math.hypot(P[2], P[3]);
+        const item = { layer, colour, h, text: t, mtext: mt };
+        if (mt) {
+          // attachment 1..9: top / middle / bottom rows of left / centre / right
+          const a = Math.min(9, Math.max(1, num(e, 71, 1) | 0));
+          [item.x, item.y] = ap(P, num(e, 10), num(e, 20));
+          item.align = mtextAlign(a);
+          item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
+          if (get(e, 11, null) !== null) {
+            const dx = num(e, 11), dy = num(e, 21);
+            item.rot = Math.atan2(M[1] * dx + M[3] * dy, M[0] * dx + M[2] * dy);
+          } else item.rot = (num(e, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
         } else {
-          // (an MTEXT's 50, without 11, is in its OCS, as TEXT's is)
-          rot = (num(r, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
+          // TEXT / ATTRIB: 72 the horizontal alignment (0 left, 1 centre, 2 right, 3 aligned, 4
+          // middle, 5 fit), 73 (an ATTRIB's 74) the vertical (0 baseline, 1 bottom, 2 middle,
+          // 3 top); any but left on the baseline is placed by the second point
+          const al = num(e, 72, 0) | 0;
+          const va = num(e, e.type === 'ATTRIB' ? 74 : 73, 0) | 0;
+          const p10 = ap(O, num(e, 10), num(e, 20)), p11 = ap(O, num(e, 11), num(e, 21));
+          item.rot = (num(e, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
+          if (al === 3 || al === 5) {
+            // aligned / fit: drawn from the first point along the baseline to the second, its width
+            // fitted to it (aligned keeps its proportions, fit its height) -- it was drawn from the
+            // second point, one text width past where it belongs
+            [item.x, item.y] = p10;
+            item.align = 'left';
+            item.valign = 'baseline';
+            const d = Math.hypot(p11[0] - p10[0], p11[1] - p10[1]);
+            if (d > 0) { item.rot = Math.atan2(p11[1] - p10[1], p11[0] - p10[0]); item.fit = d; item.fitMode = al === 3 ? 'aligned' : 'fit'; }
+          } else {
+            [item.x, item.y] = al || va ? p11 : p10;
+            item.align = ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left';
+            item.valign = al === 4 ? 'middle' : ['baseline', 'bottom', 'middle', 'top'][va] || 'baseline';
+          }
         }
-        const h = num(r, 40, 1) * Math.hypot(P[2], P[3]);
-        ctx.addText({ layer, colour, x, y, h, rot, text: t, align: r.type === 'MTEXT' ? mtextAlign(num(r, 71, 1)) : ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left', mtext: r.type === 'MTEXT' });
+        ctx.addText(item);
         break;
       }
       case 'INSERT': case 'DIMENSION': {
@@ -895,22 +921,17 @@ export function mtextPlain(s, codepage = 'windows-1252') {
         // subscript: its non-empty parts, a space apart ("m\S2^;" is m2, "+0.1^-0" is +0.1 -0;
         // as a/b they read "m2/" and "+0.1/-0")
         const a = s.slice(i + 2, j), b = s.slice(j + 1, e);
-        out += s[j] === '^' ? [a, b].filter((x) => x.trim()).join(' ') : `${a}/${b}`;
+        // (a two-part tolerance set off from the value before it: "0,2 +0.1 -0", not "0,2+0.1 -0")
+        const both = a.trim() && b.trim();
+        out += s[j] === '^' ? `${both && out && !/\s$/.test(out) ? ' ' : ''}${[a, b].filter((x) => x.trim()).join(' ')}` : `${a}/${b}`;
         i = e;
         continue;
       }
       out += c;
       continue;
     }
-    if (k === 'U' && s[i + 2] === '+' && /^[0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 7))) {
-      out += String.fromCharCode(parseInt(s.slice(i + 3, i + 7), 16));
-      i += 6;
-      continue;
-    }
-    if (k === 'M' && s[i + 2] === '+' && /^[1-5][0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 8))) {
-      const ch = mbcsChar(s.slice(i + 3, i + 8));
-      if (ch !== null) { out += ch; i += 7; continue; }
-    }
+    const esc = escapeAt(s, i);
+    if (esc) { out += esc[0]; i += esc[1] - 1; continue; }
     out += c;
   }
   return percentCodes(out, codepage);
@@ -921,11 +942,11 @@ export function mtextPlain(s, codepage = 'windows-1252') {
 const PCT = { c: 'Ø', d: '°', p: '±', u: '', o: '', k: '', '%': '%' };
 // (%%nnn above 127 is a byte of the drawing's single-byte code page -- %%128 in a 1252 drawing is
 // "€", not U+0080 -- and from 256 a character code)
-const pageDecoders = {};
 function pageChar(n, codepage) {
   if (n < 128 || n > 255) return String.fromCharCode(n);
-  try { pageDecoders[codepage] ||= new TextDecoder(codepage); } catch { pageDecoders[codepage] = new TextDecoder('windows-1252'); }
-  return pageDecoders[codepage].decode(Uint8Array.of(n));
+  // (a double-byte page has no character for one byte: 1252 then)
+  const single = codepage && !['shift_jis', 'gbk', 'euc-kr', 'big5'].includes(codepage);
+  return (decoderFor(single ? codepage : 'windows-1252') || decoderFor('windows-1252')).decode(Uint8Array.of(n));
 }
 const percentCodes = (s, codepage = 'windows-1252') => s.replace(/%%(\d{3})|%%([cdpuok%])/gi, (m, n, k) => (n ? pageChar(Number(n), codepage) : PCT[k.toLowerCase()]));
 // \M+NXXXX: a double-byte character of code page N (DXF reference: 1 Japanese, 2 Traditional
@@ -940,12 +961,25 @@ function mbcsChar(nxxxx) {
     return mbcsDecoders[enc].decode(Uint8Array.of(parseInt(nxxxx.slice(1, 3), 16), parseInt(nxxxx.slice(3, 5), 16)));
   } catch { return null; }
 }
+// A character escape at s[i] (a backslash): \U+XXXX or \M+NXXXX -> [the character, its length],
+// else null. The one decoder: mtextPlain's scanner and unescapeDxf both call it (they held a copy
+// of the patterns each)
+function escapeAt(s, i) {
+  if (s[i] !== '\\' || s[i + 2] !== '+') return null;
+  if (s[i + 1] === 'U' && /^[0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 7))) return [String.fromCharCode(parseInt(s.slice(i + 3, i + 7), 16)), 7];
+  if (s[i + 1] === 'M' && /^[1-5][0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 8))) { const ch = mbcsChar(s.slice(i + 3, i + 8)); if (ch !== null) return [ch, 8]; }
+  return null;
+}
 // The character escapes a DXF string holds, \U+XXXX and \M+NXXXX: the one rule for the drawing
 // (textCodes, mtextPlain's scanner) and the DWG validation's comparator (tests/dwg-compare.mjs)
 export function unescapeDxf(s) {
   if (s.indexOf('\\') < 0) return s;
-  return s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (m, u) => String.fromCharCode(parseInt(u, 16)))
-    .replace(/\\M\+([1-5][0-9A-Fa-f]{4})/g, (m, x) => mbcsChar(x) ?? m);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const esc = s[i] === '\\' ? escapeAt(s, i) : null;
+    if (esc) { out += esc[0]; i += esc[1] - 1; } else out += s[i];
+  }
+  return out;
 }
 // ...and a single-line TEXT's or ATTRIB's: those and the % codes (a raw "%%u", "45\U+00B0" and
 // "\M+18277" were drawn as written)

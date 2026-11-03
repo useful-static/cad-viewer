@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMATS, formatOfName, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText } from '../js/formats.js';
+import { FORMATS, formatOfName, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,6 +58,11 @@ await test('first bytes say the format, for each that has a signature', () => {
   assert.equal(sniffFormat(bytes('hello world')), null);
   assert.equal(sniffFormat(new Uint8Array(84)), null);
   assert.equal(isDWGBytes(bytes('AC10')), false);
+  // a DXF behind a 420-character 999 comment, an OBJ behind a 12-line comment header: named by
+  // their bytes within SNIFF_BYTES (a 400-byte window left them unnamed at a URL with no name)
+  assert.equal(sniffFormat(bytes(`999\n${'x'.repeat(420)}\n  0\nSECTION\n  2\nENTITIES\n`))?.label, 'DXF');
+  assert.equal(sniffFormat(bytes(`${'# exported by a tool, with a long comment header line\n'.repeat(12)}o part\nv 0 0 0\n`))?.label, 'OBJ');
+  assert.ok(SNIFF_BYTES >= 4096);
 });
 
 await test('a download URL names its model in the query', () => {

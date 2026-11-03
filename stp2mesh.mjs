@@ -12,7 +12,7 @@ import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
 import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
-import { FORMATS as CAD_FORMATS, sniffFormat } from './js/formats.js';
+import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.cadmesh]
@@ -92,7 +92,7 @@ function sniffFile(path) {
   if (b[0] === 0x1f && b[1] === 0x8b) {
     try { b = gunzipSync(b, { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
   }
-  const f = sniffFormat(new Uint8Array(b.buffer, b.byteOffset, Math.min(b.length, 400)));
+  const f = sniffFormat(new Uint8Array(b.buffer, b.byteOffset, Math.min(b.length, SNIFF_BYTES)));
   return f && f.kind === 'cad' ? f.cad : undefined;
 }
 
