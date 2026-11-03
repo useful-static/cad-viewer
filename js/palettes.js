@@ -11,7 +11,7 @@
 //   body      a different colour for every body
 //   mono      one neutral colour for everything (shape reads by shading alone)
 
-import { DEFAULT_GREY, PALETTE, partColours } from './cadmesh.js';
+import { DEFAULT_GREY, PALETTE, partColours, toByte } from './cadmesh.js';
 
 export const PALETTES = [
   { id: 'file', label: 'File colours' },
@@ -73,7 +73,7 @@ export function schemeColours(mesh, id, overrides = new Map(), faces = new Map()
   if (!per && overrides.size === 0 && faces.size === 0) return mesh.color;
   const out = per ? new Uint8Array(mesh.color.length) : mesh.color.slice();
   const fill = (m, [r, g, b]) => {
-    const R = Math.round(r * 255), G = Math.round(g * 255), B = Math.round(b * 255);
+    const R = toByte(r), G = toByte(g), B = toByte(b);
     for (let v = m.vtxStart, end = m.vtxStart + m.vtxCount; v < end; v++) {
       out[4 * v] = R; out[4 * v + 1] = G; out[4 * v + 2] = B; out[4 * v + 3] = 255;
     }
@@ -88,7 +88,7 @@ export function schemeColours(mesh, id, overrides = new Map(), faces = new Map()
     for (const [f, [r, g, b]] of faces) {
       const first = mesh.faces[f * 2], count = mesh.faces[f * 2 + 1];
       if (first === undefined) continue;
-      const R = Math.round(r * 255), G = Math.round(g * 255), B = Math.round(b * 255);
+      const R = toByte(r), G = toByte(g), B = toByte(b);
       for (let i = first * 3, end = (first + count) * 3; i < end; i++) {
         const v = mesh.index[i];
         out[4 * v] = R; out[4 * v + 1] = G; out[4 * v + 2] = B; out[4 * v + 3] = 255;
@@ -103,4 +103,4 @@ export { rgb as hexToRgb } from './styles.js';
 // red, green and blue only (an alpha would make the #value invalid), each
 // clamped to 0..1, so the colour picker never falls back to black
 export const rgbToHex = (c) => '#' + c.slice(0, 3)
-  .map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, '0')).join('');
+  .map((x) => (toByte(x) || 0).toString(16).padStart(2, '0')).join('');

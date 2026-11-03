@@ -8,7 +8,7 @@ import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUr
 import { onPaper, parseDXF } from './dxf.js';
 import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
-import { directUrl } from './open-url.js';
+import { directUrl, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
@@ -21,7 +21,7 @@ import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft }
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
-import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
+import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
@@ -722,7 +722,7 @@ const FILL_RGB = rgb(CUT_FILL);
 // transparent picture)
 function styleFrame(s, scale, light = false) {
   const passes = edgePasses(s.id, { scale, onLight: light || app.lightBg });
-  return { background: s.paper || app.lightBg ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
+  return { background: s.paper || app.lightBg ? PAPER_RGB : BG, style: { faces: s.faces, faceAlpha: s.faceAlpha ?? 1, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
     fill: s.faces === 'depth' ? FILL_RGB : null,
     // a body too small to draw edges is collapsed in the face and pick passes too
     cullFaces: !!s.paper };
@@ -1493,8 +1493,11 @@ async function shareView() {
   } catch { /* no clipboard (not a secure context, or refused) */ }
   if (!copied) window.prompt('Copy this link to the view:', link);
   app.lastViewLink = link;
-  const note = app.sourceUrl ? 'View link copied'
-    : 'View link copied: it holds the view, not the file (opened from this device)';
+  // (a link carries the first MAX_NOTES notes: said, not left for the visitor to find)
+  const nNotes = app.measure ? app.measure.notes().length : 0;
+  const cut = nNotes > MAX_NOTES ? ` (with the first ${MAX_NOTES} of its ${nNotes} notes: a link is short)` : '';
+  const note = (app.sourceUrl ? 'View link copied'
+    : 'View link copied: it holds the view, not the file (opened from this device)') + cut;
   flashHover(note);
   announce(note);
 }
@@ -1517,7 +1520,9 @@ function tourParts(names) {
 
 async function readTour(url) {
   let abs;
-  try { abs = new URL(url, location.href).href; } catch { return { error: `"${url}" is not a URL` }; }
+  // (a tour shared as a GitHub page or a Dropbox link is read from the file, and its model
+  // resolves against that file: js/open-url.js fileUrl)
+  try { abs = fileUrl(new URL(url, location.href).href); } catch { return { error: `"${url}" is not a URL` }; }
   let text;
   try {
     const r = await fetch(abs, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
@@ -1526,7 +1531,7 @@ async function readTour(url) {
   } catch (e) {
     // (the site answered without CORS -- the tour is not there, or not
     // shared -- or did not answer: fetchFailedText tells which)
-    return { error: (await fetchFailedText(abs, 'the tour', e)).replace(/^could not download the tour /, 'could not be read ') };
+    return { error: await fetchFailedText(abs, 'the tour', e, 'could not be read') };
   }
   try { return { tour: parseTour(text, abs) }; } catch (e) { return { error: e.message }; }
 }
@@ -1576,14 +1581,15 @@ function applyStepState(s) {
   const base = app.tour.base;
   const n = app.header.meshes.length;
   const ids = (names) => (names ? tourParts(names).ids : []);
-  let hidden = new Set(base.hidden);
+  // ("show": "all": nothing hidden, whatever the page hid)
+  let hidden = s.show === 'all' ? new Set() : new Set(base.hidden);
   if (s.isolate) {
     const keep = new Set(ids(s.isolate));
     hidden = new Set();
     for (let id = 1; id <= n; id++) if (!keep.has(id)) hidden.add(id);
   }
   for (const id of ids(s.hide)) hidden.add(id);
-  for (const id of ids(s.show)) hidden.delete(id);
+  if (Array.isArray(s.show)) for (const id of ids(s.show)) hidden.delete(id);
   // what the step is about: the parts it colours, else the parts it frames
   const subject = new Set(s.colour ? ids(Object.keys(s.colour)) : Array.isArray(s.frame) ? ids(s.frame) : []);
   const overrides = new Map(base.overrides);
@@ -1632,9 +1638,9 @@ function outsideQuat(box, ids = null, step = null) {
     const mine = new Set(ids || []);
     // (what the step shows: the visitor's hidden parts, plus the step's own
     // hide -- a heatsink taken off its chip -- less its show)
-    const hidden = new Set(app.tour ? app.tour.base.hidden : app.hidden);
+    const hidden = step && step.show === 'all' ? new Set() : new Set(app.tour ? app.tour.base.hidden : app.hidden);
     if (step && step.hide) for (const id of tourParts(step.hide).ids) hidden.add(id);
-    if (step && step.show) for (const id of tourParts(step.show).ids) hidden.delete(id);
+    if (step && Array.isArray(step.show)) for (const id of tourParts(step.show).ids) hidden.delete(id);
     const within = (b) => [0, 1, 2].every((k) => {
       const c = (b.min[k] + b.max[k]) / 2;
       return c >= box.min[k] && c <= box.max[k];
@@ -1911,20 +1917,24 @@ function captureStep({ camera = 'exact' } = {}) {
     s.colour = {};
     for (const [h, ids] of byHex) for (const nm of names(ids)) s.colour[nm] = h;
   }
+  // (every field the step takes is written, "nothing" included: a field left out means "keep
+  // the page's", so a step taken after Show all says "show": "all", and a step with no cut
+  // "section": "off" -- else a list's hidden parts and a visitor's cut stayed in the tour)
   if (app.hidden.size) {
     if (app.hidden.size > n / 2) {
       const shown = [];
       for (let id = 1; id <= n; id++) if (!app.hidden.has(id)) shown.push(id);
       s.isolate = names(shown);
     } else s.hide = names([...app.hidden]);
-  }
+  } else s.show = 'all';
   if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) {
     s.explode = r(app.explode.t, 3);
     if (app.explode.mode) s.explodeAlong = app.explode.mode;
   }
-  if (app.section.axis !== 'off') s.section = { axis: app.section.axis, t: r(app.section.t, 4), flip: !!app.section.flip };
+  s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: r(app.section.t, 4), flip: !!app.section.flip } : { axis: 'off' };
   s.style = currentStyle().id;
-  const notes = app.measure ? app.measure.notes() : [];
+  // (the visitor's own notes: a model list's are the page's, shown again whatever the tour says)
+  const notes = app.measure ? app.measure.notes().filter((nt) => nt.own) : [];
   if (notes.length) s.callouts = notes.map((nt) => ({ text: nt.text, at: nt.p.map((v) => r(v, 3)) }));
   return s;
 }
@@ -4195,15 +4205,23 @@ async function loadMeshFile(buf, name, seq) {
 // OBJ, PLY, OFF -- is read as mm until the units row's "file is in" says
 // otherwise: plan feature 14). app.meshSource keeps the bytes for that.
 async function meshFromSource(src, unit, seq) {
-  const model = await parseMesh(src.format, src.buf, src.name, src.extras);
+  // read off the page's thread (readInWorker; the bytes are copied, not moved: they are kept for
+  // a re-read in another unit), else here
+  const got = await readInWorker({ kind: 'mesh', buf: src.buf, format: src.format, name: src.name, extras: src.extras, unit }, src.name);
   if (stale(seq)) return;
-  const unitless = !model.sourceUnits;
-  if (unitless && unit !== 'mm') {
-    const k = MM_PER[unit];
-    for (const m of model.meshes) for (let i = 0; i < m.positions.length; i++) m.positions[i] *= k;
+  let raw, unitless;
+  if (got) ({ raw, unitless } = got);
+  else {
+    const model = await parseMesh(src.format, src.buf, src.name, src.extras);
+    if (stale(seq)) return;
+    unitless = !model.sourceUnits;
+    if (unitless && unit !== 'mm') {
+      const k = MM_PER[unit];
+      for (const m of model.meshes) for (let i = 0; i < m.positions.length; i++) m.positions[i] *= k;
+    }
+    if (unitless) model.sourceUnits = unit;
+    raw = encodeCadmesh(model);
   }
-  if (unitless) model.sourceUnits = unit;
-  const raw = encodeCadmesh(model);
   await loadBuffer(raw, src.name, seq, raw);
   // (a model added to a scene keeps the scene's units: no choice there)
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
@@ -4258,8 +4276,11 @@ async function loadDxf(buf, name, seq) {
   await nextPaint();
   if (stale(seq)) return;
   // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
-  // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page
-  const drawing = parseDXF(dwg ? dwgToPairs(readDWG(buf)) : buf);
+  // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page.
+  // Off the page's thread (readInWorker), else here.
+  const got = await readInWorker({ kind: '2d', buf, dwg }, name);
+  if (stale(seq)) return;
+  const drawing = got ? got.drawing : parseDXF(dwg ? dwgToPairs(readDWG(buf)) : buf);
   const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
   if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
@@ -4475,6 +4496,37 @@ async function convert(buf, format, seq, name) {
   }
 }
 
+// A mesh or 2D file read off the page's thread (js/read-worker.js), so no file -- a damaged one,
+// a hostile one, one too big -- freezes the tab: past READ_LIMIT_S the worker is terminated and
+// the file refused in words; one that runs the worker out of memory takes only the worker; Cancel
+// (and any newer load) terminates it through app.cancelTess, as a conversion's. -> the worker's
+// answer, or null where no module worker can be made (an old browser: read here, as before)
+// (?readlimit=<s> shortens it, for tests/ui-checks.py read-worker only)
+const READ_LIMIT_S = Number(params.get('readlimit')) > 0 ? Number(params.get('readlimit')) : 60;
+function readInWorker(msg, name) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker(new URL('./read-worker.js', import.meta.url), { type: 'module' }); } catch { app.lastReadVia = 'page'; resolve(null); return; }
+    app.lastReadVia = 'worker'; // (for tests)
+    let settled = false;
+    const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      w.terminate();
+      if (app.cancelTess === cancel) app.cancelTess = null;
+      fn(v);
+    };
+    const cancel = () => done(reject, new Error('superseded by a newer load'));
+    app.cancelTess = cancel;
+    const timer = setTimeout(() => done(reject, new Error(`${name} took over ${READ_LIMIT_S} s to read, and was stopped: a damaged file, or one too large for this viewer`)), READ_LIMIT_S * 1000);
+    w.onmessage = (ev) => (ev.data.ok ? done(resolve, ev.data) : done(reject, new Error(ev.data.message)));
+    // (a worker that dies -- out of memory -- or cannot load its modules)
+    w.onerror = (e) => { if (e.preventDefault) e.preventDefault(); done(reject, new Error(`${name} could not be read: the reader stopped (${e.message || 'it ran out of memory'})`)); };
+    w.postMessage(msg);
+  });
+}
+
 function tessellate(buf, format, seq, name, threads) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
@@ -4612,18 +4664,19 @@ const fileName = fileNameOfUrl;
 // or the file is not there (a site that sends CORS only for files it has,
 // as libre.computer does, reports a missing file this way: the browser
 // hides the 404 too). If it did not, the site is down or unreachable.
-async function fetchFailedText(url, name, e) {
+// lead: how the sentence starts ("could not download part.stp"; a tour's: "could not be read")
+async function fetchFailedText(url, name, e, lead = `could not download ${name}`) {
   let host = null;
   try {
     const u = new URL(url, location.href);
     if (u.origin !== location.origin) host = u.host;
   } catch { /* an unparsable URL: treated as this site's */ }
-  if (!host) return `could not download ${name}: the server did not answer (${e.message || e})`;
+  if (!host) return `${lead}: the server did not answer (${e.message || e})`;
   // (a cross-origin isolated page -- cad.place is -- refuses a no-cors answer
   // that carries no Cross-Origin-Resource-Policy, so there the probe cannot
   // tell an answer from silence: the message names all three)
   if (self.crossOriginIsolated) {
-    return `could not download ${name} from ${host}: the file is not there, the site does not let other web pages load its files `
+    return `${lead} from ${host}: the file is not there, the site does not let other web pages load its files `
       + '(no CORS), or it did not answer -- the browser does not say which. Check the address, or download the file and open it here.';
   }
   let answered = false;
@@ -4633,9 +4686,9 @@ async function fetchFailedText(url, name, e) {
     answered = true;
   } catch { /* no answer at all */ }
   return answered
-    ? `could not download ${name} from ${host}: the site answered but would not let this page read it -- the file is not there, `
+    ? `${lead} from ${host}: the site answered but would not let this page read it -- the file is not there, `
       + 'or the site does not let other web pages load its files (no CORS). Check the address, or download the file and open it here.'
-    : `could not download ${name}: ${host} did not answer (it may be down, or the address is wrong).`;
+    : `${lead}: ${host} did not answer (it may be down, or the address is wrong).`;
 }
 
 async function loadUrl(url) {
@@ -4828,8 +4881,17 @@ function labelMeshes() {
 
 const meshLabel = (id) => app.meshLabel[id - 1];
 
-// A name as the model list labels it (its entry's labels), else as is
-const partLabel = (s) => (app.partLabels && Object.hasOwn(app.partLabels, s) ? app.partLabels[s] : s);
+// A name as the model list labels it (its entry's labels), else as is. Matched as tours, notes and
+// "hide" match a name (js/tour.js partIndex: trimmed, any case), so "hdmi_1_3": "HDMI" labels the
+// tree's HDMI_1_3 as the tour that names "HDMI" finds it
+let labelIndex = { of: null, map: new Map() };
+const partLabel = (s) => {
+  if (!app.partLabels) return s;
+  if (labelIndex.of !== app.partLabels) {
+    labelIndex = { of: app.partLabels, map: new Map(Object.entries(app.partLabels).map(([k, v]) => [k.trim().toLowerCase(), v])) };
+  }
+  return labelIndex.map.get(String(s).trim().toLowerCase()) ?? s;
+};
 
 // The name a tree node shows: its own, else its one body's, else "(unnamed)";
 // as the model list labels it

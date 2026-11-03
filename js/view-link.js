@@ -48,8 +48,10 @@ export function runs(ids) {
   return out.join(',');
 }
 
+// the most body ids a view link's hidden and selected parts name between them
+export const MAX_LINK_IDS = 1e6;
 // "1-3,7" -> [1, 2, 3, 7]; at most `max` ids (a hand-edited 1-1e9 cannot hang the page)
-export function parseRuns(s, max = 1e6) {
+export function parseRuns(s, max = MAX_LINK_IDS) {
   const out = [];
   for (const part of String(s).split(',')) {
     const m = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
@@ -77,6 +79,9 @@ export function notePlace(x) {
 // "e:" and a tour step's "explodeAlong" name one of these)
 export const EXPLODE_MODES = ['assembly', 'x', 'y', 'z'];
 export const MAX_NOTES = 20;
+// the most notes a model list, a tour step or Measure holds (a view link carries the first
+// MAX_NOTES of them: a URL is short)
+export const NOTES_MAX = 100;
 
 // A body's key: its label, numbered from its second repeat ("A › SOLID #2"),
 // so every body of a model has its own
@@ -153,6 +158,7 @@ export function encodeView(v) {
 // -> { cam?: { target, dist, q, ortho, orient }, style?, section?, hidden?, selected?, model?, selNames? }
 export function decodeView(s) {
   const out = {};
+  let ids = MAX_LINK_IDS;
   for (const field of String(s || '').split(';')) {
     const i = field.indexOf(':');
     if (i < 1) continue;
@@ -176,8 +182,10 @@ export function decodeView(s) {
       const [t, mode] = val.split(',');
       const tn = t === '' ? NaN : Number(t);
       if (tn >= 0 && tn <= 1 && EXPLODE_MODES.includes(mode)) out.explode = { t: tn, mode };
-    } else if (k === 'h') out.hidden = parseRuns(val);
-    else if (k === 'k') out.selected = parseRuns(val);
+    // (the first "h:" and "k:" only, and one id budget for both: a link repeating "h:1-999999"
+    // was a million ids a field -- 11 KB of link, 14 s)
+    } else if (k === 'h' && !out.hidden) { out.hidden = parseRuns(val, ids); ids -= out.hidden.length; }
+    else if (k === 'k' && !out.selected) { out.selected = parseRuns(val, ids); ids -= out.selected.length; }
     else if (k === 'm' && /^[0-9a-f]{8}$/.test(val)) out.model = val;
     else if (k === 'a') {
       out.notes = val.split('~').slice(0, MAX_NOTES).flatMap((s) => {

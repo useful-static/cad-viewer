@@ -69,6 +69,8 @@ test('recorder-round-trip of the field forms: section "off" and a cut, explode, 
   const src = { cadtour: 2, steps: [
     { id: 'a', view: 'front', section: 'off', explode: 0.5, explodeAlong: 'z', hide: ['fan'], callouts: [{ text: 'here', part: 'fan' }, { text: 'there', at: [1, 2, 3] }], ease: 'linear', orbit: 45 },
     { view: 'top', section: { axis: 'z', t: 0.3, flip: true }, isolate: ['board'], dim: 'grey', transition: 2, hold: 1 },
+    // "show": "all" -- a step taken with nothing hidden, whatever the page hides
+    { view: 'iso', show: 'all', section: 'off' },
   ] };
   const t = parseTour(JSON.stringify(src));
   assert.equal(t.steps[0].explodeAlong, 'z');
@@ -118,6 +120,18 @@ test('the tour maker\'s menus offer exactly the values the parser takes (DIMS, M
   const values = (id) => [...new RegExp(`<select id="${id}"[\\s\\S]*?</select>`).exec(html)[0].matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(values('tes-dim'), DIMS);
   assert.deepEqual(values('temode'), MODES);
+});
+
+test('partIndex on a 200-deep named tree over 100,000 bodies: built at once, a name\'s ids gathered when asked', () => {
+  const n = 100000;
+  const meshes = Array.from({ length: n }, () => ({}));
+  let node = { name: 'leaf', meshes: Array.from({ length: n }, (_, i) => i), children: [] };
+  for (let d = 199; d >= 0; d--) node = { name: `level${d}`, meshes: [], children: [node] };
+  const t0 = Date.now();
+  const idx = partIndex({ meshes, root: node });
+  assert.equal(idx.get('level0').size, n);
+  assert.equal(idx.get('level150').size, n);
+  assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0} ms (gathered up front: 200 x 100,000)`);
 });
 
 // an app serving the viewer and its files from its own scheme (lc://app/)

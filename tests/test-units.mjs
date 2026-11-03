@@ -80,4 +80,12 @@ test('every display unit has decimals and a system; the pickers carry no unit li
   }
 });
 
+test('Auto, derived from the tables: each declared unit to itself or its system\'s nearest display unit', () => {
+  const want = { nm: 'mm', 'Å': 'mm', um: 'mm', mm: 'mm', cm: 'cm', dm: 'cm', m: 'm', dam: 'm', hm: 'm', km: 'm', Gm: 'm',
+    AU: 'm', ly: 'm', pc: 'm', uin: 'in', mil: 'in', in: 'in', ft: 'in', 'US ft': 'in', yd: 'in', mi: 'in' };
+  for (const [u, w] of Object.entries(want)) assert.equal(autoUnit(u), w, u);
+  assert.equal(autoUnit(null), 'mm');
+  assert.equal(autoUnit('mixed'), 'mm');
+});
+
 done();

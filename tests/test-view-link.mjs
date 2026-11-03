@@ -2,7 +2,7 @@
 // The shareable view (js/view-link.js).   node tests/test-view-link.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { MAX_NAMED, MAX_NOTES, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
+import { MAX_LINK_IDS, MAX_NAMED, MAX_NOTES, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
 
 import { test, done } from './harness.mjs';
 
@@ -133,6 +133,14 @@ test('Explode rides in the link: how far and how; off leaves it out; a bad one i
   assert.deepEqual(decodeView(encodeView({ ...view, explode: { t: 0.4, mode: 'assembly' } })).explode, { t: 0.4, mode: 'assembly' });
   assert.ok(!/(^|;)e:/.test(encodeView({ ...view, explode: null })), 'no e: when Explode is off');
   for (const e of ['1.5,z', '-0.1,z', 'x,z', '0.5,diagonal', '0.5']) assert.equal(decodeView(`c:0,0,0,10,0,0,0,1;e:${e}`).explode, undefined, e);
+});
+test('a link repeating "h:1-999999" a thousand times: the first h counts, one id budget for h and k, fast', () => {
+  const link = Array(1000).fill('h:1-999999').join(';') + ';k:1-999999';
+  const t0 = Date.now();
+  const v = decodeView(link);
+  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+  assert.equal(v.hidden.length, 999999);
+  assert.ok(v.hidden.length + v.selected.length <= MAX_LINK_IDS);
 });
 
 done();

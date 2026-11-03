@@ -8,11 +8,12 @@
 //   Hidden line     faces depth-only; cut fill; visible edges, on paper
 //   Hidden grey     as Hidden line, plus the hidden edges dashed and lighter
 //   Wire            edges at every depth, no faces, on paper
-//   X-ray           faces at alpha 0.25 without depth write; edges (lightened)
+//   X-ray           faces at alpha faceAlpha (0.25) without depth write; edges (lightened)
 //
 // Paper styles draw on #f4f4f2; outline styles also draw the silhouette
 // candidates (the outlines of curved faces), since shading cannot show them.
 // seesHidden: edges behind faces are drawn, so Measure may snap to them.
+// faceAlpha: the faces' alpha where they are blended ('xray'): both renderers read it from the frame.
 //
 // A new style is one row here plus its case in edgePasses(); main.js lists
 // every row in the Style select and both renderers draw whatever passes the
@@ -24,7 +25,7 @@ export const STYLES = [
   { id: 'hidden', label: 'Hidden line', faces: 'depth', edges: true, outline: true, paper: true, seesHidden: false },
   { id: 'hiddengrey', label: 'Hidden grey', faces: 'depth', edges: true, outline: true, paper: true, seesHidden: true },
   { id: 'wire', label: 'Wire', faces: 'none', edges: true, outline: true, paper: true, seesHidden: true },
-  { id: 'xray', label: 'X-ray', faces: 'xray', edges: true, outline: true, paper: false, seesHidden: true },
+  { id: 'xray', label: 'X-ray', faces: 'xray', faceAlpha: 0.25, edges: true, outline: true, paper: false, seesHidden: true },
 ];
 
 export const styleById = (id) => STYLES.find((s) => s.id === id) || null;

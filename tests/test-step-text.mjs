@@ -38,6 +38,14 @@ test('one 1 MB record of "#1=A" repeats, and of "=ADVANCED_FACE(\'n\',(" repeats
   assert.equal(f.faces, 0);
   assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms (was 112 s and 56 s)`);
 });
+test('1,000 unit contexts naming one 3.9 MB unit record: the record is read once', () => {
+  const parts = ['ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n', `#1=(LENGTH_UNIT()NAMED_UNIT(*)${'X'.repeat(3_900_000)}SI_UNIT(.MILLI.,.METRE.));\n`];
+  for (let k = 0; k < 1000; k++) parts.push(`#${k + 10}=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#1))REPRESENTATION_CONTEXT('',''));\n`);
+  parts.push('ENDSEC;\nEND-ISO-10303-21;\n');
+  const t0 = Date.now();
+  assert.equal(stepUnits(enc(parts.join(''))), 'mm');
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms (was 8.3 s at 6 MB)`);
+});
 test('a real ADVANCED_FACE is still counted, with its bounds', () => {
   const f = stepFeatures(enc("ISO-10303-21;\nDATA;\n#5=ADVANCED_FACE('',(#6,#7,#8),#9,.T.);\n#6=FACE_OUTER_BOUND('',#10,.T.);\nENDSEC;"));
   assert.equal(f.faces, 1);

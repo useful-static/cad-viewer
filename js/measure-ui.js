@@ -18,7 +18,7 @@ import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid 
 import { faceOfTri, makeCaster } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
-import { NOTE_TEXT_MAX } from './view-link.js';
+import { NOTES_MAX, NOTE_TEXT_MAX } from './view-link.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
@@ -46,6 +46,7 @@ export function createMeasure(deps) {
   };
   const layer = $('measvg');
   const labels = $('measlabels');
+  $('measnotetext').maxLength = NOTE_TEXT_MAX; // (a note's one limit, js/view-link.js)
 
   // ---- the model's caches ----
   function model() {
@@ -264,7 +265,11 @@ export function createMeasure(deps) {
     const p = st.pending[0];
     $('measnotetext').hidden = true;
     st.pending = [];
-    if (p && text.trim()) {
+    const count = st.results.filter((r) => r.mode === 'note').length;
+    if (p && text.trim() && count >= NOTES_MAX) {
+      // (as many as a model list or a tour step holds: js/view-link.js NOTES_MAX)
+      deps.flash(`${NOTES_MAX} notes is the most a view holds`, 4000);
+    } else if (p && text.trim()) {
       st.results.push({ mode: 'note', pts: [p.p], main: text.trim().slice(0, NOTE_TEXT_MAX), sub: '', value: null });
       deps.announce(`note: ${text.trim()}`);
     }
@@ -276,11 +281,11 @@ export function createMeasure(deps) {
   // in place of the notes there are (other results stay)
   function setNotes(list) {
     st.results = st.results.filter((r) => r.mode !== 'note');
-    for (const n of list || []) {
+    for (const n of (list || []).slice(0, NOTES_MAX)) {
       if (n && Array.isArray(n.p) && n.p.length === 3 && n.p.every(Number.isFinite) && n.text) {
         // (given: the page's, not the user's -- it does not open the bar; a
         // note of the user's own, put back as a tour ends, stays theirs)
-        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, 200), sub: '', value: null, given: n.own !== true });
+        st.results.push({ mode: 'note', pts: [n.p.slice()], main: String(n.text).slice(0, NOTE_TEXT_MAX), sub: '', value: null, given: n.own !== true });
       }
     }
     syncRow();

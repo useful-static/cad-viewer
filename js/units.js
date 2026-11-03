@@ -37,13 +37,18 @@ export const MM_PER = Object.fromEntries(DISPLAY_UNITS.map((u) => [u, LENGTH_MM[
 const DECIMALS = Object.fromEntries(DISPLAY.map((d) => [d.id, d.decimals]));
 const imperial = (u) => DISPLAY.find((d) => d.id === u)?.system === 'imperial';
 
-// The display unit Auto gives for a declared unit: itself when it is one of
-// the four; the nearest of them in the same system otherwise; mm when the
-// file says nothing (null) or its shapes disagree ('mixed').
-const AUTO = {
-  nm: 'mm', 'Å': 'mm', um: 'mm', mm: 'mm', cm: 'cm', dm: 'cm', m: 'm', dam: 'm', hm: 'm', km: 'm', Gm: 'm',
-  AU: 'm', ly: 'm', pc: 'm', uin: 'in', mil: 'in', in: 'in', ft: 'in', 'US ft': 'in', yd: 'in', mi: 'in',
-};
+// The display unit Auto gives for a declared unit: itself when it is a display row; the
+// nearest display row of the same system otherwise (by the ratio of their sizes, the smaller on
+// a tie: dm is cm); mm when the file says nothing (null) or its shapes disagree ('mixed').
+// Derived from the two tables, so a new display row (ft) is Auto's answer for its own unit.
+const IMPERIAL = new Set(['uin', 'mil', 'in', 'ft', 'US ft', 'yd', 'mi']);
+const AUTO = Object.fromEntries(Object.keys(LENGTH_MM).map((u) => {
+  if (DISPLAY_UNITS.includes(u)) return [u, u];
+  const system = IMPERIAL.has(u) ? 'imperial' : 'metric';
+  const far = (d) => Math.abs(Math.log(LENGTH_MM[d.id] / LENGTH_MM[u]));
+  const near = DISPLAY.filter((d) => d.system === system).sort((a, b) => far(a) - far(b) || LENGTH_MM[a.id] - LENGTH_MM[b.id])[0];
+  return [u, near ? near.id : 'mm'];
+}));
 // sizeMm: the model's largest extent. A model declared in metres but under a
 // metre across is shown in mm: a 123 mm board in m read "0.123 × 0.072 ×
 // 0.012 m" and its small parts "0.000 m" (a board's STEP declares metres:

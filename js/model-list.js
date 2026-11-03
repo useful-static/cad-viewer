@@ -30,9 +30,9 @@
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
-import { STEP_ID } from './tour.js';
-import { NOTE_TEXT_MAX, notePlace } from './view-link.js';
-import { directUrl } from './open-url.js';
+import { PART_NAME_MAX, STEP_ID } from './tour.js';
+import { NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
+import { fileUrl } from './open-url.js';
 
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
@@ -156,7 +156,7 @@ function extras(file, v, listUrl) {
   const page = (u, field, raw) => { if (!/^https?:$/.test(u.protocol)) throw bad(field, `"${raw}" is not an http(s) URL`); };
   // a fetched file named by a share page (a GitHub blob, a Dropbox link) is read from the file
   // itself, as the model file is (js/open-url.js): what check.html checks is what is loaded
-  const direct = (href) => (/^https?:/i.test(href) ? directUrl(href).url : href);
+  const direct = fileUrl;
   for (const field of ['step', 'page', 'image']) {
     if (v[field] === undefined) continue;
     if (typeof v[field] !== 'string' || !v[field].trim()) throw bad(field, 'must be a URL');
@@ -210,15 +210,15 @@ function extras(file, v, listUrl) {
     // (placed by the notes' one rule, js/view-link.js notePlace: its part when it names one,
     // else its point -- as a tour's callouts are)
     const ok = (x) => x && typeof x === 'object' && typeof x.text === 'string' && x.text.trim() && x.text.length <= NOTE_TEXT_MAX && notePlace(x);
-    if (!Array.isArray(n) || n.length > 100 || !n.every(ok)) {
-      throw bad('notes', `must be a list (at most 100) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<a part's name>" or "at": [x, y, z] (mm) }`);
+    if (!Array.isArray(n) || n.length > NOTES_MAX || !n.every(ok)) {
+      throw bad('notes', `must be a list (at most ${NOTES_MAX}) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<a part's name>" or "at": [x, y, z] (mm) }`);
     }
     out.notes = n.map((x) => ({ text: x.text.trim(), ...notePlace(x) }));
   }
   if (v.hide !== undefined) {
     const h = v.hide;
-    if (!Array.isArray(h) || h.length > 1000 || !h.every((x) => typeof x === 'string' && x.trim() && x.length <= 200)) {
-      throw bad('hide', 'must be a list (at most 1000) of part names (200 characters at most)');
+    if (!Array.isArray(h) || h.length > 1000 || !h.every((x) => typeof x === 'string' && x.trim() && x.length <= PART_NAME_MAX)) {
+      throw bad('hide', `must be a list (at most 1000) of part names (${PART_NAME_MAX} characters at most, as in a tour)`);
     }
     out.hide = h.map((x) => x.trim());
   }
@@ -279,7 +279,8 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
   const got = await Promise.all(urls.map(async (u) => {
     let url;
     try {
-      url = new URL(u, base).href;
+      // (a list shared as a GitHub page or a Dropbox link is read from the file: js/open-url.js)
+      url = fileUrl(new URL(u, base).href);
       const res = await fetchFn(url);
       if (!res.ok) throw new Error(`${res.status === 404 ? 'not found' : 'HTTP'} (${res.status})`);
       // the size it declares refused before reading; the text read is

@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { entryByName, fetchModelLists, joinModelLists, parseModelList } from '../js/model-list.js';
-import { parseTour } from '../js/tour.js';
+import { PART_NAME_MAX, parseTour } from '../js/tour.js';
 
 import { test, done } from './harness.mjs';
 
@@ -165,9 +165,11 @@ await test('id and aliases: a model found by either; a bad or doubled one refuse
 await test('hide: part names, trimmed; a wrong one refuses the list', () => {
   const [e] = parseModelList(JSON.stringify({ a: { name: 'A', hide: [' #2831 ', 'PRT0001'] } }), L);
   assert.deepEqual(e.hide, ['#2831', 'PRT0001']);
-  for (const h of ['#1', [''], [3], ['x'.repeat(201)]]) {
+  for (const h of ['#1', [''], [3], ['x'.repeat(PART_NAME_MAX + 1)]]) {
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', hide: h } }), L), /its hide must be/);
   }
+  // a name a tour may give, the list may hide (one limit, js/tour.js PART_NAME_MAX)
+  assert.equal(parseModelList(JSON.stringify({ a: { name: 'A', hide: ['x'.repeat(PART_NAME_MAX)] } }), L)[0].hide[0].length, PART_NAME_MAX);
 });
 await test('tours: named, resolved against the list; a wrong one refuses the list', () => {
   const [e] = parseModelList(JSON.stringify({ a: { name: 'A', tours: [{ name: ' The board ', url: 'tours/a.cadtour.json' }, { url: 'https://x.example/b.json' }] } }), L);

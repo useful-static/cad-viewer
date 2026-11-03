@@ -455,8 +455,15 @@ function container18(b, chk) {
   const read = (name) => {
     const s = sections[name];
     if (!s) return null;
+    // a section is bounded by what the file can unpack to (1024 times its bytes), before the
+    // allocation; a page is listed once (listed again, each listing checksummed the whole page
+    // again: 1.4 MB, 38 s)
+    if (s.size > 1024 * b.length) throw new Error(`a damaged DWG: section ${name} claims ${s.size} bytes, more than a ${b.length}-byte file holds`);
+    const listed = new Set();
     const out = new Uint8Array(s.size);
     for (const pg of s.list) {
+      if (listed.has(pg.num)) throw new Error(`a damaged DWG: section ${name} lists page ${pg.num} twice`);
+      listed.add(pg.num);
       const at = pages.get(pg.num).at;
       // 4.6: the masked page header
       const mask = (0x4164536b ^ at) >>> 0;
@@ -566,7 +573,10 @@ function container21(b, chk) {
     // so a section is bounded by what the file can unpack to: 1024 times its bytes)
     if (s.size > 1024 * b.length) throw new Error(`a damaged DWG: section ${name} claims ${s.size} bytes, more than a ${b.length}-byte file holds`);
     const out = new Uint8Array(s.size);
+    const listed = new Set();
     for (const pg of s.list) {
+      if (listed.has(pg.id)) throw new Error(`a damaged DWG: section ${name} lists page ${pg.id} twice`);
+      listed.add(pg.id);
       const p = pages.get(pg.id);
       // 5.2 encoding 4: Reed-Solomon (255, 251), interleaved; encoding 1: the page is stored as
       // it is, no parity (example_2007's AppInfo: read as 255-byte blocks it lost 4 bytes at
@@ -1259,10 +1269,18 @@ export function readDWG(buf) {
   const missing = ['header', 'classes', 'handles', 'objects'].filter((k) => !cont[k]);
   if (missing.length) throw new Error(`not a complete DWG: no ${missing.join(', ')} section`);
   const dec = codepageDecoder(cont.codepage);
-  const classes = readClasses(cont.classes, v, maint, chk);
+  // the classes and the object map cannot be done without: one that cannot be read is a damaged
+  // file, said as one (the reader's own words kept, an engine's not repeated)
+  const needed = (what, fn) => {
+    try { return fn(); } catch (e) {
+      const own = !(e instanceof TypeError || e instanceof RangeError);
+      throw new Error(`a damaged DWG: its ${what} cannot be read${own ? ` (${e.message})` : ''}`);
+    }
+  };
+  const classes = needed('classes', () => readClasses(cont.classes, v, maint, chk));
   let header = {};
   try { header = readHeader(cont.header, v, maint, chk); } catch (err) { chk.ok('header variables read', false); header = { error: String(err.message) }; }
-  const map = readHandles(cont.handles, chk);
+  const map = needed('object map', () => readHandles(cont.handles, chk));
   const appInfo = appInfoStrings(cont.appInfo, v);
   const rd = new ObjectReader(cont.objects, v, classes, chk, dec);
   const objects = new Map();

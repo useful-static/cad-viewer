@@ -666,14 +666,14 @@
   <div id="touredit" role="dialog" aria-label="Tour maker" hidden>
     <div class="tehead"><b>Make a tour</b><button id="teclose" aria-label="Close the tour maker" title="Close (Esc)">✕</button></div>
     <p class="tehint">Set the view: turn it, colour parts with the swatch, hide or explode them, pin notes with Measure. Then Add step.</p>
-    <label class="tefield">Title <input id="tetitle" type="text" maxlength="200" autocomplete="off"></label>
+    <label class="tefield">Title <input id="tetitle" type="text" autocomplete="off"></label>
     <div class="terow"><label>Plays <select id="temode" autocomplete="off"><option value="static">step by step</option><option value="animated">by itself</option></select></label>
       <label><input id="teloop" type="checkbox" autocomplete="off"> loop</label></div>
     <ol id="testeps" aria-label="Steps"></ol>
     <div class="terow"><button id="teadd" class="primary">Add step</button><button id="teopen">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
     <div id="testep" hidden>
-      <label class="tefield">Step title <input id="tes-title" type="text" maxlength="200" autocomplete="off"></label>
-      <label class="tefield">Text <textarea id="tes-text" rows="3" maxlength="2000"></textarea></label>
+      <label class="tefield">Step title <input id="tes-title" type="text" autocomplete="off"></label>
+      <label class="tefield">Text <textarea id="tes-text" rows="3"></textarea></label>
       <label class="tefield">Camera <select id="tes-cam" autocomplete="off"><option value="exact">this exact view</option><option value="frame">frame the selection, from this side</option></select></label>
       <label class="tefield">The other parts <select id="tes-dim" autocomplete="off"><option value="none">as they are</option><option value="ghost">faint (ghosts)</option><option value="grey">grey</option><option value="hide">hidden</option></select></label>
       <div class="terow"><label>Fly <input id="tes-transition" type="number" min="0" max="30" step="0.1" autocomplete="off"> s</label>
@@ -759,7 +759,7 @@
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>
       <span class="seg" id="measmode" role="group" aria-label="What to measure"><button data-mode="distance" aria-pressed="true" title="The distance between two points, and its X, Y and Z parts">Distance</button><button data-mode="angle" aria-pressed="false" title="The angle at the middle of three points">Angle</button><button data-mode="face" aria-pressed="false" title="The gap between two faces, the first one flat">Face</button><button data-mode="note" aria-pressed="false" title="A note pinned to a point of the model: a view link carries it">Note</button></span>
       <span id="measnote" class="secval"></span>
-      <input id="measnotetext" type="text" hidden maxlength="200" autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
+      <input id="measnotetext" type="text" hidden autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
       <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result">↶</button>
       <button id="measclear" disabled title="Remove every result">Clear all</button>
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>

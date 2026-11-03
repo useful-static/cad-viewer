@@ -69,7 +69,22 @@ export function stepUnits(u8) {
       if (/UNIT/.test(body)) units.set(Number(m[1]), body);
     }
   });
+  // (each record read once: many contexts naming one multi-MB unit record rescanned it per
+  // context -- a 6 MB file, 8 s before conversion)
+  const memo = new Map();
   const lengthMm = (id, depth = 0) => {
+    if (depth === 0) {
+      if (!memo.has(id)) memo.set(id, lengthOf(id, 0));
+      return memo.get(id);
+    }
+    return lengthOf(id, depth);
+  };
+  const isLength = new Map();
+  const lengthUnit = (r) => {
+    if (!isLength.has(r)) isLength.set(r, /LENGTH_UNIT/.test(units.get(r) || ''));
+    return isLength.get(r);
+  };
+  const lengthOf = (id, depth) => {
     const s = units.get(id);
     if (!s || depth > 8 || !/LENGTH_UNIT/.test(s) && depth === 0) return null;
     const si = /SI_UNIT\s*\(\s*(?:\.([A-Z]+)\.|\$)\s*,\s*\.METRE\.\s*\)/.exec(s);
@@ -93,7 +108,7 @@ export function stepUnits(u8) {
     if (!g || (used.size && !used.has(id))) continue;
     // the context's units name a length, an angle and a solid angle: the
     // length one is the member carrying LENGTH_UNIT
-    const len = refs(g[1]).find((r) => /LENGTH_UNIT/.test(units.get(r) || ''));
+    const len = refs(g[1]).find(lengthUnit);
     if (len === undefined) continue;
     factors.push(lengthMm(len));
   }

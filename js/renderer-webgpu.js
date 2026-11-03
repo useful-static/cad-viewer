@@ -109,7 +109,7 @@ fn clipped(p : vec3f) -> bool {
   if (st.r > 0.5) { c = mix(c, u.hi.rgb, 0.5) + vec3f(0.06); }
   else if (u.hi.a > 0.5) { c = mix(c, vec3f(dot(c, vec3f(0.299, 0.587, 0.114))), 0.7) * 0.55; }
   if (st.b > 0.5) { c = c + vec3f(0.12); }
-  // X-ray (params.w = 0.25): premultiplied, blended one / one-minus-src-alpha
+  // X-ray (params.w = the style's faceAlpha): premultiplied, blended one / one-minus-src-alpha
   let a = select(1.0, u.params.w, u.params.w > 0.0);
   return vec4f(c * a, a);
 }
@@ -608,7 +608,8 @@ export class WebGPURenderer {
     f.set([frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1], 16);
     f.set([frame.light[0], frame.light[1], frame.light[2], 0], 20);
     f.set(frame.clip || [0, 0, 0, 0], 24);
-    f.set([this.stateW, this.stateH, frame.clip ? 1 : 0, frame.style && frame.style.faces === 'xray' ? 0.25 : 0], 28);
+    // (the faces' alpha where a style blends them, js/styles.js faceAlpha; 0 = opaque)
+    f.set([this.stateW, this.stateH, frame.clip ? 1 : 0, frame.style && frame.style.faces === 'xray' ? frame.style.faceAlpha ?? 1 : 0], 28);
     f.set(frame.highlight, 32);
     const up = frame.up || [0, 1, 0];
     f.set([up[0], up[1], up[2], 0], 36);

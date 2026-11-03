@@ -12,6 +12,8 @@
 
 import { readFile } from 'node:fs/promises';
 import { decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
+import { resolve } from 'node:path';
+import { parseModelList } from '../js/model-list.js';
 import { parseTour, partIndex, resolveParts, tourNames } from '../js/tour.js';
 
 const args = process.argv.slice(2);
@@ -41,9 +43,14 @@ if (isGzip(buf.buffer)) buf = new Uint8Array(await gunzip(buf.buffer));
 const { header } = decodeCadmesh(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 let labels = null;
 if (labelsFile) {
-  const list = JSON.parse(new TextDecoder().decode(await read(labelsFile)));
-  const entry = Object.entries(list).find(([k]) => model.endsWith(k.replace(/^\//, '')));
-  labels = entry && entry[1].labels;
+  // read as the viewer reads a list (js/model-list.js parseModelList: every form, the files
+  // resolved against the list), and the model's entry found by its resolved URL. A local path
+  // stands in as https://local.invalid/<its absolute path>, the list's and the model's alike.
+  const asUrl = (p) => (/^https?:/.test(p) ? new URL(p).href : new URL(`https://local.invalid${resolve(p)}`).href);
+  const entries = parseModelList(new TextDecoder().decode(await read(labelsFile)), asUrl(labelsFile));
+  const entry = entries.find((e) => e.url === asUrl(model));
+  if (!entry) { console.log(`FAIL ${labelsFile}: names no entry for ${model}`); process.exit(1); }
+  labels = entry.labels || null;
 }
 const idx = partIndex(header, labels);
 const names = tourNames(tour);

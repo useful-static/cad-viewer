@@ -392,6 +392,23 @@ test('20,000 viewports onto 200,000 lines: refused in words within a few seconds
   assert.ok(err && /viewports look at the model/.test(err.message), String(err && err.message));
 });
 
+// --- review round 5 ---
+test('a block LWPOLYLINE that draws nothing (a coordinate not a number), inserted 10,000 times: read once, fast', () => {
+  const lw = ['0', 'LWPOLYLINE', '8', '0', '90', '5000', '70', '0'];
+  for (let k = 0; k < 5000; k++) lw.push('10', k === 3 ? 'x' : String(k), '20', '0');
+  let d;
+  const err = fast(() => { d = parseDXF(text(['0', 'BLOCK', '2', 'B', '10', '0', '20', '0', ...lw, '0', 'ENDBLK'], ['0', 'INSERT', '2', 'B', '70', '100', '71', '100', '44', '1', '45', '1'])); }, 3000);
+  assert.equal(err, null, String(err && err.message));
+  assert.equal(d.paths.length, 0);
+});
+test('one 100,000-point path clipped in 1,000 viewports: refused in words within a few seconds', () => {
+  const e = ['0', 'LWPOLYLINE', '8', '0', '90', '100000', '70', '1'];
+  for (let k = 0; k < 100000; k++) e.push('10', String(k % 2 ? 0 : 100), '20', String(k));
+  for (let k = 0; k < 1000; k++) e.push('0', 'VIEWPORT', '67', '1', '8', '0', '10', '0', '20', '0', '40', '10', '41', '10', '45', '10', '12', '50', '22', '50000', '69', String(k + 2));
+  const err = fast(() => parseDXF(['0', 'SECTION', '2', 'ENTITIES', ...e, '0', 'ENDSEC', '0', 'EOF'].join('\n')), 5000);
+  assert.ok(err && /viewports clip over/.test(err.message), String(err && err.message));
+});
+
 // --- review round 4 ---
 test('a block that inserts itself is refused at once, by name', () => {
   const err = fast(() => parseDXF(text(['0', 'BLOCK', '2', 'A', '10', '0', '20', '0', ...Array(10).fill(['0', 'INSERT', '2', 'A']).flat(), '0', 'ENDBLK'], ['0', 'INSERT', '2', 'A'])), 500);

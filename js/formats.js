@@ -46,8 +46,6 @@ export function extOf(name) {
 
 // the format a name says, or null
 export const formatOfName = (name) => BY_EXT.get(extOf(name)) || null;
-// the format an extension is, or null
-export const formatOfExt = (ext) => BY_EXT.get(String(ext || '').toLowerCase()) || null;
 
 // a name that is a model file of any kind ("part.step", "board.stl.gz"): a query value naming one
 // is the file a download URL serves

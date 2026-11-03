@@ -16,7 +16,7 @@
 import { VIEW_PRESETS, parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
-import { EXPLODE_MODES, NOTE_TEXT_MAX, notePlace } from './view-link.js';
+import { EXPLODE_MODES, NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 
 export const PRESETS = Object.keys(VIEW_PRESETS);
 export const EASES = ['linear', 'inOut'];
@@ -38,7 +38,12 @@ const isText = (v, max) => typeof v === 'string' && v.length <= max;
 const isNum = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 const isVec = (v, n) => Array.isArray(v) && v.length === n && v.every((x) => typeof x === 'number' && Number.isFinite(x));
 const isColour = (v) => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
-const isNames = (v) => Array.isArray(v) && v.length <= 500 && v.every((s) => typeof s === 'string' && s.trim() && s.length <= 300);
+// the longest part name a tour or a model list may give (a node, a body, a path of them)
+export const PART_NAME_MAX = 300;
+// the longest title (a tour's, a step's) and step text; the tour maker's inputs take these
+export const TITLE_MAX = 200;
+export const TEXT_MAX = 2000;
+const isNames = (v) => Array.isArray(v) && v.length <= 500 && v.every((s) => typeof s === 'string' && s.trim() && s.length <= PART_NAME_MAX);
 
 // text -> the tour, every default filled in; throws an Error naming what is wrong.
 // base: the URL the tour was read from (its model URL is resolved against it).
@@ -49,7 +54,7 @@ export function parseTour(text, base = undefined) {
   const bad = (where, why) => new Error(`${where}: ${why}`);
   for (const k of Object.keys(t)) if (!TOP_FIELDS.includes(k)) throw bad(`"${k}"`, `not a tour field (${TOP_FIELDS.join(', ')})`);
   if (t.cadtour !== 1 && t.cadtour !== 2) throw bad('"cadtour"', 'must be 1 or 2 (the format version)');
-  if (t.title !== undefined && !isText(t.title, 200)) throw bad('"title"', 'must be text of at most 200 characters');
+  if (t.title !== undefined && !isText(t.title, TITLE_MAX)) throw bad('"title"', `must be text of at most ${TITLE_MAX} characters`);
   let model;
   if (t.model !== undefined) {
     if (typeof t.model !== 'string' || !t.model.trim()) throw bad('"model"', 'must be a URL');
@@ -101,8 +106,8 @@ function parseStep(s, where, defaults, bad, version) {
     if (typeof s.id !== 'string' || !STEP_ID.test(s.id)) throw bad(at('id'), 'must be a-z, 0-9 and "-", starting with a letter or digit, at most 64');
     out.id = s.id;
   }
-  if (s.title !== undefined) { if (!isText(s.title, 200)) throw bad(at('title'), 'must be text of at most 200 characters'); out.title = s.title; }
-  if (s.text !== undefined) { if (!isText(s.text, 2000)) throw bad(at('text'), 'must be text of at most 2000 characters'); out.text = s.text; }
+  if (s.title !== undefined) { if (!isText(s.title, TITLE_MAX)) throw bad(at('title'), `must be text of at most ${TITLE_MAX} characters`); out.title = s.title; }
+  if (s.text !== undefined) { if (!isText(s.text, TEXT_MAX)) throw bad(at('text'), `must be text of at most ${TEXT_MAX} characters`); out.text = s.text; }
   if (s.view !== undefined) {
     if (typeof s.view === 'string') {
       if (!PRESETS.includes(s.view)) throw bad(at('view'), `must be one of ${PRESETS.join(', ')}, or a view object`);
@@ -145,9 +150,12 @@ function parseStep(s, where, defaults, bad, version) {
     }
     out.colour = Object.fromEntries(Object.entries(c).map(([k, v]) => [k.trim(), v.toLowerCase()]));
   }
+  // ("show": "all" -- every part shown, whatever the page had hidden: what the tour maker writes
+  // for a step taken with nothing hidden; a missing field keeps the page's)
   for (const k of ['show', 'hide', 'isolate']) {
     if (s[k] === undefined) continue;
-    if (!isNames(s[k])) throw bad(at(k), 'must be a list of part names');
+    if (k === 'show' && s[k] === 'all') { out.show = 'all'; continue; }
+    if (!isNames(s[k])) throw bad(at(k), k === 'show' ? '"all", or a list of part names' : 'must be a list of part names');
     out[k] = s[k].map((x) => x.trim());
   }
   if (s.explode !== undefined) { if (!isNum(s.explode, 0, 1)) throw bad(at('explode'), 'must be 0 to 1'); out.explode = s.explode; }
@@ -168,8 +176,8 @@ function parseStep(s, where, defaults, bad, version) {
     // (placed by the notes' one rule, js/view-link.js notePlace: its part when it names one,
     // else its point -- as a model list's notes are)
     const ok = (c) => c && typeof c === 'object' && isText(c.text, NOTE_TEXT_MAX) && c.text.trim() && notePlace(c);
-    if (!Array.isArray(s.callouts) || s.callouts.length > 50 || !s.callouts.every(ok)) {
-      throw bad(at('callouts'), `must be a list (at most 50) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<name>" or "at": [x, y, z] }`);
+    if (!Array.isArray(s.callouts) || s.callouts.length > NOTES_MAX || !s.callouts.every(ok)) {
+      throw bad(at('callouts'), `must be a list (at most ${NOTES_MAX}) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<name>" or "at": [x, y, z] }`);
     }
     out.callouts = s.callouts.map((c) => ({ text: c.text.trim(), ...notePlace(c) }));
   }
@@ -188,33 +196,52 @@ function parseStep(s, where, defaults, bad, version) {
 // (1-based) it covers: every tree node's name (its bodies), every body's
 // name, and every label a model list gives one of those names ("HDMI" for
 // "HDMI_1_3"). header: the model's .cadmesh header; labels: { name: label }.
+// -> { get(name) -> Set of ids | undefined, bodies }: a name keeps the tree nodes and bodies it
+// names, and its ids are gathered when it is first asked for (and kept). Gathering every name's
+// ids up front cost depth x bodies -- a 256-deep tree of many bodies, 10 s and 3 GB as a tour
+// opened -- where a tour asks for a handful.
 export function partIndex(header, labels = null) {
-  const idx = new Map();
-  const add = (name, ids) => {
-    if (!name) return;
+  const refs = new Map(); // key -> [a tree node, or { id }]
+  const put = (name, ref) => {
+    if (typeof name !== 'string') return;
     const k = name.trim().toLowerCase();
     if (!k) return;
-    if (!idx.has(k)) idx.set(k, new Set());
-    for (const id of ids) idx.get(k).add(id);
+    if (!refs.has(k)) refs.set(k, []);
+    refs.get(k).push(ref);
   };
-  const walk = (n) => {
-    const ids = [];
-    for (const i of n.meshes || []) ids.push(i + 1);
-    // (appended, not spread: 300,000 bodies under one node overflowed the call stack)
-    for (const c of n.children || []) for (const id of walk(c)) ids.push(id);
-    add(n.name, ids);
-    return ids;
-  };
-  walk(header.root);
-  header.meshes.forEach((m, i) => add(m.name, [i + 1]));
+  const stack = [header.root];
+  while (stack.length) {
+    const n = stack.pop();
+    put(n.name, n);
+    for (const c of n.children || []) stack.push(c);
+  }
+  header.meshes.forEach((m, i) => put(m.name, { id: i + 1 }));
   if (labels) {
     for (const [name, label] of Object.entries(labels)) {
-      const ids = idx.get(name.trim().toLowerCase());
-      if (ids) add(label, ids);
+      for (const r of refs.get(name.trim().toLowerCase()) || []) put(label, r);
     }
   }
-  idx.bodies = header.meshes.length;
-  return idx;
+  const gathered = new Map();
+  const gather = (n, out) => {
+    const st = [n];
+    while (st.length) {
+      const x = st.pop();
+      for (const i of x.meshes || []) out.add(i + 1);
+      for (const c of x.children || []) st.push(c);
+    }
+  };
+  return {
+    bodies: header.meshes.length,
+    get(k) {
+      if (!refs.has(k)) return undefined;
+      if (!gathered.has(k)) {
+        const ids = new Set();
+        for (const r of refs.get(k)) if (r.id) ids.add(r.id); else gather(r, ids);
+        gathered.set(k, ids);
+      }
+      return gathered.get(k);
+    },
+  };
 }
 
 // Per body (1-based ids, index id-1), the names it is known by, outermost
@@ -290,7 +317,7 @@ export function tourNames(tour) {
   const names = new Set();
   for (const s of tour.steps) {
     if (Array.isArray(s.frame)) s.frame.forEach((n) => names.add(n));
-    for (const k of ['show', 'hide', 'isolate']) (s[k] || []).forEach((n) => names.add(n));
+    for (const k of ['show', 'hide', 'isolate']) if (Array.isArray(s[k])) s[k].forEach((n) => names.add(n));
     Object.keys(s.colour || {}).forEach((n) => names.add(n));
     (s.callouts || []).forEach((c) => c.part && names.add(c.part));
   }

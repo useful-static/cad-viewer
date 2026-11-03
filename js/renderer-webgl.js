@@ -81,7 +81,7 @@ precision highp float;
 precision mediump float;
 #endif
 uniform sampler2D uState;
-uniform vec4 uParams;   // x stateW, y stateH, z clip on, w face alpha (X-ray 0.25; 0 = 1)
+uniform vec4 uParams;   // x stateW, y stateH, z clip on, w face alpha (X-ray: its style's faceAlpha; 0 = 1)
 uniform vec4 uLight;
 uniform vec4 uUp;       // world up axis: the sky and fill directions
 uniform vec4 uHi;
@@ -984,7 +984,8 @@ export class WebGLRenderer {
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       }
       this._bind(this.shade, frame);
-      this.gl.uniform4f(this.shade.u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, faces === 'xray' ? 0.25 : 1);
+      // (the faces' alpha where a style blends them, js/styles.js faceAlpha)
+      this.gl.uniform4f(this.shade.u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, faces === 'xray' ? frame.style.faceAlpha ?? 1 : 1);
       gl.uniform4f(this.shade.u.uGhost, 0, 0, 0, 0);
       this._draw();
       gl.colorMask(true, true, true, true);

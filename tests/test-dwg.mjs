@@ -181,6 +181,71 @@ t('an object map pointing 32,000 times into one long run of 0xff: each size is t
   assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
   assert.equal(d.objects.size, 0);
 });
+// A crafted R2004 file (review round 5): a section map listing one data page COUNT times, each
+// listing checksumming the whole page again (2,000 x 1 MB: 38 s)
+function r2004Repeat(COUNT, P1) {
+  const lit = (d) => {
+    const L = d.length, head = [];
+    if (L >= 3 && L <= 0x12) head.push(L - 3);
+    else { let r = L - 3 - 0x0f; head.push(0); while (r > 255) { head.push(0); r -= 255; } head.push(r); }
+    const out = new Uint8Array(head.length + L + 1);
+    out.set(head, 0); out.set(d, head.length); out[out.length - 1] = 0x11;
+    return out;
+  };
+  const u64 = (dv, o, v) => { dv.setUint32(o, v % 2 ** 32, true); dv.setUint32(o + 4, Math.floor(v / 2 ** 32), true); };
+  const smd = new Uint8Array(0x14 + 0x60 + 16 * COUNT);
+  const sdv = new DataView(smd.buffer);
+  sdv.setUint32(0, 1, true);
+  let o = 0x14;
+  u64(sdv, o, P1 - 32); sdv.setUint32(o + 8, COUNT, true); sdv.setUint32(o + 0x0c, P1 - 32, true); sdv.setUint32(o + 0x14, 1, true);
+  smd.set(new TextEncoder().encode('AcDb:AcDbObjects'), o + 0x20);
+  o += 0x60;
+  for (let p = 0; p < COUNT; p++) { sdv.setUint32(o, 1, true); sdv.setUint32(o + 4, P1 - 32, true); o += 16; }
+  const smc = lit(smd);
+  const S2 = 0x14 + smc.length;
+  const pmd = new Uint8Array(24);
+  const pdv = new DataView(pmd.buffer);
+  pdv.setInt32(0, 1, true); pdv.setUint32(4, P1, true); pdv.setInt32(8, 2, true); pdv.setUint32(12, S2, true); pdv.setInt32(16, 3, true); pdv.setUint32(20, 0x100, true);
+  const pmc = lit(pmd);
+  const b = new Uint8Array(0x100 + P1 + S2 + 0x14 + pmc.length + 64);
+  const dv = new DataView(b.buffer);
+  b.set(new TextEncoder().encode('AC1018'), 0);
+  const h = new Uint8Array(0x6c);
+  const hdv = new DataView(h.buffer);
+  h.set(new TextEncoder().encode('AcFssFcAJMB'), 0);
+  u64(hdv, 0x54, P1 + S2);
+  hdv.setUint32(0x5c, 2, true);
+  let seed = 1;
+  for (let i = 0; i < 0x6c; i++) { seed = (Math.imul(seed, 0x343fd) + 0x269ec3) | 0; b[0x80 + i] = h[i] ^ ((seed >>> 16) & 0xff); }
+  const mask = (0x4164536b ^ 0x100) >>> 0;
+  const ph = new Uint8Array(32); const phv = new DataView(ph.buffer);
+  phv.setUint32(0, 0x4163043b, true); phv.setUint32(8, P1 - 32, true);
+  for (let k = 0; k < 32; k += 4) dv.setUint32(0x100 + k, (phv.getUint32(k, true) ^ mask) >>> 0, true);
+  const at2 = 0x100 + P1;
+  dv.setUint32(at2, 0x4163003b, true); dv.setUint32(at2 + 4, smd.length, true); dv.setUint32(at2 + 8, smc.length, true);
+  b.set(smc, at2 + 0x14);
+  const at3 = at2 + S2;
+  dv.setUint32(at3, 0x41630e3b, true); dv.setUint32(at3 + 4, pmd.length, true); dv.setUint32(at3 + 8, pmc.length, true);
+  b.set(pmc, at3 + 0x14);
+  return b;
+}
+t('R2004: a section listing one page 2,000 times is refused at once, by name', () => {
+  const t0 = Date.now();
+  assert.throws(() => readDWG(r2004Repeat(2000, 1 << 20)), /a damaged DWG: section AcDb:AcDbObjects lists page 1 twice/);
+  assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0} ms`);
+});
+t('an R2000 classes section running past the end of the file: a damaged DWG, said as one', () => {
+  const b = new Uint8Array(0x400);
+  b.set(new TextEncoder().encode('AC1015'), 0);
+  b[0x13] = 30;
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0x15, 3, true);
+  const rec = (k, num, at, size) => { b[0x19 + 9 * k] = num; dv.setUint32(0x19 + 9 * k + 1, at, true); dv.setUint32(0x19 + 9 * k + 5, size, true); };
+  rec(0, 0, 0x100, 0x40); rec(1, 1, 0x3e0, 0x40); rec(2, 2, 0x300, 0x10);
+  dv.setUint32(0x3f0, 0x100, true);
+  b[0x300] = 0; b[0x301] = 2;
+  assert.throws(() => readDWG(b), /^Error: a damaged DWG: its classes cannot be read/);
+});
 t('an object\'s count past its own end stops at the object, and a map naming it 20,000 times reads it once', () => {
   const t0 = Date.now();
   const d = readDWG(crafted(20000, 1000000));

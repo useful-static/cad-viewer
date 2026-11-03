@@ -261,7 +261,10 @@ export function parseDXF(s) {
       for (let k = 0; k < out.paths.length; k++) {
         const bb = pathBoxes[k];
         if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
-        walk(budget, 1);
+        // (a clip costs the path's points, drawn or not: charged by them, so viewports x points
+        // is bounded -- a path whose box overlaps the view while every segment misses the frame
+        // drew nothing and cost its points per viewport)
+        clipped(budget, out.paths[k].pts.length / 2);
         clipPath(out.paths[k], M, s, rect, lo.paths);
       }
       let coords = 0;
@@ -456,6 +459,17 @@ function cull(budget, n) {
   }
 }
 
+// The points the viewports clip, drawn or not: a clip costs far more than a box test, so its
+// own budget (a real model of a million points in a handful of viewports is a few million;
+// one 100,000-point path in 1,000 viewports was 1e8, 17.6 s, nothing drawn)
+export const MAX_CLIPPED = 1e7;
+function clipped(budget, n) {
+  budget.clipped = (budget.clipped || 0) + n;
+  if (budget.clipped > MAX_CLIPPED) {
+    throw new Error(`the drawing is too large to draw here (its viewports clip over ${MAX_CLIPPED / 1e6} million points)`);
+  }
+}
+
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
   walk(ctx.budget, recs.length);
@@ -527,13 +541,19 @@ function emit(recs, M, byBlock, depth, ctx) {
         break;
       }
       case 'LWPOLYLINE': {
-        const xs = all(r, 10), ys = all(r, 20);
-        // bulges, in order, belong to the vertex before them
-        const bul = new Array(xs.length).fill(0);
-        let vi = -1;
-        for (const [c, v] of r.g) { if (c === 10) vi++; else if (c === 42 && vi >= 0) bul[vi] = Number(v); }
-        const closed = (num(r, 70) & 1) === 1;
-        path(bulgePts(xs, ys, bul, closed), closed);
+        // its points made once per entity (a block's polyline inserted many times is the same
+        // shape, moved; re-read per insert, one that draws nothing cost its groups each time)
+        if (!r.shape) {
+          const xs = all(r, 10), ys = all(r, 20);
+          // bulges, in order, belong to the vertex before them
+          const bul = new Array(xs.length).fill(0);
+          let vi = -1;
+          for (const [c, v] of r.g) { if (c === 10) vi++; else if (c === 42 && vi >= 0) bul[vi] = Number(v); }
+          const closed = (num(r, 70) & 1) === 1;
+          const pts = bulgePts(xs, ys, bul, closed);
+          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed };
+        }
+        if (r.shape.pts) path(r.shape.pts, r.shape.closed);
         break;
       }
       case 'POLYLINE': {
@@ -570,7 +590,9 @@ function emit(recs, M, byBlock, depth, ctx) {
       }
       case 'HATCH': {
         const solid = num(r, 70) === 1;
-        for (const loop of hatchLoops(r)) path(loop, true, solid);
+        // (its loops made once per entity, as a polyline's points are)
+        if (!r.loops) r.loops = hatchLoops(r);
+        for (const loop of r.loops) path(loop, true, solid);
         break;
       }
       case 'TEXT': case 'MTEXT': {

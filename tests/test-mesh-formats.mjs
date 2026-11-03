@@ -170,6 +170,17 @@ await test('OBJ with its MTL: o names the body, Kd colours it', async () => {
   assert.equal(m.name, 'cube');
   assert.ok(near(m.color, [1, 0, 0]), `colour ${m.color}`);
 });
+await test('MTL "Kd 0.8" (one value) is a grey, not red; a Kd over 1 is clamped, not wrapped', async () => {
+  const objText = new TextDecoder().decode(obj());
+  const grey = await parseMesh('obj', obj(), 'cube.obj', new Map([['cube.mtl', enc(new TextDecoder().decode(mtl()).replace(/Kd .*/, 'Kd 0.8'))]]));
+  assert.ok(near(grey.meshes[0].color, [0.8, 0.8, 0.8]), `colour ${grey.meshes[0].color}`);
+  // two materials (so per-vertex colours, the byte path): one over 1
+  const two = objText.replace(/usemtl .*/, 'usemtl hot');
+  const files = new Map([['cube.mtl', enc('newmtl hot\nKd 2 0.5 0\n')]]);
+  const m = await parseMesh('obj', enc(two), 'cube.obj', files);
+  const raw = decodeCadmesh(encodeCadmesh(m));
+  assert.equal(raw.color[0], 255, 'clamped to 255, not wrapped');
+});
 await test('PLY ASCII with vertex colours', async () => {
   const b = plyAscii();
   assert.equal(meshFormatOf('x.ply', b), 'ply');
@@ -275,13 +286,13 @@ await test('shared glTF nodes: a node shared down 40 levels (2^40 paths) and a m
   const dag = [];
   for (let i = 0; i < 40; i++) dag.push({ children: [i + 1, i + 1] });
   dag.push({});
-  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: dag }), 'x.gltf'), /x places 2,199,023,255,551 parts once its shared parts are repeated, more than the 2,000,000 this viewer opens/);
+  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: dag }), 'x.gltf'), /x\.gltf places 2,199,023,255,551 parts once its shared parts are repeated, more than the 2,000,000 this viewer opens/);
   // 30 k triangles under 10 levels of two-way sharing: 30.7 M triangles placed
   const fan = [];
   for (let i = 0; i < 10; i++) fan.push({ children: [i + 1, i + 1] });
   fan.push({ mesh: 0 });
   await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: fan, meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    accessors: [{ componentType: 5126, type: 'VEC3', count: 90000 }] }), 'x.gltf'), /x places 30,720,000 triangles once its shared parts are repeated, more than the 10,000,000 this viewer opens/);
+    accessors: [{ componentType: 5126, type: 'VEC3', count: 90000 }] }), 'x.gltf'), /x\.gltf places 30,720,000 triangles once its shared parts are repeated, more than the 10,000,000 this viewer opens/);
   // (a real shared part: one cube placed twice is two bodies)
   const f = new Float32Array(C.flat().map((x) => x / 1000));
   const idx = new Uint16Array(TRIS.flat());
@@ -317,7 +328,7 @@ await test('a glTF accessor counting 2^30 elements: refused before it is allocat
   // placed-vertex count refuses it before the accessor is met)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'VEC3', count: 2 ** 30 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
-  /x places 1,073,741,824 vertices once its shared parts are repeated, more than the 30,000,000 this viewer opens/);
+  /x\.gltf places 1,073,741,824 vertices once its shared parts are repeated, more than the 30,000,000 this viewer opens/);
   // (the accessor's own cap, on values: a POSITION of 16 values per element under the vertex cap)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
@@ -337,8 +348,8 @@ await test('glTF/GLB shapes refused in words: a 3-byte GLB, a view past its buff
   await refusedFast(() => parseMesh('gltf', gltf({ extensionsRequired: 5 }), 'x.gltf'), /x\.gltf is damaged: "extensionsRequired" is not a list/);
 });
 await test('STL and PLY in words: "solidx" then endfacet, a 300 k-vertex facet, an unknown PLY type, a negative list count', async () => {
-  await refusedFast(() => parseMesh('stl', enc('solidx\nendfacet\n'), 'a.stl'), /a has no triangles to show/);
-  await refusedFast(() => parseMesh('stl', enc(`solid a\n${'vertex 1 2 3\n'.repeat(300000)}endfacet\nendsolid\n`), 'a.stl'), /a has no triangles to show \(every triangle has no area\)/, 5000);
+  await refusedFast(() => parseMesh('stl', enc('solidx\nendfacet\n'), 'a.stl'), /a\.stl has no triangles to show/);
+  await refusedFast(() => parseMesh('stl', enc(`solid a\n${'vertex 1 2 3\n'.repeat(300000)}endfacet\nendsolid\n`), 'a.stl'), /a\.stl has no triangles to show \(every triangle has no area\)/, 5000);
   await refusedFast(() => parseMesh('ply', enc('ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty foo x\nend_header\n\0\0\0\0\0\0\0\0\0\0\0\0'), 'a.ply'),
     /a\.ply is damaged: property x has type foo, which is not a PLY type/);
   const hdr = 'ply\nformat binary_little_endian 1.0\nelement face 1\nproperty list int int vertex_indices\nend_header\n';
@@ -382,7 +393,7 @@ await test('r3-2 placed vertices: a 451-byte glTF placing a 30 M-vertex POSITION
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 12, uri: b64uri(idx) }], bufferViews: [{ buffer: 0, byteLength: 12 }],
     accessors: [{ componentType: 5126, type: 'VEC3', count: 30_000_000 }, { bufferView: 0, componentType: 5125, type: 'SCALAR', count: 3 }],
     meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }], nodes: [{ mesh: 0 }, { mesh: 0 }], scenes: [{ nodes: [0, 1] }] }), 'x.gltf'),
-  /x places 60,000,000 vertices once its shared parts are repeated, more than the 30,000,000 this viewer opens/, 1000);
+  /x\.gltf places 60,000,000 vertices once its shared parts are repeated, more than the 30,000,000 this viewer opens/, 1000);
   const m3 = (x) => zipStored([['3D/3dmodel.model', enc(`<model unit="millimeter"><resources>${x}</build></model>`)]]);
   let v = '';
   for (let i = 0; i < 50000; i++) v += `<vertex x="${i}" y="0" z="0"/>`;
@@ -456,7 +467,7 @@ await test('r3-12 a glTF with no "scenes": the roots are the nodes no node names
 });
 await test('r3-13 3MF and glTF whose every triangle collapses: "has no triangles to show", as the other readers say', async () => {
   await refusedFast(() => parseMesh('gltf', gltf({ accessors: [{ componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'z.gltf'), /z has no triangles to show \(every triangle has no area\)/);
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'z.gltf'), /z\.gltf has no triangles to show \(every triangle has no area\)/);
   const z = zipStored([['3D/3dmodel.model', enc('<model unit="millimeter"><resources><object id="1"><mesh><vertices><vertex x="1" y="1" z="1"/><vertex x="1" y="1" z="1"/><vertex x="1" y="1" z="1"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object></resources><build><item objectid="1"/></build></model>')]]);
   await refusedFast(() => parseMesh('3mf', z, 'z.3mf'), /z\.3mf has no triangles to show \(every triangle has no area\)/);
 });
@@ -477,7 +488,7 @@ async function zipDeflated(name, raw) {
   return z.buffer;
 }
 await test('r4-3 an ASCII STL holding 64 KB of blank lines: refused at once (the record regex\'s \\s* crossed newlines from every line start)', async () => {
-  await refusedFast(() => parseMesh('stl', enc(`solid a\n${'\n'.repeat(64 * 1024)}${' \t\r\n'.repeat(16 * 1024)}x\n`), 'a.stl'), /a has no triangles to show/, 1000);
+  await refusedFast(() => parseMesh('stl', enc(`solid a\n${'\n'.repeat(64 * 1024)}${' \t\r\n'.repeat(16 * 1024)}x\n`), 'a.stl'), /a\.stl has no triangles to show/, 1000);
 });
 await test('r4-4 a 3MF model part of 200 MB of "<a/>" tags, and one of 10 M + 1 triangles: refused in words, not the heap run out by one object per tag', async () => {
   const flood = await zipDeflated('3D/3dmodel.model', Buffer.alloc(200 * 2 ** 20, '<a/>'));
@@ -489,8 +500,8 @@ await test('r4-4 a 3MF model part of 200 MB of "<a/>" tags, and one of 10 M + 1 
   await refusedFast(() => parseMesh('3mf', tris, 'b.3mf'), /b\.3mf holds more than the 10,000,000 triangles this viewer opens/, 5000);
 });
 await test('r4-5 an OBJ of 4 MB of "g" lines and an STL of 32 MB of "solid" lines: no body per empty group, refused at once', async () => {
-  await refusedFast(() => parseMesh('obj', Buffer.alloc(4 * 2 ** 20, 'g\n').buffer, 'x.obj'), /x has no triangles to show/, 1500);
-  await refusedFast(() => parseMesh('stl', Buffer.alloc(32 * 2 ** 20, 'solid\n').buffer, 'x.stl'), /x has no triangles to show/, 1500);
+  await refusedFast(() => parseMesh('obj', Buffer.alloc(4 * 2 ** 20, 'g\n').buffer, 'x.obj'), /x\.obj has no triangles to show/, 1500);
+  await refusedFast(() => parseMesh('stl', Buffer.alloc(32 * 2 ** 20, 'solid\n').buffer, 'x.stl'), /x\.stl has no triangles to show/, 1500);
   // (a group named before its faces still names the body; an empty group between two is dropped)
   const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\ng empty\ng tri\nf 1 2 3\ng after\n'), 'n.obj');
   assert.equal(m.meshes.length, 1);
@@ -501,12 +512,12 @@ await test('r4-5 an OBJ of 4 MB of "g" lines and an STL of 32 MB of "solid" line
 });
 await test('r4-11 a 199-byte glTF whose POSITION counts 30 M with no buffer view: no geometry, said so at once (it was allocated and walked as zeros)', async () => {
   await refusedFast(() => parseMesh('gltf', gltf({ accessors: [{ componentType: 5126, type: 'VEC3', count: 30_000_000 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'x.gltf'), /x has no triangles to show \(every triangle has no area\)/, 1000);
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'x.gltf'), /x\.gltf has no triangles to show \(every triangle has no area\)/, 1000);
   // (indices with no buffer view are all vertex 0: no triangle either)
   const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 36, uri: b64uri(new Uint8Array(pos.buffer)) }], bufferViews: [{ buffer: 0, byteLength: 36 }],
     accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }, { componentType: 5125, type: 'SCALAR', count: 9_000_000 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }], nodes: [{ mesh: 0 }] }), 'y.gltf'), /y has no triangles to show \(every triangle has no area\)/, 1000);
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }], nodes: [{ mesh: 0 }] }), 'y.gltf'), /y\.gltf has no triangles to show \(every triangle has no area\)/, 1000);
 });
 await test('r4-12 a glTF buffer uri with a bad % escape, and a data: uri that does not decode: "damaged", not URIError or "fetch failed"', async () => {
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ uri: 'a%zz.bin', byteLength: 4 }] }), 'x.gltf'), /x\.gltf is damaged: buffer 0's uri "a%zz\.bin" cannot be read/);
@@ -523,6 +534,97 @@ await test('r4-14 PLY and glTF refusals name the file with its extension, in the
   await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
   /x\.gltf: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
+});
+
+// --- review round 5 ---
+await test('r5-4 weld: a fan of 30 k distinct but collinear (zero-area) triangles about one vertex welds in linear time, one shared group per vertex', async () => {
+  // vertices k,0,0 for k = 0..N+1 and Q = (0,1,0); triangles (0, j, j+1), j = 1..N, have no area
+  // but distinct corners; one real triangle (0, 1, Q). Each zero-area triangle joins its corner's
+  // one no-normal group: vertices 0 and 1 hold that group and the real one, 2..N+1 the one, Q the
+  // real one -- N + 5 (each such triangle opened a group per corner, every one searched: quadratic)
+  const N = 30000;
+  const pos = [];
+  for (let k = 0; k <= N + 1; k++) pos.push(k, 0, 0);
+  pos.push(0, 1, 0);
+  const tri = [];
+  for (let j = 1; j <= N; j++) tri.push(0, j, j + 1);
+  tri.push(0, 1, N + 2);
+  const t0 = Date.now();
+  const m = weld({ name: 'fan', pos, tri });
+  const dt = Date.now() - t0;
+  assert.equal(m.indices.length, 3 * (N + 1), 'triangle corners');
+  assert.equal(m.positions.length / 3, N + 5, 'vertices');
+  // the real triangle's corners keep its own normal, +-z
+  const last = 3 * N;
+  for (let c = 0; c < 3; c++) assert.ok(Math.abs(Math.abs(m.normals[m.indices[last + c] * 3 + 2]) - 1) < 1e-6, `corner ${c} normal`);
+  assert.ok(dt < 1000, `${dt} ms`);
+});
+await test('r5-5 OBJ: 3000 "mtllib" lines naming one 2000-material MTL read it once, and its colour still applies', async () => {
+  const m = [];
+  for (let k = 0; k < 2000; k++) m.push(`newmtl m${k}`, k === 1999 ? 'Kd 0.5 0.25 1' : 'Kd 0.1 0.2 0.3');
+  const files = new Map([['a.mtl', enc(m.join('\n'))]]);
+  const L = ['v 0 0 0', 'v 1 0 0', 'v 0 1 0'];
+  for (let k = 0; k < 3000; k++) L.push('mtllib a.mtl');
+  L.push('usemtl m1999', 'f 1 2 3');
+  const t0 = Date.now();
+  const model = await parseMesh('obj', enc(L.join('\n')), 'm.obj', files);
+  const dt = Date.now() - t0;
+  assert.ok(near(model.meshes[0].color, [0.5, 0.25, 1]), `colour ${model.meshes[0].color}`);
+  assert.ok(dt < 1000, `${dt} ms`);
+});
+await test('r5-9 OBJ, OFF and PLY past the triangle / vertex caps (as 3MF and glTF): refused in words before the memory is spent', async () => {
+  // OBJ: one face of 10,000,003 corners alternating two vertices: 10,000,001 triangles in 20 MB
+  const objFace = Buffer.concat([Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1'), Buffer.alloc(4 * 5_000_001, ' 2 3'), Buffer.from('\n')]);
+  await refusedFast(() => parseMesh('obj', objFace.buffer.slice(objFace.byteOffset, objFace.byteOffset + objFace.length), 'x.obj'),
+    /x\.obj holds more than the 10,000,000 triangles this viewer opens/, 1000);
+  // OBJ: 30,000,001 "v" lines
+  await refusedFast(() => parseMesh('obj', Buffer.alloc(2 * 30_000_001, 'v\n').buffer, 'x.obj'), /x\.obj holds more than the 30,000,000 vertices this viewer opens/, 1500);
+  // OFF: one face of 10,000,003 corners
+  const offFace = Buffer.concat([Buffer.from('OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n10000003'), Buffer.alloc(2 * 10_000_003, ' 1'), Buffer.from('\n')]);
+  await refusedFast(() => parseMesh('off', offFace.buffer.slice(offFace.byteOffset, offFace.byteOffset + offFace.length), 'x.off'),
+    /x\.off holds more than the 10,000,000 triangles this viewer opens/, 2000);
+  // PLY: 40 M vertex records with no properties (charged a byte each, none read): no x, y, z
+  const hdr = enc('ply\nformat binary_little_endian 1.0\nelement vertex 40000000\nend_header\n');
+  const e = new Uint8Array(hdr.byteLength + 40_000_000);
+  e.set(new Uint8Array(hdr));
+  await refusedFast(() => parseMesh('ply', e.buffer, 'e.ply'), /e\.ply is damaged: its vertex element has no x, y, z properties/, 1000);
+  // PLY: three vertices and one face listing 10,000,003 corners: refused at the list's count
+  const fh = enc('ply\nformat binary_little_endian 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list int int vertex_indices\nend_header\n');
+  const nc = 10_000_003;
+  const f = new Uint8Array(fh.byteLength + 36 + 4 + 4 * nc);
+  f.set(new Uint8Array(fh));
+  const dv = new DataView(f.buffer);
+  dv.setFloat32(fh.byteLength + 12, 1, true); dv.setFloat32(fh.byteLength + 28, 1, true);
+  dv.setInt32(fh.byteLength + 36, nc, true);
+  for (let i = 0; i < nc; i++) dv.setInt32(fh.byteLength + 40 + 4 * i, 1 + (i % 2), true);
+  await refusedFast(() => parseMesh('ply', f.buffer, 'f.ply'), /f\.ply holds more than the 10,000,000 triangles this viewer opens/, 1000);
+});
+await test('r5-10 a glTF node or mesh name that is not text: the default name is taken, and the model encodes and decodes', async () => {
+  const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const model = await parseMesh('gltf', gltf({ buffers: [{ byteLength: 36, uri: b64uri(new Uint8Array(pos.buffer)) }], bufferViews: [{ buffer: 0, byteLength: 36 }],
+    accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ name: { x: 1 }, primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [{ mesh: 0, name: 42 }], scenes: [{ nodes: [0] }] }), 'n.gltf');
+  assert.equal(model.root.children[0].name, 'node 0');
+  assert.equal(model.meshes[0].name, 'node 0');
+  const back = decodeCadmesh(encodeCadmesh(model));
+  assert.equal(back.header.meshes.length, 1);
+});
+await test('r5-11 every refusal names the file with its extension: STL, OBJ, glTF placements / coordinates / no triangles, 3MF zip; the tree root keeps the bare name', async () => {
+  await refusedFast(() => parseMesh('stl', enc('solidx\nendfacet\n'), 'a.stl'), /^a\.stl has no triangles to show/);
+  await refusedFast(() => parseMesh('obj', enc('g\n'), 'x.obj'), /^x\.obj has no triangles to show/);
+  const dag = [];
+  for (let i = 0; i < 40; i++) dag.push({ children: [i + 1, i + 1] });
+  dag.push({});
+  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: dag }), 'x.gltf'), /^x\.gltf places 2,199,023,255,551 parts/);
+  const nan = new Uint8Array(36).fill(0xff);
+  await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 36, uri: b64uri(nan) }], bufferViews: [{ buffer: 0, byteLength: 36 }],
+    accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'e.gltf'), /^e\.gltf is damaged: a vertex coordinate is not a number/);
+  await refusedFast(() => parseMesh('gltf', gltf({ accessors: [{ componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'z.gltf'), /^z\.gltf has no triangles to show/);
+  await refusedFast(() => parseMesh('3mf', enc('not a zip at all, just some text'), 'a.3mf'), /^a\.3mf: not a zip file/);
+  const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'), 'n.obj');
+  assert.equal(m.root.name, 'n');
 });
 
 done();

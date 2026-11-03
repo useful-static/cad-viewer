@@ -13,7 +13,7 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { DEFAULT_GREY, MAX_FILE_BYTES, MM, inflate } from './cadmesh.js';
+import { DEFAULT_GREY, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
 import { FORMATS, extOf, sniffFormat } from './formats.js';
 import { LENGTH_MM } from './units.js';
 
@@ -77,13 +77,16 @@ export function meshFormatOf(name, buf) {
 
 // A model from a mesh file. files: other dropped files by lower-case name
 // (an OBJ's .mtl, a .gltf's .bin). Throws in plain words on what it refuses.
+// Every refusal names the file one way: its name and the format's extension ("a.stl"); the
+// tree's root keeps the bare name.
 export async function parseMesh(format, buf, name, files = new Map()) {
   const base = (name || 'model').replace(/\.[^.]+$/, '');
+  const file = `${base}.${format}`;
   switch (format) {
-    case 'stl': return finish(base, parseSTL(buf, base), null);
-    case 'obj': return finish(base, parseOBJ(text(buf, name), files, base), null);
-    case 'ply': return finish(base, parsePLY(buf, base), null);
-    case 'off': return finish(base, parseOFF(text(buf, name), base), null);
+    case 'stl': return finish(file, base, parseSTL(buf, base));
+    case 'obj': return finish(file, base, parseOBJ(text(buf, file), files, base));
+    case 'ply': return finish(file, base, parsePLY(buf, base));
+    case 'off': return finish(file, base, parseOFF(text(buf, file), base));
     case '3mf': return parse3MF(buf, base);
     case 'glb': case 'gltf': return parseGLTF(buf, format, base, files);
     default: throw new Error(`${name}: not a mesh format this viewer reads`);
@@ -121,15 +124,24 @@ function needTriangles(rootName, welded) {
   }
 }
 
-function finish(rootName, bodies, sourceUnits, root = null) {
-  checkBodies(rootName, bodies);
+// (file: the name refusals use, "a.stl"; rootName: the tree root's, "a")
+function finish(file, rootName, bodies) {
+  checkBodies(file, bodies);
   const welded = bodies.filter((b) => b.tri.length).map(weld);
-  needTriangles(rootName, welded);
-  // (a tree given by the file names its meshes by number: they are kept as they are)
-  const meshes = root ? welded : welded.filter((m) => m.indices.length);
-  const model = { units: MM, meshes, root: root || { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
-  if (sourceUnits) model.sourceUnits = sourceUnits;
-  return model;
+  needTriangles(file, welded);
+  const meshes = welded.filter((m) => m.indices.length);
+  return { units: MM, meshes, root: { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
+}
+
+// The readers that build as they read (STL, OBJ, PLY, OFF) are held to the caps the 3MF and
+// glTF readers use, in the same words; counted before what they count is built.
+// OBJ, OFF and PLY had none: one OBJ face of alternating corners is a triangle per 2 bytes, so
+// 20 MB made 10 M triangles (4.2 s, 1.6 GB) and 40 MB ran a tab out of memory.
+const tooMany = (who, what, cap) => new Error(`${who} holds more than the ${big(cap)} ${what} this viewer opens`);
+function counter(who) {
+  const n = { triangles: 0, vertices: 0 };
+  const caps = { triangles: MAX_PLACED_TRIANGLES, vertices: MAX_PLACED_VERTICES };
+  return (what, k = 1) => { if ((n[what] += k) > caps[what]) throw tooMany(who, what, caps[what]); };
 }
 
 // Weld equal positions, then split each welded vertex by crease (and by
@@ -162,15 +174,22 @@ export function weld(b) {
   }
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
   const unit = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
-  // per welded vertex: its groups [{ n: unit seed, out }], with colours kept apart by a Map
+  // per welded vertex: its groups [{ n: unit seed, out }] (and .noNormal, its no-normal group), with colours kept apart by a Map
   // colour -> groups (a linear search over every colour at a vertex was quadratic: a fan of
   // 60 k triangles, each its own colour, about one centre took 13.5 s)
   const groups = new Array(wp.length / 3);
   const corner = new Uint32Array(kept * 3); // the group (output vertex) each corner uses
   const outPos = [], outNrmSum = [], outCol = [];
   const cols = b.col ? colKept : null;
+  // A triangle with no normal (distinct corners on one line: zero area, or one not finite) matches
+  // no group, so it opened a new one at each corner, each searched by every later triangle there:
+  // a fan of N such triangles about one vertex was quadratic (60 k: 11.2 s). Those triangles share
+  // one no-normal group per vertex (and colour) instead, kept out of the crease search.
   for (let t = 0; t < kept; t++) {
-    const n = unit(fn[t * 3], fn[t * 3 + 1], fn[t * 3 + 2]);
+    const fx = fn[t * 3], fy = fn[t * 3 + 1], fz = fn[t * 3 + 2];
+    const fl = Math.hypot(fx, fy, fz);
+    const flat = !(fl > 0 && Number.isFinite(fl));
+    const n = flat ? null : [fx / fl, fy / fl, fz / fl];
     const ck = cols ? cols[t].join(',') : '';
     for (let c = 0; c < 3; c++) {
       const w = tri[t * 3 + c];
@@ -180,15 +199,16 @@ export function weld(b) {
         gs = byCol.get(ck);
         if (!gs) { gs = []; byCol.set(ck, gs); }
       } else gs = groups[w] || (groups[w] = []);
-      let g = gs.find((x) => x.n[0] * n[0] + x.n[1] * n[1] + x.n[2] * n[2] >= cosC);
+      // (a property of the array, not "flat": that is Array.prototype.flat, a function)
+      let g = flat ? gs.noNormal : gs.find((x) => x.n[0] * n[0] + x.n[1] * n[1] + x.n[2] * n[2] >= cosC);
       if (!g) {
         g = { n, out: outPos.length / 3 };
-        gs.push(g);
+        if (flat) gs.noNormal = g; else gs.push(g);
         outPos.push(wp[w * 3], wp[w * 3 + 1], wp[w * 3 + 2]);
         outNrmSum.push(0, 0, 0);
-        if (cols) outCol.push(Math.round(cols[t][0] * 255), Math.round(cols[t][1] * 255), Math.round(cols[t][2] * 255), 255);
+        if (cols) outCol.push(toByte(cols[t][0]), toByte(cols[t][1]), toByte(cols[t][2]), 255);
       }
-      outNrmSum[g.out * 3] += fn[t * 3]; outNrmSum[g.out * 3 + 1] += fn[t * 3 + 1]; outNrmSum[g.out * 3 + 2] += fn[t * 3 + 2];
+      if (!flat) { outNrmSum[g.out * 3] += fx; outNrmSum[g.out * 3 + 1] += fy; outNrmSum[g.out * 3 + 2] += fz; }
       corner[t * 3 + c] = g.out;
     }
   }
@@ -205,10 +225,12 @@ export function weld(b) {
 // ---------- STL ----------
 function parseSTL(buf, base) {
   const dv = new DataView(buf);
+  const hold = counter(`${base}.stl`);
   // binary when the size is exactly 84 + 50 n, even if it starts "solid"
   if (buf.byteLength >= 84) {
     const n = dv.getUint32(80, true);
     if (84 + 50 * n === buf.byteLength) {
+      hold('triangles', n); hold('vertices', 3 * n);
       const pos = new Array(n * 9), tri = new Array(n * 3);
       for (let i = 0; i < n; i++) {
         const o = 84 + i * 50 + 12;
@@ -242,12 +264,14 @@ function parseSTL(buf, base) {
       body();
       const xyz = m[2].trim().split(/\s+/).slice(0, 3).map(Number);
       if (xyz.length < 3 || !xyz.every(Number.isFinite)) throw new Error(`${base}.stl is damaged: "${m[0].trim().slice(0, 80)}" is not three numbers`);
+      hold('vertices');
       fv.push(xyz[0], xyz[1], xyz[2]);
     }
     else if (m[1] === 'endfacet') {
       // a facet of more than 3 vertices: a fan (appended by a loop: spread into push, a
       // 300 k-vertex facet overflowed the stack)
       body();
+      if (fv.length > 6) hold('triangles', fv.length / 3 - 2);
       const k0 = cur.pos.length / 3;
       for (const x of fv) cur.pos.push(x);
       for (let i = 1; i + 1 < fv.length / 3; i++) cur.tri.push(k0, k0 + i, k0 + i + 1);
@@ -276,6 +300,33 @@ function parseOBJ(s, files, base) {
   // one pass over the lines (splitting 40 MB of "g" lines into 20 M strings first was 1.6 s)
   const ws = (c) => c === 32 || c === 9 || c === 13 || c === 11 || c === 12;
   const n = s.length;
+  // the "v" lines and the faces' triangles counted against the caps first, by a pass that makes
+  // no strings (a 20 MB face of alternating corners was 10 M triangles built, 4.2 s and 1.6 GB);
+  // the vertices the bodies copy are held as they are made
+  const who = `${base}.obj`;
+  const hold = counter(who);
+  {
+    let nv = 0, nt = 0;
+    for (let i = 0; i < n;) {
+      let e = s.indexOf('\n', i);
+      if (e < 0) e = n;
+      let a = i;
+      i = e + 1;
+      while (a < e && ws(s.charCodeAt(a))) a++;
+      const c0 = s.charCodeAt(a);
+      if (a === e || (a + 1 < e && !ws(s.charCodeAt(a + 1)))) continue;
+      if (c0 === 118) nv++; // "v"
+      else if (c0 === 102) { // "f": its corners, less 2
+        let k = 0, inTok = false;
+        for (let j = a + 1; j < e; j++) { const w = ws(s.charCodeAt(j)); if (!w && !inTok) k++; inTok = !w; }
+        if (k > 2) nt += k - 2;
+      }
+    }
+    if (nv > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
+    if (nt > MAX_PLACED_TRIANGLES) throw tooMany(who, 'triangles', MAX_PLACED_TRIANGLES);
+  }
+  // each MTL is read once (each "mtllib" line naming it re-read it: 20 k lines, 32.8 s)
+  const mtlRead = new Set();
   for (let i = 0; i < n;) {
     let e = s.indexOf('\n', i);
     if (e < 0) e = n;
@@ -294,7 +345,10 @@ function parseOBJ(s, files, base) {
     else if (k === 'o' || k === 'g') start(-1, 0, sp.slice(1).join(' ') || base);
     else if (k === 'mtllib') {
       for (const f of sp.slice(1)) {
-        const t = files.get(f.toLowerCase());
+        const key = f.toLowerCase();
+        if (mtlRead.has(key)) continue;
+        mtlRead.add(key);
+        const t = files.get(key);
         if (t) readMTL(text(t, f), mtl);
       }
     } else if (k === 'usemtl') mat = sp.slice(1).join(' ');
@@ -309,7 +363,7 @@ function parseOBJ(s, files, base) {
       });
       const loc = ids.map((i) => {
         let j = cur.map.get(i);
-        if (j === undefined) { j = cur.pos.length / 3; cur.map.set(i, j); cur.pos.push(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]); }
+        if (j === undefined) { hold('vertices'); j = cur.pos.length / 3; cur.map.set(i, j); cur.pos.push(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]); }
         return j;
       });
       const c = (mat && mtl.get(mat)) || null;
@@ -330,7 +384,11 @@ function readMTL(s, out) {
   for (const raw of s.split(/\r?\n/)) {
     const sp = raw.trim().split(/\s+/);
     if (sp[0] === 'newmtl') cur = sp.slice(1).join(' ');
-    else if (sp[0] === 'Kd' && cur) out.set(cur, [+sp[1], +sp[2], +sp[3]]);
+    else if (sp[0] === 'Kd' && cur) {
+      // "Kd r [g b]": one value is a grey (the MTL form); a colour that is not numbers is not one
+      const r = +sp[1], g = sp[2] === undefined ? r : +sp[2], b = sp[3] === undefined ? r : +sp[3];
+      if ([r, g, b].every(Number.isFinite)) out.set(cur, [r, g, b]);
+    }
   }
 }
 
@@ -363,6 +421,19 @@ function parsePLY(buf, base) {
       else e.props.push({ t: ty(sp[1], sp[2]), name: sp[2] });
     }
   }
+  // a vertex element must give x, y, z, and is held to the vertex cap before it is looped (40 M
+  // property-less records, charged a byte each and none read, built 3 GB of empty positions);
+  // the faces' triangles are held at each list's count, before its items are read
+  const who = `${base}.ply`;
+  const hold = counter(who);
+  for (const e of els) {
+    // (the face list take() reads)
+    e.tlist = e.props.some((pr) => pr.name === 'vertex_indices') ? 'vertex_indices' : 'vertex_index';
+    if (e.name !== 'vertex') continue;
+    if (!['x', 'y', 'z'].every((c) => e.props.some((pr) => pr.name === c && !pr.list))) throw new Error(`${who} is damaged: its vertex element has no x, y, z properties`);
+    if (e.n > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
+  }
+  const corners = (e, pr, c) => { if (e.name === 'face' && pr.name === e.tlist && c > 2) hold('triangles', c - 2); return c; };
   const pos = [], tri = [], vcol = [];
   let hasCol = false;
   const take = (e, rec) => {
@@ -395,10 +466,11 @@ function parsePLY(buf, base) {
     checkCounts(toks.length, (e) => e.props.length);
     let p = 0;
     for (const e of els) {
+      if (!e.props.length) continue; // (its records hold nothing to read)
       for (let i = 0; i < e.n; i++) {
         const rec = {};
         for (const pr of e.props) {
-          if (pr.list) { const c = listCount(+toks[p++], pr, e, toks.length - p); rec[pr.name] = toks.slice(p, p + c).map(Number); p += c; } else rec[pr.name] = +toks[p++];
+          if (pr.list) { const c = corners(e, pr, listCount(+toks[p++], pr, e, toks.length - p)); rec[pr.name] = toks.slice(p, p + c).map(Number); p += c; } else rec[pr.name] = +toks[p++];
         }
         take(e, rec);
       }
@@ -414,10 +486,11 @@ function parsePLY(buf, base) {
       const v = dv[`get${t}`](o, le); o += PLY_SIZE[t]; return v;
     };
     for (const e of els) {
+      if (!e.props.length) continue; // (its records hold nothing to read)
       for (let i = 0; i < e.n; i++) {
         const rec = {};
         for (const pr of e.props) {
-          if (pr.list) { const c = listCount(rd(pr.ct), pr, e, (buf.byteLength - o) / PLY_SIZE[pr.t]); const a = new Array(c); for (let j = 0; j < c; j++) a[j] = rd(pr.t); rec[pr.name] = a; } else rec[pr.name] = rd(pr.t);
+          if (pr.list) { const c = corners(e, pr, listCount(rd(pr.ct), pr, e, (buf.byteLength - o) / PLY_SIZE[pr.t])); const a = new Array(c); for (let j = 0; j < c; j++) a[j] = rd(pr.t); rec[pr.name] = a; } else rec[pr.name] = rd(pr.t);
         }
         take(e, rec);
       }
@@ -450,6 +523,21 @@ function parseOFF(s, base) {
   // memory; each vertex takes 3 tokens and each face at least 4
   if (!Number.isInteger(nv) || !Number.isInteger(nf) || nv < 0 || nf < 0) throw new Error(`${base}.off: not an OFF file (no vertex and face counts)`);
   if (nv * 3 + nf * 4 > toks.length - p) throw new Error(`${base}.off is damaged: it counts ${nv} vertices and ${nf} faces, more than the file holds`);
+  // held to the caps the 3MF and glTF readers use: the vertices by their count, the faces'
+  // triangles by a walk over the face counts alone, both before anything is built (a face's
+  // count that is not a whole number the file holds is left to the loop below to refuse)
+  const who = `${base}.off`;
+  if (nv > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
+  {
+    let q = p + nv * 3, nt = 0;
+    for (let i = 0; i < nf; i++) {
+      const c = +toks[q++];
+      if (!Number.isInteger(c) || c < 0 || c > toks.length - q) break;
+      if (c > 2) nt += c - 2;
+      q += c;
+    }
+    if (nt > MAX_PLACED_TRIANGLES) throw tooMany(who, 'triangles', MAX_PLACED_TRIANGLES);
+  }
   const pos = [];
   for (let i = 0; i < nv; i++) { pos.push(+toks[p], +toks[p + 1], +toks[p + 2]); p += 3; }
   const tri = [];
@@ -552,9 +640,15 @@ function xmlWalk(s, want, onTag) {
 const UNIT_NAME = { micron: 'um', millimeter: 'mm', centimeter: 'cm', inch: 'in', foot: 'ft', meter: 'm' };
 
 async function parse3MF(buf, base) {
-  const zip = await unzip(buf);
+  const who = `${base}.3mf`;
+  // the zip's own refusals ("not a zip file", "a damaged zip ...") name the file as the rest do
+  const named = (e) => (e instanceof Error && !e.message.startsWith(who) ? new Error(`${who}: ${e.message}`) : e);
+  let zip;
+  try { zip = await unzip(buf); } catch (e) { throw named(e); }
   // an XML part is read as one string: refused past the text limit before it is inflated
-  const xmlPart = (p, what) => zip.get(p, MAX_TEXT_BYTES, (size) => new Error(`${base}.3mf: its ${what} ${p} unpacks to ${size}, ${TEXT_LIMIT_WORDS}`));
+  const xmlPart = async (p, what) => {
+    try { return await zip.get(p, MAX_TEXT_BYTES, (size) => new Error(`${who}: its ${what} ${p} unpacks to ${size}, ${TEXT_LIMIT_WORDS}`)); } catch (e) { throw named(e); }
+  };
   let path = '3D/3dmodel.model';
   const rels = await xmlPart('_rels/.rels', 'relationships part');
   if (rels) {
@@ -565,14 +659,13 @@ async function parse3MF(buf, base) {
     });
   }
   const xml = await xmlPart(path, 'model part');
-  if (!xml) throw new Error(`${base}.3mf has no model part (${path})`);
-  const who = `${base}.3mf`;
+  if (!xml) throw new Error(`${who} has no model part (${path})`);
   // what the model part holds is counted as it is read, and refused past the viewer's caps
   // before it is kept (each vertex, triangle, placement, material and object costs memory)
   const caps = { vertices: MAX_PLACED_VERTICES, triangles: MAX_PLACED_TRIANGLES, 'parts and placements': MAX_PLACED_PARTS,
     'base materials': MAX_PLACED_PARTS, objects: MAX_PLACED_PARTS };
   const held = Object.fromEntries(Object.keys(caps).map((c) => [c, 0]));
-  const hold = (what) => { if (++held[what] > caps[what]) throw new Error(`${who} holds more than the ${big(caps[what])} ${what} this viewer opens`); };
+  const hold = (what) => { if (++held[what] > caps[what]) throw tooMany(who, what, caps[what]); };
   let unit = null, k = 1;
   const objects = new Map(); // id -> { name, verts, tris, pids, comps }
   const mats = new Map();    // basematerials id -> [[r,g,b], ...]
@@ -710,7 +803,7 @@ async function parseGLTF(buf, format, base, files) {
     let nm;
     try { nm = decodeURIComponent(b.uri); } catch { throw unread(); }
     const f = files.get(nm.split('/').pop().toLowerCase());
-    if (!f) throw new Error(`${base}.gltf needs ${b.uri}: drop it together with the .gltf`);
+    if (!f) throw new Error(`${file} needs ${b.uri}: drop it together with the .${format}`);
     return f;
   }));
   const acc = (i) => {
@@ -812,12 +905,15 @@ async function parseGLTF(buf, format, base, files) {
     if (!nd) throw damaged(`node ${ni} is not there`);
     return list(nd.children, `node ${ni}'s "children"`);
   }, (ni) => (nodes[ni].mesh !== undefined ? meshCounts(nodes[ni].mesh) : { tris: 0, verts: 0 }), 64,
-  (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), base);
+  (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), file);
   const bodies = [];
+  // a name is taken only when it is text, else the default (glTF 2.0 makes "name" a string; one
+  // of 42 was written into the .cadmesh and refused there as "cadmesh: mesh 0 name is not text")
+  const textName = (x) => (typeof x === 'string' && x ? x : null);
   const nodeOf = (ni, parent) => {
     const nd = nodes[ni];
     const m = mul4(parent, localMatrix(nd, (k, n) => damaged(`node ${ni}'s "${k}" is not a list of ${n} numbers`)));
-    const n = { name: nd.name || `node ${ni}`, meshes: [], children: [] };
+    const n = { name: textName(nd.name) || `node ${ni}`, meshes: [], children: [] };
     if (nd.mesh !== undefined) {
       const me = at(meshDefs, nd.mesh);
       if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
@@ -828,7 +924,8 @@ async function parseGLTF(buf, format, base, files) {
         if (!isObj(pr.attributes)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} has no attributes`);
         const P = acc(pr.attributes.POSITION);
         const I = pr.indices !== undefined ? acc(pr.indices) : undefined;
-        const name = me.primitives.length > 1 ? `${me.name || n.name} ${k + 1}` : (me.name || n.name);
+        const meName = textName(me.name) || n.name;
+        const name = me.primitives.length > 1 ? `${meName} ${k + 1}` : meName;
         // all-zero positions (every vertex at one point) or all-zero indices (every corner vertex
         // 0): each triangle has no area, so the primitive is an empty body, as one whose every
         // triangle the weld collapses
@@ -858,9 +955,9 @@ async function parseGLTF(buf, format, base, files) {
     return n;
   };
   const root = { name: base, meshes: [], children: roots.map((ni) => nodeOf(ni, IDENT)) };
-  checkBodies(base, bodies);
+  checkBodies(file, bodies);
   const meshes = bodies.map(weld);
-  needTriangles(base, meshes);
+  needTriangles(file, meshes);
   return { units: MM, meshes, root, sourceUnits: 'm' };
 }
 // A texture's average colour (sRGB, 0..1), or null where the image cannot be

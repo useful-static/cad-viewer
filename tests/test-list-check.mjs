@@ -131,6 +131,13 @@ await test('a .dxf holding a DWG opens (a warning); a .gz that arrives unpacked 
   const junk = await checkFile(`${B}text.stp.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(junk.level, 'bad', junk.detail);
 });
+await test('a STEP the site sends without CORS is a warning (a download link needs none); a model so is bad', async () => {
+  const step = await checkFile('https://other.example/x.stp', { fetchFn: fakeFetch, method: 'HEAD', download: true });
+  assert.equal(step.level, 'warn', step.detail);
+  assert.match(step.detail, /a download link does not need/);
+  const model = await checkFile('https://other.example/x.cadmesh.gz', { fetchFn: fakeFetch, sniff: true });
+  assert.equal(model.level, 'bad');
+});
 await test('a model named in the query: named as the viewer names it', async () => {
   assert.equal(namedFormat(`${B}get?file=board.stl`), 'STL');
   assert.equal(namedFormat(`${B}get.php?file=board.stl`), 'STL');

@@ -17,7 +17,7 @@
 //   video(tour)            the tour played and recorded -> bytes, or why not
 //   announce(text)         the live region
 
-import { DEFAULTS, STEP_FIELDS, TOUR_VERSION } from './tour.js';
+import { DEFAULTS, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VERSION } from './tour.js';
 
 // what a step keeps when the draft is written: the parser's own field list
 const STEP_KEYS = ['id', ...STEP_FIELDS];
@@ -61,6 +61,10 @@ export function createTourRecorder(api) {
     note: $('tenote'), step: $('testep'), pics: $('tepics'), video: $('tevideo'), sTitle: $('tes-title'), sText: $('tes-text'), sCam: $('tes-cam'), sDim: $('tes-dim'),
     sFly: $('tes-transition'), sHold: $('tes-hold'), sOrbit: $('tes-orbit'), sUpdate: $('tes-update'), sGo: $('tes-go'),
   };
+  // the inputs take what the parser takes (js/tour.js)
+  el.title.maxLength = TITLE_MAX;
+  el.sTitle.maxLength = TITLE_MAX;
+  el.sText.maxLength = TEXT_MAX;
 
   const note = (t) => { el.note.textContent = t; if (t) api.announce(t); };
 
@@ -102,9 +106,9 @@ export function createTourRecorder(api) {
     el.sTitle.value = s.title || '';
     el.sText.value = s.text || '';
     el.sCam.value = s.frame ? 'frame' : 'exact';
-    el.sDim.value = s.dim || 'none';
-    el.sFly.value = s.transition ?? 1.2;
-    el.sHold.value = s.hold ?? 4;
+    el.sDim.value = s.dim || DEFAULTS.dim;
+    el.sFly.value = s.transition ?? DEFAULTS.transition;
+    el.sHold.value = s.hold ?? DEFAULTS.hold;
     el.sOrbit.value = s.orbit ?? 0;
   }
 

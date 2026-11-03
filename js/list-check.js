@@ -10,7 +10,7 @@
 import { fetchModelLists } from './model-list.js';
 import { parseTour } from './tour.js';
 import { FORMATS, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
-import { directUrl } from './open-url.js';
+import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
 // by the viewer's own reading of a URL and its one table (js/formats.js)
@@ -78,14 +78,18 @@ function refused(e) {
 
 // One file: answered, CORS, found, size; with sniff, its format too.
 // -> { ok, level: 'ok' | 'warn' | 'bad', detail, url }
-export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 'GET' } = {}) {
+// download: the viewer only links to the file (Download STEP), never fetches it
+export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 'GET', download = false } = {}) {
   // a host's share page (a GitHub blob, a Dropbox dl=0 link) is fetched as the file it shares,
   // as the viewer fetches it (js/open-url.js)
-  const fetchUrl = /^https?:/i.test(url) ? directUrl(url).url : url;
+  const fetchUrl = fileUrl(url);
   let res;
   try {
     res = await fetchFn(fetchUrl, sniff ? { headers: { Range: 'bytes=0-65535' }, cache: 'no-store' } : { method, cache: 'no-store' });
   } catch (e) {
+    // a file the viewer only links to (Download STEP: a plain download, which needs no CORS)
+    // is not at fault for refusing this page; that it is there cannot be read from here
+    if (download) return { level: 'warn', detail: `not readable from this page (its site sends no CORS, which a download link does not need), so not checked: ${e && e.message ? e.message : e}`, url };
     return { level: 'bad', detail: refused(e), url };
   }
   if (!res.ok) {
@@ -194,7 +198,7 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
     const checks = [];
     checks.push({ what: 'model', ...(await checkFile(e.url, { fetchFn, sniff: true })) });
     if (e.image) checks.push({ what: 'picture', ...(await checkFile(e.image, { fetchFn, method: 'HEAD' })) });
-    if (e.step) checks.push({ what: 'STEP', ...(await checkFile(e.step, { fetchFn, method: 'HEAD' })) });
+    if (e.step) checks.push({ what: 'STEP', ...(await checkFile(e.step, { fetchFn, method: 'HEAD', download: true })) });
     for (const t of e.tours || []) checks.push({ what: `tour "${t.name}"`, ...(await checkTour(t.url, fetchFn)) });
     const out = { name: e.name, url: e.url, id: e.id || null, checks };
     if (onEntry) onEntry(out, i, n);
