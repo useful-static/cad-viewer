@@ -16,7 +16,9 @@
 //
 // Pure ES module, no DOM.
 
-const SEG_RAD = Math.PI / 36; // arcs flattened at 5° a segment (finer when big: see arcPts)
+import { LENGTH_MM } from './units.js';
+
+const SEG_RAD = Math.PI / 36; // arcs flattened at 5° a segment, at least 8 to an arc (arcPts)
 
 // A text DXF writes a control character in a string as a caret and the character 64 on ("^C" is
 // U+0003, "^J" a line feed), and a caret itself as "^ " (DXF reference, "Group Codes in Numerical
@@ -67,26 +69,29 @@ function binaryPairs(buf) {
   const dec = new TextDecoder('utf-8');
   const out = [];
   let o = 22;
+  // every read checked first: a truncated file is "ends inside a value", not the engine's
+  // "Offset is outside the bounds of the DataView"
+  const need = (n) => { if (o + n > b.length) throw new Error('the binary DXF ends inside a value'); };
   while (o < b.length) {
     let c;
     if (oneByte) {
       c = b[o++];
-      if (c === 255) { c = dv.getUint16(o, true); o += 2; }
-    } else { c = dv.getUint16(o, true); o += 2; }
+      if (c === 255) { need(2); c = dv.getUint16(o, true); o += 2; }
+    } else { need(2); c = dv.getUint16(o, true); o += 2; }
     const k = valueKind(c);
     let v;
     if (k === 's') {
       let e = o;
       while (e < b.length && b[e] !== 0) e++;
+      need(e - o + 1);
       v = dec.decode(b.subarray(o, e));
       o = e + 1;
-    } else if (k === 'bin') { const n = b[o]; v = ''; o += 1 + n; }
-    else if (k === 'd') { v = String(dv.getFloat64(o, true)); o += 8; }
-    else if (k === 'i32') { v = String(dv.getInt32(o, true)); o += 4; }
-    else if (k === 'i64') { v = String(dv.getBigInt64(o, true)); o += 8; }
-    else if (k === 'b') { v = String(b[o]); o += 1; }
-    else { v = String(dv.getInt16(o, true)); o += 2; }
-    if (o > b.length) throw new Error('the binary DXF ends inside a value');
+    } else if (k === 'bin') { need(1); const n = b[o]; need(1 + n); v = ''; o += 1 + n; }
+    else if (k === 'd') { need(8); v = String(dv.getFloat64(o, true)); o += 8; }
+    else if (k === 'i32') { need(4); v = String(dv.getInt32(o, true)); o += 4; }
+    else if (k === 'i64') { need(8); v = String(dv.getBigInt64(o, true)); o += 8; }
+    else if (k === 'b') { need(1); v = String(b[o]); o += 1; }
+    else { need(2); v = String(dv.getInt16(o, true)); o += 2; }
     out.push([c, v]);
     if (c === 0 && v === 'EOF') break;
   }
@@ -107,7 +112,29 @@ const get = (r, c, d) => { const p = r.g.find((x) => x[0] === c); return p ? p[1
 const num = (r, c, d = 0) => { const v = get(r, c, null); return v === null ? d : Number(v); };
 const all = (r, c) => r.g.filter((x) => x[0] === c).map((x) => Number(x[1]));
 
-export const UNITS = { 1: ['in', 25.4], 2: ['ft', 304.8], 4: ['mm', 1], 5: ['cm', 10], 6: ['m', 1000], 8: ['uin', 25.4e-6], 9: ['mil', 0.0254], 10: ['yd', 914.4], 13: ['um', 0.001], 14: ['dm', 100] };
+// $INSUNITS: every unit the DXF reference lists (0 is "not stored") -> [name, mm per unit]
+const INSUNITS = ['', 'in', 'ft', 'mi', 'mm', 'cm', 'm', 'km', 'uin', 'mil', 'yd', 'Å', 'nm', 'um', 'dm', 'dam', 'hm',
+  'Gm', 'AU', 'ly', 'pc', 'US ft'];
+export const UNITS = Object.fromEntries(INSUNITS.flatMap((n, code) => (n ? [[code, [n, LENGTH_MM[n]]]] : [])));
+
+// The text of an ASCII DXF from its bytes: from R2007 (AC1021) UTF-8; before, the drawing's code
+// page ($DWGCODEPAGE: ANSI_1252 for most, GBK for a Chinese drawing); with neither stated, UTF-8
+// when the bytes are valid UTF-8, else Windows-1252. (Read as UTF-8, a pre-2007 file's ° ± Ø
+// became U+FFFD; read as Latin-1, a UTF-8 one's accents were mangled.)
+const DXF_CP = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5' };
+export function dxfText(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 8000)));
+  const ver = /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/.exec(head);
+  if (ver && Number(ver[1]) >= 1021) return new TextDecoder('utf-8').decode(u8);
+  const cp = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/.exec(head);
+  if (cp) {
+    const c = cp[1].toUpperCase();
+    const label = DXF_CP[c] || (/^ANSI_(125\d)$/.test(c) ? `windows-${c.slice(5)}` : null);
+    if (label) { try { return new TextDecoder(label).decode(u8); } catch { /* an unknown page: below */ } }
+  }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(u8); } catch { return new TextDecoder('windows-1252').decode(u8); }
+}
 
 // s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
 // or ASCII read from the bytes)
@@ -117,7 +144,7 @@ export function parseDXF(s) {
   if (Array.isArray(s)) ps = s;
   else if (s instanceof ArrayBuffer) {
     if (isBinaryDXF(s)) ps = binaryPairs(s);
-    else s = new TextDecoder('latin1').decode(s);
+    else s = dxfText(s);
   }
   if (!ps) {
     if (!/^\s*0\s*\r?\n\s*SECTION/.test(s)) throw new Error('not a DXF file (a DWG is not read)');
@@ -180,7 +207,15 @@ export function parseDXF(s) {
   const inPaper = (r) => get(r, 67, '0') === '1';
   const ents = every.filter((r) => !inPaper(r));
   const paperSpace = every.filter((r) => inPaper(r) && !['VERTEX', 'SEQEND', 'ATTRIB'].includes(r.type)).length;
-  emit(ents, IDENT, null, 0, { layers, blocks, out, ltypes, ltscale });
+  // one budget for the whole drawing (model space and every layout): an untrusted file's MINSERT
+  // array, a huge arc or blocks nested to fan out stop at it, not when the tab runs out of memory
+  const budget = { items: 0, pts: 0 };
+  // (a path or text with a coordinate that is not a number is left out: one LINE with "10 abc"
+  // made the whole drawing's extents NaN and Fit useless)
+  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, budget,
+    add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
+    addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
+  emit(ents, IDENT, null, 0, ctxOf(out));
   // Layouts (paper space): the active one is the entities flagged 67 = 1,
   // others are the *Paper_Space<n> blocks. Each draws its own entities and,
   // through each VIEWPORT (but the sheet's own, id 1), model space: a model
@@ -192,7 +227,7 @@ export function parseDXF(s) {
   for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push(b.recs);
   const layouts = sets.map((recs, li) => {
     const lo = { paths: [], texts: [] };
-    emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, { layers, blocks, out: lo, ltypes, ltscale });
+    emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
     for (const v of recs) {
       if (v.type !== 'VIEWPORT' || num(v, 69, 0) === 1) continue;
       const cx = num(v, 10), cy = num(v, 20), w = num(v, 40), h = num(v, 41), vh = num(v, 45);
@@ -201,10 +236,16 @@ export function parseDXF(s) {
       const c = Math.cos(tw) * s, si = Math.sin(tw) * s, mx = num(v, 12), my = num(v, 22);
       const M = [c, si, -si, c, cx - (c * mx - si * my), cy - (si * mx + c * my)];
       const rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+      // (what a viewport draws of model space counts against the drawing's budget too: many
+      // viewports multiply it)
+      const p0 = lo.paths.length;
       for (const p of out.paths) clipPath(p, M, s, rect, lo.paths);
+      let coords = 0;
+      for (let k = p0; k < lo.paths.length; k++) coords += lo.paths[k].pts.length;
+      charge(budget, lo.paths.length - p0, coords);
       for (const t of out.texts) {
         const [x, y] = ap(M, t.x, t.y);
-        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) lo.texts.push({ ...t, x, y, h: t.h * s, rot: t.rot + tw });
+        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) addItem(budget, lo.texts, { ...t, x, y, h: t.h * s, rot: t.rot + tw }, 2);
       }
       const layer = get(v, 8, '0');
       lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
@@ -307,6 +348,22 @@ function colourOf(r, ctx, byBlock, layer) {
   return aciColour(Math.abs(aci));
 }
 
+// The most a drawing draws: paths and texts, and the coordinates in them (a 2D view of more is
+// not usable either; the largest real drawing here, 861 k entities, draws under both)
+export const MAX_DRAWN_ITEMS = 4e6;
+export const MAX_DRAWN_COORDS = 1.2e8;
+function charge(budget, items, coords) {
+  budget.items += items;
+  budget.pts += coords;
+  if (budget.items > MAX_DRAWN_ITEMS || budget.pts > MAX_DRAWN_COORDS) {
+    throw new Error(`the drawing is too large to draw here (over ${MAX_DRAWN_ITEMS / 1e6} million items or ${MAX_DRAWN_COORDS / 2e6} million points: an array or nested blocks multiply it)`);
+  }
+}
+function addItem(budget, list, item, coords) {
+  charge(budget, 1, coords);
+  list.push(item);
+}
+
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
   for (let i = 0; i < recs.length; i++) {
@@ -332,24 +389,26 @@ function emit(recs, M, byBlock, depth, ctx) {
     const path = (pts, closed = false, fill = false) => {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
-      ctx.out.paths.push({ layer, colour, ...sty,pts: f, closed, fill });
+      ctx.add({ layer, colour, ...sty,pts: f, closed, fill });
     };
     switch (r.type) {
       case 'LINE': {
         // LINE's points are in world coordinates, not its OCS
         const a = ap(M, num(r, 10), num(r, 20)), b = ap(M, num(r, 11), num(r, 21));
-        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
+        ctx.add({ layer, colour, ...sty,pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
         break;
       }
       case 'POINT': {
         const [x, y] = ap(M, num(r, 10), num(r, 20));
-        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
+        ctx.add({ layer, colour, ...sty,pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
         break;
       }
       case 'CIRCLE': path(arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI), true); break;
       case 'ARC': {
-        const a0 = (num(r, 50) * Math.PI) / 180;
-        let a1 = (num(r, 51) * Math.PI) / 180;
+        // (angles taken within one turn: 370° is 10°; an arc runs counter-clockwise from a0)
+        const turn = (deg) => (((deg % 360) + 360) % 360) * Math.PI / 180;
+        const a0 = turn(num(r, 50));
+        let a1 = turn(num(r, 51));
         if (a1 <= a0) a1 += 2 * Math.PI;
         path(arcPts(num(r, 10), num(r, 20), num(r, 40), a0, a1));
         break;
@@ -358,7 +417,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         // world coordinates: centre, the major axis end, the minor ratio
         const cx = num(r, 10), cy = num(r, 20), mx = num(r, 11), my = num(r, 21), ratio = num(r, 40, 1);
         let t0 = num(r, 41, 0), t1 = num(r, 42, 2 * Math.PI);
+        if (!Number.isFinite(t0) || !Number.isFinite(t1)) break;
         if (t1 <= t0) t1 += 2 * Math.PI;
+        if (t1 - t0 > 2 * Math.PI) t1 = t0 + 2 * Math.PI; // (at most one turn)
         // an ellipse seen from -Z runs the other way
         const flip = num(r, 230, 1) < 0 ? -1 : 1;
         const n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
@@ -369,7 +430,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const [x, y] = ap(M, cx + mx * c - my * ratio * s, cy + my * c + mx * ratio * s);
           pts.push(x, y);
         }
-        ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.from(pts), closed: Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9, fill: false });
+        ctx.add({ layer, colour, ...sty,pts: Float64Array.from(pts), closed: Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9, fill: false });
         break;
       }
       case 'LWPOLYLINE': {
@@ -395,7 +456,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const flags = num(r, 70);
         if (flags & (16 | 64)) break; // a 3D mesh or a polyface: not drawn in 2D
         const closed = (flags & 1) === 1;
-        if (flags & 8) { const W = mul(M, IDENT); ctx.out.paths.push({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
+        if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
         else path(bulgePts(xs, ys, bul, closed), closed);
         break;
       }
@@ -405,7 +466,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const W = M; // splines are in world coordinates
           const f = new Float64Array(pts.length);
           for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(W, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
-          ctx.out.paths.push({ layer, colour, ...sty,pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
+          ctx.add({ layer, colour, ...sty,pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
         }
         break;
       }
@@ -431,7 +492,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // the transform's rotation and scale carried over
         rot += Math.atan2(O[1], O[0]);
         const h = num(r, 40, 1) * Math.hypot(O[2], O[3]);
-        ctx.out.texts.push({ layer, colour, x, y, h, rot, text: t, align: r.type === 'MTEXT' ? mtextAlign(num(r, 71, 1)) : ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left', mtext: r.type === 'MTEXT' });
+        ctx.addText({ layer, colour, x, y, h, rot, text: t, align: r.type === 'MTEXT' ? mtextAlign(num(r, 71, 1)) : ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left', mtext: r.type === 'MTEXT' });
         break;
       }
       case 'INSERT': case 'DIMENSION': {
@@ -441,6 +502,11 @@ function emit(recs, M, byBlock, depth, ctx) {
         const sx = isDim ? 1 : num(r, 41, 1), sy = isDim ? 1 : num(r, 42, 1);
         const rot = isDim ? 0 : (num(r, 50) * Math.PI) / 180;
         const cols = isDim ? 1 : Math.max(1, num(r, 70, 1)), rows = isDim ? 1 : Math.max(1, num(r, 71, 1));
+        // an array of more cells than a drawing can draw is refused before it is walked (an
+        // empty block's cells would otherwise loop without drawing anything to count)
+        if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols * rows > MAX_DRAWN_ITEMS) {
+          throw new Error(`the drawing is too large to draw here (an array of ${cols} × ${rows} inserts)`);
+        }
         const dc = num(r, 44), dr = num(r, 45);
         const ix = isDim ? 0 : num(r, 10), iy = isDim ? 0 : num(r, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
@@ -460,6 +526,9 @@ function emit(recs, M, byBlock, depth, ctx) {
 
 // an arc as points: radius r about (cx, cy) from a0 to a1 (radians, CCW)
 function arcPts(cx, cy, r, a0, a1) {
+  // a sweep is at most one turn (an angle of 1e12 asked for 2e11 points), and a non-number is none
+  if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(r)) return [];
+  if (a1 - a0 > 2 * Math.PI) a1 = a0 + 2 * Math.PI;
   const n = Math.max(8, Math.ceil((a1 - a0) / SEG_RAD));
   const out = [];
   for (let k = 0; k <= n; k++) { const t = a0 + ((a1 - a0) * k) / n; out.push(cx + r * Math.cos(t), cy + r * Math.sin(t)); }
@@ -543,20 +612,30 @@ function hatchLoops(r) {
     const type = at(92);
     const pts = [];
     if (type & 2) {
-      const hasB = at(72), closed = at(73), nv = at(93);
+      const hasB = at(72);
+      at(73); // "closed": a boundary is closed either way
+      const nv = at(93);
       const xs = [], ys = [], bs = [];
       for (let v = 0; v < nv; v++) { xs.push(at(10)); ys.push(at(20)); bs.push(hasB ? at(42) : 0); }
-      pts.push(...bulgePts(xs, ys, bs, !!closed || true));
+      // (a hatch boundary is closed whatever its 73 says)
+      pts.push(...bulgePts(xs, ys, bs, true));
     } else {
       const ne = at(93);
       for (let e = 0; e < ne; e++) {
         const et = at(72);
         if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
-          const cx = at(10), cy = at(20), rr = at(40); let a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
-          const ccw = at(73);
-          if (!ccw) [a0, a1] = [-a0, -a1];
-          if (a1 <= a0) a1 += 2 * Math.PI;
-          pts.push(...arcPts(cx, cy, rr, a0, a1));
+          const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
+          if (at(73)) {
+            // counter-clockwise from a0 to a1
+            pts.push(...arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));
+          } else {
+            // clockwise: the angles are stored mirrored, so the edge runs from -a0 clockwise to
+            // -a1 (0° to 90° stored is the quarter from 360° down to 270°): the same arc taken
+            // counter-clockwise from -a1 to -a0, its points reversed so the loop keeps its order
+            const s = -a1, e = -a0;
+            const ccwPts = arcPts(cx, cy, rr, s, e <= s ? e + 2 * Math.PI : e);
+            for (let k = ccwPts.length - 2; k >= 0; k -= 2) pts.push(ccwPts[k], ccwPts[k + 1]);
+          }
         } else if (et === 3) {
           const cx = at(10), cy = at(20), mx = at(11), my = at(21), ratio = at(40); let t0 = (at(50) * Math.PI) / 180, t1 = (at(51) * Math.PI) / 180;
           at(73);
@@ -586,6 +665,7 @@ const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 function extentsOf(out) {
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
   for (const p of out.paths) for (let k = 0; k < p.pts.length; k += 2) {
+    if (!Number.isFinite(p.pts[k]) || !Number.isFinite(p.pts[k + 1])) continue;
     min[0] = Math.min(min[0], p.pts[k]); max[0] = Math.max(max[0], p.pts[k]);
     min[1] = Math.min(min[1], p.pts[k + 1]); max[1] = Math.max(max[1], p.pts[k + 1]);
   }

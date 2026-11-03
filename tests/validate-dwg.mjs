@@ -17,7 +17,8 @@
 //
 // It also measures how complex each file is: decoded entities, distinct entity types, blocks,
 // layers. Exit status 0 only when every file passes 1-4.
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { readDWG, dwgToPairs, pairsToDXF } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { dxfPairs, byHandle, compare, hexHandle } from './dwg-compare.mjs';
@@ -140,4 +141,5 @@ function main() {
   }
   process.exit(results.every((r) => r.ok) ? 0 : 1);
 }
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// run as a command (a path with a space or through a symlink included)
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) main();

@@ -8,8 +8,8 @@
 // DOM.
 
 import { circleOf } from './measure-geom.js';
+import { dot } from './vec3.js';
 
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const esc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const n3 = (v) => (Math.abs(v) < 5e-4 ? '0' : v.toFixed(3).replace(/\.?0+$/, ''));
 

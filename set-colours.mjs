@@ -5,7 +5,7 @@
 // -- is copied as it was. For a site that colours its models its own way
 // (its renders' palette, say): it works out one colour per vertex, in the
 // file's vertex order, and this tool writes them, so the file format has one
-// writer, here.
+// writer, js/cadmesh.js (splitCadmesh + withHeader).
 //
 //   set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>"
 //
@@ -14,9 +14,10 @@
 // recoloured is refused (its colours are no longer the converter's), unless
 // --again.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
-import { decodeCadmesh } from './js/cadmesh.js';
+import { decodeCadmesh, splitCadmesh, withHeader } from './js/cadmesh.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -26,21 +27,14 @@ const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmes
   --show     print the input's vertex count and "recolour", and write nothing
 `;
 
-const align8 = (n) => (n + 7) & ~7;
-
 // raw .cadmesh bytes (Uint8Array) + colours -> the new file's bytes
 export function setColours(raw, colours, by, { again = false } = {}) {
   if (typeof by !== 'string' || !by.trim()) throw new Error('say what wrote the colours (--by)');
-  const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-  const d = decodeCadmesh(ab); // (validates the whole file first)
-  const h = d.header;
+  const { header: h, data } = splitCadmesh(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
   if (h.recolour && !again) throw new Error(`already recoloured (${h.recolour}); --again to recolour it anyway`);
   const n = h.vertexCount;
   const per = colours.length === n * 4 ? 4 : colours.length === n * 3 ? 3 : 0;
   if (!per) throw new Error(`${colours.length} colour bytes for ${n} vertices: want ${n * 4} (RGBA) or ${n * 3} (RGB)`);
-  const jlen = new DataView(ab).getUint32(8, true);
-  const dataStart = align8(12 + jlen);
-  const data = raw.slice(dataStart);
   const sec = h.sections.color;
   for (let v = 0; v < n; v++) {
     const o = sec.offset + v * 4;
@@ -49,17 +43,8 @@ export function setColours(raw, colours, by, { again = false } = {}) {
     data[o + 2] = colours[v * per + 2];
     data[o + 3] = 255;
   }
-  // the header as it was, plus who wrote the colours (section offsets are
-  // from the data's start, so a longer header moves nothing they name)
-  const json = new TextEncoder().encode(JSON.stringify({ ...h, recolour: by.trim() }));
-  const start = align8(12 + json.length);
-  const out = new Uint8Array(start + data.length);
-  out.set(raw.subarray(0, 8));
-  new DataView(out.buffer).setUint32(8, json.length, true);
-  out.set(json, 12);
-  out.set(data, start);
-  decodeCadmesh(out.buffer); // (and the result reads back)
-  return out;
+  // the header as it was, plus who wrote the colours
+  return new Uint8Array(withHeader({ ...h, recolour: by.trim() }, data));
 }
 
 function main() {
@@ -89,6 +74,8 @@ function main() {
   console.log(`${a.in}: colours of ${decodeCadmesh(out.buffer).header.vertexCount} vertices set (recolour: ${a.by.trim()}) -> ${a.out}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// run as a command (a path with a space or through a symlink included: the plain "file://"
+// + argv[1] test was false there, and the tool exited 0 doing nothing)
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try { main(); } catch (e) { console.error(`set-colours: ${e.message}`); process.exit(1); }
 }

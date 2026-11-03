@@ -16,9 +16,10 @@
 // IGES: the global section's units flag (parameter 14), with the unit name
 // (parameter 15) when the flag is 3. BREP stores no unit.
 
+import { LENGTH_MM } from './units.js';
+
 // mm per unit -> name
-const BY_FACTOR = [[1, 'mm'], [10, 'cm'], [1000, 'm'], [1e6, 'km'], [1e-3, 'um'],
-  [25.4, 'in'], [304.8, 'ft'], [914.4, 'yd'], [0.0254, 'mil'], [2.54e-5, 'uin']];
+const BY_FACTOR = Object.entries(LENGTH_MM).map(([name, f]) => [f, name]);
 const SI_PREFIX = { '$': 1, EXA: 1e18, PETA: 1e15, TERA: 1e12, GIGA: 1e9, MEGA: 1e6, KILO: 1e3, HECTO: 1e2,
   DECA: 1e1, DECI: 1e-1, CENTI: 1e-2, MILLI: 1e-3, MICRO: 1e-6, NANO: 1e-9, PICO: 1e-12 };
 
@@ -86,7 +87,8 @@ export function stepUnits(u8) {
     const base = lengthMm(Number(mv[2]), depth + 1);
     return base === null ? null : Number(mv[1]) * base;
   };
-  const answers = new Set();
+  // mm per unit of each used context's length unit (null: not readable)
+  const factors = [];
   for (const [id, s] of units) {
     const g = /GLOBAL_UNIT_ASSIGNED_CONTEXT\s*\(\s*\(([^)]*)\)/.exec(s);
     if (!g || (used.size && !used.has(id))) continue;
@@ -94,15 +96,19 @@ export function stepUnits(u8) {
     // length one is the member carrying LENGTH_UNIT
     const len = refs(g[1]).find((r) => /LENGTH_UNIT/.test(units.get(r) || ''));
     if (len === undefined) continue;
-    answers.add(unitOfFactor(lengthMm(len)));
+    factors.push(lengthMm(len));
   }
-  if (answers.size > 1) return 'mixed';
-  return answers.size ? [...answers][0] : null;
+  // one unreadable context makes the file's unit unknown, not 'mixed' (that
+  // says the shapes DISAGREE, which nothing read shows); readable ones that
+  // differ are 'mixed', even when a factor has no name
+  if (!factors.length || factors.includes(null)) return null;
+  if (factors.some((f) => Math.abs(f / factors[0] - 1) >= 1e-6)) return 'mixed';
+  return unitOfFactor(factors[0]);
 }
 
 // IGES units flag -> name (flag 3: the name parameter says)
-const IGES_FLAG = { 1: 'in', 2: 'mm', 4: 'ft', 6: 'm', 7: 'km', 8: 'mil', 9: 'um', 10: 'cm', 11: 'uin' };
-const IGES_NAME = { IN: 'in', INCH: 'in', MM: 'mm', FT: 'ft', M: 'm', KM: 'km', MIL: 'mil', UM: 'um', CM: 'cm', UIN: 'uin' };
+const IGES_FLAG = { 1: 'in', 2: 'mm', 4: 'ft', 5: 'mi', 6: 'm', 7: 'km', 8: 'mil', 9: 'um', 10: 'cm', 11: 'uin' };
+const IGES_NAME = { IN: 'in', INCH: 'in', MM: 'mm', FT: 'ft', MI: 'mi', M: 'm', KM: 'km', MIL: 'mil', UM: 'um', CM: 'cm', UIN: 'uin' };
 
 export function igesUnits(u8) {
   // fixed 80-column lines; column 73 is the section letter. Only the start

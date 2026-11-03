@@ -53,5 +53,5 @@ await test('the cap is generous for a large assembly (the rack is 3.2 MB gzipped
   assert.ok(CACHE_CAP_BYTES >= 100e6);
 });
 
-console.log(`${passed} passed, ${failed} failed`);
+console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

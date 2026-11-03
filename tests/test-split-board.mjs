@@ -127,5 +127,5 @@ test('refuses a file without b-rep faces', () => {
   assert.throws(() => splitBoard({ ...d, faces: null }), /no faces section/);
 });
 
-console.log(`${passed} passed, ${failed} failed`);
+console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

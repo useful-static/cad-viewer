@@ -14,6 +14,7 @@
 // No other reader's code was consulted: the clean-room rule of the project.
 
 import { caret, valueKind, aciColour } from './dxf.js';
+import { crc32 } from './crc32.js';
 
 // --- checks -------------------------------------------------------------------------------------
 
@@ -27,16 +28,7 @@ export function crc16(seed, b, from, to) {
   for (let i = from; i < to; i++) dx = ((dx >>> 8) ^ CRC16[(b[i] ^ dx) & 0xff]) & 0xffff;
   return dx;
 }
-const CRC32T = (() => {
-  const t = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1; t[i] = c >>> 0; }
-  return t;
-})();
-export function crc32(b, from, to, seed = 0) {
-  let c = ~seed >>> 0;
-  for (let i = from; i < to; i++) c = (c >>> 8) ^ CRC32T[(c ^ b[i]) & 0xff];
-  return ~c >>> 0;
-}
+export { crc32 };
 // 4.2: the R2004 section page checksum
 function checksum04(seed, b, from, len) {
   let s1 = seed & 0xffff, s2 = seed >>> 16, i = from;

@@ -9,6 +9,7 @@
 // falls back to them (the tests build such cams).
 
 import { lookAt } from './mat4.js';
+import { cross, dot, unit as nrm } from './vec3.js';
 
 // ---- quaternions [x, y, z, w] ----
 
@@ -96,9 +97,6 @@ const LEVEL_MAX = Math.PI / 2 - 0.02;
 export function levelOrbitBy(cam, up, dx, dy, rate = 0.008) {
   if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
   const d = camDir(cam);
-  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
-  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
   let elev = Math.asin(Math.max(-1, Math.min(1, dot(d, up))));
   // the horizontal heading (from the screen's right when looking straight down)
   let h = [d[0] - up[0] * dot(d, up), d[1] - up[1] * dot(d, up), d[2] - up[2] * dot(d, up)];

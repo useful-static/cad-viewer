@@ -119,5 +119,5 @@ test('a painted face colours its triangles\' vertices, over the scheme', () => {
   assert.equal(schemeColours(mesh, 'file', new Map(), new Map()), mesh.color);
 });
 
-console.log(`${passed} passed, ${failed} failed`);
+console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

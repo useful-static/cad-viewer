@@ -108,7 +108,7 @@ export function schemeColours(mesh, id, overrides = new Map(), faces = new Map()
 }
 
 // '#rrggbb' <-> [r, g, b] in 0..1, for the colour picker
-export const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+export { rgb as hexToRgb } from './styles.js';
 // red, green and blue only (an alpha would make the #value invalid), each
 // clamped to 0..1, so the colour picker never falls back to black
 export const rgbToHex = (c) => '#' + c.slice(0, 3)

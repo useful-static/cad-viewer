@@ -16,23 +16,28 @@
 
 import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
 import { faceOfTri, makeCaster } from './raycast.js';
+import { add, dot, len, mul, sub } from './vec3.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
 const KIND_NAME = { vertex: 'corner', mid: 'midpoint', centre: 'centre', edge: 'edge', surface: 'surface' };
 
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const len = (a) => Math.hypot(a[0], a[1], a[2]);
 
-// deps: { $, app, view() -> { vp, eye, dir, right, up, ortho, tanV, w, h, target, dist },
+// The colours Measure draws in, on the dark view and on paper (a light ground)
+const INK = {
+  dark: { line: '#ffd23f', label: 'rgba(20,24,30,0.92)', text: '#fff', sub: '#c9d1db', loupe: '#1d2127' },
+  light: { line: '#9a6b00', label: 'rgba(255,255,255,0.95)', text: '#111', sub: '#444', loupe: '#f4f4f2' },
+};
+const HOLE = '#5fd3ff';
+
+// deps: { $, scene: { mesh, header, hidden, sphere } (the model as converted,
+//   its header, the hidden body ids, its bounding sphere: read when used),
+//   view() -> { vp, eye, dir, right, up, ortho, tanV, w, h, target, dist },
 //   sectionPlane(), lenText(mm) "4.00 mm", num(mm) "4.00", unit() "mm", announce(text),
 //   flash(text, ms), queueFrame(), syncOptbar(),
 //   coarse(), showsHidden() }
 export function createMeasure(deps) {
-  const { $, app } = deps;
+  const { $, scene } = deps;
   const st = {
     on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), caster: null, model: null,
     listOpen: false, holes: null,
@@ -42,7 +47,7 @@ export function createMeasure(deps) {
 
   // ---- the model's caches ----
   function model() {
-    const m = app.baseMesh;
+    const m = scene.mesh;
     if (m !== st.model) { st.model = m; st.geom = new Map(); st.caster = m ? makeCaster(m) : null; }
     return m;
   }
@@ -74,7 +79,7 @@ export function createMeasure(deps) {
       const hv = v.tanV, hh = v.tanV * (v.w / v.h);
       if (v.ortho) {
         const o0 = add(add(v.target, mul(v.right, nx * hh * v.dist)), mul(v.up, ny * hv * v.dist));
-        const back = (app.sphere.radius + len(sub(v.target, app.sphere.center))) * 4 + v.dist;
+        const back = (scene.sphere.radius + len(sub(v.target, scene.sphere.center))) * 4 + v.dist;
         return { o: add(o0, mul(v.dir, back)), d: mul(v.dir, -1) };
       }
       return { o: v.eye, d: add(add(mul(v.dir, -1), mul(v.right, nx * hh)), mul(v.up, ny * hv)) };
@@ -85,9 +90,9 @@ export function createMeasure(deps) {
   // the bodies whose projected box covers (x, y) +- r, not hidden
   function bodiesNear(v, x, y, r) {
     const out = [];
-    const ms = app.header.meshes;
+    const ms = scene.header.meshes;
     for (let i = 0; i < ms.length; i++) {
-      if (app.hidden.has(i + 1)) continue;
+      if (scene.hidden.has(i + 1)) continue;
       const b = ms[i].bbox;
       if (!b) continue;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, behind = false;
@@ -120,18 +125,18 @@ export function createMeasure(deps) {
   // along the view direction) -- among the bodies over p's screen point
   function visible(v, p, bodies, skip) {
     if (deps.showsHidden()) return true;
-    const o = v.ortho ? add(p, mul(v.dir, (app.sphere.radius + len(sub(p, app.sphere.center))) * 4 + v.dist)) : v.eye;
+    const o = v.ortho ? add(p, mul(v.dir, (scene.sphere.radius + len(sub(p, scene.sphere.center))) * 4 + v.dist)) : v.eye;
     const d = sub(p, o);
     const L = len(d);
     if (!L) return true;
-    const eps = Math.max(1e-5, (app.sphere.radius * 2e-4) / L);
+    const eps = Math.max(1e-5, (scene.sphere.radius * 2e-4) / L);
     const h = st.caster.cast(bodies, o, d, 1 - eps, skip);
     return !h;
   }
 
   // The snap under CSS point (x, y): { p, kind, mesh, info, face? } | null
   function snapAt(x, y) {
-    if (!model() || !app.header) return null;
+    if (!model() || !scene.header) return null;
     const v = projector();
     const r = deps.coarse() ? 24 : 12;
     const near = bodiesNear(v, x, y, r);
@@ -200,7 +205,7 @@ export function createMeasure(deps) {
     const skip = skipCut();
     const hit = st.caster.cast(bodiesNear(v, x, y, 0), ray.o, ray.d, Infinity, skip);
     if (!hit) return null;
-    const m = app.header.meshes[hit.mesh];
+    const m = scene.header.meshes[hit.mesh];
     const f = faceOfTri(st.model.faces, m, hit.tri);
     if (f < 0) return null;
     const g = geomOf(hit.mesh, Infinity);
@@ -312,7 +317,7 @@ export function createMeasure(deps) {
   // picks of faces, and a distance found elsewhere (the clearance check) is
   // that check's; neither is dragged.
   function dotAt(x, y) {
-    if (!st.on || !app.header) return null;
+    if (!st.on || !scene.header) return null;
     const v = projector();
     let best = null;
     for (const r of st.results) {
@@ -381,15 +386,15 @@ export function createMeasure(deps) {
     box.style.top = `${top}px`;
     const ctx = box.getContext('2d');
     const half = LOUPE / ZOOM / 2; // CSS px of the view either side of the centre
-    ctx.fillStyle = document.getElementById('stage').dataset.bg === 'paper' ? '#f4f4f2' : '#1d2127';
+    const ink = $('stage').dataset.bg === 'paper' ? INK.light : INK.dark;
+    ctx.fillStyle = ink.loupe;
     ctx.fillRect(0, 0, px, px);
     try {
       ctx.drawImage(src, (cx - half) * k, (cy - half) * k, 2 * half * k, 2 * half * k, 0, 0, px, px);
     } catch { /* a canvas that cannot be read leaves the plain backing */ }
     // the centre: a crosshair, and the snap ring when there is a snap
-    const paper = document.getElementById('stage').dataset.bg === 'paper';
     const c = px / 2;
-    ctx.strokeStyle = paper ? '#9a6b00' : '#ffd23f';
+    ctx.strokeStyle = ink.line;
     ctx.lineWidth = 1.5 * dpr;
     ctx.beginPath();
     ctx.moveTo(c - 10 * dpr, c); ctx.lineTo(c - 3 * dpr, c);
@@ -415,7 +420,7 @@ export function createMeasure(deps) {
     layer.replaceChildren();
     labels.replaceChildren();
     if (!st.on && !st.results.length) { drawLoupe({}); return; }
-    if (!app.header) return;
+    if (!scene.header) return;
     const v = projector();
     drawLoupe(v);
     for (const r of st.results) drawResult(v, r);
@@ -464,37 +469,38 @@ export function createMeasure(deps) {
   // picture (main.js savePicture): as draw() places them, at s device px per
   // CSS px; light chips on a light background (paper or white)
   function paint(ctx, s, light = false) {
-    if (!app.header || (!st.results.length && !st.holes)) return;
+    if (!scene.header || (!st.results.length && !st.holes)) return;
     const v = projector();
     const P = (p) => { const q = v.toScreen(p); return q && [q[0] * s, q[1] * s]; };
+    const ink = light ? INK.light : INK.dark;
     ctx.save();
     ctx.lineCap = 'round';
     for (const r of st.results) {
       const q = r.pts.map(P);
       if (q.some((x) => !x)) continue;
-      ctx.strokeStyle = light ? '#9a6b00' : '#ffd23f';
+      ctx.strokeStyle = ink.line;
       ctx.lineWidth = 2.5 * s;
       ctx.beginPath();
       q.forEach((x, i) => (i ? ctx.lineTo(...x) : ctx.moveTo(...x)));
       ctx.stroke();
-      ctx.fillStyle = light ? '#9a6b00' : '#ffd23f';
+      ctx.fillStyle = ink.line;
       for (const x of q) { ctx.beginPath(); ctx.arc(x[0], x[1], 4 * s, 0, 2 * Math.PI); ctx.fill(); }
       const at = r.mode === 'angle' ? q[1] : [(q[0][0] + q[q.length - 1][0]) / 2, (q[0][1] + q[q.length - 1][1]) / 2];
       ctx.font = `${12 * s}px system-ui, sans-serif`;
       const w = Math.max(ctx.measureText(r.main).width, r.sub ? ctx.measureText(r.sub).width * 0.85 : 0) + 12 * s;
       const h = (r.sub ? 32 : 18) * s;
       const x0 = at[0] - w / 2, y0 = at[1] - h - 8 * s;
-      ctx.fillStyle = light ? 'rgba(255,255,255,0.95)' : 'rgba(20,24,30,0.92)';
-      ctx.strokeStyle = light ? '#9a6b00' : '#ffd23f';
+      ctx.fillStyle = ink.label;
+      ctx.strokeStyle = ink.line;
       ctx.lineWidth = 1 * s;
       ctx.fillRect(x0, y0, w, h);
       ctx.strokeRect(x0, y0, w, h);
-      ctx.fillStyle = light ? '#111' : '#fff';
+      ctx.fillStyle = ink.text;
       ctx.textBaseline = 'top';
       ctx.fillText(r.main, x0 + 6 * s, y0 + 3 * s);
       if (r.sub) {
         ctx.font = `${10 * s}px system-ui, sans-serif`;
-        ctx.fillStyle = light ? '#444' : '#c9d1db';
+        ctx.fillStyle = ink.sub;
         ctx.fillText(r.sub, x0 + 6 * s, y0 + 18 * s);
       }
     }
@@ -503,10 +509,10 @@ export function createMeasure(deps) {
       st.holes.list.forEach((h, i) => {
         const q = P(h.centre);
         if (!q) return;
-        ctx.strokeStyle = i === st.holes.pick ? '#ffd23f' : '#5fd3ff';
+        ctx.strokeStyle = i === st.holes.pick ? INK.dark.line : HOLE;
         ctx.lineWidth = 2 * s;
         ctx.beginPath(); ctx.arc(q[0], q[1], 6 * s, 0, 2 * Math.PI); ctx.stroke();
-        ctx.fillStyle = light ? '#111' : '#fff';
+        ctx.fillStyle = ink.text;
         ctx.fillText(String(i + 1), q[0] + 8 * s, q[1] - 18 * s);
       });
     }
@@ -527,7 +533,7 @@ export function createMeasure(deps) {
     for (const b of $('measmode').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === st.mode));
     // Face needs the b-rep faces (a .cadmesh written before they were kept has none)
     const faceBtn = $('measmode').querySelector('[data-mode="face"]');
-    faceBtn.hidden = !(app.baseMesh && app.baseMesh.faces);
+    faceBtn.hidden = !(scene.mesh && scene.mesh.faces);
     $('measundo').disabled = !st.pending.length && !st.results.length;
     $('measclear').disabled = !st.pending.length && !st.results.length;
     const n = st.results.length;

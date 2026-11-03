@@ -60,6 +60,25 @@ test('a degree angle unit does not mislead it', () => {
 test('two shape contexts that disagree are mixed', () => {
   assert.equal(sourceUnits(step(MM + INCH + ctx(100, '#10') + angles(100) + ctx(200, '#14') + angles(200)), 'step'), 'mixed');
 });
+test('one unreadable context makes the unit unknown (null), not mixed', () => {
+  const lost = "#14=(CONVERSION_BASED_UNIT('X',#99)LENGTH_UNIT()NAMED_UNIT(#15));";
+  assert.equal(sourceUnits(step(MM + lost + ctx(100, '#10') + angles(100) + ctx(200, '#14') + angles(200)), 'step'), null);
+});
+test('a mm context and one of an unnamed factor (2 mm) are mixed', () => {
+  const two = INCH.replace('2.54E1', '2.');
+  assert.equal(sourceUnits(step(MM + two + ctx(100, '#10') + angles(100) + ctx(200, '#14') + angles(200)), 'step'), 'mixed');
+});
+test('two contexts both in mm are mm', () => {
+  const mm2 = INCH.replace('2.54E1', '1.');
+  assert.equal(sourceUnits(step(MM + mm2 + ctx(100, '#10') + angles(100) + ctx(200, '#14') + angles(200)), 'step'), 'mm');
+});
+test('every named factor reads back as its name (one table, js/units.js)', () => {
+  assert.equal(unitOfFactor(1609344), 'mi');
+  assert.equal(unitOfFactor(100), 'dm');
+  assert.equal(unitOfFactor(304.8), 'ft');
+  assert.equal(unitOfFactor(1200 / 3937 * 1000), 'US ft');
+  assert.equal(unitOfFactor(2), null);
+});
 test('a context no shape representation uses does not count', () => {
   // the inch context's representation is a draughting one, not a shape one
   const other = ctx(200, '#14', 'DRAUGHTING_MODEL');

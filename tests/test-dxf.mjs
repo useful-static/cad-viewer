@@ -238,5 +238,71 @@ test('caret notation: "^C" is U+0003, "^ " a caret, and caret() writes them back
   assert.notEqual(uncaret('a^Cb'), 'a^Cb');
 });
 
+// --- an untrusted drawing: bounded, and damaged values left out ---
+const ents = (...e) => dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...e.flat(), [0, 'ENDSEC'], [0, 'EOF']]);
+const blocks = (...b) => [[0, 'SECTION'], [2, 'BLOCKS'], ...b.flat(), [0, 'ENDSEC']];
+test('a 32767 × 32767 array of inserts is refused at once, not drawn until memory runs out', () => {
+  const s = dxf([...blocks([[0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0], [0, 'ENDBLK']]), [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [70, 32767], [71, 32767], [0, 'ENDSEC'], [0, 'EOF']]);
+  const t0 = Date.now();
+  assert.throws(() => parseDXF(s), /too large to draw here \(an array of 32767 × 32767/);
+  assert.ok(Date.now() - t0 < 1000);
+});
+test('blocks nested to fan out stop at the drawing budget', () => {
+  // each level inserts the one below 40 times: 40^5 = 1e8 lines
+  const lv = (k) => [[0, 'BLOCK'], [2, `L${k}`], [10, 0], [20, 0], ...Array.from({ length: 40 }, (_, i) => (k === 0
+    ? [[0, 'LINE'], [8, '0'], [10, i], [20, 0], [11, i], [21, 1]] : [[0, 'INSERT'], [8, '0'], [2, `L${k - 1}`], [10, i], [20, 0]])).flat(), [0, 'ENDBLK']];
+  const s = dxf([...blocks(...[0, 1, 2, 3, 4].map(lv)), [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'L4'], [10, 0], [20, 0], [0, 'ENDSEC'], [0, 'EOF']]);
+  assert.throws(() => parseDXF(s), /too large to draw here/);
+});
+test('an arc of 1e12° is one turn at most (it asked for 2e11 points); 370° is 10°', () => {
+  const d = parseDXF(ents([[0, 'ARC'], [8, '0'], [10, 0], [20, 0], [40, 1], [50, 0], [51, 1e12]]));
+  assert.ok(d.paths[0].pts.length < 200, `${d.paths[0].pts.length}`);
+  const q = parseDXF(ents([[0, 'ARC'], [8, '0'], [10, 0], [20, 0], [40, 1], [50, 0], [51, 370]])).paths[0].pts;
+  // a 10° arc: it ends at (cos 10°, sin 10°)
+  assert.ok(Math.abs(q[q.length - 2] - Math.cos(Math.PI / 18)) < 1e-9 && Math.abs(q[q.length - 1] - Math.sin(Math.PI / 18)) < 1e-9);
+});
+test('a clockwise hatch arc edge, 0° to 90° stored, is the quarter from 360° down to 270°', () => {
+  // a loop of one clockwise arc edge (73 = 0), radius 1 about the origin
+  const d = parseDXF(ents([[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, 0], [20, 0], [40, 1], [50, 0], [51, 90], [73, 0]]));
+  const p = d.paths[0].pts;
+  // starts at angle 0 (1, 0), ends at 270° (0, -1), every point in the fourth quadrant
+  assert.ok(Math.abs(p[0] - 1) < 1e-9 && Math.abs(p[1]) < 1e-9, `start ${p[0]},${p[1]}`);
+  assert.ok(Math.abs(p[p.length - 2]) < 1e-9 && Math.abs(p[p.length - 1] + 1) < 1e-9, `end ${p[p.length - 2]},${p[p.length - 1]}`);
+  for (let k = 0; k < p.length; k += 2) assert.ok(p[k] >= -1e-9 && p[k + 1] <= 1e-9, `point ${p[k]},${p[k + 1]}`);
+});
+test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
+  const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));
+  assert.equal(d.paths.length, 1);
+  assert.deepEqual(d.extents, { min: [0, 0], max: [5, 5] });
+});
+test('an ASCII DXF is read in its code page: 1252 before R2007, UTF-8 from it, GBK when it says so', () => {
+  const head = (ver, cp) => [[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, ver], ...(cp ? [[9, '$DWGCODEPAGE'], [3, cp]] : []), [0, 'ENDSEC']];
+  const body = (t) => [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, t], [0, 'ENDSEC'], [0, 'EOF']];
+  const bytes = (groups, enc) => enc(dxf(groups));
+  const latin = (s) => Uint8Array.from([...s].map((c) => c.charCodeAt(0))).buffer;
+  // "Ø20 ±0.1 90°" in Windows-1252 bytes, an R2000 file
+  assert.equal(parseDXF(bytes([...head('AC1015', 'ANSI_1252'), ...body('\xd820 \xb10.1 90\xb0')], latin)).texts[0].text, 'Ø20 ±0.1 90°');
+  // the same in UTF-8, an R2007 file
+  assert.equal(parseDXF(new TextEncoder().encode(dxf([...head('AC1021'), ...body('Ø20 ±0.1 90°')])).buffer).texts[0].text, 'Ø20 ±0.1 90°');
+  // GBK (素土 = CB D8 CD C1), an R2000 file of code page 936
+  assert.equal(parseDXF(latin(dxf([...head('AC1015', 'ANSI_936'), ...body('\xcb\xd8\xcd\xc1')]))).texts[0].text, '素土');
+});
+test('a truncated binary DXF: "ends inside a value", not the engine\'s DataView error', () => {
+  const s = 'AutoCAD Binary DXF\r\n\x1a\x00';
+  const b = new Uint8Array(s.length + 3);
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+  b[s.length] = 10; // group 10 (a double): two bytes of code, then only one byte of the 8
+  assert.throws(() => parseDXF(b.buffer), /the binary DXF ends inside a value/);
+});
+test('a rational quadratic spline of a quarter circle lies on the circle (weights, de Boor)', () => {
+  const w = Math.SQRT1_2;
+  const d = parseDXF(ents([[0, 'SPLINE'], [8, '0'], [70, 4], [71, 2], [72, 6], [73, 3], [40, 0], [40, 0], [40, 0], [40, 1], [40, 1], [40, 1],
+    [10, 1], [20, 0], [41, 1], [10, 1], [20, 1], [41, w], [10, 0], [20, 1], [41, 1]]));
+  const p = d.paths[0].pts;
+  assert.ok(p.length >= 8);
+  for (let k = 0; k < p.length; k += 2) assert.ok(Math.abs(Math.hypot(p[k], p[k + 1]) - 1) < 1e-9, `radius ${Math.hypot(p[k], p[k + 1])}`);
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

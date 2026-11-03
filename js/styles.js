@@ -12,14 +12,19 @@
 //
 // Paper styles draw on #f4f4f2; outline styles also draw the silhouette
 // candidates (the outlines of curved faces), since shading cannot show them.
+// seesHidden: edges behind faces are drawn, so Measure may snap to them.
+//
+// A new style is one row here plus its case in edgePasses(); main.js lists
+// every row in the Style select and both renderers draw whatever passes the
+// frame carries.
 
 export const STYLES = [
-  { id: 'shaded', label: 'Shaded', faces: 'shade', edges: false, outline: false, paper: false, hidden: false },
-  { id: 'edges', label: 'Shaded + edges', faces: 'shade', edges: true, outline: false, paper: false, hidden: false },
-  { id: 'hidden', label: 'Hidden line', faces: 'depth', edges: true, outline: true, paper: true, hidden: false },
-  { id: 'hiddengrey', label: 'Hidden grey', faces: 'depth', edges: true, outline: true, paper: true, hidden: true },
-  { id: 'wire', label: 'Wire', faces: 'none', edges: true, outline: true, paper: true, hidden: false },
-  { id: 'xray', label: 'X-ray', faces: 'xray', edges: true, outline: true, paper: false, hidden: false },
+  { id: 'shaded', label: 'Shaded', faces: 'shade', edges: false, outline: false, paper: false, hidden: false, seesHidden: false },
+  { id: 'edges', label: 'Shaded + edges', faces: 'shade', edges: true, outline: false, paper: false, hidden: false, seesHidden: false },
+  { id: 'hidden', label: 'Hidden line', faces: 'depth', edges: true, outline: true, paper: true, hidden: false, seesHidden: false },
+  { id: 'hiddengrey', label: 'Hidden grey', faces: 'depth', edges: true, outline: true, paper: true, hidden: true, seesHidden: true },
+  { id: 'wire', label: 'Wire', faces: 'none', edges: true, outline: true, paper: true, hidden: false, seesHidden: true },
+  { id: 'xray', label: 'X-ray', faces: 'xray', edges: true, outline: true, paper: false, hidden: false, seesHidden: true },
 ];
 
 export const styleById = (id) => STYLES.find((s) => s.id === id) || null;
@@ -49,8 +54,33 @@ export const PAPER_EDGES = {
   faded: ['#a8a8a4', '#bebeba'],
 };
 
-const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
-export const rgb = (h) => hex(h);
+// '#rrggbb' -> [r, g, b] in 0..1 (the colour picker's too: js/palettes.js hexToRgb)
+export const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+const hex = rgb;
+
+// A style's edge passes, in draw order: each a depth test ('lequal' |
+// 'greater' | 'always'), a colour mode (0 the face colour darkened, 1 the
+// paper colours by state, 2 the face colour lightened), a dash period in
+// device px, the paper colours ([r, g, b] by state), and selectedOnly. null:
+// the style draws no edges. scale: device px per CSS px. onLight: drawn on a
+// light ground, where X-ray's lightened edges would all but vanish, so they
+// take the paper colours.
+const DASH_PX = 6; // the hidden edges: 3 px drawn, 3 px gap
+const paperColours = (k) => ({ plain: rgb(PAPER_EDGES.plain[k]), selected: rgb(PAPER_EDGES.selected[k]), faded: rgb(PAPER_EDGES.faded[k]) });
+export function edgePasses(id, { scale = 1, onLight = false } = {}) {
+  const visible = { depth: 'lequal', mode: 1, colours: paperColours(0) };
+  switch (id) {
+    case 'edges': return [{ depth: 'lequal', mode: 0 }];
+    case 'hidden': return [visible];
+    // the hidden edges first, so a visible edge wins where they cross; only
+    // the selected or hovered parts' (every part's is a grey thicket on a
+    // dense model), so with nothing selected it reads as Hidden line
+    case 'hiddengrey': return [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: paperColours(1), selectedOnly: true }, visible];
+    case 'wire': return [{ ...visible, depth: 'always' }];
+    case 'xray': return [onLight ? { ...visible, depth: 'always' } : { depth: 'always', mode: 2 }];
+    default: return null;
+  }
+}
 
 // WCAG contrast ratio of two #rrggbb colours
 export function contrast(a, b) {

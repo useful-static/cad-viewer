@@ -63,5 +63,5 @@ test('the encoder keeps "recolour" (what split-board.mjs writes through)', () =>
   assert.equal(decodeCadmesh(none).header.recolour, undefined);
 });
 
-console.log(`${passed} passed, ${failed} failed`);
+console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

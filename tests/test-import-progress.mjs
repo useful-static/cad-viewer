@@ -114,5 +114,5 @@ test('the bar: done grows through the steps and stays under the total', () => {
   }
 });
 
-console.log(`${passed} passed, ${failed} failed`);
+console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

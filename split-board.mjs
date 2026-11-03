@@ -19,7 +19,8 @@
 // Works on .cadmesh files with the faces section (stp2mesh.mjs writes it):
 // a vertex belongs to exactly one b-rep face, so the cut never splits one.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh } from './js/cadmesh.js';
 
@@ -261,4 +262,5 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// run as a command (a path with a space or through a symlink included)
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) main();

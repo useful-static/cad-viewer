@@ -15,9 +15,7 @@ const TURNS = 12;
 const FRACS = [0.15, 0.5, 0.85];
 const PREFER_WEIGHT = 0.08;
 
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const norm = (a) => { const n = Math.hypot(...a); return a.map((v) => v / n); };
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+import { cross, dot, unit as norm } from './vec3.js';
 
 // Whether the ray p + t d (t > eps) passes through box b
 export function rayHitsBox(p, d, b, eps = 1e-6) {

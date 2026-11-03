@@ -9,35 +9,20 @@
 
 import { fetchModelLists } from './model-list.js';
 import { parseTour } from './tour.js';
+import { formatOfName, sniffFormat as sniffBytes } from './formats.js';
+import { directUrl } from './open-url.js';
 
-// The format a file's name says ("board.cadmesh.gz" -> "cadmesh")
-const EXT = {
-  cadmesh: 'cadmesh', stp: 'STEP', step: 'STEP', igs: 'IGES', iges: 'IGES', brep: 'BREP', brp: 'BREP',
-  stl: 'STL', obj: 'OBJ', ply: 'PLY', off: 'OFF', '3mf': '3MF', glb: 'glTF', gltf: 'glTF', dxf: 'DXF', zip: 'zip',
-};
+// The format a file's name says ("board.cadmesh.gz" -> "cadmesh"), by the viewer's own table
+// (js/formats.js)
 export function namedFormat(url) {
-  const path = new URL(url).pathname.toLowerCase().replace(/\.gz$/, '');
-  return EXT[path.split('.').pop()] || null;
+  const f = formatOfName(new URL(url).pathname);
+  return f ? f.label : null;
 }
 
-// The format a file's first bytes say (after gunzip), or null
+// The format a file's first bytes say (after gunzip), or null: the viewer's own sniff
 export function sniffFormat(bytes) {
-  const b = bytes;
-  const text = new TextDecoder('latin1').decode(b.subarray(0, Math.min(400, b.length))).replace(/^ï»¿/, '');
-  if (text.startsWith('CADM')) return 'cadmesh';
-  if (/^\s*ISO-10303-21\s*;/.test(text)) return 'STEP';
-  if (/^\s*DBRep_DrawableShape/.test(text)) return 'BREP';
-  if (text.startsWith('glTF')) return 'glTF';
-  if (text.startsWith('PK\x03\x04')) return 'zip';
-  if (/^ply\s/.test(text)) return 'PLY';
-  if (/^\s*(\d+\s*\n\s*)?0\s*\n\s*SECTION/.test(text) || text.startsWith('AutoCAD Binary DXF')) return 'DXF';
-  if (/^\s*solid[\s\S]*facet/.test(text)) return 'STL';
-  if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return 'glTF';
-  if (/^(\s*(#.*)?\n)*\s*(v|o|g|mtllib)\s/.test(text)) return 'OBJ';
-  if (/^\s*OFF\s/.test(text)) return 'OFF';
-  const line = text.split(/\r?\n/)[0];
-  if (line.length >= 73 && line[72] === 'S') return 'IGES';
-  return null;
+  const f = sniffBytes(bytes);
+  return f ? f.label : null;
 }
 // (3MF and a zip of models are both zips; a binary STL has no magic: its
 // header is free text, so it is judged by its name)
@@ -93,9 +78,12 @@ function refused(e) {
 // One file: answered, CORS, found, size; with sniff, its format too.
 // -> { ok, level: 'ok' | 'warn' | 'bad', detail, url }
 export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 'GET' } = {}) {
+  // a host's share page (a GitHub blob, a Dropbox dl=0 link) is fetched as the file it shares,
+  // as the viewer fetches it (js/open-url.js)
+  const fetchUrl = /^https?:/i.test(url) ? directUrl(url).url : url;
   let res;
   try {
-    res = await fetchFn(url, sniff ? { headers: { Range: 'bytes=0-65535' }, cache: 'no-store' } : { method, cache: 'no-store' });
+    res = await fetchFn(fetchUrl, sniff ? { headers: { Range: 'bytes=0-65535' }, cache: 'no-store' } : { method, cache: 'no-store' });
   } catch (e) {
     return { level: 'bad', detail: refused(e), url };
   }
@@ -111,7 +99,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   if (!total && res.status !== 206) total = Number(res.headers.get('content-length')) || null;
   if (!total && res.status === 206) {
     try {
-      const h = await fetchFn(url, { method: 'HEAD', cache: 'no-store' });
+      const h = await fetchFn(fetchUrl, { method: 'HEAD', cache: 'no-store' });
       if (h.ok) total = Number(h.headers.get('content-length')) || null;
     } catch { /* the size stays unknown */ }
   }

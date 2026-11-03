@@ -6,7 +6,7 @@
 //   node tests/test-mesh-formats.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { meshFormatOf, parseMesh } from '../js/mesh-formats.js';
+import { meshFormatOf, parseMesh, unzip } from '../js/mesh-formats.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 
 let passed = 0;
@@ -182,6 +182,74 @@ await test('glTF needing Draco: refused by name', async () => {
 await test('a .gltf without its .bin: says which file to drop with it', async () => {
   const j = enc(JSON.stringify({ asset: { version: '2.0' }, buffers: [{ uri: 'cube.bin', byteLength: 4 }], meshes: [], nodes: [] }));
   await assert.rejects(parseMesh('gltf', j, 'x.gltf'), /cube\.bin/);
+});
+
+// --- damaged files: refused in plain words, quickly, never a hang or an engine error ---
+await test('a coloured ASCII PLY of 200 k vertices opens (its colour scale overflowed the stack)', async () => {
+  const n = 200000;
+  const verts = [];
+  for (let i = 0; i < n; i++) verts.push(`${i % 1000} ${Math.floor(i / 1000)} 0 200 100 50`);
+  const faces = [];
+  for (let i = 0; i + 1001 < n; i += 997) faces.push(`3 ${i} ${i + 1} ${i + 1000}`);
+  const ply = enc(`ply\nformat ascii 1.0\nelement vertex ${n}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face ${faces.length}\nproperty list uchar int vertex_indices\nend_header\n${verts.join('\n')}\n${faces.join('\n')}\n`);
+  const model = await parseMesh('ply', ply, 'big.ply');
+  assert.ok(model.meshes[0].indices.length > 0);
+});
+await test('counts larger than the file: refused at once (OFF, ASCII PLY, binary PLY)', async () => {
+  const t0 = Date.now();
+  await assert.rejects(parseMesh('off', enc('OFF\n1e999 0 0\n'), 'x.off'), /not an OFF file|damaged/);
+  await assert.rejects(parseMesh('off', enc('OFF\n30000000 1 0\n0 0 0\n'), 'x.off'), /damaged/);
+  await assert.rejects(parseMesh('ply', enc('ply\nformat ascii 1.0\nelement vertex 1e999\nproperty float x\nend_header\n1\n'), 'x.ply'), /damaged/);
+  await assert.rejects(parseMesh('ply', enc('ply\nformat binary_little_endian 1.0\nelement vertex 1000\nproperty float x\nend_header\n\0\0\0\0'), 'x.ply'), /damaged/);
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+});
+await test('a face naming a vertex the file does not have: refused, naming it', async () => {
+  await assert.rejects(parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 9\n'), 'x.obj'), /x\.obj is damaged: "f 1 2 9" refers to vertex 9 of 3/);
+  await assert.rejects(parseMesh('off', enc('OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 7\n'), 'x.off'), /refers to vertex 8 of 3/);
+});
+await test('a broken zip: "damaged", not the engine\'s DataView error; an entry over the limit refused', async () => {
+  const z = new Uint8Array(zipStored([['a.txt', new TextEncoder().encode('hello')]]));
+  // the central directory entry's local-header offset (+42) pointed past the end
+  const cd = z.length - 22 - (46 + 5);
+  const bad = z.slice();
+  new DataView(bad.buffer).setUint32(cd + 42, 0x7fffffff, true);
+  await assert.rejects((async () => { const u = await unzip(bad.buffer); await u.get('a.txt'); })(), /damaged zip/);
+  // a deflated entry claiming 3 GB unpacked is refused before inflating
+  const big = z.slice();
+  const dvb = new DataView(big.buffer);
+  dvb.setUint16(cd + 10, 8, true);
+  dvb.setUint32(cd + 24, 3 * 2 ** 30, true);
+  const u = await unzip(big.buffer);
+  await assert.rejects(u.get('a.txt'), /unpacks to over 2 GB/);
+});
+await test('a .gltf whose buffer is a base64 data: URI opens (the URI\'s text was read as the buffer)', async () => {
+  const f = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const b64 = Buffer.from(f.buffer).toString('base64');
+  const j = enc(JSON.stringify({ asset: { version: '2.0' }, buffers: [{ uri: `data:application/octet-stream;base64,${b64}`, byteLength: 36 }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }], accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }] }));
+  const model = await parseMesh('gltf', j, 'tri.gltf');
+  const p = model.meshes[0].positions;
+  // metres to mm: the second corner at x = 1000
+  assert.ok([...p].some((x, i) => i % 3 === 0 && Math.abs(x - 1000) < 1e-3), `positions ${[...p]}`);
+});
+await test('a damaged glTF: a cycle, a missing scene or node, a short buffer, bad JSON, a long chunk', async () => {
+  const g = (o) => enc(JSON.stringify({ asset: { version: '2.0' }, ...o }));
+  await assert.rejects(parseMesh('gltf', g({ scenes: [{ nodes: [0] }], nodes: [{ children: [0] }] }), 'x.gltf'), /node 0 is its own ancestor/);
+  await assert.rejects(parseMesh('gltf', g({ scene: 3, scenes: [{ nodes: [] }], nodes: [] }), 'x.gltf'), /scene 3 is not there/);
+  await assert.rejects(parseMesh('gltf', g({ scenes: [{ nodes: [5] }], nodes: [] }), 'x.gltf'), /node 5 is not there/);
+  const shortBuf = g({ buffers: [{ uri: 'data:application/octet-stream;base64,AAAA', byteLength: 3 }], bufferViews: [{ buffer: 0, byteLength: 3 }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }] });
+  await assert.rejects(parseMesh('gltf', shortBuf, 'x.gltf'), /accessor 0 reads past the end of its buffer/);
+  await assert.rejects(parseMesh('gltf', enc('{ not json'), 'x.gltf'), /x\.gltf is damaged: its JSON does not parse/);
+  const glb = new ArrayBuffer(20);
+  const dv = new DataView(glb);
+  dv.setUint32(0, 0x46546c67, true); dv.setUint32(12, 1000, true); dv.setUint32(16, 0x4e4f534a, true);
+  await assert.rejects(parseMesh('glb', glb, 'x.glb'), /x\.glb is damaged: a chunk runs past the end/);
+});
+await test('triangles with no area: said so, not "holds no faces"', async () => {
+  await assert.rejects(parseMesh('stl', enc('solid z\n facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 0 0 0\n   vertex 0 0 0\n  endloop\n endfacet\nendsolid z\n'), 'z.stl'), /every triangle has no area/);
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

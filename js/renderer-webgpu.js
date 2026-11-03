@@ -3,6 +3,7 @@
 // state texture and clip plane as the WebGL backend (renderer-webgl.js).
 
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
+import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
 // The ground shadow, as renderer-webgl.js's VS_GROUND / FS_GROUND: a quad
 // centre + x * ax + y * ay over x, y in [-1, 1], dark at the middle and
@@ -271,8 +272,8 @@ fn edgeOut(corner : vec2f, p0 : vec3f, p1 : vec3f, idc : vec4f, col : vec4f) -> 
 }
 `;
 
-const EDGE_STRIDE = 32; // p0 f32x3, p1 f32x3, id u8x4, colour u8x4
-const SIL_STRIDE = 48;  // an edge instance, then two normals snorm16x4
+// EDGE_STRIDE (p0 f32x3, p1 f32x3, id u8x4, colour u8x4) and SIL_STRIDE (an
+// edge instance, then two normals snorm16x4): js/edges.js, which writes them
 
 const MSAA = 4;
 const INIT_TIMEOUT_MS = 6000;
@@ -425,13 +426,19 @@ export class WebGPURenderer {
       entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
     });
     const edgeLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bgl, this.passBgl] });
-    this.passSlots = [0, 1, 2, 3].map(() => {
-      const buf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      return { buf, bind: device.createBindGroup({ layout: this.passBgl, entries: [{ binding: 0, resource: { buffer: buf } }] }) };
-    });
+    // a slot per pass, made when a frame first carries that many (a style
+    // with more passes than any before it draws them all, never a cut list)
+    this.passSlots = [];
+    this.passSlot = (k) => {
+      while (this.passSlots.length <= k) {
+        const buf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.passSlots.push({ buf, bind: device.createBindGroup({ layout: this.passBgl, entries: [{ binding: 0, resource: { buffer: buf } }] }) });
+      }
+      return this.passSlots[k];
+    };
     const inst = [{ shaderLocation: 1, offset: 0, format: 'float32x3' }, { shaderLocation: 2, offset: 12, format: 'float32x3' },
       { shaderLocation: 3, offset: 24, format: 'unorm8x4' }, { shaderLocation: 4, offset: 28, format: 'unorm8x4' }];
-    const silInst = [...inst, { shaderLocation: 5, offset: 32, format: 'snorm16x4' }, { shaderLocation: 6, offset: 40, format: 'snorm16x4' }];
+    const silInst = [...inst, { shaderLocation: 5, offset: EDGE_STRIDE, format: 'snorm16x4' }, { shaderLocation: 6, offset: EDGE_STRIDE + 8, format: 'snorm16x4' }];
     // one pipeline per (depth test, boundary or silhouette), made when first used
     this.edgePipes = new Map();
     this.edgePipe = (depth, sil) => {
@@ -711,17 +718,18 @@ export class WebGPURenderer {
       // the hidden parts as ghosts, over the shown faces, under the edges
       if (frame.ghost && faces !== 'none') this._encodeDraw(pass, 'ghost');
       if (edges) {
-        const passes = (frame.edgePasses || [{ depth: 'lequal', mode: 0 }]).slice(0, this.passSlots.length);
+        const passes = frame.edgePasses || [{ depth: 'lequal', mode: 0 }];
         const outline = frame.style && frame.style.outline && this.silCount;
         passes.forEach((ps, k) => {
           const c = ps.colours || {};
           const z = [0, 0, 0];
           const pf = new Float32Array([ps.mode || 0, ps.dash || 0, ps.selectedOnly ? 1 : 0, 0, ...(c.plain || z), 1, ...(c.selected || z), 1, ...(c.faded || z), 1]);
-          this.device.queue.writeBuffer(this.passSlots[k].buf, 0, pf);
+          const slot = this.passSlot(k);
+          this.device.queue.writeBuffer(slot.buf, 0, pf);
           const draw = (buf, count, sil) => {
             pass.setPipeline(this.edgePipe(ps.depth || 'lequal', sil));
             pass.setBindGroup(0, this.bind);
-            pass.setBindGroup(1, this.passSlots[k].bind);
+            pass.setBindGroup(1, slot.bind);
             pass.setVertexBuffer(0, this.cornerBuf);
             pass.setVertexBuffer(1, buf);
             pass.draw(4, count);

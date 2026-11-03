@@ -13,6 +13,8 @@
 //
 // Pure ES module, no DOM.
 
+import { cross, dot, sub } from './vec3.js';
+
 const LEAF = 4;
 
 // Hoare-style select: order[lo..hi] partitioned so order[k] has the k-th centre on axis a
@@ -68,9 +70,6 @@ function boxDist2(A, i, B, j) {
   return d;
 }
 
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const madd = (a, b, s) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 

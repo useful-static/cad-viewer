@@ -3,7 +3,7 @@
 // DWG version) against the reader's js/dwg.js dwgToPairs output. Used by validate-dwg.mjs and
 // validate-dwg-versions.mjs, so both judge by the same rules.
 import { readFileSync } from 'node:fs';
-import { uncaret, valueKind } from '../js/dxf.js';
+import { uncaret, valueKind, dxfText } from '../js/dxf.js';
 
 // the groups compared per DXF type (a group absent from the key is not compared)
 export const GROUPS = {
@@ -17,10 +17,6 @@ export const GROUPS = {
 // DXF defaults of compared groups a writer may leave out
 const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' }, POLYLINE: { 71: '0', 72: '0' } };
 
-// a DXF $DWGCODEPAGE (ANSI_936...) as a TextDecoder label
-const CP = { ANSI_874: 'windows-874', ANSI_932: 'shift_jis', ANSI_936: 'gbk', ANSI_949: 'euc-kr', ANSI_950: 'big5' };
-const cpLabel = (cp) => CP[cp] || (/^ANSI_(125\d)$/.test(cp) ? `windows-${cp.slice(5)}` : 'windows-1252');
-
 // \M+N: 1 Japanese, 2 Traditional Chinese, 3 Korean, 5 Simplified Chinese (DXF reference)
 const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
 export function unescapeDxf(s) {
@@ -30,14 +26,9 @@ export function unescapeDxf(s) {
 }
 
 export function dxfPairs(path) {
-  // DXF from AutoCAD 2007 (AC1021) on is UTF-8; before, the drawing's ANSI code page
-  // ($DWGCODEPAGE: a Chinese drawing's DXF is GBK, ANSI_936)
-  const buf = readFileSync(path);
-  const head = buf.subarray(0, 4000).toString('latin1');
-  const m = /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/.exec(head);
-  const cp = /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/.exec(head);
-  const old = !(m && Number(m[1]) >= 1021);
-  const t = new TextDecoder(old ? cpLabel(cp ? cp[1].toUpperCase() : '') : 'utf-8').decode(buf).split(/\r?\n/);
+  // read in the drawing's own code page, as the viewer reads it (js/dxf.js dxfText: UTF-8 from
+  // R2007; before, $DWGCODEPAGE: a Chinese drawing's DXF is GBK, ANSI_936)
+  const t = dxfText(readFileSync(path)).split(/\r?\n/);
   const out = [];
   for (let i = 0; i + 1 < t.length; i += 2) {
     const c = Number(t[i].trim());

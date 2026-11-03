@@ -13,7 +13,12 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-export const MESH_EXTS = ['stl', 'obj', 'ply', 'off', '3mf', 'glb', 'gltf'];
+import { MAX_FILE_BYTES, inflate } from './cadmesh.js';
+import { FORMATS } from './formats.js';
+import { LENGTH_MM } from './units.js';
+
+// the mesh extensions, from the viewer's one format table (js/formats.js)
+export const MESH_EXTS = FORMATS.filter((f) => f.kind === 'mesh').flatMap((f) => f.ext);
 const CREASE_DEG = 30;
 
 // The mesh format a file is, by its name and first bytes, or null
@@ -49,9 +54,24 @@ const text = (buf) => new TextDecoder().decode(buf);
 
 // raw bodies [{ name, pos: number[], tri: number[], col?: [r,g,b] per
 // triangle or null, color }] -> the encodeCadmesh model, one tree node
+// a face pointing past the vertices, or a coordinate that is not a number, is a damaged file:
+// said so here, not met later as NaN geometry ("facts are not one closed / area / volume")
+function checkBodies(rootName, bodies) {
+  for (const b of bodies) {
+    const n = b.pos.length / 3;
+    for (const x of b.pos) if (!Number.isFinite(x)) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
+    for (const t of b.tri) if (!Number.isInteger(t) || t < 0 || t >= n) throw new Error(`${rootName} is damaged: a face refers to vertex ${t + 1} of ${n}`);
+  }
+}
+
 function finish(rootName, bodies, sourceUnits, root = null) {
-  const meshes = bodies.filter((b) => b.tri.length).map(weld);
-  if (!meshes.length) throw new Error(`${rootName} has no triangles to show`);
+  checkBodies(rootName, bodies);
+  const welded = bodies.filter((b) => b.tri.length).map(weld);
+  if (!welded.some((m) => m.indices.length)) {
+    throw new Error(`${rootName} has no triangles to show${welded.length ? ' (every triangle has no area)' : ''}`);
+  }
+  // (a tree given by the file names its meshes by number: they are kept as they are)
+  const meshes = root ? welded : welded.filter((m) => m.indices.length);
   const model = { units: 'mm', meshes, root: root || { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
   if (sourceUnits) model.sourceUnits = sourceUnits;
   return model;
@@ -180,7 +200,13 @@ function parseOBJ(s, files, base) {
     } else if (k === 'usemtl') mat = sp.slice(1).join(' ');
     else if (k === 'f') {
       if (!cur) start(base);
-      const ids = sp.slice(1).map((x) => { const i = parseInt(x, 10); return i < 0 ? v.length / 3 + i : i - 1; });
+      const ids = sp.slice(1).map((x) => {
+        const i = parseInt(x, 10);
+        const k = i < 0 ? v.length / 3 + i : i - 1;
+        // (1-based, negative from the end: 0 or one past the vertices is a damaged file)
+        if (!Number.isInteger(k) || k < 0 || k >= v.length / 3) throw new Error(`${base}.obj is damaged: "${line}" refers to vertex ${x} of ${v.length / 3}`);
+        return k;
+      });
       const loc = ids.map((i) => {
         let j = cur.map.get(i);
         if (j === undefined) { j = cur.pos.length / 3; cur.map.set(i, j); cur.pos.push(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]); }
@@ -243,8 +269,12 @@ function parsePLY(buf, base) {
       for (let i = 1; i + 1 < ids.length; i++) tri.push(ids[0], ids[i], ids[i + 1]);
     }
   };
+  // a count the data cannot hold is a damaged header, refused before looping on it (1e999
+  // vertices looped until the tab ran out of memory)
+  const badCount = (e, room) => !Number.isInteger(e.n) || e.n < 0 || e.n > room;
   if (fmt === 'ascii') {
     const toks = new TextDecoder('latin1').decode(u8.subarray(bodyStart)).trim().split(/\s+/);
+    for (const e of els) if (badCount(e, toks.length)) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
     let p = 0;
     for (const e of els) {
       for (let i = 0; i < e.n; i++) {
@@ -260,7 +290,11 @@ function parsePLY(buf, base) {
     if (!le && fmt !== 'binary_big_endian') throw new Error(`${base}.ply: format ${fmt} is not ascii or binary`);
     const dv = new DataView(buf);
     let o = bodyStart;
-    const rd = (t) => { const v = dv[`get${t}`](o, le); o += PLY_SIZE[t]; return v; };
+    for (const e of els) if (badCount(e, buf.byteLength - bodyStart)) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
+    const rd = (t) => {
+      if (o + PLY_SIZE[t] > buf.byteLength) throw new Error(`${base}.ply is damaged: its data ends early`);
+      const v = dv[`get${t}`](o, le); o += PLY_SIZE[t]; return v;
+    };
     for (const e of els) {
       for (let i = 0; i < e.n; i++) {
         const rec = {};
@@ -274,7 +308,10 @@ function parsePLY(buf, base) {
   const body = { name: base, pos, tri };
   if (hasCol) {
     // vertex colours (0-255) become each triangle's mean, so the weld keeps them
-    const scale = Math.max(...vcol.filter(Boolean).flat()) > 1 ? 255 : 1;
+    // (the largest by a loop: spread into Math.max, a 200 k-vertex file overflowed the stack)
+    let top = 0;
+    for (const c of vcol) if (c) for (const x of c) if (x > top) top = x;
+    const scale = top > 1 ? 255 : 1;
     body.col = [];
     for (let t = 0; t < tri.length / 3; t++) {
       const cs = [0, 1, 2].map((c) => vcol[tri[t * 3 + c]] || [scale * 0.72, scale * 0.74, scale * 0.78]);
@@ -291,20 +328,23 @@ function parseOFF(s, base) {
   if (/^[CN]?OFF$/.test(toks[0])) p++;
   const nv = +toks[p++], nf = +toks[p++];
   p++; // edges
+  // counts checked before they are looped on: 1e999 vertices looped until the tab ran out of
+  // memory; each vertex takes 3 tokens and each face at least 4
+  if (!Number.isInteger(nv) || !Number.isInteger(nf) || nv < 0 || nf < 0) throw new Error(`${base}.off: not an OFF file (no vertex and face counts)`);
+  if (nv * 3 + nf * 4 > toks.length - p) throw new Error(`${base}.off is damaged: it counts ${nv} vertices and ${nf} faces, more than the file holds`);
   const pos = [];
   for (let i = 0; i < nv; i++) { pos.push(+toks[p], +toks[p + 1], +toks[p + 2]); p += 3; }
-  const tri = [], col = [];
-  let anyCol = false;
+  const tri = [];
   for (let i = 0; i < nf; i++) {
     const c = +toks[p++];
+    if (!Number.isInteger(c) || c < 0 || c > toks.length - p) throw new Error(`${base}.off is damaged: face ${i + 1} counts ${toks[p - 1]} vertices`);
     const ids = toks.slice(p, p + c).map(Number);
     p += c;
     // an optional colour to the end of the line is not separable from the next
     // face once split on whitespace: OFF colours are left out
-    for (let k = 1; k + 1 < ids.length; k++) { tri.push(ids[0], ids[k], ids[k + 1]); col.push(null); }
+    for (let k = 1; k + 1 < ids.length; k++) tri.push(ids[0], ids[k], ids[k + 1]);
   }
-  if (!Number.isFinite(nv) || !Number.isFinite(nf)) throw new Error(`${base}.off: not an OFF file (no vertex and face counts)`);
-  return [{ name: base, pos, tri, col: anyCol ? col : null }];
+  return [{ name: base, pos, tri, col: null }];
 }
 
 // ---------- 3MF ----------
@@ -312,25 +352,33 @@ function parseOFF(s, base) {
 // (stored or deflated; paths matched without case or a leading /)
 export async function unzip(buf) {
   const dv = new DataView(buf);
+  const len = buf.byteLength;
+  // every offset the archive gives is checked against its size: a broken zip is refused as
+  // "damaged", not met as the engine's "Offset is outside the bounds of the DataView"
+  const need = (at, n, what) => { if (!(at >= 0 && at + n <= len)) throw new Error(`a damaged zip (${what} lies outside the file)`); };
   // the end of central directory record, searched back from the end
   let e = -1;
-  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  for (let i = len - 22; i >= Math.max(0, len - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
   if (e < 0) throw new Error('not a zip file (no central directory)');
   const n = dv.getUint16(e + 10, true);
   let o = dv.getUint32(e + 16, true);
   if (o === 0xffffffff || n === 0xffff) throw new Error('a zip64 archive, which this viewer does not read');
   const out = new Map();
   for (let i = 0; i < n; i++) {
+    need(o, 46, 'a directory entry');
     if (dv.getUint32(o, true) !== 0x02014b50) throw new Error('a damaged zip central directory');
     const method = dv.getUint16(o + 10, true);
-    const csize = dv.getUint32(o + 20, true);
+    const csize = dv.getUint32(o + 20, true), usize = dv.getUint32(o + 24, true);
     const nlen = dv.getUint16(o + 28, true), xlen = dv.getUint16(o + 30, true), clen = dv.getUint16(o + 32, true);
     const lho = dv.getUint32(o + 42, true);
+    need(o + 46, nlen, 'an entry name');
     const name = new TextDecoder().decode(new Uint8Array(buf, o + 46, nlen));
     o += 46 + nlen + xlen + clen;
+    need(lho, 30, `${name}'s header`);
     const lnl = dv.getUint16(lho + 26, true), lxl = dv.getUint16(lho + 28, true);
+    need(lho + 30 + lnl + lxl, csize, `${name}'s data`);
     const data = new Uint8Array(buf, lho + 30 + lnl + lxl, csize);
-    out.set(name.replace(/^\//, '').toLowerCase(), { method, data, name });
+    out.set(name.replace(/^\//, '').toLowerCase(), { method, data, name, usize });
   }
   return {
     names: [...out.values()].map((f) => f.name),
@@ -340,9 +388,9 @@ export async function unzip(buf) {
       if (!f) return null;
       if (f.method === 0) return f.data.slice().buffer;
       if (f.method !== 8) throw new Error(`zip entry ${p} uses compression method ${f.method}`);
-      if (typeof DecompressionStream !== 'function') throw new Error('this browser cannot unpack a deflated zip entry');
-      const s = new Blob([f.data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-      return new Response(s).arrayBuffer();
+      // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
+      if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+      return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES);
     },
   };
 }
@@ -362,7 +410,7 @@ function xmlTags(s) {
   return out;
 }
 
-const UNIT_MM = { micron: 0.001, millimeter: 1, centimeter: 10, inch: 25.4, foot: 304.8, meter: 1000 };
+// 3MF's unit attribute -> the viewer's unit name (js/units.js holds mm per unit)
 const UNIT_NAME = { micron: 'um', millimeter: 'mm', centimeter: 'cm', inch: 'in', foot: 'ft', meter: 'm' };
 
 async function parse3MF(buf, base) {
@@ -378,7 +426,7 @@ async function parse3MF(buf, base) {
   const tags = xmlTags(text(xml));
   const modelTag = tags.find((x) => x.tag === 'model');
   const unit = (modelTag && modelTag.attrs.unit) || 'millimeter';
-  const k = UNIT_MM[unit] ?? 1;
+  const k = LENGTH_MM[UNIT_NAME[unit]] ?? 1;
   const objects = new Map(); // id -> { name, verts, tris, pids, comps }
   const mats = new Map();    // basematerials id -> [[r,g,b], ...]
   const build = [];
@@ -424,6 +472,7 @@ async function parse3MF(buf, base) {
   const root = { name: base, meshes: [], children: [] };
   for (const it of build) { const n = node(it.id, it.m, 0); if (n) root.children.push(n); }
   // (bodies are welded in order, so node mesh indices stay right)
+  checkBodies(`${base}.3mf`, bodies);
   const meshes = bodies.map(weld);
   if (!meshes.length) throw new Error(`${base}.3mf has no triangles to show`);
   return { units: 'mm', meshes, root, sourceUnits: UNIT_NAME[unit] || undefined };
@@ -450,6 +499,11 @@ function mulAffine(a, b) {
 const COMP = { 5120: [Int8Array, 127], 5121: [Uint8Array, 255], 5122: [Int16Array, 32767], 5123: [Uint16Array, 65535], 5125: [Uint32Array, 0], 5126: [Float32Array, 0] };
 const NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 
+// a glTF's JSON, or a plain "damaged" in place of the engine's parse error
+function parseJSON(s, what) {
+  try { return JSON.parse(s); } catch (e) { throw new Error(`${what} is damaged: its JSON does not parse (${e.message})`); }
+}
+
 async function parseGLTF(buf, format, base, files) {
   let json, bin = null;
   if (format === 'glb') {
@@ -458,31 +512,40 @@ async function parseGLTF(buf, format, base, files) {
     let o = 12;
     while (o + 8 <= buf.byteLength) {
       const len = dv.getUint32(o, true), type = dv.getUint32(o + 4, true);
-      if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, o + 8, len)));
+      if (o + 8 + len > buf.byteLength) throw new Error(`${base}.glb is damaged: a chunk runs past the end of the file`);
+      if (type === 0x4e4f534a) json = parseJSON(new TextDecoder().decode(new Uint8Array(buf, o + 8, len)), `${base}.glb`);
       else if (type === 0x004e4942) bin = buf.slice(o + 8, o + 8 + len);
       o += 8 + len;
     }
-  } else json = JSON.parse(text(buf));
+  } else json = parseJSON(text(buf), `${base}.gltf`);
   if (!json) throw new Error(`${base}: no glTF JSON`);
   const refused = [...(json.extensionsRequired || [])].filter((x) => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_mesh_quantization'].includes(x));
   if (refused.length) throw new Error(`${base} needs ${refused.join(', ')}, which this viewer does not decode: export it without compression`);
   const buffers = await Promise.all((json.buffers || []).map(async (b, i) => {
     if (b.uri === undefined) { if (i === 0 && bin) return bin; throw new Error(`${base}: buffer ${i} has no data`); }
-    if (b.uri.startsWith('data:')) return new Response(b.uri).arrayBuffer();
+    // (a data: URI decoded by fetch: new Response(uri) gave the URI's own text as the buffer)
+    if (b.uri.startsWith('data:')) return (await fetch(b.uri)).arrayBuffer();
     const f = files.get(decodeURIComponent(b.uri).split('/').pop().toLowerCase());
     if (!f) throw new Error(`${base}.gltf needs ${b.uri}: drop it together with the .gltf`);
     return f;
   }));
+  const damaged = (what) => new Error(`${base} is damaged: ${what}`);
   const acc = (i) => {
-    const a = json.accessors[i];
+    const a = json.accessors && json.accessors[i];
+    if (!a || !COMP[a.componentType] || !NCOMP[a.type] || !Number.isInteger(a.count) || a.count < 0) throw damaged(`accessor ${i} is missing or malformed`);
     const [Ctor, max] = COMP[a.componentType];
     const nc = NCOMP[a.type];
     const out = new Float64Array(a.count * nc);
     if (a.bufferView === undefined) return out;
-    const bv = json.bufferViews[a.bufferView];
-    const bytes = new DataView(buffers[bv.buffer], (bv.byteOffset || 0) + (a.byteOffset || 0));
+    const bv = json.bufferViews && json.bufferViews[a.bufferView];
+    const data = bv && buffers[bv.buffer];
+    if (!data) throw damaged(`accessor ${i} names a buffer view that is not there`);
+    const start = (bv.byteOffset || 0) + (a.byteOffset || 0);
     const size = Ctor.BYTES_PER_ELEMENT;
     const stride = bv.byteStride || size * nc;
+    // every read inside the buffer (checked once, not met as a DataView RangeError)
+    if (a.count && start + (a.count - 1) * stride + nc * size > data.byteLength) throw damaged(`accessor ${i} reads past the end of its buffer`);
+    const bytes = new DataView(data, start);
     const get = { 1: (o) => (Ctor === Int8Array ? bytes.getInt8(o) : bytes.getUint8(o)), 2: (o) => (Ctor === Int16Array ? bytes.getInt16(o, true) : bytes.getUint16(o, true)),
       4: (o) => (Ctor === Float32Array ? bytes.getFloat32(o, true) : bytes.getUint32(o, true)) }[size];
     for (let e = 0; e < a.count; e++) {
@@ -504,12 +567,20 @@ async function parseGLTF(buf, format, base, files) {
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
   }));
   const bodies = [];
+  // the node tree walked once per path: a node among its own ancestors (a cycle), a missing
+  // node, or a tree deeper than 64 is a damaged file (a self-child overflowed the stack)
+  const onPath = new Set();
   const nodeOf = (ni, parent, depth) => {
-    const nd = json.nodes[ni];
+    const nd = json.nodes && json.nodes[ni];
+    if (!nd) throw damaged(`node ${ni} is not there`);
+    if (onPath.has(ni)) throw damaged(`node ${ni} is its own ancestor`);
+    if (depth > 64) throw damaged('its node tree is more than 64 deep');
+    onPath.add(ni);
     const m = mul4(parent, localMatrix(nd));
     const n = { name: nd.name || `node ${ni}`, meshes: [], children: [] };
-    if (nd.mesh !== undefined && depth < 64) {
-      const me = json.meshes[nd.mesh];
+    if (nd.mesh !== undefined) {
+      const me = json.meshes && json.meshes[nd.mesh];
+      if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
       (me.primitives || []).forEach((pr, k) => {
         if ((pr.mode ?? 4) !== 4) return; // points, lines, strips: not drawn
         if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${base} uses Draco compression, which this viewer does not decode`);
@@ -532,10 +603,13 @@ async function parseGLTF(buf, format, base, files) {
       });
     }
     for (const c of nd.children || []) n.children.push(nodeOf(c, m, depth + 1));
+    onPath.delete(ni);
     return n;
   };
   const scene = json.scenes ? json.scenes[json.scene || 0] : { nodes: (json.nodes || []).map((_, i) => i) };
+  if (!scene) throw damaged(`its scene ${json.scene || 0} is not there`);
   const root = { name: base, meshes: [], children: (scene.nodes || []).map((ni) => nodeOf(ni, IDENT, 0)) };
+  checkBodies(base, bodies);
   const meshes = bodies.map(weld);
   if (!meshes.length) throw new Error(`${base} has no triangles to show`);
   return { units: 'mm', meshes, root, sourceUnits: 'm' };

@@ -7,14 +7,28 @@
 // or a section position one place fewer. Areas, volumes and masses have four
 // significant digits, in a unit that keeps the number readable.
 
+// Every length unit a file may declare, by the one short name the viewer uses
+// for it (header.sourceUnits, the info panel), and mm per unit. Each reader
+// maps its own format's vocabulary to these names (DXF $INSUNITS codes,
+// js/dxf.js; 3MF's "millimeter", js/mesh-formats.js; a STEP or IGES unit,
+// js/source-units.js) and takes the factor from here.
+export const LENGTH_MM = {
+  nm: 1e-6, um: 0.001, mm: 1, cm: 10, dm: 100, m: 1000, dam: 1e4, hm: 1e5, km: 1e6, Gm: 1e12,
+  'Å': 1e-7, uin: 25.4e-6, mil: 0.0254, in: 25.4, ft: 304.8, 'US ft': 1200 / 3937 * 1000, yd: 914.4,
+  mi: 1609344, AU: 1.495978707e14, ly: 9.4607304725808e18, pc: 3.0856775814913673e19,
+};
+
 export const DISPLAY_UNITS = ['mm', 'cm', 'm', 'in'];
-export const MM_PER = { mm: 1, cm: 10, m: 1000, in: 25.4 };
+export const MM_PER = Object.fromEntries(DISPLAY_UNITS.map((u) => [u, LENGTH_MM[u]]));
 const DECIMALS = { mm: 2, cm: 3, m: 4, in: 3 };
 
 // The display unit Auto gives for a declared unit: itself when it is one of
 // the four; the nearest of them in the same system otherwise; mm when the
 // file says nothing (null) or its shapes disagree ('mixed').
-const AUTO = { mm: 'mm', cm: 'cm', m: 'm', in: 'in', ft: 'in', yd: 'in', mil: 'in', uin: 'in', um: 'mm', km: 'm' };
+const AUTO = {
+  nm: 'mm', 'Å': 'mm', um: 'mm', mm: 'mm', cm: 'cm', dm: 'cm', m: 'm', dam: 'm', hm: 'm', km: 'm', Gm: 'm',
+  AU: 'm', ly: 'm', pc: 'm', uin: 'in', mil: 'in', in: 'in', ft: 'in', 'US ft': 'in', yd: 'in', mi: 'in',
+};
 // sizeMm: the model's largest extent. A model declared in metres but under a
 // metre across is shown in mm: a 123 mm board in m read "0.123 × 0.072 ×
 // 0.012 m" and its small parts "0.000 m" (a board's STEP declares metres:

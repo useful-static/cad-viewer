@@ -11,6 +11,7 @@
 // Pure, for tests/test-orient.mjs.
 
 import { qFromBasis } from './camera.js';
+import { cross } from './vec3.js';
 
 export const DEFAULT_ORIENT = '+y+z';
 export const Z_UP_ORIENT = '+z-y';
@@ -23,7 +24,6 @@ const vec = (a) => {
   const m = AXIS_RE.exec(a);
   return AXES[m[2]].map((v) => (m[1] === '-' ? -v : v));
 };
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const name = (v) => {
   const k = v.findIndex((c) => c !== 0);
   return (v[k] < 0 ? '-' : '+') + 'xyz'[k];

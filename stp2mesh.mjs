@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
 import { BODY_KINDS, encodeCadmesh, hashName, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
+import { FORMATS as CAD_FORMATS, sniffFormat } from './js/formats.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.cadmesh]
@@ -71,12 +72,11 @@ function parseArgs(argv) {
   return a;
 }
 
-const FORMATS = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
+// the CAD formats (the converter's, in the viewer's own table: js/formats.js), extension -> reader
+const FORMATS = Object.fromEntries(CAD_FORMATS.filter((f) => f.kind === 'cad').flatMap((f) => f.ext.map((e) => [e, f.cad])));
 
-// The format a file's first bytes say (gzipped or not), or undefined: STEP
-// opens "ISO-10303-21;", BREP "DBRep_DrawableShape", IGES has "S" in column
-// 73 of its first line; a UTF-8 byte-order mark first is skipped (main.js
-// sniffCad reads the same)
+// The CAD format a file's first bytes say (gzipped or not), or undefined: the viewer's own
+// sniff (js/formats.js sniffFormat)
 function sniffFile(path) {
   // the first 64 KiB only (a gzip's head unpacks from them): the whole file
   // was read and unpacked to look at 200 bytes (review r23)
@@ -91,11 +91,8 @@ function sniffFile(path) {
   if (b[0] === 0x1f && b[1] === 0x8b) {
     try { b = gunzipSync(b, { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
   }
-  const head = b.subarray(0, 200).toString('latin1').replace(/^ï»¿/, '');
-  if (/^\s*ISO-10303-21\s*;/.test(head)) return 'step';
-  if (/^\s*DBRep_DrawableShape/.test(head)) return 'brep';
-  const line = head.split(/\r?\n/)[0];
-  return line.length >= 73 && line[72] === 'S' ? 'iges' : undefined;
+  const f = sniffFormat(new Uint8Array(b.buffer, b.byteOffset, Math.min(b.length, 400)));
+  return f && f.kind === 'cad' ? f.cad : undefined;
 }
 
 async function main() {

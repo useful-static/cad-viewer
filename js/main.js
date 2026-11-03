@@ -3,8 +3,9 @@
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
-import { MESH_EXTS, meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
-import { isBinaryDXF, onPaper, parseDXF } from './dxf.js';
+import { meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
+import { formatOfName, sniffFormat, isDWGBytes, isCompanion, MODEL_NAME, acceptList } from './formats.js';
+import { onPaper, parseDXF } from './dxf.js';
 import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
 import { directUrl } from './open-url.js';
@@ -25,8 +26,9 @@ import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges } from './scene.js';
 import { clearance } from './clearance.js';
-import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, defaultStyle, rgb, styleById, styleFor, toggleEdges } from './styles.js';
+import { CUT_FILL, PAPER, STYLES, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
+import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
 import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
@@ -72,15 +74,13 @@ const app = {
   // the colour scheme shown (js/palettes.js), remembered in this browser;
   // app.mesh is the model drawn in it, app.baseMesh the model as converted
   palette: (() => {
-    let p = null;
-    try { p = localStorage.getItem('cadv.palette'); } catch { /* storage off */ }
+    const p = getPref('cadv.palette');
     return PALETTES.some((x) => x.id === p) ? p : 'file';
   })(),
   // the display unit chosen (js/units.js); only an explicit choice is
   // remembered, so 'auto' (the file's declared unit) is the absence of one
   unitChoice: (() => {
-    let u = null;
-    try { u = localStorage.getItem('cadv.units'); } catch { /* storage off */ }
+    const u = getPref('cadv.units');
     return DISPLAY_UNITS.includes(u) ? u : 'auto';
   })(),
   baseMesh: null,
@@ -91,12 +91,7 @@ const app = {
   // the display style chosen in the select (js/styles.js), remembered in this
   // browser; null until a choice, when the file type's default applies
   // (?style=<id> picks one for this page only, for tests and screenshots)
-  styleChoice: (() => {
-    let s = new URLSearchParams(location.search).get('style');
-    if (s) return s;
-    try { s = localStorage.getItem('cadv.style'); } catch { /* storage off */ }
-    return s;
-  })(),
+  styleChoice: new URLSearchParams(location.search).get('style') || getPref('cadv.style'),
   isMeshFile: false, // a mesh format (feature 14): Shaded by default
   showSilhouettes: true, // the outline styles' silhouettes; a test turns them off for a control
   // colours picked for single parts of the loaded model: body index -> [r, g, b],
@@ -113,22 +108,20 @@ const modelKeyOf = (header) => `cadv.colours.${header.meshes.length}-${
 
 function loadOverrides(key, bodies) {
   const out = new Map();
-  try {
-    const saved = JSON.parse(localStorage.getItem(key) || '{}');
-    for (const [i, hex] of Object.entries(saved)) {
-      const n = Number(i);
-      if (Number.isInteger(n) && n >= 0 && n < bodies && /^#[0-9a-f]{6}$/i.test(hex)) out.set(n, hexToRgb(hex));
-    }
-  } catch { /* storage off or a damaged entry: no remembered colours */ }
+  // (storage off or a damaged entry: no remembered colours)
+  const saved = getPrefJSON(key, {});
+  if (!saved || typeof saved !== 'object') return out;
+  for (const [i, hex] of Object.entries(saved)) {
+    const n = Number(i);
+    if (Number.isInteger(n) && n >= 0 && n < bodies && /^#[0-9a-f]{6}$/i.test(hex)) out.set(n, hexToRgb(hex));
+  }
   return out;
 }
 
+// (storage off or full: the colours last while the model is open)
 function saveOverrides() {
   if (!app.modelKey) return;
-  try {
-    if (!app.overrides.size) localStorage.removeItem(app.modelKey);
-    else localStorage.setItem(app.modelKey, JSON.stringify(Object.fromEntries([...app.overrides].map(([i, c]) => [i, rgbToHex(c)]))));
-  } catch { /* storage off or full: the colours last while the model is open */ }
+  setPrefJSON(app.modelKey, app.overrides.size ? Object.fromEntries([...app.overrides].map(([i, c]) => [i, rgbToHex(c)])) : null);
 }
 window.__cadv = app;
 app.redraw = () => viewChanged(); // for tests that change a display flag
@@ -177,7 +170,7 @@ function setStatus(s, msg) {
 }
 
 // (every kind of file the page opens, as its empty card says)
-const IDLE_MSG = 'open or drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, 3MF, glTF…) or a 2D DXF';
+const IDLE_MSG = 'open or drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, 3MF, glTF…) or a 2D DXF or DWG';
 const mb = (n) => (n / 1e6).toFixed(1);
 
 // The empty-state card: shown while there is no model and no load running (and,
@@ -720,27 +713,13 @@ const EDGE_HOVER_PX = 1;
 const pxScale = (r) => (r.canvas.clientWidth ? r.canvas.width / r.canvas.clientWidth : 1);
 
 // A style's part of the frame: the background, which faces pass, and the edge
-// passes (each a depth test, a colour mode, a dash period, the paper colours)
+// passes (js/styles.js edgePasses)
 const PAPER_RGB = rgb(PAPER);
 const FILL_RGB = rgb(CUT_FILL);
-const PAPER_COLS = (k) => ({ plain: rgb(PAPER_EDGES.plain[k]), selected: rgb(PAPER_EDGES.selected[k]), faded: rgb(PAPER_EDGES.faded[k]) });
-const DASH_PX = 6; // the hidden edges: 3 px drawn, 3 px gap
 // light: drawn on a light ground (the Light background option, or a white or
-// transparent picture): X-ray's edges, its faces' colour lightened, would
-// all but vanish there, so they take the paper colours
+// transparent picture)
 function styleFrame(s, scale, light = false) {
-  const visible = { depth: 'lequal', mode: 1, colours: PAPER_COLS(0) };
-  const onLight = light || app.lightBg;
-  const passes = {
-    edges: [{ depth: 'lequal', mode: 0 }],
-    hidden: [visible],
-    // the hidden edges first, so a visible edge wins where they cross; only
-    // the selected or hovered parts' (every part's is a grey thicket on a
-    // dense model), so with nothing selected it reads as Hidden line
-    hiddengrey: [{ depth: 'greater', mode: 1, dash: DASH_PX * scale, colours: PAPER_COLS(1), selectedOnly: true }, visible],
-    wire: [{ ...visible, depth: 'always' }],
-    xray: [onLight ? { ...visible, depth: 'always' } : { depth: 'always', mode: 2 }],
-  }[s.id] || null;
+  const passes = edgePasses(s.id, { scale, onLight: light || app.lightBg });
   return { background: s.paper || app.lightBg ? PAPER_RGB : BG, style: { faces: s.faces, outline: s.outline && app.showSilhouettes }, edgePasses: passes,
     fill: s.faces === 'depth' ? FILL_RGB : null,
     // a body too small to draw edges is collapsed in the face and pick passes too
@@ -997,10 +976,9 @@ function flashHover(text, ms = 1500) {
 const TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
 function touchHintOnce() {
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
-  try {
-    if (localStorage.getItem('cadv.touchHint')) return;
-    localStorage.setItem('cadv.touchHint', '1');
-  } catch { /* storage off: shown every time, which is harmless */ }
+  // (storage off: shown every time, which is harmless)
+  if (getPref('cadv.touchHint')) return;
+  setPref('cadv.touchHint', '1');
   flashHover(TOUCH_HINT, 6000);
 }
 
@@ -1236,7 +1214,7 @@ function syncPicOpts() {
   $('picsel').setAttribute('aria-pressed', String(app.pic.sel));
 }
 function savePicOpts() {
-  try { localStorage.setItem('cadv.pic', JSON.stringify(app.pic)); } catch { /* storage off */ }
+  setPrefJSON('cadv.pic', app.pic);
   syncPicOpts();
 }
 
@@ -1258,12 +1236,12 @@ function copyPicture() {
 // scale 1 | 2 | 4, bg 'view' | 'white' | 'transparent', sel (draw the
 // selection as selected)
 app.pic = { scale: 2, bg: 'view', sel: false };
-try {
-  const p = JSON.parse(localStorage.getItem('cadv.pic') || 'null');
+{
+  const p = getPrefJSON('cadv.pic');
   if (p && [1, 2, 4].includes(p.scale)) app.pic.scale = p.scale;
   if (p && ['view', 'white', 'transparent'].includes(p.bg)) app.pic.bg = p.bg;
   if (p && typeof p.sel === 'boolean') app.pic.sel = p.sel;
-} catch { /* storage off, or not ours */ }
+}
 
 // The view rendered at app.pic.scale x its CSS size, in tiles of at most
 // 2048 px: each tile is the whole picture's projection cropped to it
@@ -2131,21 +2109,16 @@ function setEmbedActive(on) {
   announce(on ? 'the model now turns and zooms with the pointer; Esc gives the page its wheel back' : 'the page scrolls again');
 }
 
-// the styles built so far; the rest join the select as they are
-const BUILT_STYLES = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
-// (the select's choice, else the model list's style for the model, else the
-// file type's default)
-const currentStyle = () => {
-  const id = styleFor(app.styleChoice || (app.header && listEntry(app.sourceUrl)?.style) || null, app.isMeshFile);
-  return styleById(BUILT_STYLES.includes(id) ? id : defaultStyle(app.isMeshFile));
-};
+// the style in force: the select's choice, else the model list's style for
+// the model, else the file type's default
+const currentStyle = () => styleById(styleFor(app.styleChoice || (app.header && listEntry(app.sourceUrl)?.style) || null, app.isMeshFile));
 
 // remember: only a choice made in the select is kept (E is not)
 function setStyle(id, remember) {
-  if (!BUILT_STYLES.includes(id)) return;
+  if (!styleById(id)) return;
   app.styleChoice = id;
   if (remember) {
-    try { localStorage.setItem('cadv.style', id); } catch { /* storage off */ }
+    setPref('cadv.style', id);
   }
   $('style').value = id;
   syncStyleBg();
@@ -2167,11 +2140,9 @@ const TURN_RAD_S = 0.35; // about 18 s a turn
 const IDLE_MS = 2500;
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 function readLooks() {
-  try {
-    app.lightBg = localStorage.getItem('cadv.bg') === 'light';
-    app.ghostHidden = localStorage.getItem('cadv.ghost') === '1';
-    app.levelOrbit = localStorage.getItem('cadv.level') === '1';
-  } catch { /* storage off */ }
+  app.lightBg = getPref('cadv.bg') === 'light';
+  app.ghostHidden = getPref('cadv.ghost') === '1';
+  app.levelOrbit = getPref('cadv.level') === '1';
   app.turntable = params.get('turntable') === '1' && !reducedMotion();
   app.lastInput = performance.now();
 }
@@ -2185,20 +2156,20 @@ function wireLooks() {
   press();
   $('level').onclick = () => {
     app.levelOrbit = !app.levelOrbit;
-    try { localStorage.setItem('cadv.level', app.levelOrbit ? '1' : '0'); } catch { /* storage off */ }
+    setPref('cadv.level', app.levelOrbit ? '1' : '0');
     press();
     announce(app.levelOrbit ? 'level orbit: the model\'s up stays up' : 'free orbit');
   };
   $('lightbg').onclick = () => {
     app.lightBg = !app.lightBg;
-    try { localStorage.setItem('cadv.bg', app.lightBg ? 'light' : 'dark'); } catch { /* storage off */ }
+    setPref('cadv.bg', app.lightBg ? 'light' : 'dark');
     press();
     syncStyleBg();
     queueFrame();
   };
   $('ghost').onclick = () => {
     app.ghostHidden = !app.ghostHidden;
-    try { localStorage.setItem('cadv.ghost', app.ghostHidden ? '1' : '0'); } catch { /* storage off */ }
+    setPref('cadv.ghost', app.ghostHidden ? '1' : '0');
     press();
     queueFrame();
   };
@@ -3459,7 +3430,7 @@ function stale(seq) {
 function setPalette(id) {
   if (!PALETTES.some((p) => p.id === id)) return;
   app.palette = id;
-  try { localStorage.setItem('cadv.palette', id); } catch { /* storage off */ }
+  setPref('cadv.palette', id);
   recolour(`colours: ${PALETTES.find((p) => p.id === id).label}`);
 }
 
@@ -4051,22 +4022,6 @@ const readyText = () => (app.unmeshedFaces
   ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
   : 'ready') + (app.listNote ? ` · ${app.listNote}` : '');
 
-const STEP_EXT = { stp: 'step', step: 'step', igs: 'iges', iges: 'iges', brep: 'brep' };
-
-// The CAD format a file's first bytes say ('stp', 'igs', 'brep'), or null: a
-// STEP file opens "ISO-10303-21;", a BREP "DBRep_DrawableShape", and an IGES
-// file's first line is an 80-column record with "S" in column 73
-function sniffCad(buf) {
-  const head = new TextDecoder('latin1').decode(new Uint8Array(buf, 0, Math.min(200, buf.byteLength)));
-  // (a UTF-8 byte-order mark first is read as Latin-1 "ï»¿": skipped, r20)
-  const text = head.replace(/^ï»¿/, '');
-  if (/^\s*ISO-10303-21\s*;/.test(text)) return 'stp';
-  if (/^\s*DBRep_DrawableShape/.test(text)) return 'brep';
-  const line = text.split(/\r?\n/)[0];
-  if (line.length >= 73 && line[72] === 'S') return 'igs';
-  return null;
-}
-
 // Keep a conversion in this browser, gzipped where the browser can (about a
 // sixth of the raw size), then update the panel's line. Never throws.
 async function saveConversion(key, raw, name) {
@@ -4108,41 +4063,40 @@ async function loadAny(buf, name, seq) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
-  // A mesh file (STL, OBJ, PLY, OFF, 3MF, glTF / GLB; gzipped too), or one
-  // whose bytes say so under a name that does not (a GLB, a PLY): read here
-  // into a .cadmesh (js/mesh-formats.js)
-  const meshName = name.replace(/\.gz$/i, '');
-  if (MESH_EXTS.includes(extOf(meshName)) || (!extOf(meshName) && !isGzip(buf) && meshFormatOf('', buf))) return loadMeshFile(buf, name, seq);
-  if (extOf(meshName) === 'dxf' || extOf(meshName) === 'dwg' || isDWG(buf)) return loadDxf(buf, name, seq);
-  if (extOf(name) === 'zip') return loadZip(buf, name, seq);
+  // A name that says no format this viewer opens (a URL with no extension; x.gz with nothing
+  // inside its name, r20) is opened by what its bytes are (js/formats.js sniffFormat), gzipped
+  // ones unpacked first (r19), and named for it. The name changes only for what it turned out
+  // to be: an unknown x.gz is refused as "x.gz", not "x" (r21); it is unpacked once, whatever
+  // it is (a .cadmesh opens raw, anything else is refused below in plain words)
+  if (!formatOfName(name)) {
+    let body = buf;
+    if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
+    const said = sniffFormat(new Uint8Array(body, 0, Math.min(400, body.byteLength)));
+    if (said) name = `${name.replace(/\.gz$/i, '')}.${said.ext[0]}`;
+    buf = body;
+  }
+  // every format by the one table (js/formats.js): a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB;
+  // gzipped too) is read into a .cadmesh (js/mesh-formats.js); a DXF or DWG opens in 2D; a zip
+  // for the model in it; a STEP / IGES / BREP is converted; a .cadmesh opens
+  const fmt = formatOfName(name);
+  if (fmt && fmt.kind === '2d' && app.adding && app.adding.seq === seq) {
+    // a drawing has no place in a 3D scene: refused, not opened over it (the scene went)
+    app.adding = null;
+    throw new Error(`${name} is a 2D drawing: Add model… adds a 3D model (open the drawing on its own with Open…)`);
+  }
+  if (fmt && fmt.kind === 'mesh') return loadMeshFile(buf, name, seq);
+  if (fmt && fmt.kind === '2d') return loadDxf(buf, name, seq);
+  if (fmt && fmt.kind === 'zip') return loadZip(buf, name, seq);
   // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
   // to download): unpacked here, then opened as the file inside it
   // (served with Content-Encoding: gzip, fetch has unpacked it already)
-  const inner = name.replace(/\.gz$/i, '');
-  if (inner !== name && STEP_EXT[extOf(inner)]) {
+  if (fmt && fmt.kind === 'cad' && /\.gz$/i.test(name)) {
     if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
-    name = inner;
-  }
-  // A name that says nothing (a URL with no extension) opened by what the
-  // bytes are: a STEP, IGES or BREP file starts in a way of its own; gzipped,
-  // it is unpacked first (review r19)
-  // (x.gz with nothing inside its name counts as saying nothing too, r20)
-  const said = extOf(name.replace(/\.gz$/i, ''));
-  if (!STEP_EXT[said] && said !== 'cadmesh' && !(/\.gz$/i.test(name) && said)) {
-    let body = buf;
-    if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
-    const kind = sniffCad(body);
-    const base = name.replace(/\.gz$/i, '');
-    // (the name changes only for what it turned out to be: an unknown x.gz
-    // is refused as "x.gz", not "x", r21)
-    if (kind) name = `${base}.${kind}`;
-    // unpacked once, whatever it is: a .cadmesh opens raw, anything else is
-    // refused below in plain words (it was inflated a second time first)
-    buf = body;
+    name = name.replace(/\.gz$/i, '');
   }
   const ext = extOf(name);
-  if (STEP_EXT[ext]) {
-    const format = STEP_EXT[ext];
+  if (fmt && fmt.kind === 'cad') {
+    const format = fmt.cad;
     // a gzip under a plain .stp name (it reached the converter compressed)
     // is unpacked; a UTF-8 byte-order mark first is dropped: OpenCascade
     // refuses it ("unexpected QUID, expecting STEP"), as stp2mesh does (r21)
@@ -4269,11 +4223,11 @@ async function loadZip(buf, name, seq) {
   if (stale(seq)) return;
   const z = await unzip(buf);
   const files = z.names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
-  const opens = (n) => { const e = extOf(n.replace(/\.gz$/i, '')); return !!STEP_EXT[e] || MESH_EXTS.includes(e) || e === 'cadmesh' || e === 'dxf' || e === 'dwg'; };
+  const opens = (n) => { const f = formatOfName(n); return !!f && f.kind !== 'zip'; };
   const model = files.find(opens);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   const others = files.filter((n) => n !== model && opens(n)).length;
-  app.dropExtras = files.filter((n) => COMPANION.test(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
+  app.dropExtras = files.filter((n) => isCompanion(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
   const inner = await z.get(model);
   if (stale(seq)) return;
   if (others) announce(`opening ${model} from ${name} (${others} more in it not opened)`);
@@ -4289,13 +4243,15 @@ async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `reading ${name}`);
-  const dwg = isDWG(buf);
+  // a DWG by its bytes ("AC10..": an unread version is refused by name by the reader), or by
+  // its name (a .dwg that is not one is refused by the reader as "not a DWG file")
+  const dwg = isDWGBytes(new Uint8Array(buf, 0, Math.min(6, buf.byteLength))) || /\.dwg$/i.test(name);
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${dwg ? 'DWG' : 'DXF'}`);
   await nextPaint();
   if (stale(seq)) return;
-  // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a binary DXF is read
-  // from its bytes; an ASCII one as UTF-8 text
-  const drawing = parseDXF(dwg ? dwgToPairs(readDWG(buf)) : isBinaryDXF(buf) ? buf : new TextDecoder().decode(buf));
+  // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
+  // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page
+  const drawing = parseDXF(dwg ? dwgToPairs(readDWG(buf)) : buf);
   const hasLayout = drawing.layouts.some((l) => l.paths.length || l.texts.length);
   if (!drawing.paths.length && !drawing.texts.length && !hasLayout) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
@@ -4459,9 +4415,7 @@ function fillInfo2D(el) {
 }
 
 // what Open… and a drop take, for the messages that say so
-const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB) or a 2D DXF or DWG (R13 to 2018)';
-// a DWG by its bytes: the version string R13 to R2018 (AC1012 .. AC1032)
-const isDWG = (buf) => { const b = new Uint8Array(buf, 0, Math.min(6, buf.byteLength)); return /^AC10(1[2458]|2[147]|32)$/.test(String.fromCharCode(...b)); };
+const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB), a 2D DXF or DWG (R13 to 2018), or a zip of one';
 
 // The conversion runs in this tab, in one call; the card shows the step it is
 // on, the time so far, and what to expect.
@@ -4639,7 +4593,7 @@ function tessellate(buf, format, seq, name, threads) {
 //   rack.cadmesh?v=2                        -> rack.cadmesh   (path part, query dropped)
 //   /api/download?file=part.step&token=abc  -> part.step      (a query value naming a model file)
 //   /api/download?id=7                      -> download       (no extension anywhere)
-const MODEL_EXT = /\.(?:stp|step|igs|iges|brep|cadmesh)(?:\.gz)?$/i;
+const MODEL_EXT = MODEL_NAME;
 const fileName = (url) => {
   const [path, query = ''] = url.split('#')[0].split('?');
   // decoded, so "my%20part.stp" shows and saves as "my part.stp" (r22)
@@ -4780,7 +4734,7 @@ function droppedFile(e) {
   const dt = e.dataTransfer;
   const files = dt ? dt.files : [];
   const f = files[0];
-  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP, a mesh or a DXF)'); return null; }
+  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP, a mesh, a DXF or DWG)'); return null; }
   const item = dt.items && dt.items[0];
   if (item && item.webkitGetAsEntry && item.webkitGetAsEntry()?.isDirectory) {
     announce(`${f.name} is a folder: drop the model file in it`);
@@ -4792,10 +4746,9 @@ function droppedFile(e) {
 // Of several files dropped or picked together, the model (the first that is
 // not a companion: an .mtl, a .bin, a picture), the companions kept for it
 // in app.dropExtras (an OBJ's colours, a .gltf's buffers)
-const COMPANION = /\.(mtl|bin|png|jpe?g|webp|ktx2)$/i;
 function pickModelFile(files) {
-  const f = files.find((x) => !COMPANION.test(x.name)) || files[0];
-  app.dropExtras = files.filter((x) => x !== f && COMPANION.test(x.name));
+  const f = files.find((x) => !isCompanion(x.name)) || files[0];
+  app.dropExtras = files.filter((x) => x !== f && isCompanion(x.name));
   const rest = files.length - 1 - app.dropExtras.length;
   if (rest > 0) announce(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`);
   return f;
@@ -5239,10 +5192,7 @@ function syncUnitsRow() {
 
 function setUnitChoice(u) {
   app.unitChoice = DISPLAY_UNITS.includes(u) ? u : 'auto';
-  try {
-    if (app.unitChoice === 'auto') localStorage.removeItem('cadv.units');
-    else localStorage.setItem('cadv.units', app.unitChoice);
-  } catch { /* storage off */ }
+  setPref('cadv.units', app.unitChoice === 'auto' ? null : app.unitChoice);
   showInfo();
   updateButtons(); // the section readout
 }
@@ -5505,15 +5455,26 @@ app.pickAt = async (x, y) => {
 
 function wireInput() {
   const stage = $('stage');
+  // the pickers offer what the loader opens (js/formats.js): Open… every format, Add model… the
+  // 3D ones (a drawing is refused there)
+  $('open').accept = acceptList();
+  $('addmodel').accept = acceptList(['cad', 'cadmesh', 'mesh', 'zip']);
   // Measure (js/measure-ui.js): this input feeds it while it is on
   app.measure = createMeasure({
-    $, app, view: measureView, sectionPlane,
+    $, view: measureView, sectionPlane,
+    // the model as Measure reads it, at the time it reads it
+    scene: {
+      get mesh() { return app.baseMesh; },
+      get header() { return app.header; },
+      get hidden() { return app.hidden; },
+      get sphere() { return app.sphere; },
+    },
     lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
     num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
     announce, flash: flashHover, queueFrame, syncOptbar,
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
-    showsHidden: () => ['wire', 'xray', 'hiddengrey'].includes(currentStyle().id),
+    showsHidden: () => currentStyle().seesHidden,
     // Measure's points are where the bodies are, not where Explode draws them
     // (Measure, Paint and Explode exclude each other: a click goes to one,
     // and Measure and Paint pick the parts where they are, not where Explode
@@ -6085,7 +6046,7 @@ function wireInput() {
   wireLooks();
   syncStyleBg();
   const sty = $('style');
-  for (const s of STYLES) if (BUILT_STYLES.includes(s.id)) sty.add(new Option(s.label, s.id));
+  for (const s of STYLES) sty.add(new Option(s.label, s.id));
   sty.value = currentStyle().id;
   syncStyleBg();
   blurAfterPick(sty);
@@ -6099,18 +6060,20 @@ function wireInput() {
   $('meshunit').onchange = (e) => setMeshUnit(e.target.value);
   // the material: remembered in this browser; a pick from the list is blurred
   // (the number keys then reach the view)
-  try { const m = localStorage.getItem('cadv.material'); if (m && [...$('material').options].some((o) => o.value === m)) $('material').value = m; } catch { /* storage off */ }
+  const material = getPref('cadv.material');
+  if (material && [...$('material').options].some((o) => o.value === material)) $('material').value = material;
   blurAfterPick($('material'));
   $('material').onchange = () => {
-    try { localStorage.setItem('cadv.material', $('material').value); } catch { /* storage off */ }
+    setPref('cadv.material', $('material').value);
     syncMassRow();
     // "other…": the density is typed next (the pick's blur has run already)
     if ($('material').value === 'custom') $('density').focus();
   };
   // a typed density, remembered as the material is
-  try { const d = localStorage.getItem('cadv.density'); if (d) $('density').value = d; } catch { /* storage off */ }
+  const density = getPref('cadv.density');
+  if (density) $('density').value = density;
   $('density').oninput = () => {
-    try { localStorage.setItem('cadv.density', $('density').value); } catch { /* storage off */ }
+    setPref('cadv.density', $('density').value);
     syncMassRow();
   };
   $('refset').onclick = () => setRef(true);

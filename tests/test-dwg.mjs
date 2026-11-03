@@ -6,17 +6,15 @@
 // directory holding example_r14.dwg .. example_2018.dwg (LibreDWG's test/test-data). Without
 // it the file arms are skipped, and the run says so.
 //
-//   node tests/test-dwg.mjs        -> "N passed" (and "M skipped: ..." when the corpus is absent)
+//   DWG_CORPUS=DIR node tests/test-dwg.mjs   -> "RESULT: N passed, 0 failed[, M skipped]"
 import { readFileSync, existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { readDWG, dwgToPairs, _internal, crc16 } from '../js/dwg.js';
+import { readDWG, dwgToPairs, pairsToDXF, decompress18, _internal, crc16, crc32 } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
+import { test as t, skip, done } from './harness.mjs';
 
 const { Bits } = _internal;
 const bits = (s) => { const t = s.replace(/[^01]/g, ''); const b = new Uint8Array(Math.ceil(t.length / 8)); for (let i = 0; i < t.length; i++) if (t[i] === '1') b[i >> 3] |= 0x80 >> (i & 7); return b; };
-let passed = 0, skipped = 0;
-const skipWhy = [];
-const t = (name, fn) => { fn(); passed++; };
 
 // --- 2: the bit codes, by the spec's own examples ---
 t('2.2 BITSHORT: 257, 0, 256, 15, 0', () => {
@@ -53,12 +51,38 @@ t('a DWG drawing reaches parseDXF as pairs', () => {
   assert.deepEqual([...d.paths[0].pts], [0, 0, 3, 4]);
 });
 
+// --- no corpus needed: the checksums, the decompressor and the DXF writer, each two-sided ---
+t('CRC-32: the standard check value, and one changed byte changes it', () => {
+  const b = new TextEncoder().encode('123456789');
+  assert.equal(crc32(b, 0, b.length), 0xcbf43926);
+  assert.equal(crc32(b), 0xcbf43926, 'the range defaults to the whole buffer');
+  b[4] ^= 1;
+  assert.notEqual(crc32(b), 0xcbf43926);
+});
+t('4.7 R2004 decompression: a literal run, then a back reference', () => {
+  // 0x01: 4 literal bytes; 0x5C 0x00: copy 4 from 4 back (comp (0x5 - 1), offset 3 + 1), then
+  // no literal (the next byte is the 0x11 end, so its run length is 0)
+  const src = Uint8Array.of(0x01, 0x61, 0x62, 0x63, 0x64, 0x5c, 0x00, 0x11);
+  const { out, n } = decompress18(src, 0, src.length, 8);
+  assert.equal(new TextDecoder().decode(out.subarray(0, n)), 'abcdabcd');
+});
+t('4.7 R2004 decompression refuses a back reference before the start', () => {
+  const src = Uint8Array.of(0x01, 0x61, 0x62, 0x63, 0x64, 0x5c, 0xff, 0x11);
+  assert.throws(() => decompress18(src, 0, src.length, 8), /back reference out of range/);
+});
+t('pairsToDXF writes control characters and carets in caret notation, and parseDXF reads them back', () => {
+  const P = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, '0'], [20, '0'], [40, '1'], [1, 'a\x03b^c'], [0, 'ENDSEC'], [0, 'EOF']];
+  const s = pairsToDXF(P);
+  assert.ok(s.includes('a^Cb^ c'), 'caret notation');
+  assert.equal(parseDXF(s).texts[0].text, parseDXF(P).texts[0].text);
+});
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };
 for (const [rel, f] of Object.entries(files)) {
   const p = `${root}/${f}`;
-  if (!existsSync(p)) { skipped++; skipWhy.push(f); continue; }
+  if (!existsSync(p)) { skip(`${rel}: the file arms`, `${f} absent (set DWG_CORPUS)`); continue; }
   const b = new Uint8Array(readFileSync(p));
   t(`${rel}: every check passes and the drawing reaches parseDXF`, () => {
     const d = readDWG(b);
@@ -99,4 +123,4 @@ t('not a DWG, and a pre-R13 DWG, are refused by name', () => {
   assert.throws(() => readDWG(new TextEncoder().encode('hello world')), /not a DWG file/);
   assert.throws(() => readDWG(new TextEncoder().encode('AC1009 an R12 drawing')), /AC1009 DWG \(older than R13\) is not read/);
 });
-console.log(`${passed} passed${skipped ? `, ${skipped} skipped: corpus files absent (${skipWhy.join(', ')}); set DWG_CORPUS` : ''}`);
+done();

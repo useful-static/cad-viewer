@@ -12,6 +12,8 @@
 // convention; Y up for glTF, its own). Coordinates stay in mm except GLB's,
 // which glTF fixes in metres.
 
+import { crc32 } from './crc32.js';
+
 const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 
 // one body's vertices (in the basis, scaled) and triangles (local numbers)
@@ -58,20 +60,7 @@ export function toSTL(model, ids, basis, name = 'model') {
 }
 
 // ---- a zip (3MF's container): deflated entries, CRC-32 ----
-const CRC = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-export function crc32(bytes) {
-  let c = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
+export { crc32 };
 async function deflateRaw(bytes) {
   const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(s).arrayBuffer());

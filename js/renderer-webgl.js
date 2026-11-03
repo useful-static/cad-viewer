@@ -11,6 +11,7 @@
 // uniform declared in both stages with different precision.)
 
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
+import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
 const VS = `
 attribute vec3 aPos;
@@ -133,6 +134,13 @@ void main() {
     vec3 pn = normalize(uCapN.xyz);
     c = vCol * 0.8 * (0.35 + 0.5 * max(dot(pn, l), 0.0) + 0.15 * (0.5 + 0.5 * dot(pn, up)));
   }
+  // a ghost: the lit colour greyed, at its alpha, with no selection or hover
+  // tint (as renderer-webgpu.js fsGhost: a hidden body is never picked)
+  if (uGhost.x > 0.0) {
+    c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.6);
+    gl_FragColor = vec4(c * uGhost.x, uGhost.x);
+    return;
+  }
   // uHi.a = 1 while anything is selected: the rest is greyed and darkened, so
   // the selection stands out whatever colours the model itself uses
   if (st.r > 0.5) c = mix(c, uHi.rgb, 0.5) + vec3(0.06);
@@ -140,7 +148,6 @@ void main() {
   if (st.b > 0.5) c = c + vec3(0.12);
   // X-ray: premultiplied, blended one / one-minus-src-alpha
   float a = uParams.w > 0.0 ? uParams.w : 1.0;
-  if (uGhost.x > 0.0) { c = mix(c, vec3(dot(c, vec3(0.299, 0.587, 0.114))), 0.6); a = uGhost.x; }
   gl_FragColor = vec4(c * a, a);
 }`;
 
@@ -313,8 +320,8 @@ void main() {
   gl_FragColor = vec4(c, 1.0);
 }`;
 
-const EDGE_STRIDE = 32; // p0 f32x3, p1 f32x3, id u8x4, colour u8x4
-const SIL_STRIDE = 48;  // an edge instance, then two normals snorm16x4
+// EDGE_STRIDE (p0 f32x3, p1 f32x3, id u8x4, colour u8x4) and SIL_STRIDE (an
+// edge instance, then two normals snorm16x4): js/edges.js, which writes them
 
 function compile(gl, type, src) {
   const s = gl.createShader(type);
@@ -984,7 +991,21 @@ export class WebGLRenderer {
       gl.colorMask(true, true, true, true);
       gl.depthMask(true);
       gl.disable(gl.BLEND);
-      // the hidden parts as ghosts: over the shown faces, no depth written
+      // The passes after the faces, in the order renderer-webgpu.js draws
+      // them too: the cut fill, then the hidden parts as ghosts (over every
+      // shown surface, the fill included), then the edges.
+      // the cut fill: the same bias, so its depths equal the depth-only pass's
+      if (faces === 'depth' && frame.clip && frame.fill) {
+        this._bind(this.fillProg, frame);
+        gl.uniform4f(this.fillProg.u.uFill, frame.fill[0], frame.fill[1], frame.fill[2], 1);
+        gl.depthMask(false);
+        gl.depthFunc(gl.LEQUAL);
+        this._draw();
+        gl.depthMask(true);
+        gl.depthFunc(gl.LESS);
+        if (frame.ghost) this._bind(this.shade, frame);
+      }
+      // the hidden parts as ghosts: no depth written
       if (frame.ghost) {
         gl.depthMask(false);
         gl.enable(gl.BLEND);
@@ -995,16 +1016,6 @@ export class WebGLRenderer {
         gl.uniform4f(this.shade.u.uGhost, 0, 0, 0, 0);
         gl.depthMask(true);
         gl.disable(gl.BLEND);
-      }
-      // the cut fill: the same bias, so its depths equal the depth-only pass's
-      if (faces === 'depth' && frame.clip && frame.fill) {
-        this._bind(this.fillProg, frame);
-        gl.uniform4f(this.fillProg.u.uFill, frame.fill[0], frame.fill[1], frame.fill[2], 1);
-        gl.depthMask(false);
-        gl.depthFunc(gl.LEQUAL);
-        this._draw();
-        gl.depthMask(true);
-        gl.depthFunc(gl.LESS);
       }
       gl.disable(gl.POLYGON_OFFSET_FILL);
     }

@@ -3,7 +3,7 @@
 // contrast as the plan states it.   node tests/test-styles.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, contrast, defaultStyle, styleFor, toggleEdges } from '../js/styles.js';
+import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, contrast, defaultStyle, edgePasses, styleFor, toggleEdges } from '../js/styles.js';
 
 let passed = 0;
 let failed = 0;
@@ -28,6 +28,22 @@ test('E switches Shaded and Shaded + edges only', () => {
   assert.equal(toggleEdges('shaded'), 'edges');
   assert.equal(toggleEdges('edges'), 'shaded');
   assert.equal(toggleEdges('wire'), null);
+});
+test('edge passes: none for Shaded, one or two per edge style, hidden first in Hidden grey', () => {
+  assert.equal(edgePasses('shaded'), null);
+  for (const s of STYLES) assert.equal(!!edgePasses(s.id), s.edges, `${s.id}: edges flag and passes agree`);
+  const hg = edgePasses('hiddengrey', { scale: 2 });
+  assert.deepEqual(hg.map((p) => p.depth), ['greater', 'lequal']);
+  assert.equal(hg[0].dash, 12);
+  assert.equal(hg[0].selectedOnly, true);
+  assert.equal(edgePasses('xray')[0].mode, 2);
+  assert.equal(edgePasses('xray', { onLight: true })[0].mode, 1, 'X-ray on a light ground takes the paper colours');
+});
+test('seesHidden exactly where a pass draws behind faces', () => {
+  for (const s of STYLES) {
+    const behind = (edgePasses(s.id) || []).some((p) => p.depth !== 'lequal');
+    assert.equal(s.seesHidden, behind, s.id);
+  }
 });
 test('the paper colours meet the plan\'s contrast figures', () => {
   const r = (a, b) => Math.round(contrast(a, b) * 100) / 100;

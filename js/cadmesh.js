@@ -200,6 +200,33 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
   return out;
 }
 
+// A raw .cadmesh (ArrayBuffer) -> { header, data }: the parsed header and a
+// copy of the data region every section offset is counted from. With
+// withHeader() it is how a tool edits a file in place (set-colours.mjs: new
+// colour bytes, a "recolour" key) without a second writer of the layout.
+export function splitCadmesh(buf) {
+  const { header } = decodeCadmesh(buf); // (validates the whole file first)
+  const jlen = new DataView(buf).getUint32(8, true);
+  return { header, data: new Uint8Array(buf.slice(align8(12 + jlen))) };
+}
+
+// header + data region -> a raw .cadmesh (ArrayBuffer), checked to read back.
+// Section offsets are from the data's start, so a longer header moves nothing
+// they name.
+export function withHeader(header, data) {
+  const json = new TextEncoder().encode(JSON.stringify(header));
+  const dataStart = align8(12 + json.byteLength);
+  const out = new ArrayBuffer(dataStart + data.byteLength);
+  const dv = new DataView(out);
+  dv.setUint32(0, MAGIC, true);
+  dv.setUint32(4, VERSION, true);
+  dv.setUint32(8, json.byteLength, true);
+  new Uint8Array(out, 12, json.byteLength).set(json);
+  new Uint8Array(out, dataStart).set(data);
+  decodeCadmesh(out);
+  return out;
+}
+
 // A .cadmesh file may be stored gzip-compressed (RFC 1952): the sections are
 // mostly redundant bytes (a 650k-triangle assembly gzips to a sixth), and a
 // static host serves application/octet-stream uncompressed. The gzip magic
@@ -219,11 +246,18 @@ export const MAX_FILE_BYTES = 2 * 2 ** 30;
 
 // gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz),
 // counted as they come, at most `max`
-export async function gunzip(buf, max = MAX_FILE_BYTES) {
+export function gunzip(buf, max = MAX_FILE_BYTES) {
+  return inflate(buf, 'gzip', max);
+}
+
+// compressed bytes ('gzip', or a zip entry's 'deflate-raw') -> the bytes inside, counted as they
+// come and refused past `max` (a zip bomb stops there, not when the tab runs out of memory)
+export async function inflate(buf, format, max = MAX_FILE_BYTES) {
+  const what = format === 'gzip' ? 'gzip' : 'deflated';
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('this file is gzip-compressed, and this browser cannot decompress (no DecompressionStream)');
+    throw new Error(`this file is ${what}-compressed, and this browser cannot decompress (no DecompressionStream)`);
   }
-  const rd = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const rd = new Blob([buf]).stream().pipeThrough(new DecompressionStream(format)).getReader();
   const chunks = [];
   let n = 0;
   try {
@@ -238,8 +272,8 @@ export async function gunzip(buf, max = MAX_FILE_BYTES) {
       chunks.push(value);
     }
   } catch (e) {
-    if (e instanceof RangeError) throw new Error(`the gzip file is too big: ${e.message}`);
-    throw new Error(`the gzip data is corrupt or truncated (${e.message || e})`);
+    if (e instanceof RangeError) throw new Error(`the ${format === 'gzip' ? 'gzip file' : 'zip entry'} is too big: ${e.message}`);
+    throw new Error(`the ${what} data is corrupt or truncated (${e.message || e})`);
   }
   const out = new Uint8Array(n);
   let o = 0;
