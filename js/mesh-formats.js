@@ -1,8 +1,10 @@
 // Mesh files opened as models (plan feature 14; feature review item 23):
-// STL (binary or ASCII), OBJ (with its MTL), PLY (ASCII or binary, vertex
-// colours), OFF, 3MF (a zip: its model XML, units, components and base
-// materials) and glTF / GLB (core: node transforms baked in, baseColorFactor,
-// metres to mm). Each parser returns the model js/cadmesh.js encodeCadmesh
+// STL (binary or ASCII; VisCAM / Magics facet colours), OBJ (with its MTL;
+// vertex colours), PLY (ASCII or binary, vertex and face colours), OFF, 3MF
+// (a zip: its model XML, units, components, base materials and colour groups)
+// and glTF / GLB (core, KHR_mesh_quantization and EXT_mesh_gpu_instancing:
+// node transforms baked in, baseColorFactor x texture x COLOR_0, metres to
+// mm). Each parser returns the model js/cadmesh.js encodeCadmesh
 // takes, so the tree, colours, cache, Save .cadmesh, the facts, edges and
 // Measure all work as for a converted STEP file.
 //
@@ -23,6 +25,7 @@ const CREASE_DEG = 30;
 // A 3MF or glTF names a part once and places it many times; the placements are counted
 // before any is built (a part shared two ways down 40 levels is 2^40 placements from a few
 // hundred bytes). Real assemblies of several million placed triangles stay under these.
+// (own(id) may give .parts: the parts a node adds beyond itself, a glTF node's instances)
 // Vertices are counted as well as triangles: each placement copies its part's vertices, so one
 // triangle indexing a 30 M-vertex list, placed 4 times, was 29.6 s and 2.9 GB from 451 bytes
 // (the vertex cap is an unindexed mesh at the triangle cap: 3 corners each).
@@ -47,7 +50,7 @@ function placements(roots, kids, own, maxDepth, refuse, who) {
     const ks = kids(id, from);
     onPath.add(id);
     const o = own(id);
-    const r = { parts: 1, tris: o.tris, verts: o.verts, height: 0 };
+    const r = { parts: 1 + (o.parts || 0), tris: o.tris, verts: o.verts, height: 0 };
     for (const k of ks) {
       const c = count(k, depth + 1, id);
       r.parts += c.parts; r.tris += c.tris; r.verts += c.verts; r.height = Math.max(r.height, c.height + 1);
@@ -75,8 +78,20 @@ export function meshFormatOf(name, buf) {
   return MESH_EXTS.includes(ext) ? ext : null;
 }
 
-// A model from a mesh file. files: other dropped files by lower-case name
-// (an OBJ's .mtl, a .gltf's .bin). Throws in plain words on what it refuses.
+// A companion file's key: its name without a directory (cut at / or \) and without case. Every
+// reference a mesh file makes to another (an OBJ's mtllib, a glTF's buffers and images) is looked
+// up by this one rule, and the map's own keys are read by it too, so a map keyed by bare name (a
+// drop: js/main.js keys by File.name) and one keyed by path both match.
+export const companionKey = (ref) => String(ref).split(/[/\\]/).pop().toLowerCase();
+function companion(files, ref) {
+  const k = companionKey(ref);
+  if (files.has(k)) return files.get(k);
+  for (const [n, f] of files) if (companionKey(n) === k) return f;
+  return null;
+}
+
+// A model from a mesh file. files: other dropped files by name (an OBJ's .mtl, a .gltf's .bin),
+// matched by companionKey. Throws in plain words on what it refuses.
 // Every refusal names the file one way: its name and the format's extension ("a.stl"); the
 // tree's root keeps the bare name.
 export async function parseMesh(format, buf, name, files = new Map()) {
@@ -226,22 +241,30 @@ export function weld(b) {
 function parseSTL(buf, base) {
   const dv = new DataView(buf);
   const hold = counter(`${base}.stl`);
-  // binary when the size is exactly 84 + 50 n, even if it starts "solid"
-  if (buf.byteLength >= 84) {
-    const n = dv.getUint32(80, true);
-    if (84 + 50 * n === buf.byteLength) {
-      hold('triangles', n); hold('vertices', 3 * n);
-      const pos = new Array(n * 9), tri = new Array(n * 3);
-      for (let i = 0; i < n; i++) {
-        const o = 84 + i * 50 + 12;
-        for (let k = 0; k < 9; k++) pos[i * 9 + k] = dv.getFloat32(o + k * 4, true);
-        tri[i * 3] = i * 3; tri[i * 3 + 1] = i * 3 + 1; tri[i * 3 + 2] = i * 3 + 2;
-      }
-      return [{ name: base, pos, tri }];
+  // binary when the size is 84 + 50 n, even if it starts "solid", or that plus a surplus under one
+  // record (padding, an appended byte or two). Text cannot pass for it: header bytes 80-83 of text
+  // count at least 0x09090909 triangles, far past the size.
+  const n = buf.byteLength >= 84 ? dv.getUint32(80, true) : 0;
+  const want = 84 + 50 * n;
+  if (buf.byteLength >= 84 && want <= buf.byteLength && buf.byteLength - want < 50) {
+    hold('triangles', n); hold('vertices', 3 * n);
+    const pos = new Array(n * 9), tri = new Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const o = 84 + i * 50 + 12;
+      for (let k = 0; k < 9; k++) pos[i * 9 + k] = dv.getFloat32(o + k * 4, true);
+      tri[i * 3] = i * 3; tri[i * 3 + 1] = i * 3 + 1; tri[i * 3 + 2] = i * 3 + 2;
     }
+    return [{ name: base, pos, tri, ...stlColours(dv, n) }];
   }
+  // neither: a file holding a NUL byte is binary (no ASCII STL has one), so its size is what is wrong
+  const sizeWrong = () => new Error(`${base}.stl is damaged: its header counts ${big(n)} triangle${n === 1 ? '' : 's'}, so it should be ${big(want)} bytes, but it is ${big(buf.byteLength)} bytes`);
+  const binary = () => buf.byteLength >= 84 && new Uint8Array(buf).indexOf(0) >= 0;
   const s = text(buf, `${base}.stl`);
-  if (!/^\s*solid/.test(s)) throw new Error(`${base}.stl is neither a binary STL (its size does not match its triangle count) nor an ASCII one`);
+  if (!/^\s*solid/.test(s)) {
+    if (binary()) throw sizeWrong();
+    throw new Error(`${base}.stl is neither a binary STL (its size does not match its triangle count) nor an ASCII one`);
+  }
+  if (!/\bvertex\b/.test(s) && binary()) throw sizeWrong();
   const bodies = [];
   let cur = null;
   // (the indent is [ \t]*, not \s*: \s crossed newlines from every line start, so 256 KB of
@@ -281,9 +304,52 @@ function parseSTL(buf, base) {
   return bodies;
 }
 
+// A binary STL's per-facet colours, from each record's 16-bit attribute word, by the two
+// conventions writers use (both 5 bits a channel, 0-31):
+// - Materialise Magics, when the header holds "COLOR=": the 4 bytes after it are the part's RGBA,
+//   and the first 4 after ",MATERIAL=" (its diffuse colour) are preferred over them. A facet with
+//   bit 15 CLEAR has its own colour, red in bits 0-4, green 5-9, blue 10-14; bit 15 set takes the
+//   part's colour.
+// - VisCAM / SolidView, any other header: bit 15 SET marks the facet's colour valid, blue in bits
+//   0-4, green 5-9, red 10-14; clear is no colour (the default grey).
+// -> {} (no colour), { color } (one for every facet) or { col } (per facet, grey where none)
+function stlColours(dv, n) {
+  const hdr = new Uint8Array(dv.buffer, 0, 80);
+  const words = String.fromCharCode(...hdr);
+  const ci = words.indexOf('COLOR='), mi = words.indexOf('MATERIAL=');
+  const rgba = (at) => (at + 4 <= 80 ? [hdr[at] / 255, hdr[at + 1] / 255, hdr[at + 2] / 255] : null);
+  const magics = ci >= 0;
+  const part = (mi >= 0 && rgba(mi + 9)) || (magics && rgba(ci + 6)) || null;
+  // one colour array per distinct word, shared by its facets (10 M facets, at most 65,536 arrays)
+  const byWord = new Map();
+  const col = new Array(n);
+  let any = false, same = true;
+  for (let i = 0; i < n; i++) {
+    const w = dv.getUint16(84 + i * 50 + 48, true);
+    let c = byWord.get(w);
+    if (c === undefined) {
+      const ch = (sh) => ((w >> sh) & 31) / 31;
+      c = magics ? (w & 0x8000 ? part : [ch(0), ch(5), ch(10)]) : (w & 0x8000 ? [ch(10), ch(5), ch(0)] : null);
+      byWord.set(w, c);
+    }
+    if (c) any = true;
+    if (i && c !== col[0]) same = false;
+    col[i] = c;
+  }
+  if (!any) return {};
+  if (same) return { color: col[0] };
+  for (let i = 0; i < n; i++) if (!col[i]) col[i] = DEFAULT_GREY;
+  return { col };
+}
+
 // ---------- OBJ ----------
+// (a vertex may carry a colour, "v x y z r g b" in 0..1, as MeshLab writes it: each triangle
+// takes its corners' mean, and that wins over its usemtl's Kd. A line whose last non-space
+// character is "\" continues on the next, in both passes below.)
 function parseOBJ(s, files, base) {
+  if (/\\[ \t\r]*\n/.test(s)) s = s.replace(/\\[ \t\r]*\n/g, ' ');
   const v = [];
+  let vc = null; // the vertex colours, 3 per vertex (NaN: none), once one vertex has one
   const bodies = [];
   let cur = null;
   let mat = null;
@@ -341,14 +407,24 @@ function parseOBJ(s, files, base) {
     if (!line || line[0] === '#') continue;
     const sp = line.split(/\s+/);
     const k = sp[0];
-    if (k === 'v') v.push(+sp[1], +sp[2], +sp[3]);
+    if (k === 'v') {
+      v.push(+sp[1], +sp[2], +sp[3]);
+      if (sp.length >= 7) {
+        if (!vc) vc = new Array(v.length - 3).fill(NaN);
+        vc.push(+sp[4], +sp[5], +sp[6]);
+      } else if (vc) vc.push(NaN, NaN, NaN);
+    }
     else if (k === 'o' || k === 'g') start(-1, 0, sp.slice(1).join(' ') || base);
     else if (k === 'mtllib') {
-      for (const f of sp.slice(1)) {
-        const key = f.toLowerCase();
+      // the rest of the line as one name first (Blender writes "mtllib my model.mtl" unquoted),
+      // else each word a name (the form "mtllib a.mtl b.mtl")
+      const whole = line.slice(6).trim();
+      const names = sp.length > 2 && companion(files, whole) ? [whole] : sp.slice(1);
+      for (const f of names) {
+        const key = companionKey(f);
         if (mtlRead.has(key)) continue;
         mtlRead.add(key);
-        const t = files.get(key);
+        const t = companion(files, f);
         if (t) readMTL(text(t, f), mtl);
       }
     } else if (k === 'usemtl') mat = sp.slice(1).join(' ');
@@ -367,7 +443,16 @@ function parseOBJ(s, files, base) {
         return j;
       });
       const c = (mat && mtl.get(mat)) || null;
-      for (let i = 1; i + 1 < loc.length; i++) { cur.tri.push(loc[0], loc[i], loc[i + 1]); cur.col.push(c); }
+      const vcol = (i) => (Number.isFinite(vc[i * 3]) ? vc.slice(i * 3, i * 3 + 3) : null);
+      for (let i = 1; i + 1 < loc.length; i++) {
+        cur.tri.push(loc[0], loc[i], loc[i + 1]);
+        let tc = c;
+        if (vc) {
+          const cs = [ids[0], ids[i], ids[i + 1]].map(vcol);
+          if (cs.some(Boolean)) tc = [0, 1, 2].map((q) => ((cs[0] || DEFAULT_GREY)[q] + (cs[1] || DEFAULT_GREY)[q] + (cs[2] || DEFAULT_GREY)[q]) / 3);
+        }
+        cur.col.push(tc);
+      }
     }
   }
   for (const b of bodies) {
@@ -434,15 +519,27 @@ function parsePLY(buf, base) {
     if (e.n > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
   }
   const corners = (e, pr, c) => { if (e.name === 'face' && pr.name === e.tlist && c > 2) hold('triangles', c - 2); return c; };
-  const pos = [], tri = [], vcol = [];
-  let hasCol = false;
+  // a colour's scale is its red property's TYPE: a float is 0..1, an integer its type's top
+  // (uchar 255, ushort 65535; a 32-bit integer is taken as bytes). Judged by the values, a uchar
+  // model whose channels were all 0 or 1 (a near-black part) opened as 0..1 fractions.
+  const scaleOf = (name) => {
+    const el = els.find((e) => e.name === name);
+    const rt = el && el.props.find((pr) => pr.name === 'red' && !pr.list);
+    return !rt || /^Float/.test(rt.t) ? 1 : /16$/.test(rt.t) ? 65535 : 255;
+  };
+  const vScale = scaleOf('vertex'), fScale = scaleOf('face');
+  // face colours (MeshLab writes red green blue [alpha] on the face element), one per triangle
+  const pos = [], tri = [], vcol = [], fcol = [];
+  let hasCol = false, hasFaceCol = false;
   const take = (e, rec) => {
     if (e.name === 'vertex') {
       pos.push(rec.x, rec.y, rec.z);
       if (rec.red !== undefined) { hasCol = true; vcol.push([rec.red, rec.green, rec.blue]); } else vcol.push(null);
     } else if (e.name === 'face') {
       const ids = rec.vertex_indices || rec.vertex_index || [];
-      for (let i = 1; i + 1 < ids.length; i++) tri.push(ids[0], ids[i], ids[i + 1]);
+      const fc = rec.red !== undefined ? [rec.red / fScale, (rec.green ?? 0) / fScale, (rec.blue ?? 0) / fScale] : null;
+      if (fc) hasFaceCol = true;
+      for (let i = 1; i + 1 < ids.length; i++) { tri.push(ids[0], ids[i], ids[i + 1]); fcol.push(fc); }
     }
   };
   // the counts the data cannot hold are a damaged header, refused before looping on them (1e999
@@ -497,16 +594,13 @@ function parsePLY(buf, base) {
     }
   }
   const body = { name: base, pos, tri };
-  if (hasCol) {
-    // vertex colours become each triangle's mean, so the weld keeps them. Their scale is the red
-    // property's TYPE: a float is 0..1, an integer its type's top (uchar 255, ushort 65535; a
-    // 32-bit integer is taken as bytes). Judged by the values, a uchar model whose channels were
-    // all 0 or 1 (a near-black part) opened as 0..1 fractions, white / yellow.
-    const vel = els.find((e) => e.name === 'vertex');
-    const rt = vel && vel.props.find((pr) => pr.name === 'red' && !pr.list);
-    const scale = !rt || /^Float/.test(rt.t) ? 1 : /16$/.test(rt.t) ? 65535 : 255;
+  if (hasCol || hasFaceCol) {
+    // a face's colour, else its vertex colours' mean (so the weld keeps them), else grey
+    const scale = vScale;
     body.col = [];
     for (let t = 0; t < tri.length / 3; t++) {
+      if (fcol[t]) { body.col.push(fcol[t]); continue; }
+      if (!hasCol) { body.col.push(DEFAULT_GREY); continue; }
       const cs = [0, 1, 2].map((c) => vcol[tri[t * 3 + c]] || DEFAULT_GREY.map((x) => x * scale));
       body.col.push([0, 1, 2].map((k) => (cs[0][k] + cs[1][k] + cs[2][k]) / 3 / scale));
     }
@@ -682,10 +776,23 @@ function xmlWalk(s, want, onTag) {
     const attrs = {};
     const ar = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
     let a;
-    while ((a = ar.exec(m[3]))) attrs[a[1].replace(/^.*:/, '')] = a[2] ?? a[3];
+    while ((a = ar.exec(m[3]))) attrs[a[1].replace(/^.*:/, '')] = xmlText(a[2] ?? a[3]);
     if (onTag({ tag: m[2].replace(/^.*:/, ''), attrs, close: !!m[1], self: !!m[4] })) return;
     find.lastIndex = TAG_RE.lastIndex;
   }
+}
+
+// An attribute value as text: XML's five named entities and its character references (&#N;,
+// &#xH;) decoded ("Bolt &amp; nut" is the name "Bolt & nut"). A reference to no character is
+// left as written. (Only a value holding "&" is scanned: a model's millions of coordinates are not.)
+const XML_NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+function xmlText(v) {
+  if (v.indexOf('&') < 0) return v;
+  return v.replace(/&(?:#[xX]([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|quot|apos));/g, (all, hex, dec, nm) => {
+    if (nm) return XML_NAMED[nm];
+    const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec, 10);
+    return cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : all;
+  });
 }
 
 // 3MF's unit attribute -> the viewer's unit name (js/units.js holds mm per unit)
@@ -746,8 +853,12 @@ async function parse3MF(buf, base) {
     const key = (id, at = null) => `${at === null ? pk : partKey(at)}#${id}`;
     const want = (at) => { if (at && !partsRead.has(partKey(at)) && !wantedKeys.has(partKey(at))) { wantedKeys.add(partKey(at)); partsWanted.push(at); } };
     let obj = null, matGroup = null;
-    xmlWalk(text(xml, `${base}.3mf's model part`), ['model', 'basematerials', 'base', 'object', 'vertex', 'triangle', 'component', 'item'], (t) => {
-      if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials') matGroup = null; return false; }
+    // (a property group is core basematerials of <base displaycolor>, or the materials
+    // extension's m:colorgroup of <m:color color>; a pid names either, p1 (or the object's
+    // pindex) the entry. A colour group gives each corner its own, p1 p2 p3: the triangle takes
+    // their mean, as PLY vertex colours are taken)
+    xmlWalk(text(xml, `${base}.3mf's model part`), ['model', 'basematerials', 'base', 'colorgroup', 'color', 'object', 'vertex', 'triangle', 'component', 'item'], (t) => {
+      if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials' || t.tag === 'colorgroup') matGroup = null; return false; }
       switch (t.tag) {
         // (each part's first model tag gives its unit; the root's is the model's)
         case 'model': if (!seenModel) {
@@ -757,7 +868,9 @@ async function parse3MF(buf, base) {
           if (isRoot) unit = u;
         } break;
         case 'basematerials': hold('objects'); matGroup = []; mats.set(key(t.attrs.id), matGroup); break;
-        case 'base': if (matGroup) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
+        case 'base': if (matGroup && !matGroup.perCorner) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
+        case 'colorgroup': hold('objects'); matGroup = []; matGroup.perCorner = true; mats.set(key(t.attrs.id), matGroup); break;
+        case 'color': if (matGroup && matGroup.perCorner) { hold('base materials'); matGroup.push(hexColour(t.attrs.color)); } break;
         case 'object': hold('objects'); obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(key(t.attrs.id), obj); break;
         case 'vertex': if (obj) { hold('vertices'); obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); } break;
         case 'triangle': if (obj) {
@@ -765,7 +878,14 @@ async function parse3MF(buf, base) {
           obj.tris.push(+t.attrs.v1, +t.attrs.v2, +t.attrs.v3);
           const pid = t.attrs.pid ?? obj.pid, pi = t.attrs.p1 !== undefined ? +t.attrs.p1 : obj.pindex;
           const g = pid !== undefined ? mats.get(key(pid)) : undefined;
-          obj.tcol.push(g ? g[pi] || null : null);
+          let c = g ? g[pi] || null : null;
+          // (a corner with no p2 / p3 takes p1, as the core spec says)
+          if (c && g.perCorner && (t.attrs.p2 !== undefined || t.attrs.p3 !== undefined)) {
+            const corner = (p) => (p === undefined ? c : g[+p] || c);
+            const c2 = corner(t.attrs.p2), c3 = corner(t.attrs.p3);
+            c = [0, 1, 2].map((q) => (c[q] + c2[q] + c3[q]) / 3);
+          }
+          obj.tcol.push(c);
         } break;
         // (path: the production extension's p:path, the prefix dropped by the walker)
         case 'component': if (obj) { hold('parts and placements'); want(t.attrs.path); obj.comps.push({ id: key(t.attrs.objectid, t.attrs.path ?? null), m: mat3mf(t.attrs.transform, k) }); } break;
@@ -854,6 +974,13 @@ const COMP = { 5120: [Int8Array, 127], 5121: [Uint8Array, 255], 5122: [Int16Arra
 const NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 // the primitive modes drawn: TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN (points and lines are not)
 const TRI_MODES = [4, 5, 6];
+// the extensions a file may require: KHR_mesh_quantization (integer and normalized attributes
+// are read, and its dequantization is the node transform, baked in) and EXT_mesh_gpu_instancing
+// (each instance placed); every other is refused by name, compression in its own words
+const GLTF_EXTENSIONS_READ = ['KHR_mesh_quantization', 'EXT_mesh_gpu_instancing'];
+const GLTF_COMPRESSION = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
+const INSTANCING = 'EXT_mesh_gpu_instancing';
+const INSTANCE_ATTR = { TRANSLATION: 'VEC3', ROTATION: 'VEC4', SCALE: 'VEC3' };
 
 // a glTF's JSON, or a plain "damaged" in place of the engine's parse error
 function parseJSON(s, what) {
@@ -887,8 +1014,14 @@ async function parseGLTF(buf, format, base, files) {
   const list = (x, what) => { if (x === undefined) return []; if (!Array.isArray(x)) throw damaged(`${what} is not a list`); return x; };
   const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
   const nat = (x) => Number.isInteger(x) && x >= 0;
-  const refused = list(json.extensionsRequired, '"extensionsRequired"').filter((x) => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_mesh_quantization'].includes(x));
-  if (refused.length) throw new Error(`${file} needs ${refused.join(', ')}, which this viewer does not decode: export it without compression`);
+  // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
+  // must not load such an asset; ignored, an instanced part opened as one copy without a word).
+  // Compression keeps its own words, since the fix is the same for each.
+  const required = list(json.extensionsRequired, '"extensionsRequired"');
+  const packed = required.filter((x) => GLTF_COMPRESSION.includes(x));
+  if (packed.length) throw new Error(`${file} needs ${packed.join(', ')}, which this viewer does not decode: export it without compression`);
+  const unread = required.filter((x) => !GLTF_EXTENSIONS_READ.includes(x)).map((x) => String(x).slice(0, 80));
+  if (unread.length) throw new Error(`${file} needs the glTF extension${unread.length > 1 ? 's' : ''} ${unread.join(', ')}, which this viewer does not read`);
   const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
   const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
   const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {
@@ -904,7 +1037,7 @@ async function parseGLTF(buf, format, base, files) {
     }
     let nm;
     try { nm = decodeURIComponent(b.uri); } catch { throw unread(); }
-    const f = files.get(nm.split('/').pop().toLowerCase());
+    const f = companion(files, nm);
     if (!f) throw new Error(`${file} needs ${b.uri}: drop it together with the .${format}`);
     return f;
   }));
@@ -967,15 +1100,33 @@ async function parseGLTF(buf, format, base, files) {
     }
     return out;
   };
-  // each material's colour: baseColorFactor, times its base texture's average
-  // colour when it has one and the image can be decoded here
-  const matColour = await Promise.all(list(json.materials, '"materials"').map(async (mat) => {
+  // each material's LINEAR colour: baseColorFactor (linear), times its base texture's linear
+  // average when it has one and the image can be decoded here. Products are taken in linear
+  // space and made sRGB (the viewer's colours) last: srgb(factor x texture x COLOR_0).
+  const matLinear = await Promise.all(list(json.materials, '"materials"').map(async (mat) => {
     const pbr = (isObj(mat) && isObj(mat.pbrMetallicRoughness) && mat.pbrMetallicRoughness) || {};
-    const f = Array.isArray(pbr.baseColorFactor) ? linearToSrgb(pbr.baseColorFactor) : null;
+    const f = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor.slice(0, 3) : null;
     const tex = isObj(pbr.baseColorTexture) ? await textureAverage(json, buffers, pbr.baseColorTexture.index, files) : null;
     if (!tex) return f;
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
   }));
+  // a node's EXT_mesh_gpu_instancing: null (none, or no mesh to place), else { count, attrs }
+  const instancing = (ni) => {
+    const nd = nodes[ni];
+    const ex = isObj(nd.extensions) ? nd.extensions[INSTANCING] : undefined;
+    if (ex === undefined || nd.mesh === undefined) return null;
+    if (!isObj(ex) || !isObj(ex.attributes)) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
+    let count = null;
+    for (const [k, ty] of Object.entries(INSTANCE_ATTR)) {
+      if (ex.attributes[k] === undefined) continue;
+      const a = at(accessors, ex.attributes[k]);
+      if (!a || a.type !== ty || !nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} is not a ${ty} accessor`);
+      if (count !== null && a.count !== count) throw damaged(`node ${ni}'s ${INSTANCING} attributes count ${count} and ${a.count} instances`);
+      count = a.count;
+    }
+    if (count === null) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
+    return { count, attrs: ex.attributes };
+  };
   const si = json.scene ?? 0;
   // with no scenes the roots are the nodes no node names as a child (every node as a root drew
   // each child twice: under its parent and again at the origin)
@@ -1007,7 +1158,12 @@ async function parseGLTF(buf, format, base, files) {
     const nd = at(nodes, ni);
     if (!nd) throw damaged(`node ${ni} is not there`);
     return list(nd.children, `node ${ni}'s "children"`);
-  }, (ni) => (nodes[ni].mesh !== undefined ? meshCounts(nodes[ni].mesh) : { tris: 0, verts: 0 }), 64,
+  }, (ni) => {
+    if (nodes[ni].mesh === undefined) return { tris: 0, verts: 0 };
+    const c = meshCounts(nodes[ni].mesh), ins = instancing(ni);
+    // (each instance is a part of its own and a copy of the mesh)
+    return ins ? { tris: c.tris * ins.count, verts: c.verts * ins.count, parts: ins.count } : c;
+  }, 64,
   (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), file);
   const bodies = [];
   // a name is taken only when it is text, else the default (glTF 2.0 makes "name" a string; one
@@ -1017,7 +1173,8 @@ async function parseGLTF(buf, format, base, files) {
     const nd = nodes[ni];
     const m = mul4(parent, localMatrix(nd, (k, n) => damaged(`node ${ni}'s "${k}" is not a list of ${n} numbers`)));
     const n = { name: textName(nd.name) || `node ${ni}`, meshes: [], children: [] };
-    if (nd.mesh !== undefined) {
+    // the node's mesh placed by m into target's meshes (once, or once per instance)
+    const emit = (target, m) => {
       const me = at(meshDefs, nd.mesh);
       if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
       list(me.primitives, `mesh ${nd.mesh}'s "primitives"`).forEach((pr, k) => {
@@ -1034,7 +1191,7 @@ async function parseGLTF(buf, format, base, files) {
         // 0): each triangle has no area, so the primitive is an empty body, as one whose every
         // triangle the weld collapses
         if (P === null || I === null) {
-          n.meshes.push(bodies.length);
+          target.meshes.push(bodies.length);
           bodies.push({ name, pos: [], tri: [], color: null });
           return;
         }
@@ -1061,10 +1218,57 @@ async function parseGLTF(buf, format, base, files) {
         }
         // a mirroring transform flips the winding back
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
-        n.meshes.push(bodies.length);
-        bodies.push({ name, pos, tri: idx,
-          color: Number.isInteger(pr.material) ? matColour[pr.material] || null : null });
+        const lin = (Number.isInteger(pr.material) && matLinear[pr.material]) || null;
+        const body = { name, pos, tri: idx, color: lin ? linearToSrgb(lin) : null };
+        // COLOR_0 (linear; VEC3 or VEC4, float or normalized ubyte / ushort): each triangle the
+        // mean of its corners, times the material's colour, made sRGB
+        if (pr.attributes.COLOR_0 !== undefined) {
+          const ca = at(accessors, pr.attributes.COLOR_0);
+          const cn = ca && NCOMP[ca.type];
+          if (cn !== 3 && cn !== 4) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 is not a VEC3 or VEC4 accessor`);
+          if (!nat(ca.count) || ca.count < nv) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 holds ${ca.count} colours for its ${nv} vertices`);
+          const CV = acc(pr.attributes.COLOR_0); // (null: no buffer view, every colour 0)
+          // (an integer colour the file forgot to mark normalized is still read as a fraction)
+          const top = !ca.normalized && Object.hasOwn(COMP, ca.componentType) ? COMP[ca.componentType][1] : 0;
+          const f = lin || [1, 1, 1];
+          const ch = (v, q) => (CV ? (top ? CV[v * cn + q] / top : CV[v * cn + q]) : 0);
+          const col = new Array(idx.length / 3);
+          let same = true;
+          for (let t = 0; t < col.length; t++) {
+            const a = idx[t * 3], b = idx[t * 3 + 1], c = idx[t * 3 + 2];
+            col[t] = linearToSrgb([0, 1, 2].map((q) => ((ch(a, q) + ch(b, q) + ch(c, q)) / 3) * f[q]));
+            if (t && same && (col[t][0] !== col[0][0] || col[t][1] !== col[0][1] || col[t][2] !== col[0][2])) same = false;
+          }
+          if (col.length && same) body.color = col[0];
+          else if (col.length) { body.color = null; body.col = col; }
+        }
+        target.meshes.push(bodies.length);
+        bodies.push(body);
       });
+    };
+    if (nd.mesh !== undefined) {
+      const ins = instancing(ni);
+      if (!ins) emit(n, m);
+      else {
+        // EXT_mesh_gpu_instancing: instance j is placed by its own TRS, then by the node's
+        // transform (world = node x instance); each instance a part of its own under the node.
+        // (An attribute with no buffer view is all zeros (glTF 2.0 3.6.2.1): a translation or
+        // scale of zeros is kept, a rotation of zeros is no quaternion and is taken as none)
+        const val = (k) => (ins.attrs[k] !== undefined ? acc(ins.attrs[k]) : null);
+        const T = val('TRANSLATION'), R = val('ROTATION'), S = val('SCALE');
+        const noS = ins.attrs.SCALE === undefined;
+        const bad = (k, c) => damaged(`node ${ni}'s ${INSTANCING} ${k} is not a list of ${c} numbers`);
+        for (let j = 0; j < ins.count; j++) {
+          const trs = {
+            translation: T ? [T[j * 3], T[j * 3 + 1], T[j * 3 + 2]] : [0, 0, 0],
+            rotation: R ? [R[j * 4], R[j * 4 + 1], R[j * 4 + 2], R[j * 4 + 3]] : [0, 0, 0, 1],
+            scale: S ? [S[j * 3], S[j * 3 + 1], S[j * 3 + 2]] : noS ? [1, 1, 1] : [0, 0, 0],
+          };
+          const ch = { name: `${n.name} instance ${j + 1}`, meshes: [], children: [] };
+          emit(ch, mul4(m, localMatrix(trs, bad)));
+          n.children.push(ch);
+        }
+      }
     }
     for (const c of nd.children || []) n.children.push(nodeOf(c, m));
     return n;
@@ -1075,10 +1279,11 @@ async function parseGLTF(buf, format, base, files) {
   needTriangles(file, meshes);
   return { units: MM, meshes, root, sourceUnits: 'm' };
 }
-// A texture's average colour (sRGB, 0..1), or null where the image cannot be
+// A texture's average colour (LINEAR, 0..1), or null where the image cannot be
 // decoded here (no createImageBitmap / OffscreenCanvas: Node, an old browser)
-// or is not found. The image is drawn at 32 x 32 and its pixels averaged,
-// weighted by alpha.
+// or is not found. The image is drawn at 32 x 32 and its pixels (sRGB, as glTF
+// base colour textures are) averaged in linear light, weighted by alpha.
+const SRGB_TO_LINEAR = Array.from({ length: 256 }, (_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
 async function textureAverage(json, buffers, ti, files) {
   try {
     if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return null;
@@ -1090,7 +1295,7 @@ async function textureAverage(json, buffers, ti, files) {
       blob = new Blob([new Uint8Array(buffers[bv.buffer], bv.byteOffset || 0, bv.byteLength)], { type: img.mimeType || 'image/png' });
     } else if (img.uri && img.uri.startsWith('data:')) blob = await (await fetch(img.uri)).blob();
     else if (img.uri) {
-      const f = files.get(decodeURIComponent(img.uri).split('/').pop().toLowerCase());
+      const f = companion(files, decodeURIComponent(img.uri));
       if (!f) return null;
       blob = new Blob([f]);
     } else return null;
@@ -1100,8 +1305,9 @@ async function textureAverage(json, buffers, ti, files) {
     cx.drawImage(bmp, 0, 0, 32, 32);
     const px = cx.getImageData(0, 0, 32, 32).data;
     let r = 0, g = 0, b = 0, w = 0;
-    for (let i = 0; i < px.length; i += 4) { const a = px[i + 3] / 255; r += px[i] * a; g += px[i + 1] * a; b += px[i + 2] * a; w += a; }
-    return w ? [r / w / 255, g / w / 255, b / w / 255] : null;
+    const L = SRGB_TO_LINEAR;
+    for (let i = 0; i < px.length; i += 4) { const a = px[i + 3] / 255; r += L[px[i]] * a; g += L[px[i + 1]] * a; b += L[px[i + 2]] * a; w += a; }
+    return w ? [r / w, g / w, b / w] : null;
   } catch { return null; }
 }
 

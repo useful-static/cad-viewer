@@ -43,6 +43,9 @@ export function draftToTour(draft, modelUrl = null) {
 // it replaces, or the one before a new step): its id, words, dimming, timing and orbit. The
 // view's own fields come from the capture. Pure: tests/test-tour.mjs.
 const EDITOR_FIELDS = ['id', 'title', 'text', 'dim', 'transition', 'hold', 'ease', 'orbit'];
+// what a new step takes from the one before it (ease was left out: a draft of linear steps got
+// an inOut one)
+export const CARRIED_FIELDS = ['dim', 'transition', 'hold', 'ease'];
 export function stepFromView(captured, keep = {}) {
   const s = { ...captured, title: '', text: '', dim: DEFAULTS.dim, transition: DEFAULTS.transition, hold: DEFAULTS.hold };
   for (const k of EDITOR_FIELDS) if (keep[k] !== undefined && keep[k] !== '') s[k] = keep[k];
@@ -143,7 +146,8 @@ export function createTourRecorder(api) {
 
   el.add.onclick = () => {
     const prev = draft.steps[draft.sel];
-    const s = take(prev ? { dim: prev.dim, transition: prev.transition, hold: prev.hold } : {});
+    // (the step before's dimming and timing carry over: its words, id and orbit do not)
+    const s = take(prev ? Object.fromEntries(CARRIED_FIELDS.map((k) => [k, prev[k]])) : {});
     if (!s) { note('select parts first to frame them, or choose "this exact view"'); return; }
     draft.steps.splice(draft.sel + 1, 0, s);
     select(draft.sel + 1);

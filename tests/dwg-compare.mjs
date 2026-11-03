@@ -12,6 +12,7 @@ export const GROUPS = {
   INSERT: [2, 10, 20, 30, 41, 42, 50], LWPOLYLINE: [90, 10, 20, 42], SPLINE: [71, 72, 73, 74, 40, 10, 20],
   SOLID: [10, 20, 11, 21, 12, 22, 13, 23], TRACE: [10, 20, 11, 21, 12, 22, 13, 23], HATCH: [2, 70, 91],
   DIMENSION: [2, 10, 20], POLYLINE: [70, 71, 72], VERTEX: [10, 20, 30, 42], LAYER: [2, 62, 6],
+  ATTRIB: [10, 20, 40, 50, 1, 2, 70], '3DFACE': [10, 20, 30, 11, 21, 31, 12, 22, 32, 13, 23, 33, 70],
 };
 
 // DXF defaults of compared groups a writer may leave out
@@ -152,6 +153,9 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
     // another kind (a freed VERTEX handle reused for an XRECORD, a STYLE) is counted apart
     const other = src(h);
     if (!b && opts.handlesReused && other && !other.e) { cmp.reused = (cmp.reused || 0) + 1; continue; }
+    // an R2018 multi-line ATTRIB (its value an embedded MTEXT, not decoded): the adapter leaves
+    // it undrawn for that stated reason; counted apart, not as missing
+    if (!b && a.type === 'ATTRIB' && other && other.d && other.d.multi) { cmp.undrawn = (cmp.undrawn || 0) + 1; continue; }
     if (!b) { cmp.missing++; ex(`missing ${a.type} ${h.toString(16)}`); continue; }
     // a fit-point spline: the DWG holds its fit points; AutoCAD's DXF adds control points it
     // computes, which the file does not hold: compare the fit points

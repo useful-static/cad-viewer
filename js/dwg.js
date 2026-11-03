@@ -926,12 +926,37 @@ class ObjectReader {
   }
 }
 const ENTITY_NAMES = new Set(['TEXT', 'ATTRIB', 'ATTDEF', 'BLOCK', 'ENDBLK', 'SEQEND', 'INSERT', 'MINSERT', 'VERTEX', 'POLYLINE', 'ARC', 'CIRCLE', 'LINE', 'DIMENSION', 'POINT', 'SOLID', 'TRACE',
-  'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE']);
+  'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', '3DFACE']);
 
 // the per-type prescriptions (20.4.x); each reads its data with r and its handles with o.h
 const DECODE = {
   TEXT(o, r, v) { o.d = text(r, v); this.entityHandles(o); o.d.style = o.h.Ha(o.handle); },
-  ATTRIB(o, r, v) { o.d = text(r, v); /* the rest is not drawn */ },
+  // 20.4.32: four corners (R2000+: the first raw, each next as DDs on the one before) and the
+  // invisible-edge flags
+  '3DFACE'(o, r, v) {
+    let c, flags;
+    if (v <= 14) { c = [r.BD3(), r.BD3(), r.BD3(), r.BD3()]; flags = r.BS(); } else {
+      const noFlags = r.B(), zZero = r.B();
+      const p0 = [r.RD(), r.RD(), zZero ? 0 : r.RD()];
+      c = [p0];
+      for (let k = 1; k < 4; k++) { const q = c[k - 1]; c.push([r.DD(q[0]), r.DD(q[1]), r.DD(q[2])]); }
+      flags = noFlags ? 0 : r.BS();
+    }
+    o.d = { c, flags };
+    this.entityHandles(o);
+  },
+  // 20.4.4: the text, then (R2010+) a version, (R2018+) the attribute type -- a multi-line one
+  // carries an embedded MTEXT, not decoded: left undrawn -- then its tag and flags (1: invisible)
+  ATTRIB(o, r, v) {
+    const d = text(r, v);
+    const ver = v >= 24 ? r.RC() : undefined;
+    // (the handles are their own stream, so a multi-line one's owner is still read)
+    if (v >= 32) { const type = r.RC(); if (type > 1) { o.d = { multi: true, ver, type }; this.entityHandles(o); return; } d.type = type; }
+    d.ver = ver;
+    d.tag = r.TV(); r.BS(); d.flags = r.RC();
+    o.d = d;
+    this.entityHandles(o); d.style = o.h.Ha(o.handle);
+  },
   ATTDEF(o, r, v) { o.d = text(r, v); },
   BLOCK(o, r) { o.d = { name: r.TV() }; this.entityHandles(o); },
   ENDBLK(o) { this.entityHandles(o); },
@@ -1427,6 +1452,11 @@ export function dwgToPairs(dwg) {
       case 'ARC': common('ARC'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.rad); put(50, deg(d.a0)); put(51, deg(d.a1)); ext(d.ext); break;
       case 'POINT': common('POINT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); ext(d.ext); break;
       case 'ELLIPSE': common('ELLIPSE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(11, d.major[0]); put(21, d.major[1]); put(31, d.major[2]); ext(d.ext); put(40, d.ratio); put(41, d.t0); put(42, d.t1); break;
+      case '3DFACE':
+        common('3DFACE');
+        d.c.forEach((p, k) => { put(10 + k, p[0]); put(20 + k, p[1]); put(30 + k, p[2]); });
+        if (d.flags) put(70, d.flags);
+        break;
       case 'SOLID': case 'TRACE':
         common(o.name);
         d.c.forEach((p, k) => { put(10 + k, p[0]); put(20 + k, p[1]); put(30 + k, d.z); });
@@ -1496,7 +1526,33 @@ export function dwgToPairs(dwg) {
         if (d.s[2] !== 1) put(43, d.s[2]);
         if (d.rot) put(50, deg(d.rot));
         if (o.name === 'MINSERT') { put(70, d.cols); put(71, d.rows); put(44, d.dc); put(45, d.dr); }
-        ext(d.ext); break;
+        // its attributes (a title block's values) follow it, as DXF writes them: 66, the
+        // ATTRIBs in handle order, SEQEND
+        const atts = d.atts ? (children.get(o.handle) || []).filter((c) => c.name === 'ATTRIB').sort((a, b) => hcmp(a.handle, b.handle)) : [];
+        if (atts.length) put(66, 1);
+        ext(d.ext);
+        if (!atts.length) break;
+        for (const a of atts) {
+          const ad = a.d;
+          if (!ad || ad.multi) { const why = 'ATTRIB, multi-line (not drawn)'; stats.dropped[why] = (stats.dropped[why] || 0) + 1; continue; }
+          stats.attribs = (stats.attribs || 0) + 1;
+          put(0, 'ATTRIB'); put(5, hex(a.handle));
+          if (inPaper) put(67, 1);
+          put(8, name(a.e.layer) || '0');
+          if (a.e.colour.aci !== 256) put(62, a.e.colour.aci);
+          if (a.e.colour.rgb !== undefined) put(420, a.e.colour.rgb);
+          if (a.e.invisible) put(60, 1);
+          put(10, ad.p[0]); put(20, ad.p[1]); put(30, ad.elev); put(40, ad.h);
+          put(1, styleText(ad.text, ad.style).replace(/\r\n|\r|\n/g, ' ')); put(2, ad.tag); put(70, ad.flags);
+          if (ad.rot) put(50, deg(ad.rot));
+          if (ad.wf !== 1) put(41, ad.wf);
+          if (ad.ha) put(72, ad.ha);
+          if (ad.ha || ad.va) { put(11, ad.a[0]); put(21, ad.a[1]); put(31, ad.elev); }
+          ext(ad.ext);
+          if (ad.va) put(74, ad.va);
+        }
+        put(0, 'SEQEND');
+        break;
       }
       case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {
         const bn = bname(d.block);

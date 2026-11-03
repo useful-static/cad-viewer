@@ -8,7 +8,8 @@
 // (evaluated: weights, fit points as the polyline when no control points),
 // POINT, TEXT, MTEXT (formatting stripped), INSERT and MINSERT (nested,
 // scaled, rotated, arrayed), DIMENSION (its block), HATCH (solid fill, else
-// its outline), SOLID / TRACE. The object coordinate system (210/220/230,
+// its outline), SOLID / TRACE, 3DFACE (its visible edges), ATTRIB (an insert's attribute values,
+// as TEXT; invisible ones left out). The object coordinate system (210/220/230,
 // the arbitrary-axis rule) is applied; BYLAYER and BYBLOCK resolve through
 // nested inserts; ACI and true colour (420). $INSUNITS gives the unit
 // (0: not stored). A DWG arrives here as group-code pairs from js/dwg.js:
@@ -595,7 +596,26 @@ function emit(recs, M, byBlock, depth, ctx) {
         for (const loop of r.loops) path(loop, true, solid);
         break;
       }
-      case 'TEXT': case 'MTEXT': {
+      case '3DFACE': {
+        // world corners (the fourth repeats the third for a triangle); 70's bits 1, 2, 4, 8 hide
+        // the first .. fourth edge
+        const c = [[num(r, 10), num(r, 20)], [num(r, 11), num(r, 21)], [num(r, 12), num(r, 22)], [num(r, 13, num(r, 12)), num(r, 23, num(r, 22))]].map(([x, y]) => ap(M, x, y));
+        const hide = num(r, 70);
+        if (!(hide & 15)) {
+          ctx.add({ layer, colour, ...sty, pts: Float64Array.from(c.flat()), closed: true, fill: false });
+          break;
+        }
+        for (let e = 0; e < 4; e++) {
+          if (hide & (1 << e)) continue;
+          const a = c[e], b = c[(e + 1) % 4];
+          ctx.add({ layer, colour, ...sty, pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
+        }
+        break;
+      }
+      case 'TEXT': case 'MTEXT': case 'ATTRIB': {
+        // (an ATTRIB is a TEXT that follows its INSERT -- a title block's values -- and one
+        // flagged invisible (70 bit 1) is not drawn; its vertical alignment is 74, not 73)
+        if (r.type === 'ATTRIB' && (num(r, 70) & 1)) break;
         // (the plain text, made once per entity: a block's text inserted many times is the same)
         if (r.plain === undefined) {
           const raw = r.type === 'MTEXT' ? r.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
@@ -604,13 +624,23 @@ function emit(recs, M, byBlock, depth, ctx) {
         const t = r.plain;
         if (!t.trim()) break;
         // TEXT with an alignment uses its second point
-        const al = r.type === 'TEXT' ? num(r, 72, 0) : 0;
-        const useB = r.type === 'TEXT' && (al || num(r, 73, 0));
-        const [x, y] = ap(O, useB ? num(r, 11) : num(r, 10), useB ? num(r, 21) : num(r, 20));
-        let rot = r.type === 'MTEXT' && get(r, 11, null) !== null ? Math.atan2(num(r, 21), num(r, 11)) : (num(r, 50) * Math.PI) / 180;
-        // the transform's rotation and scale carried over
-        rot += Math.atan2(O[1], O[0]);
-        const h = num(r, 40, 1) * Math.hypot(O[2], O[3]);
+        const al = r.type !== 'MTEXT' ? num(r, 72, 0) : 0;
+        const useB = r.type !== 'MTEXT' && (al || num(r, r.type === 'ATTRIB' ? 74 : 73, 0));
+        // MTEXT's point (10) and direction (11) are in WORLD coordinates, TEXT's in its own (the
+        // OCS): an MTEXT at world (50, 0) with extrusion 0,0,-1 was drawn at (-50, 0)
+        const mt = r.type === 'MTEXT';
+        const P = mt ? M : O;
+        const [x, y] = ap(P, useB ? num(r, 11) : num(r, 10), useB ? num(r, 21) : num(r, 20));
+        let rot;
+        if (mt && get(r, 11, null) !== null) {
+          // the world direction, through the insert transform
+          const dx = num(r, 11), dy = num(r, 21);
+          rot = Math.atan2(M[1] * dx + M[3] * dy, M[0] * dx + M[2] * dy);
+        } else {
+          // (an MTEXT's 50, without 11, is in its OCS, as TEXT's is)
+          rot = (num(r, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
+        }
+        const h = num(r, 40, 1) * Math.hypot(P[2], P[3]);
         ctx.addText({ layer, colour, x, y, h, rot, text: t, align: r.type === 'MTEXT' ? mtextAlign(num(r, 71, 1)) : ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left', mtext: r.type === 'MTEXT' });
         break;
       }

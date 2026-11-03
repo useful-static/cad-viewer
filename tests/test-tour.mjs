@@ -6,14 +6,23 @@
 // its poses and moves steadily between them.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES } from '../js/tour.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { encodeCadmesh } from '../js/cadmesh.js';
+import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX } from '../js/tour.js';
 import { checkTour } from '../js/list-check.js';
+import { parseModelList } from '../js/model-list.js';
+import { EXPLODE_MODES } from '../js/view-link.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
-import { draftToTour, stepFromView } from '../js/tour-recorder.js';
+import { CARRIED_FIELDS, draftToTour, stepFromView } from '../js/tour-recorder.js';
 import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 import { test, done } from './harness.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 // the plan's example, as written there
 const EXAMPLE = {
@@ -58,6 +67,42 @@ await test('a tour over MAX_TOUR_BYTES is refused before it is parsed, in words;
   assert.equal(r.level, 'bad');
   assert.match(r.detail, /over 4 MB/);
   assert.ok(cancelled && pulled <= 6, `read ${pulled} MB before refusing`);
+});
+
+test('one part-name limit for lists and tours: what a list allows, the tour maker writes and the parser takes', () => {
+  const N = 1300;
+  const header = { root: { name: '', meshes: [...Array(N).keys()], children: [] }, meshes: Array.from({ length: N }, (_, i) => ({ name: `part${i + 1}` })) };
+  // a list hides 600 bodies; the maker names them in a step; the tour parses
+  const hide = namesFor(Array.from({ length: 600 }, (_, i) => i + 1), header, partIndex(header));
+  assert.equal(parseModelList(JSON.stringify({ 'a.stl': { name: 'A', hide } }), 'https://x.example/l.json')[0].hide.length, 600);
+  const step = { view: { cam: { target: [0, 0, 0], dist: 10, q: [0, 0, 0, 1], ortho: false } }, hide, section: { axis: 'off' }, title: '', text: '', dim: 'none', transition: 1.2, hold: 4 };
+  assert.equal(parseTour(JSON.stringify(draftToTour({ title: 't', mode: 'static', loop: false, orient: null, steps: [step] }))).steps[0].hide.length, 600);
+  // over the limit: refused in words that name it
+  const many = Array.from({ length: PART_NAMES_MAX + 1 }, (_, i) => `p${i}`);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, steps: [{ hide: many }] })), new RegExp(`at most ${PART_NAMES_MAX} part names`));
+  assert.throws(() => parseModelList(JSON.stringify({ 'a.stl': { name: 'A', hide: many } }), 'https://x.example/l.json'), new RegExp(`at most ${PART_NAMES_MAX}`));
+  // a label (which a tour then names the part by) and a colour key: the same length limit
+  const long = 'L'.repeat(PART_NAME_MAX + 50);
+  assert.throws(() => parseModelList(JSON.stringify({ 'a.stl': { name: 'A', labels: { part1: long } } }), 'https://x.example/l.json'), /labels/);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, steps: [{ colour: { [long]: '#ff0000' } }] })), /colour/);
+});
+
+test('check-tour.mjs plays a local tour over the model its "model" names beside it, as the page does', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cv-checktour-'));
+  try {
+    const quad = { name: 'plate', color: null, positions: Float32Array.of(0, 0, 0, 1, 0, 0, 1, 1, 0), normals: null, colors: null, indices: Uint32Array.of(0, 1, 2) };
+    writeFileSync(join(dir, 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } })));
+    writeFileSync(join(dir, 't.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.cadmesh', steps: [{ frame: ['plate'] }] }));
+    const out = execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json')], { encoding: 'utf8' });
+    assert.match(out, /^OK {2}.*1 steps, 1 part names, 0 not in the model/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a new step carries the step before\'s dimming AND timing, ease included', () => {
+  const prev = { dim: 'grey', transition: 2, hold: 1, ease: 'linear', title: 'not carried', id: 'x' };
+  const s = stepFromView({ view: {} }, Object.fromEntries(CARRIED_FIELDS.map((k) => [k, prev[k]])));
+  assert.deepEqual([s.dim, s.transition, s.hold, s.ease, s.title], ['grey', 2, 1, 'linear', '']);
+  assert.equal(s.id, undefined);
 });
 
 test('parse-defaults', () => {
@@ -138,6 +183,9 @@ test('the tour maker\'s menus offer exactly the values the parser takes (DIMS, M
   const values = (id) => [...new RegExp(`<select id="${id}"[\\s\\S]*?</select>`).exec(html)[0].matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(values('tes-dim'), DIMS);
   assert.deepEqual(values('temode'), MODES);
+  // and Explode's direction buttons offer exactly the modes links and tours take (EXPLODE_MODES)
+  const seg = /<span class="seg" id="xpmode"[\s\S]*?<\/span>/.exec(html)[0];
+  assert.deepEqual([...seg.matchAll(/data-mode="([^"]+)"/g)].map((m) => m[1]), EXPLODE_MODES);
 });
 
 test('partIndex on a 200-deep named tree over 100,000 bodies: built at once, a name\'s ids gathered when asked', () => {

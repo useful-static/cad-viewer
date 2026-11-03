@@ -121,9 +121,13 @@ function loadOverrides(key, bodies) {
 }
 
 // (storage off or full: the colours last while the model is open)
+// The VISITOR's colours: while a tour plays, app.overrides is the tour's map (its step's colours,
+// every other part grey), which the visitor's own colours are kept under app.tour.base
+const ownOverrides = () => (app.tour ? app.tour.base.overrides : app.overrides);
 function saveOverrides() {
   if (!app.modelKey) return;
-  setPrefJSON(app.modelKey, app.overrides.size ? Object.fromEntries([...app.overrides].map(([i, c]) => [i, rgbToHex(c)])) : null);
+  const own = ownOverrides();
+  setPrefJSON(app.modelKey, own.size ? Object.fromEntries([...own].map(([i, c]) => [i, rgbToHex(c)])) : null);
 }
 window.__cadv = app;
 app.redraw = () => viewChanged(); // for tests that change a display flag
@@ -1114,6 +1118,11 @@ function applyView(v, link = false) {
 }
 
 app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
+// (for tests/ui-checks.py tour-leaves-no-state: a tour from an object, the tour maker's capture,
+// a load from a URL without leaving the page)
+app.playTour = (t) => startTour(parseTour(JSON.stringify(t), location.href), null);
+app.captureStep = (o) => captureStep(o);
+app.openUrl = (u) => loadUrl(u);
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
 // in their drawn colours, turned the way the model opens: Z up for STL and
 // 3MF (a printer's convention), Y up for GLB (glTF's)
@@ -1600,14 +1609,16 @@ function applyStepState(s) {
   const overrides = new Map(base.overrides);
   for (const [name, hex] of Object.entries(s.colour || {})) for (const id of tourParts([name]).ids) overrides.set(id - 1, hexToRgb(hex));
   app.tourGhost = false;
+  // (what the dim alone did, so the tour maker records the step and not its dimming: captureStep)
+  const dimmed = { grey: new Set(), hidden: new Set() };
   if (subject.size && s.dim !== 'none') {
     for (let id = 1; id <= n; id++) {
       if (subject.has(id)) { hidden.delete(id); continue; }
-      if (s.dim === 'grey') overrides.set(id - 1, TOUR_GREY);
-      else hidden.add(id);
+      if (s.dim === 'grey') { overrides.set(id - 1, TOUR_GREY); dimmed.grey.add(id); } else if (!hidden.has(id)) { hidden.add(id); dimmed.hidden.add(id); }
     }
     app.tourGhost = s.dim === 'ghost';
   }
+  app.tour.dimmed = dimmed;
   app.hidden = hidden;
   syncTreeChecks();
   const same = overrides.size === app.overrides.size && [...overrides].every(([k, v]) => app.overrides.get(k)?.every((x, j) => x === v[j]));
@@ -1839,7 +1850,7 @@ function startTour(tour, url, only = null) {
   // (styleChoice: the visitor's own choice of style, which a step's style is
   // not; leaving puts it back as it was)
   const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
-    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t }, walk: !!app.walk };
+    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
   // (in place of another tour: the visitor's orientation, not that tour's,
   // unless this one sets its own below)
@@ -1867,6 +1878,18 @@ function startTour(tour, url, only = null) {
   return true;
 }
 
+// Explode as the visitor had it before a tour: on or off, AND its amount and direction (a tour's
+// step left them where it put them: Explode off, then on, read "exploded 0 %" and moved nothing,
+// or moved the parts along the step's axis)
+function restoreExplode(bx) {
+  const x = app.explode;
+  if (!bx.on) setExplode(false);
+  x.t = bx.t;
+  if (bx.mine && bx.mode && x.mode !== bx.mode) setExplodeMode(bx.mode);
+  else if (!bx.mine) { x.for = null; x.dirs = null; x.mode = bx.mode; } // (the default direction, chosen when next turned on)
+  if (bx.on) { if (x.on) { syncBodies(true); syncExplodeSphere(); syncExplodeRow(); viewChanged(); } else setExplode(true); }
+}
+
 // Leave the tour: the card goes and the view the visitor had comes back
 function endTour(restore = true) {
   if (!app.tour) return;
@@ -1879,7 +1902,7 @@ function endTour(restore = true) {
   if (restore && saved && app.header) {
     app.overrides = base.overrides;
     recolour();
-    if (base.explode.on) { app.explode.t = base.explode.t; if (app.explode.on) { syncExplodeSphere(); syncExplodeRow(); } else setExplode(true); } else setExplode(false);
+    restoreExplode(base.explode);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
@@ -1913,8 +1936,21 @@ function captureStep({ camera = 'exact' } = {}) {
   } else {
     s.view = { cam: { target: c.target.map((v) => r(v, 4)), dist: +c.dist.toPrecision(6), q, ortho: !!c.ortho } };
   }
+  // with a tour shown (the maker's Show or Preview), the view is the step as played: what its dim
+  // did (every other part grey, or hidden) is the dim field's, which the editor keeps, not a
+  // colour or a hide of the step's -- recording it named every other part #9ea3ab, or hid them
+  const dim = app.tour && app.tour.dimmed;
+  const overrides = new Map(app.overrides);
+  let hiddenNow = app.hidden;
+  if (dim) {
+    for (const id of dim.grey) {
+      const own = app.tour.base.overrides.get(id - 1);
+      if (own) overrides.set(id - 1, own); else overrides.delete(id - 1);
+    }
+    hiddenNow = new Set([...app.hidden].filter((id) => !dim.hidden.has(id)));
+  }
   const byHex = new Map();
-  for (const [i, rgb] of app.overrides) {
+  for (const [i, rgb] of overrides) {
     const h = rgbToHex(rgb);
     if (!byHex.has(h)) byHex.set(h, []);
     byHex.get(h).push(i + 1);
@@ -1926,12 +1962,12 @@ function captureStep({ camera = 'exact' } = {}) {
   // (every field the step takes is written, "nothing" included: a field left out means "keep
   // the page's", so a step taken after Show all says "show": "all", and a step with no cut
   // "section": "off" -- else a list's hidden parts and a visitor's cut stayed in the tour)
-  if (app.hidden.size) {
-    if (app.hidden.size > n / 2) {
+  if (hiddenNow.size) {
+    if (hiddenNow.size > n / 2) {
       const shown = [];
-      for (let id = 1; id <= n; id++) if (!app.hidden.has(id)) shown.push(id);
+      for (let id = 1; id <= n; id++) if (!hiddenNow.has(id)) shown.push(id);
       s.isolate = names(shown);
-    } else s.hide = names([...app.hidden]);
+    } else s.hide = names([...hiddenNow]);
   } else s.show = 'all';
   if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) {
     s.explode = r(app.explode.t, 3);
@@ -1941,7 +1977,11 @@ function captureStep({ camera = 'exact' } = {}) {
   s.style = currentStyle().id;
   // (the visitor's own notes: a model list's are the page's, shown again whatever the tour says)
   const notes = app.measure ? app.measure.notes().filter((nt) => nt.own) : [];
-  if (notes.length) s.callouts = notes.map((nt) => ({ text: nt.text, at: nt.p.map((v) => r(v, 3)) }));
+  // (and, with a tour shown, the shown step's own callouts, as it names them: they are on the
+  // view, as the tour's notes, so the visitor-only filter above left them out)
+  const shownStep = app.tour && app.tour.tour.steps[app.tour.i];
+  const callouts = [...(shownStep && shownStep.callouts ? shownStep.callouts : []), ...notes.map((nt) => ({ text: nt.text, at: nt.p.map((v) => r(v, 3)) }))];
+  if (callouts.length) s.callouts = callouts;
   return s;
 }
 
@@ -3488,7 +3528,8 @@ function recolour(announcement) {
 function setPartColour(hex) {
   if (!app.selected.size) return;
   const c = hexToRgb(hex);
-  for (const id of app.selected) app.overrides.set(id - 1, c);
+  // (shown now, and -- in a tour -- kept as the visitor's own, which leaving the tour puts back)
+  for (const id of app.selected) { app.overrides.set(id - 1, c); if (app.tour) app.tour.base.overrides.set(id - 1, c); }
   saveOverrides();
   updateButtons();
   recolour(`${app.selected.size} part${app.selected.size > 1 ? 's' : ''} recoloured`);
@@ -3498,11 +3539,13 @@ function setPartColour(hex) {
 // picked colour of this model; the parts take the scheme's colours again
 function resetPartColour() {
   let n = 0;
+  const own = ownOverrides();
   if (app.selected.size) {
-    for (const id of app.selected) if (app.overrides.delete(id - 1)) n++;
+    for (const id of app.selected) { if (app.overrides.delete(id - 1)) n++; own.delete(id - 1); }
   } else {
-    n = app.overrides.size + app.faceOverrides.size;
+    n = own.size + app.faceOverrides.size;
     app.overrides.clear();
+    own.clear();
     app.faceOverrides.clear(); // and the painted faces
   }
   saveOverrides();
@@ -4193,6 +4236,11 @@ async function loadAny(buf, name, seq) {
 // it. app.dropExtras: the other files dropped or picked with it (an OBJ's
 // .mtl, a .gltf's .bin), by lower-case name
 async function loadMeshFile(buf, name, seq) {
+  // the companions are this load's alone: taken here, so a later file opened from a URL or a
+  // list never reads an earlier drop's .mtl or scene.bin (a re-read in another unit keeps them
+  // in app.meshSource)
+  const drop = app.dropExtras || [];
+  app.dropExtras = null;
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   const format = meshFormatOf(name, buf);
@@ -4202,7 +4250,7 @@ async function loadMeshFile(buf, name, seq) {
   await nextPaint();
   if (stale(seq)) return;
   const extras = new Map();
-  for (const f of app.dropExtras || []) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
+  for (const f of drop) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
   if (stale(seq)) return;
   return meshFromSource({ buf, name, format, extras }, 'mm', seq);
 }
@@ -4699,6 +4747,7 @@ async function fetchFailedText(url, name, e, lead = `could not download ${name}`
 
 async function loadUrl(url) {
   const seq = beginLoad();
+  app.dropExtras = null; // (a URL brings no companions: an earlier drop's are not this file's)
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load

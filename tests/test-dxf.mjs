@@ -278,6 +278,33 @@ test('a clockwise hatch ELLIPSE edge, 0° to 90° stored, is the quarter from 36
   const c = parseDXF(ents([[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 3], [10, 0], [20, 0], [11, 2], [21, 0], [40, 0.5], [50, 0], [51, 90], [73, 1]])).paths[0].pts;
   assert.ok(Math.abs(c[c.length - 2]) < 1e-9 && Math.abs(c[c.length - 1] - 1) < 1e-9, `ccw end ${c[c.length - 2]},${c[c.length - 1]}`);
 });
+test('MTEXT\'s point and direction are WORLD coordinates (extrusion 0,0,-1 drew it mirrored); TEXT\'s are its own', () => {
+  const mt = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 50], [20, 0], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'A']])).texts[0];
+  assert.deepEqual([mt.x, mt.y], [50, 0]);
+  // (with no 11, its 50 is an angle in the OCS, as ezdxf maps it: OCS x runs along world -x here)
+  assert.ok(Math.abs(Math.abs(mt.rot) - Math.PI) < 1e-9, `rot ${mt.rot}`);
+  const md = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 50], [20, 0], [11, 0], [21, 1], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'B']])).texts[0];
+  assert.ok(Math.abs(md.rot - Math.PI / 2) < 1e-9, `direction rot ${md.rot}`);
+  // a TEXT with the same extrusion: its point is in the OCS, whose x runs along world -x
+  const tx = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 50], [20, 0], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'C']])).texts[0];
+  assert.deepEqual([tx.x, tx.y], [-50, 0]);
+});
+test('an INSERT\'s ATTRIBs are drawn as text (a title block\'s values), an invisible one is not; 3DFACE draws its visible edges', () => {
+  const d = parseDXF(ents(
+    [[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 5], [20, 6], [40, 2], [1, 'PN-12345'], [2, 'PARTNO'], [70, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 5], [20, 9], [40, 2], [1, 'hidden'], [2, 'NOTE'], [70, 1]],
+    [[0, 'SEQEND'], [8, '0']],
+    [[0, '3DFACE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 4], [21, 0], [31, 0], [12, 4], [22, 3], [32, 0], [13, 0], [23, 3], [33, 0], [70, 0]],
+    [[0, '3DFACE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 4], [21, 0], [31, 0], [12, 4], [22, 3], [32, 0], [13, 0], [23, 3], [33, 0], [70, 5]],
+  ));
+  assert.deepEqual(d.texts.map((t) => [t.text, t.x, t.y]), [['PN-12345', 5, 6]]);
+  // the closed quad, then the second face's two visible edges (bits 1 and 4 hide edges 1 and 3)
+  assert.equal(d.paths.length, 3);
+  assert.deepEqual([...d.paths[0].pts], [0, 0, 4, 0, 4, 3, 0, 3]);
+  assert.ok(d.paths[0].closed);
+  assert.deepEqual(d.paths.slice(1).map((p) => [...p.pts]), [[4, 0, 4, 3], [0, 3, 0, 0]]);
+});
 test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
   const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));
   assert.equal(d.paths.length, 1);

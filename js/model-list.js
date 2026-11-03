@@ -30,7 +30,7 @@
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
-import { PART_NAME_MAX, STEP_ID } from './tour.js';
+import { PART_NAME_MAX, PART_NAMES_MAX, STEP_ID, isPartName } from './tour.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 import { fileUrl } from './open-url.js';
 
@@ -172,8 +172,10 @@ function extras(file, v, listUrl) {
   }
   if (v.labels !== undefined) {
     const l = v.labels;
-    if (!l || typeof l !== 'object' || Array.isArray(l) || Object.values(l).some((s) => typeof s !== 'string')) {
-      throw bad('labels', 'must be an object of part name -> label (text)');
+    // (a label is what a tour then names the part by: the tour's limits, js/tour.js)
+    if (!l || typeof l !== 'object' || Array.isArray(l) || Object.keys(l).length > PART_NAMES_MAX
+      || !Object.entries(l).every(([k, s]) => isPartName(k) && typeof s === 'string' && s.length <= PART_NAME_MAX)) {
+      throw bad('labels', `must be an object of part name -> label (text): at most ${PART_NAMES_MAX}, each name and label at most ${PART_NAME_MAX} characters, as in a tour`);
     }
     out.labels = Object.fromEntries(Object.entries(l).filter(([, s]) => s.trim()).map(([k, s]) => [k, s.trim()]));
   }
@@ -217,8 +219,8 @@ function extras(file, v, listUrl) {
   }
   if (v.hide !== undefined) {
     const h = v.hide;
-    if (!Array.isArray(h) || h.length > 1000 || !h.every((x) => typeof x === 'string' && x.trim() && x.length <= PART_NAME_MAX)) {
-      throw bad('hide', `must be a list (at most 1000) of part names (${PART_NAME_MAX} characters at most, as in a tour)`);
+    if (!Array.isArray(h) || h.length > PART_NAMES_MAX || !h.every(isPartName)) {
+      throw bad('hide', `must be a list (at most ${PART_NAMES_MAX}) of part names (${PART_NAME_MAX} characters at most, as in a tour)`);
     }
     out.hide = h.map((x) => x.trim());
   }

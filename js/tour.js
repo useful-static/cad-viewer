@@ -40,10 +40,16 @@ const isVec = (v, n) => Array.isArray(v) && v.length === n && v.every((x) => typ
 const isColour = (v) => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
 // the longest part name a tour or a model list may give (a node, a body, a path of them)
 export const PART_NAME_MAX = 300;
+// the most part names one list of them may hold, in a tour (a step's hide, colour, …) or a model
+// list (hide; labels): one limit, so the tour maker, which writes a list's names into a step,
+// never writes a step the parser refuses (a list hid 1000, a tour took 500)
+export const PART_NAMES_MAX = 1000;
 // the longest title (a tour's, a step's) and step text; the tour maker's inputs take these
 export const TITLE_MAX = 200;
 export const TEXT_MAX = 2000;
-const isNames = (v) => Array.isArray(v) && v.length <= 500 && v.every((s) => typeof s === 'string' && s.trim() && s.length <= PART_NAME_MAX);
+export const isPartName = (s) => typeof s === 'string' && !!s.trim() && s.length <= PART_NAME_MAX;
+const isNames = (v) => Array.isArray(v) && v.length <= PART_NAMES_MAX && v.every(isPartName);
+const NAMES_RULE = `at most ${PART_NAMES_MAX} part names of at most ${PART_NAME_MAX} characters`;
 
 // text -> the tour, every default filled in; throws an Error naming what is wrong.
 // base: the URL the tour was read from (its model URL is resolved against it).
@@ -133,7 +139,7 @@ function parseStep(s, where, defaults, bad, version) {
     if (f && typeof f === 'object' && !Array.isArray(f)) {
       if (!isVec(f.min, 3) || !isVec(f.max, 3) || f.min.some((v, k) => v > f.max[k])) throw bad(at('frame'), 'a box needs "min": [x, y, z] and "max": [x, y, z], min ≤ max');
       out.frame = { min: f.min.slice(), max: f.max.slice() };
-    } else if (f !== 'all' && !isNames(f)) throw bad(at('frame'), '"all", a list of part names, or { "min": [x, y, z], "max": [x, y, z] }');
+    } else if (f !== 'all' && !isNames(f)) throw bad(at('frame'), `"all", a list of part names (${NAMES_RULE}), or { "min": [x, y, z], "max": [x, y, z] }`);
     else out.frame = f === 'all' ? 'all' : f.map((x) => x.trim());
   }
   if (s.from !== undefined) {
@@ -151,9 +157,9 @@ function parseStep(s, where, defaults, bad, version) {
   if (s.ortho !== undefined) { if (typeof s.ortho !== 'boolean') throw bad(at('ortho'), 'must be true or false'); out.ortho = s.ortho; }
   if (s.colour !== undefined) {
     const c = s.colour;
-    if (!c || typeof c !== 'object' || Array.isArray(c) || Object.keys(c).length > 500
-      || !Object.entries(c).every(([k, v]) => k.trim() && isColour(v))) {
-      throw bad(at('colour'), 'must be { "<part name>": "#rrggbb", … }');
+    if (!c || typeof c !== 'object' || Array.isArray(c) || Object.keys(c).length > PART_NAMES_MAX
+      || !Object.entries(c).every(([k, v]) => isPartName(k) && isColour(v))) {
+      throw bad(at('colour'), `must be { "<part name>": "#rrggbb", … } (${NAMES_RULE})`);
     }
     out.colour = Object.fromEntries(Object.entries(c).map(([k, v]) => [k.trim(), v.toLowerCase()]));
   }
@@ -162,7 +168,7 @@ function parseStep(s, where, defaults, bad, version) {
   for (const k of ['show', 'hide', 'isolate']) {
     if (s[k] === undefined) continue;
     if (k === 'show' && s[k] === 'all') { out.show = 'all'; continue; }
-    if (!isNames(s[k])) throw bad(at(k), k === 'show' ? '"all", or a list of part names' : 'must be a list of part names');
+    if (!isNames(s[k])) throw bad(at(k), k === 'show' ? `"all", or a list of part names (${NAMES_RULE})` : `must be a list of ${NAMES_RULE}`);
     out[k] = s[k].map((x) => x.trim());
   }
   if (s.explode !== undefined) { if (!isNum(s.explode, 0, 1)) throw bad(at('explode'), 'must be 0 to 1'); out.explode = s.explode; }

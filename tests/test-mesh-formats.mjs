@@ -151,8 +151,13 @@ await test('meshFormatOf: conclusive bytes win over the name (as check.html judg
   assert.equal(meshFormatOf('part.OFF', off()), 'off');
   assert.equal(meshFormatOf('readme.txt', enc('hello')), null);
 });
-await test('every mesh format says its geometry is in mm by the header word the viewer converts from (MM)', async () => {
-  const models = [await parseMesh('off', off(), 'cube.off'), await parseMesh('ply', plyBinary(), 'cube.ply')];
+await test('every mesh format (STL, OBJ, PLY, OFF, 3MF, GLB) says its geometry is in mm by the header word the viewer converts from (MM)', async () => {
+  // (r7-11: this arm checked OFF and PLY only)
+  const models = [await parseMesh('stl', stlBinary(), 'cube.stl'), await parseMesh('stl', stlAscii(), 'cube.stl'),
+    await parseMesh('obj', obj(), 'cube.obj', new Map([['cube.mtl', mtl()]])), await parseMesh('ply', plyBinary(), 'cube.ply'),
+    await parseMesh('off', off(), 'cube.off'), await parseMesh('3mf', zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', model3mf()]]), 'cube.3mf'),
+    await parseMesh('glb', glb(), 'cube.glb')];
+  assert.equal(models.length, 7);
   for (const m of models) assert.equal(decodeCadmesh(encodeCadmesh(m)).header.units, MM);
 });
 await test('STL binary, header starting "solid"', async () => {
@@ -735,6 +740,239 @@ await test('r6-6 PLY colour scale by the property type: uchar 0/1 values are byt
   assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('uchar', '1 1 0'), 'd.ply'))), ['1,1,0']);
   assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('float', '1 1 0'), 'd.ply'))), ['255,255,0']);
   assert.deepEqual(colourSet(cube(await parseMesh('ply', ply('ushort', '65535 0 32896'), 'd.ply'))), ['255,0,128']);
+});
+
+// --- review round 7: variants real exporters write ---
+// the bounding box of every body, rounded: [lox, loy, loz, hix, hiy, hiz]
+const boxOf = (model) => {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const me of model.meshes) for (let i = 0; i < me.positions.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], me.positions[i + k]); hi[k] = Math.max(hi[k], me.positions[i + k]); }
+  return [...lo, ...hi].map((x) => Math.round(x * 1000) / 1000 + 0);
+};
+const triCount = (model) => model.meshes.reduce((s, me) => s + me.indices.length / 3, 0);
+const TRI1 = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+// A one-node, one-mesh glTF JSON. Accessor 0 is POSITION (values in componentType comp, packed
+// at stride); then COLOR_0 when colour = { values, comp, nc, normalized } is given; then each of
+// extra [{ values, comp, nc, normalized }] in order (instancing attributes, say). node and more are
+// spread into the node and the top level.
+function gltfOf({ positions, comp = 5126, normalized, stride, colour, extra = [], node = {}, more = {} }) {
+  const W = { 5126: ['Float32', 4], 5122: ['Int16', 2], 5120: ['Int8', 1], 5123: ['Uint16', 2], 5121: ['Uint8', 1] };
+  const chunks = [], bufferViews = [], accessors = [];
+  let off0 = 0;
+  const add = ({ values, comp: ct, nc, normalized: nz, stride: st }) => {
+    const [t, es] = W[ct];
+    const n = values.length / nc, s = st || nc * es;
+    const len = (n - 1) * s + nc * es;
+    const dv = new DataView(new ArrayBuffer(Math.ceil(len / 4) * 4));
+    for (let e = 0; e < n; e++) for (let c = 0; c < nc; c++) dv[`set${t}`](e * s + c * es, values[e * nc + c], true);
+    chunks.push(new Uint8Array(dv.buffer));
+    bufferViews.push({ buffer: 0, byteOffset: off0, byteLength: len, ...(st ? { byteStride: st } : {}) });
+    off0 += dv.byteLength;
+    accessors.push({ bufferView: bufferViews.length - 1, componentType: ct, count: n, type: ['', 'SCALAR', 'VEC2', 'VEC3', 'VEC4'][nc], ...(nz ? { normalized: true } : {}) });
+    return accessors.length - 1;
+  };
+  const attributes = { POSITION: add({ values: positions, comp, nc: 3, normalized, stride }) };
+  if (colour) attributes.COLOR_0 = add(colour);
+  for (const x of extra) add(x);
+  const all = new Uint8Array(off0);
+  let o = 0;
+  for (const c of chunks) { all.set(c, o); o += c.length; }
+  return { asset: { version: '2.0' }, buffers: [{ uri: b64uri(all), byteLength: all.length }], bufferViews, accessors,
+    meshes: [{ primitives: [{ attributes }] }], nodes: [{ mesh: 0, ...node }], scenes: [{ nodes: [0] }], ...more };
+}
+const openJ = (j, name = 'g.gltf') => parseMesh('gltf', enc(JSON.stringify(j)), name);
+// a binary STL of triangles [[9 coordinates], attribute word] under an 80-byte header, plus surplus bytes
+function stlOf(tris, header = '', surplus = 0) {
+  const b = new ArrayBuffer(84 + 50 * tris.length + surplus);
+  const u = new Uint8Array(b), dv = new DataView(b);
+  if (typeof header === 'string') u.set(new TextEncoder().encode(header)); else u.set(header);
+  dv.setUint32(80, tris.length, true);
+  tris.forEach(([p, attr], i) => { p.forEach((x, k) => dv.setFloat32(84 + i * 50 + 12 + k * 4, x, true)); dv.setUint16(84 + i * 50 + 48, attr, true); });
+  return b;
+}
+const m3of = (inner) => zipStored([['3D/3dmodel.model', enc(`<?xml version="1.0"?><model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">${inner}</model>`)]]);
+const TRI3MF = '<mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh>';
+
+await test('r7-1 companion files by one rule: a name with a space, a directory (/ or \\), any case; OBJ mtllib and glTF buffers alike', async () => {
+  const red = enc('newmtl red\nKd 1 0 0\n');
+  const objq = (line) => enc(`${line}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl red\nf 1 2 3\n`);
+  const col = async (line, key) => (await parseMesh('obj', objq(line), 'a.obj', new Map([[key, red]]))).meshes[0].color;
+  assert.ok(near(await col('mtllib my model.mtl', 'my model.mtl'), [1, 0, 0]), 'a name with a space (Blender writes it unquoted)');
+  assert.ok(near(await col('mtllib mat/a.mtl', 'a.mtl'), [1, 0, 0]), 'a directory with /');
+  assert.ok(near(await col('mtllib ..\\Mat\\A.MTL', 'a.mtl'), [1, 0, 0]), 'a directory with \\, upper case');
+  assert.ok(near(await col('mtllib a.mtl', 'textures/a.mtl'), [1, 0, 0]), 'the map keyed by a path');
+  // two names on one line are each still read
+  const two = await parseMesh('obj', enc('mtllib a.mtl b.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl blue\nf 1 2 3\n'), 'a.obj', new Map([['a.mtl', red], ['b.mtl', enc('newmtl blue\nKd 0 0 1\n')]]));
+  assert.ok(near(two.meshes[0].color, [0, 0, 1]), `two names: ${two.meshes[0].color}`);
+  // a glTF's buffer by the same rule
+  const pos = new Float32Array(TRI1).buffer;
+  const j = (uri) => gltf({ buffers: [{ uri, byteLength: 36 }], bufferViews: [{ buffer: 0, byteLength: 36 }], accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] });
+  for (const [uri, key] of [['bin/Tri.BIN', 'tri.bin'], ['bin%5Ctri.bin', 'tri.bin'], ['my%20tri.bin', 'my tri.bin'], ['tri.bin', 'sub/tri.bin']]) {
+    const model = await parseMesh('gltf', j(uri), 'a.gltf', new Map([[key, pos]]));
+    assert.equal(triCount(model), 1, uri);
+  }
+});
+await test('r7-2 glTF extensionsRequired: one the reader does not read is refused by name; EXT_mesh_gpu_instancing places every instance; Draco keeps its words', async () => {
+  await refusedFast(() => openJ({ ...gltfOf({ positions: TRI1 }), extensionsRequired: ['KHR_future_thing'] }, 'f.gltf'),
+    /^f\.gltf needs the glTF extension KHR_future_thing, which this viewer does not read/);
+  await refusedFast(() => openJ({ ...gltfOf({ positions: TRI1 }), extensionsRequired: ['KHR_draco_mesh_compression', 'KHR_future_thing'] }, 'd.gltf'),
+    /^d\.gltf needs KHR_draco_mesh_compression, which this viewer does not decode: export it without compression/);
+  // three instances: at the origin, 5 m along x, and 10 m along x turned 90 degrees about z; the
+  // node moves them all 2 m along y (the node's transform applies after the instance's)
+  const inst = gltfOf({ positions: TRI1, node: { translation: [0, 2, 0], extensions: { EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: 1, ROTATION: 2 } } } },
+    extra: [{ values: [0, 0, 0, 5, 0, 0, 10, 0, 0], comp: 5126, nc: 3 }, { values: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, Math.SQRT1_2, Math.SQRT1_2], comp: 5126, nc: 4 }],
+    more: { extensionsUsed: ['EXT_mesh_gpu_instancing'], extensionsRequired: ['EXT_mesh_gpu_instancing'] } });
+  const model = await openJ(inst, 'i.gltf');
+  assert.equal(model.meshes.length, 3, 'bodies');
+  assert.deepEqual(boxOf({ meshes: [model.meshes[0]] }), [0, 2000, 0, 1000, 3000, 0]);
+  assert.deepEqual(boxOf({ meshes: [model.meshes[1]] }), [5000, 2000, 0, 6000, 3000, 0]);
+  assert.deepEqual(boxOf({ meshes: [model.meshes[2]] }), [9000, 2000, 0, 10000, 3000, 0]);
+  // instances are counted against the caps before any is built
+  await refusedFast(() => openJ({ ...gltfOf({ positions: TRI1, node: { extensions: { EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: 1 } } } } }),
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }, { componentType: 5126, count: 4_000_000, type: 'VEC3' }] }, 'x.gltf'),
+  /^x\.gltf places 4,000,001 parts once its shared parts are repeated, more than the 2,000,000 this viewer opens/);
+});
+await test('r7-4 3MF names with XML character references: &amp; &lt; &gt; &quot; &apos; &#N; &#xH; decoded', async () => {
+  const model = await parseMesh('3mf', m3of(`<resources><object id="1" name="Bolt &amp; nut">${TRI3MF}</object><object id="2" name="&#x41;&#66;&lt;&gt;&quot;&apos;&#x1F600;">${TRI3MF}</object></resources>`
+    + '<build><item objectid="1"/><item objectid="2" transform="1 0 0 0 1 0 0 0 1 5 0 0"/></build>'), 'n.3mf');
+  assert.equal(model.root.children[0].name, 'Bolt & nut');
+  assert.equal(model.root.children[1].name, 'AB<>"\'\u{1F600}');
+});
+await test('r7-5 glTF requiring KHR_mesh_quantization (normalized int16 positions) opens', async () => {
+  const model = await openJ(gltfOf({ positions: [0, 0, 0, 32767, 0, 0, 0, 32767, 0], comp: 5122, normalized: true,
+    more: { extensionsUsed: ['KHR_mesh_quantization'], extensionsRequired: ['KHR_mesh_quantization'] } }));
+  assert.deepEqual(boxOf(model), [0, 0, 0, 1000, 1000, 0]);
+});
+await test('r7-6a STL per-facet colour: VisCAM / SolidView (bit 15 = valid, red high) and Materialise Magics (COLOR= / MATERIAL= header, bit 15 = use the part colour, red low)', async () => {
+  const A = [0, 0, 0, 1, 0, 0, 0, 1, 0], B = [5, 0, 0, 6, 0, 0, 5, 1, 0];
+  const one = await parseMesh('stl', stlOf([[A, 0x8000 | (31 << 10)]]), 'v.stl');
+  assert.ok(near(one.meshes[0].color, [1, 0, 0]), `VisCAM red: ${one.meshes[0].color}`);
+  // a facet without the valid bit stays grey beside a coloured one
+  const mixed = await parseMesh('stl', stlOf([[A, 0x8000 | 31], [B, 0]]), 'v.stl');
+  assert.deepEqual(colourSet(mixed.meshes[0]), ['0,0,255', '184,189,199']);
+  // Magics: the part colour (blue) for a facet with bit 15 set, its own (red, in bits 0-4) without
+  const hdr = new Uint8Array(80);
+  hdr.set(new TextEncoder().encode('Magics COLOR='), 0); hdr.set([0, 0, 255, 255], 13);
+  const magics = await parseMesh('stl', stlOf([[A, 0x8000], [B, 31]], hdr), 'm.stl');
+  assert.deepEqual(colourSet(magics.meshes[0]), ['0,0,255', '255,0,0']);
+  // MATERIAL= (its diffuse colour, green) is preferred over COLOR=
+  const mat = new Uint8Array(80);
+  mat.set(new TextEncoder().encode('COLOR='), 0); mat.set([0, 0, 255, 255], 6);
+  mat.set(new TextEncoder().encode(',MATERIAL='), 10); mat.set([0, 255, 0, 255, 9, 9, 9, 255, 9, 9, 9, 255], 20);
+  const m2 = await parseMesh('stl', stlOf([[A, 0x8000]], mat), 'm.stl');
+  assert.ok(near(m2.meshes[0].color, [0, 1, 0]), `MATERIAL= diffuse: ${m2.meshes[0].color}`);
+});
+await test('r7-6b OBJ vertex colours (v x y z r g b): each triangle the mean of its corners; over a usemtl', async () => {
+  const red = await parseMesh('obj', enc('v 0 0 0 1 0 0\nv 1 0 0 1 0 0\nv 0 1 0 1 0 0\nf 1 2 3\n'), 'vc.obj');
+  assert.ok(near(red.meshes[0].color, [1, 0, 0]), `colour ${red.meshes[0].color}`);
+  const mean = await parseMesh('obj', enc('mtllib a.mtl\nusemtl g\nv 0 0 0 1 0 0\nv 1 0 0 0 0 1\nv 0 1 0 0 0 1\nf 1 2 3\n'), 'vc.obj', new Map([['a.mtl', enc('newmtl g\nKd 0 1 0\n')]]));
+  assert.ok(near(mean.meshes[0].color, [1 / 3, 0, 2 / 3]), `colour ${mean.meshes[0].color}`);
+});
+await test('r7-6c PLY face colours (MeshLab: red green blue on the face element), over vertex colours', async () => {
+  const head = (vprops) => `ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\n${vprops}element face 1\nproperty list uchar int vertex_indices\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty uchar alpha\nend_header\n`;
+  const fc = await parseMesh('ply', enc(`${head('')}0 0 0\n1 0 0\n1 1 0\n3 0 1 2 255 0 0 255\n`), 'fc.ply');
+  assert.deepEqual(colourSet(fc.meshes[0]), ['255,0,0']);
+  const both = await parseMesh('ply', enc(`${head('property uchar red\nproperty uchar green\nproperty uchar blue\n')}0 0 0 0 255 0\n1 0 0 0 255 0\n1 1 0 0 255 0\n3 0 1 2 0 0 255 255\n`), 'fc.ply');
+  assert.deepEqual(colourSet(both.meshes[0]), ['0,0,255']);
+});
+await test('r7-6d glTF COLOR_0: float VEC4, normalized ubyte VEC3 and ushort VEC4, times the material\'s baseColorFactor, in linear space', async () => {
+  const red4 = [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1];
+  const f = await openJ(gltfOf({ positions: TRI1, colour: { values: red4, comp: 5126, nc: 4 } }));
+  assert.ok(near(f.meshes[0].color, [1, 0, 0]), `float: ${f.meshes[0].color}`);
+  const u8 = await openJ(gltfOf({ positions: TRI1, colour: { values: [255, 0, 0, 255, 0, 0, 255, 0, 0], comp: 5121, nc: 3, normalized: true } }));
+  assert.ok(near(u8.meshes[0].color, [1, 0, 0]), `ubyte: ${u8.meshes[0].color}`);
+  const u16 = await openJ(gltfOf({ positions: TRI1, colour: { values: [0, 65535, 0, 65535, 0, 65535, 0, 65535, 0, 65535, 0, 65535], comp: 5123, nc: 4, normalized: true } }));
+  assert.ok(near(u16.meshes[0].color, [0, 1, 0]), `ushort: ${u16.meshes[0].color}`);
+  // linear 0.2 x factor 0.5 = linear 0.1 -> sRGB 0.349
+  const jm = gltfOf({ positions: TRI1, colour: { values: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2], comp: 5126, nc: 3 },
+    more: { materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5, 0.5, 1] } }] } });
+  jm.meshes[0].primitives[0].material = 0;
+  const mul = await openJ(jm);
+  assert.ok(near(mul.meshes[0].color, [0.349, 0.349, 0.349]), `times the factor: ${mul.meshes[0].color}`);
+  // a colour per corner: each triangle their mean (red, red, blue -> 2/3 red, 1/3 blue, in linear)
+  const per = await openJ(gltfOf({ positions: TRI1, colour: { values: [1, 0, 0, 1, 0, 0, 0, 0, 1], comp: 5126, nc: 3 } }));
+  const s = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+  assert.ok(near(per.meshes[0].color, [s(2 / 3), 0, s(1 / 3)]), `mean: ${per.meshes[0].color}`);
+});
+await test('r7-6e 3MF materials extension: m:colorgroup by the object\'s pid / pindex, and a triangle\'s p1 p2 p3 averaged', async () => {
+  const cg = '<m:colorgroup id="5"><m:color color="#FF0000"/><m:color color="#0000FFFF"/></m:colorgroup>';
+  const obj1 = await parseMesh('3mf', m3of(`<resources>${cg}<object id="1" pid="5" pindex="0">${TRI3MF}</object></resources><build><item objectid="1"/></build>`), 'c.3mf');
+  assert.ok(near(obj1.meshes[0].color, [1, 0, 0]), `object colour: ${obj1.meshes[0].color}`);
+  const corners = TRI3MF.replace('<triangle v1="0" v2="1" v3="2"/>', '<triangle v1="0" v2="1" v3="2" pid="5" p1="0" p2="1" p3="1"/>');
+  const tri = await parseMesh('3mf', m3of(`<resources>${cg}<object id="1">${corners}</object></resources><build><item objectid="1"/></build>`), 'c.3mf');
+  assert.ok(near(tri.meshes[0].color, [1 / 3, 0, 2 / 3]), `corner mean: ${tri.meshes[0].color}`);
+});
+await test('r7-7 OBJ line continuation: a trailing backslash joins the next line (faces, vertices) in both passes', async () => {
+  const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 \\\n 0\nv 1 1 0\nv 0 1 0\nf 1 2 \\\r\n 3 4\n'), 'c.obj');
+  assert.equal(triCount(m), 2);
+  assert.deepEqual(boxOf(m), [0, 0, 0, 1, 1, 0]);
+});
+await test('r7-8 binary STL: a surplus under 50 bytes after 84 + 50 n is read as binary; a larger mismatch is refused naming the sizes', async () => {
+  const A = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+  assert.equal(triCount(await parseMesh('stl', stlOf([[A, 0]], 'solid part', 2), 'tr.stl')), 1);
+  assert.equal(triCount(await parseMesh('stl', stlOf([[A, 0]], 'exported', 49), 'tr.stl')), 1);
+  await refusedFast(() => parseMesh('stl', stlOf([[A, 0]], 'solid part', 60), 'tr.stl'),
+    /^tr\.stl is damaged: its header counts 1 triangle, so it should be 134 bytes, but it is 194 bytes/);
+  await refusedFast(() => parseMesh('stl', stlOf([[A, 0]], 'exported', 60), 'tr.stl'),
+    /^tr\.stl is damaged: its header counts 1 triangle, so it should be 134 bytes, but it is 194 bytes/);
+});
+await test('r7-10a PLY binary big-endian', async () => {
+  const hdr = new TextEncoder().encode('ply\nformat binary_big_endian 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n');
+  const b = new ArrayBuffer(hdr.length + 36 + 13);
+  new Uint8Array(b).set(hdr);
+  const dv = new DataView(b);
+  let o = hdr.length;
+  for (const v of [0, 0, 0, 2, 0, 0, 0, 3, 0]) { dv.setFloat32(o, v, false); o += 4; }
+  dv.setUint8(o, 3); o++;
+  for (const v of [0, 1, 2]) { dv.setInt32(o, v, false); o += 4; }
+  const m = await parseMesh('ply', b, 'be.ply');
+  assert.equal(triCount(m), 1);
+  assert.deepEqual(boxOf(m), [0, 0, 0, 2, 3, 0]);
+});
+await test('r7-10b glTF bufferView byteStride (interleaved POSITION, 16-byte stride)', async () => {
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: TRI1, stride: 16 }))), [0, 0, 0, 1000, 1000, 0]);
+  // (a stride ignored reads the second vertex from bytes 12..23: (0, 1, 0), not (1, 0, 0))
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: [0, 0, 0, 2, 0, 0, 0, 3, 0], stride: 20 }))), [0, 0, 0, 2000, 3000, 0]);
+});
+await test('r7-10c glTF normalized int8 and int16 POSITION', async () => {
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: [0, 0, 0, 127, 0, 0, 0, -128, 0], comp: 5120, normalized: true }))), [0, -1000, 0, 1000, 0, 0]);
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: [0, 0, 0, 32767, 0, 0, 0, -32768, 0], comp: 5122, normalized: true }))), [0, -1000, 0, 1000, 0, 0]);
+});
+await test('r7-10d glTF node matrix (column-major, translate x + 2 m)', async () => {
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: TRI1, node: { matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1] } }))), [2000, 0, 0, 3000, 1000, 0]);
+});
+await test('r7-10e glTF node rotation (90 degrees about z) and scale', async () => {
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: TRI1, node: { rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] } }))), [-1000, 0, 0, 0, 1000, 0]);
+  assert.deepEqual(boxOf(await openJ(gltfOf({ positions: TRI1, node: { rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], scale: [2, 1, 1] } }))), [-1000, 0, 0, 0, 2000, 0]);
+});
+await test('r7-10f glTF "scene" chooses among several scenes', async () => {
+  const j = gltfOf({ positions: TRI1, more: { scene: 1, scenes: [{ nodes: [0] }, { nodes: [1] }] } });
+  j.nodes.push({ mesh: 0, translation: [10, 0, 0] });
+  assert.deepEqual(boxOf(await openJ(j)), [10000, 0, 0, 11000, 1000, 0]);
+  j.scene = 0;
+  assert.deepEqual(boxOf(await openJ(j)), [0, 0, 0, 1000, 1000, 0]);
+});
+await test('r7-10g OBJ negative (relative) indices', async () => {
+  const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 1 1 0\nf -3 -2 -1\nv 5 5 5\nv 6 5 5\nv 6 6 5\nf -3/-1 -2/-1 -1/-1\n'), 'n.obj');
+  assert.equal(triCount(m), 2);
+  assert.deepEqual(boxOf(m), [0, 0, 0, 6, 6, 5]);
+});
+await test('r7-12 a textured glTF material: factor x texture average multiplied in linear space, then made sRGB', async () => {
+  // (Node has no image decoder: one standing in for it draws every pixel sRGB 64)
+  const saved = [globalThis.createImageBitmap, globalThis.OffscreenCanvas];
+  globalThis.createImageBitmap = async () => ({});
+  globalThis.OffscreenCanvas = class { getContext() { return { drawImage() {}, getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4).map((_, i) => (i % 4 === 3 ? 255 : 64)) }) }; } };
+  try {
+    const j = gltfOf({ positions: TRI1, more: { materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.2, 0.2, 0.2, 1], baseColorTexture: { index: 0 } } }],
+      textures: [{ source: 0 }], images: [{ uri: 'data:image/png;base64,AAAA' }] } });
+    j.meshes[0].primitives[0].material = 0;
+    const c = (await openJ(j)).meshes[0].color;
+    // sRGB 64/255 is linear 0.05127; x 0.2 = 0.010254, sRGB 0.1015 (the sRGB product was 0.4845 x 0.251 = 0.1216)
+    assert.ok(c && c.every((x) => Math.abs(x - 0.1015) < 0.002), `colour ${c}`);
+  } finally {
+    [globalThis.createImageBitmap, globalThis.OffscreenCanvas] = saved;
+  }
 });
 
 done();
