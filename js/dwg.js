@@ -1095,7 +1095,9 @@ const DECODE = {
     }
     for (let k = 0; k < nb; k++) d.bulges.push(r.BD());
     for (let k = 0; k < nid; k++) r.BL();
-    for (let k = 0; k < nw; k++) { r.BD(); r.BD(); }
+    // its per-vertex widths (start, end): the drawing draws a polyline at its width
+    d.widths = [];
+    for (let k = 0; k < nw; k++) d.widths.push([r.BD(), r.BD()]);
     this.entityHandles(o);
   },
   HATCH(o, r, v) {
@@ -1474,6 +1476,7 @@ export function dwgToPairs(dwg) {
         common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' '));
         if (d.rot) put(50, deg(d.rot));
         if (d.wf !== 1) put(41, d.wf);
+        if (d.oblique) put(51, deg(d.oblique)); // (its slant: the drawing reads it)
         if (d.gen) put(71, d.gen); // (backward / upside down: the drawing reads it)
         if (d.ha) put(72, d.ha);
         if (d.ha || d.va) { put(11, d.a[0]); put(21, d.a[1]); put(31, d.elev); }
@@ -1495,13 +1498,19 @@ export function dwgToPairs(dwg) {
         common('LWPOLYLINE'); put(90, d.pts.length); put(70, (d.flags & 512 ? 1 : 0) | (d.flags & 128 ? 128 : 0));
         if (d.elev) put(38, d.elev);
         if (d.cw) put(43, d.cw);
-        d.pts.forEach((p, k) => { put(10, p[0]); put(20, p[1]); if (d.bulges[k]) put(42, d.bulges[k]); });
+        d.pts.forEach((p, k) => {
+          put(10, p[0]); put(20, p[1]);
+          const w = d.widths && d.widths[k];
+          if (w && (w[0] || w[1])) { put(40, w[0]); put(41, w[1]); }
+          if (d.bulges[k]) put(42, d.bulges[k]);
+        });
         ext(d.ext); break;
       }
       case 'POLYLINE': {
         common('POLYLINE'); put(66, 1); put(10, 0); put(20, 0); put(30, d.elev || 0); put(70, d.flags);
         if (d.flags & 16) { put(71, d.m); put(72, d.n); put(73, d.md); put(74, d.nd); put(75, d.curve); }
         if (d.flags & 64) { put(71, d.nv); put(72, d.nf); }
+        if (d.sw || d.ew) { put(40, d.sw || 0); put(41, d.ew || 0); } // (its default widths: drawn)
         ext(d.ext);
         const kids = new Map((children.get(o.handle) || []).map((c) => [c.handle, c]));
         const order = d.vertices || [...kids.keys()].sort(hcmp);
@@ -1510,6 +1519,7 @@ export function dwgToPairs(dwg) {
           if (!vx || vx.name !== 'VERTEX' || !vx.d) continue;
           const pt = vx.d.pt || [0, 0, 0]; // a PFACE face record has no point (DXF writes 0,0,0)
           put(0, 'VERTEX'); put(5, hex(vh)); put(8, name(vx.e.layer) || '0'); put(10, pt[0]); put(20, pt[1]); put(30, pt[2]);
+          if (vx.d.sw || vx.d.ew) { put(40, vx.d.sw || 0); put(41, vx.d.ew || 0); }
           if (vx.d.bulge) put(42, vx.d.bulge);
           put(70, vx.d.flags);
           if (vx.d.idx) vx.d.idx.forEach((x, k) => { if (x) put(71 + k, x); });
@@ -1555,6 +1565,7 @@ export function dwgToPairs(dwg) {
           put(1, styleText(ad.text, ad.style).replace(/\r\n|\r|\n/g, ' ')); put(2, ad.tag); put(70, ad.flags);
           if (ad.rot) put(50, deg(ad.rot));
           if (ad.wf !== 1) put(41, ad.wf);
+          if (ad.oblique) put(51, deg(ad.oblique));
           if (ad.gen) put(71, ad.gen);
           if (ad.ha) put(72, ad.ha);
           if (ad.ha || ad.va) { put(11, ad.a[0]); put(21, ad.a[1]); put(31, ad.elev); }
@@ -1638,8 +1649,15 @@ export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, cont
 
 // The pairs as DXF text; a string's control characters and carets in DXF's caret notation (a
 // text may hold U+0003; written raw, a line feed would split the pair)
+// (before R2007 a DXF's text is in its code page, which its header names: the text is written as
+// UTF-8 here, so every non-ASCII character goes as \U+XXXX, as AutoCAD writes one outside its page
+// -- written as itself, a reader took the UTF-8 bytes in the named page: "135.00°" read
+// "135.00Â°". From R2007 a DXF is UTF-8 and characters are written as themselves)
 export function pairsToDXF(P) {
+  const ver = P.findIndex(([c, v]) => c === 9 && v === '$ACADVER');
+  const utf8 = ver >= 0 && P[ver + 1] && Number((/AC(\d{4})/.exec(String(P[ver + 1][1])) || [])[1]) >= 1021;
+  const esc = (v) => (utf8 ? v : v.replace(/[^\x00-\x7f]/g, (ch) => `\\U+${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`));
   let s = '';
-  for (const [c, v] of P) s += `${c < 10 ? '  ' : c < 100 ? ' ' : ''}${c}\r\n${typeof v === 'string' && valueKind(c) === 's' ? caret(v) : v}\r\n`;
+  for (const [c, v] of P) s += `${c < 10 ? '  ' : c < 100 ? ' ' : ''}${c}\r\n${typeof v === 'string' && valueKind(c) === 's' ? caret(esc(v)) : v}\r\n`;
   return s;
 }

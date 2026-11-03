@@ -6,7 +6,7 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
-import { drawsNothing, onPaper } from './dxf.js';
+import { drawsNothing, onPaper, sheetDraws } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
@@ -4488,13 +4488,13 @@ function show2D(drawing, name, url) {
   forgetAddressModel();
   // the sheets: model space, then each layout that draws anything; a
   // drawing with nothing in model space opens on its first layout
-  const sheets = drawing.layouts.map((l, i) => ({ l, i })).filter(({ l }) => l.paths.length || l.texts.length);
+  const sheets = drawing.layouts.map((l, i) => ({ l, i })).filter(({ l }) => sheetDraws(l));
   const sel = $('sheet');
   sel.replaceChildren(...[['-1', 'Model'], ...sheets.map(({ l, i }) => [String(i), l.name])].map(([v, t]) => {
     const o = document.createElement('option'); o.value = v; o.textContent = t; return o;
   }));
   sel.hidden = !sheets.length;
-  setSheet(drawing.paths.length || drawing.texts.length || !sheets.length ? -1 : sheets[0].i);
+  setSheet(sheetDraws(drawing) || !sheets.length ? -1 : sheets[0].i);
   $('measure').setAttribute('aria-pressed', 'false');
   updateButtons(); // (clearModel ran them before app.dxf: Measure, Fit and Print come on for the drawing)
   buildLayerList();
@@ -4596,6 +4596,9 @@ function fillInfo2D(el) {
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
   row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  // what the drawing holds that is not drawn here, by kind (it was left out without a word)
+  const nd = Object.entries(full.notDrawn || {});
+  if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {

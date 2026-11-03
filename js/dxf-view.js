@@ -10,7 +10,7 @@
 // jitter when zoomed in), stroked under the view transform with lineWidth =
 // 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { onPaper } from './dxf.js';
+import { onPaper, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unitWord } from './units.js';
 
@@ -53,10 +53,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
-    const key = `${p.layer}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}`;
+    const key = `${p.layer}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}`;
     let g = groups.get(key);
-    // a line weight in mm shows as 4 px a mm on screen, at least 1 px
-    if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, path: new Path2D(), points: [] }; groups.set(key, g); }
+    // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
+    // drawing units (it scales with the zoom, as on paper)
+    if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, path: new Path2D(), points: [] }; groups.set(key, g); }
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
     g.path.moveTo(p.pts[0] - o[0], p.pts[1] - o[1]);
     for (let k = 2; k < p.pts.length; k += 2) g.path.lineTo(p.pts[k] - o[0], p.pts[k + 1] - o[1]);
@@ -96,7 +97,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       const col = g.layer === sel ? SELECTED : sel && g.layer !== st.hover ? FADED : g.colour;
       if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col;
-      ctx.lineWidth = (g.px + (hot ? 1 : 0)) / st.s;
+      ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
       // a line type's dashes are drawing units (under the transform): they
       // scale with the zoom, as on paper; too fine to see, drawn solid
       ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
@@ -114,22 +115,31 @@ export function createDxfView(canvas, drawing, cb = {}) {
       const px = t.h * st.s;
       if (px < 3) continue; // too small to read: left out
       ctx.save();
+      // (a text seen through a layout viewport, clipped to its frame: js/dxf.js)
+      if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
       ctx.scale(1, -1);
       ctx.fillStyle = t.layer === sel ? SELECTED : sel && t.layer !== st.hover ? FADED : onPaper(t.colour);
       ctx.font = `${t.h}px sans-serif`;
       ctx.textAlign = t.align;
-      const lines = t.text.split('\n');
+      // (an MTEXT with a reference width wraps at it, measured in the font -- js/dxf.js wrapLines;
+      // made once per text, as the font's width does not change with the zoom)
+      if (t.mtext && t.wrap > 0 && !t.wrapped) t.wrapped = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.widthFactor || 1), t.wrap);
+      const lines = t.wrapped || t.text.split('\n');
       const lh = t.h * 1.4;
       // aligned / fit (js/dxf.js): the text fitted to its baseline's length -- aligned in both
       // directions, fit in width only
       if (t.fit > 0) {
-        const w = Math.max(...lines.map((l) => ctx.measureText(l).width));
+        let w = 0;
+        for (const l of lines) w = Math.max(w, ctx.measureText(l).width); // (a loop: not a spread of every line)
         if (w > 0) { const k = t.fit / w; ctx.scale(k, t.fitMode === 'aligned' ? k : 1); }
       } else if (t.widthFactor) ctx.scale(t.widthFactor, 1); // (its width factor, 41)
       // backward / upside down (a TEXT's 71): mirrored about its point
       if (t.mirrorX || t.mirrorY) ctx.scale(t.mirrorX ? -1 : 1, t.mirrorY ? -1 : 1);
+      // oblique (51): slanted -- the glyphs' tops moved along the baseline by tan(angle) per unit of
+      // height (y runs down here, so up is -y)
+      if (t.oblique) ctx.transform(1, 0, -Math.tan(t.oblique), 1, 0, 0);
       if (t.mtext) {
         // an MTEXT block hangs from its point (top), or is centred on it (middle), or stands on it
         // (bottom): the attachment's row -- every row was drawn hanging, a dimension's value

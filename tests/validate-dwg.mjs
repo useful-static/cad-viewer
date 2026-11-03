@@ -127,7 +127,7 @@ function main() {
     if (ks.length) s.twins++;
     for (const [src, k] of ks) {
       (s.keySrc ||= {})[src] = (s.keySrc[src] || 0) + 1;
-      s.matched += k.matched; s.fields += k.fieldsCompared; s.drift += k.notInFile + k.represented + (k.keyInconsistent || 0);
+      s.matched += k.matched; s.fields += k.fieldsCompared; s.drift += k.notInFile + k.represented + (k.keyInconsistent || 0) + (k.keyOmitsValign || 0);
     }
     s.diffs += r.confirmed || 0;
     for (const [src, n] of Object.entries(r.loneKey || {})) (s.lone ||= {})[src] = (s.lone[src] || 0) + n;

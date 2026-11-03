@@ -2,7 +2,7 @@
 // The shareable view (js/view-link.js).   node tests/test-view-link.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { MAX_LINK_IDS, MAX_NAMED, MAX_NOTES, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
+import { MAX_LINK_IDS, MAX_NAMED, MAX_NOTES, NOTE_TEXT_MAX, bodyKeys, cutText, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
 
 import { test, done } from './harness.mjs';
 
@@ -141,6 +141,13 @@ test('a link repeating "h:1-999999" a thousand times: the first h counts, one id
   assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
   assert.equal(v.hidden.length, 999999);
   assert.ok(v.hidden.length + v.selected.length <= MAX_LINK_IDS);
+});
+
+test('a note cut to its limit never through a surrogate pair (an emoji at the cut is left out whole)', () => {
+  const s = `${'a'.repeat(NOTE_TEXT_MAX - 1)}😀`;
+  assert.equal(cutText(s, NOTE_TEXT_MAX), 'a'.repeat(NOTE_TEXT_MAX - 1));
+  assert.equal(cutText('short', NOTE_TEXT_MAX), 'short');
+  assert.equal(cutText(`${'a'.repeat(NOTE_TEXT_MAX - 2)}😀b`, NOTE_TEXT_MAX), `${'a'.repeat(NOTE_TEXT_MAX - 2)}😀`);
 });
 
 done();

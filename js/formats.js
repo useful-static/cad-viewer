@@ -94,6 +94,8 @@ function dxfHead(text) {
 // 999 comments or an OBJ's comment header, which ran past 400 bytes and left a valid file unnamed
 export const SNIFF_BYTES = 4096;
 export const looksLikeDxf = (text) => dxfHead(text);
+// a binary DXF's first 22 bytes: the one sentinel for the sniff here and the reader (js/dxf.js)
+export const BINARY_DXF_SENTINEL = 'AutoCAD Binary DXF\r\n\x1a\x00';
 export function sniffFormat(bytes) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (isDWGBytes(b)) return BY_EXT.get('dwg');
@@ -105,7 +107,7 @@ export function sniffFormat(bytes) {
   if (text.startsWith('glTF')) return f('glb');
   if (text.startsWith('PK\x03\x04')) return f('zip');
   if (/^ply\r?\n/.test(text)) return f('ply');
-  if (looksLikeDxf(text) || text.startsWith('AutoCAD Binary DXF')) return f('dxf');
+  if (looksLikeDxf(text) || text.startsWith(BINARY_DXF_SENTINEL)) return f('dxf');
   if (/^\s*solid[\s\S]*facet/.test(text)) return f('stl');
   if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return f('gltf');
   if (/^\s*[CN]?OFF\s/.test(text)) return f('off');

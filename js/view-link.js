@@ -67,6 +67,13 @@ export const MAX_NAMED = 32;
 // A note's text, at most this long, wherever it is written (a model list's notes, a tour's
 // callouts, a view link, Measure > Note)
 export const NOTE_TEXT_MAX = 200;
+// a text cut to at most max UTF-16 units, never through a surrogate pair (a 200-unit note ending in
+// an emoji kept half of it, which the next share wrote as U+FFFD)
+export function cutText(s, max) {
+  if (s.length <= max) return s;
+  const k = (s.charCodeAt(max - 1) & 0xfc00) === 0xd800 ? max - 1 : max;
+  return s.slice(0, k);
+}
 // A note's place, one rule for lists and tours: its part when it names one (text with more than
 // spaces), else its point [x, y, z]; null for neither
 export function notePlace(x) {
@@ -192,7 +199,7 @@ export function decodeView(s) {
         const q = s.split(',');
         const p = q.slice(0, 3).map(Number);
         if (q.length !== 4 || !p.every(Number.isFinite) || !/^[A-Za-z0-9_-]+$/.test(q[3])) return [];
-        try { return [{ p, text: unb64u(q[3]).slice(0, NOTE_TEXT_MAX) }]; } catch { return []; }
+        try { return [{ p, text: cutText(unb64u(q[3]), NOTE_TEXT_MAX) }]; } catch { return []; }
       });
     }
     else if (k === 'n') {

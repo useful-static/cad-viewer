@@ -42,6 +42,17 @@ export const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
 // the double-byte pages: no character for one byte (a %%nnn in such a drawing reads as 1252)
 export const isDoubleByte = (label) => Object.values(MBCS).includes(label);
 
+// A DXF's text decoder, the one choice for its ASCII and its binary form: UTF-8 from R2007 (AC1021);
+// before, the code page its header names; with none named, UTF-8 when every string is valid UTF-8,
+// else 1252 (isUtf8: does the text decode as UTF-8 -- the two readers fell back to different
+// pages, and one drawing read "Ø20 ±0.1" as ASCII, "Ã˜20 Â±0.1" as binary)
+export function dxfDecoder(acadver, pageName, isUtf8) {
+  if (Number(acadver) >= 1021) return decoderFor('utf-8');
+  const named = decoderFor(codePageLabel(pageName));
+  if (named) return named;
+  return isUtf8() ? decoderFor('utf-8') : decoderFor('windows-1252');
+}
+
 // a decoder for a label (a TextDecoder, or the 850 table), or null when there is none
 const made = {};
 export function decoderFor(label) {

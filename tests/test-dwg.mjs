@@ -126,6 +126,29 @@ t('20.4.4 ATTRIB, R2000: the text data, then its tag and flags (1: invisible)', 
   const d = decodeData('ATTRIB', 15, `11111111 ${rd(5)} ${rd(6)} 1 1 ${rd(2.5)} ${tv('PN1')} ${tv('TAG')} 10 ${b8(1)}`);
   assert.deepEqual([d.p, d.h, d.text, d.tag, d.flags], [[5, 6], 2.5, 'PN1', 'TAG', 1]);
 });
+t('pairsToDXF before R2007: non-ASCII as \\U+XXXX, so the file read back as BYTES in its named code page gives the text again', () => {
+  const P = [[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, 'AC1015'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1252'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'], [0, 'LAYER'], [2, 'Möbel'], [70, '0'], [62, '7'], [6, 'CONTINUOUS'], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, 'Möbel'], [10, '0'], [20, '0'], [40, '1'], [1, '135.00°'], [0, 'ENDSEC'], [0, 'EOF']];
+  const s = pairsToDXF(P);
+  assert.ok(/135\.00\\U\+00B0/.test(s), 'escaped');
+  const u8 = new TextEncoder().encode(s);
+  const d = parseDXF(u8.buffer);
+  assert.equal(d.texts[0].text, '135.00°');
+  assert.equal(d.texts[0].layer, 'Möbel');
+  assert.ok(d.layers.some((l) => l.name === 'Möbel'));
+  // from R2007 the file is UTF-8: written as itself
+  assert.ok(pairsToDXF(P.map(([c, v]) => (v === 'AC1015' ? [c, 'AC1021'] : [c, v]))).includes('135.00°'));
+});
+t('an MTEXT font code naming a non-ASCII font survives the \\U+XXXX escape: the code is still stripped, not drawn', () => {
+  const P = [[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, 'AC1014'], [9, '$DWGCODEPAGE'], [3, 'ANSI_936'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'MTEXT'], [8, '0'], [10, '0'], [20, '0'], [40, '1'], [1, '{\\f宋体|b0|i0|c134|p49;平面}'], [0, 'ENDSEC'], [0, 'EOF']];
+  const s = pairsToDXF(P);
+  assert.ok(/\\U\+5B8B/.test(s), 'the font name was escaped');
+  const d = parseDXF(new TextEncoder().encode(s).buffer);
+  assert.deepEqual(d.texts.map((x) => x.text), parseDXF(P).texts.map((x) => x.text));
+  assert.equal(d.texts[0].text, '平面');
+});
 t('pairsToDXF writes control characters and carets in caret notation, and parseDXF reads them back', () => {
   const P = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, '0'], [20, '0'], [40, '1'], [1, 'a\x03b^c'], [0, 'ENDSEC'], [0, 'EOF']];
   const s = pairsToDXF(P);

@@ -3,7 +3,7 @@
 // DWG version) against the reader's js/dwg.js dwgToPairs output. Used by validate-dwg.mjs and
 // validate-dwg-versions.mjs, so both judge by the same rules.
 import { readFileSync } from 'node:fs';
-import { uncaret, unescapeDxf, valueKind, dxfText } from '../js/dxf.js';
+import { attribTextGroups, uncaret, unescapeDxf, valueKind, dxfText } from '../js/dxf.js';
 
 // the groups compared per DXF type (a group absent from the key is not compared)
 export const GROUPS = {
@@ -81,17 +81,9 @@ export function byHandle(P) {
   m.blocks = blocks;
   return m;
 }
-// (an ATTRIB's text placement -- 11 / 21, 41, 71, 72 -- from its AcDbText part only: an R2018
-// key's AcDbAttribute part writes these codes again with other meanings, 71 its attribute type)
-const ATTRIB_TEXT_CODES = new Set([11, 21, 41, 71, 72]);
-export const vals = (r, c) => {
-  let g = r.g;
-  if (r.type === 'ATTRIB' && ATTRIB_TEXT_CODES.has(c)) {
-    const k = g.findIndex((x) => x[0] === 100 && x[1] === 'AcDbAttribute');
-    if (k >= 0) g = g.slice(0, k);
-  }
-  return g.filter((x) => x[0] === c).map((x) => x[1]);
-};
+// (an ATTRIB's text placement from its AcDbText part only: the reader's own rule, js/dxf.js
+// attribTextGroups)
+export const vals = (r, c) => (r.type === 'ATTRIB' ? attribTextGroups(r.g) : r.g).filter((x) => x[0] === c).map((x) => x[1]);
 
 // a SPLINE record's curve (71 degree, 40 knots, 10/20 control points; weights ignored: only a
 // non-rational spline is evaluated) at each distinct knot of its domain, by de Boor; null if
@@ -237,9 +229,18 @@ export function compare(A, B, inFile, dwgV, src, opts = {}) {
       // texts hold 73 = 2 (middle), and their alignment point stands exactly half a height above
       // the insertion point, as a middle-aligned text's does; ODA's and LibreDWG's DXF of it both
       // leave 73 out (0). Not compared, counted apart (no AutoCAD-written DXF of it to settle it)
-      if (a.type === 'TEXT' && dwgV <= 14 && !Number(vals(a, 73)[0] || 0) && Number(vals(b, 73)[0] || 0)) {
-        groups = groups.filter((c) => c !== 73);
-        cmp.keyOmitsValign = (cmp.keyOmitsValign || 0) + 1;
+      // -- only where the file's geometry says so: our 73 = 2 and the alignment point half a height
+      // off the insertion point (within 1%), else compared as any group (a misread passes nothing)
+      const ourVa = Number(vals(b, 73)[0] || 0);
+      if (a.type === 'TEXT' && dwgV <= 14 && !Number(vals(a, 73)[0] || 0) && ourVa === 2) {
+        const p = [Number(vals(b, 10)[0]), Number(vals(b, 20)[0])], q = [Number(vals(b, 11)[0]), Number(vals(b, 21)[0])];
+        const h = Number(vals(b, 40)[0]), rot = (Number(vals(b, 50)[0] || 0) * Math.PI) / 180;
+        // (the alignment point's offset across the baseline: half the height for a middle text)
+        const across = -(q[0] - p[0]) * Math.sin(rot) + (q[1] - p[1]) * Math.cos(rot);
+        if (h > 0 && Math.abs(across - h / 2) <= 0.01 * h) {
+          groups = groups.filter((c) => c !== 73);
+          cmp.keyOmitsValign = (cmp.keyOmitsValign || 0) + 1;
+        }
       }
     }
     const nm = (s) => (opts.oldNames ? oldName(s) : s.toUpperCase());

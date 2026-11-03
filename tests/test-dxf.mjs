@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, textCodes, unescapeDxf, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
@@ -466,6 +466,77 @@ test('round 13 (quality): an R2018 MTEXT\'s own groups end at its 101; a TEXT\'s
   // a backward text stands left of its point (the extents follow it)
   const back = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, 2], [1, 'BACK']]));
   assert.ok(back.extents.max[0] <= 1e-9 && back.extents.min[0] < -1, `backward: ${back.extents.min[0]}..${back.extents.max[0]}`);
+});
+test('round 14: text in a mirrored / stretched block, a text-only layer, one code page choice, an anchored header search, 300k lines, an ATTRIB\'s own 71', () => {
+  const blk = [[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0],
+    [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'T'], [0, 'ENDBLK'], [0, 'ENDSEC']];
+  const withInsert = (ins) => parseDXF(dxf([...blk, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], ...ins, [0, 'ENDSEC'], [0, 'EOF']]));
+  // mirrored in x: backward, along -x (rot pi - pi = 0 with the mirror), upright
+  const mx = withInsert([[41, -1]]).texts[0];
+  assert.ok(mx.mirrorX && Math.abs(Math.cos(mx.rot) - 1) < 1e-9, `x-mirrored: rot ${mx.rot}, mirrorX ${mx.mirrorX}`);
+  // mirrored in y: mirrored (with a half turn: upside down)
+  const my = withInsert([[42, -1]]).texts[0];
+  assert.ok(my.mirrorX && Math.abs(Math.cos(my.rot) + 1) < 1e-9, `y-mirrored: rot ${my.rot}`);
+  // stretched 2 in x: twice as wide
+  assert.equal(withInsert([[41, 2]]).texts[0].widthFactor, 2);
+  // a layer only a text uses is a layer
+  const tl = parseDXF(ents([[0, 'TEXT'], [8, 'NOTES'], [10, 0], [20, 0], [40, 1], [1, 'n']]));
+  assert.ok(tl.layers.some((l) => l.name === 'NOTES'));
+  // no code page named: ASCII and binary choose alike (UTF-8 when it is, else 1252)
+  const G = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'Ø20 ±0.1'], [0, 'ENDSEC'], [0, 'EOF']];
+  const ascii = new TextEncoder().encode(dxf(G));
+  assert.equal(parseDXF(ascii.buffer).texts[0].text, 'Ø20 ±0.1');
+  assert.equal(parseDXF(binaryDXF(G)).texts[0].text, 'Ø20 ±0.1');
+  // a comment naming $DWGCODEPAGE before the header: the header's own value is read (1251)
+  const H = `999\nsee $DWGCODEPAGE\n${dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1251'], [0, 'ENDSEC'], [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'X'], [0, 'ENDSEC'], [0, 'EOF']])}`;
+  const [pre, post] = H.split('\nX\n');
+  const bytes = Buffer.concat([Buffer.from(`${pre}\n`, 'latin1'), Buffer.from([0xcf, 0xf0, 0xe8]), Buffer.from(`\n${post}`, 'latin1')]);
+  assert.equal(parseDXF(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length)).texts[0].text, 'При');
+  // 300k lines of MTEXT: boxed without a stack overflow
+  assert.ok(textCorners({ x: 0, y: 0, h: 1, rot: 0, text: '\n'.repeat(300000), align: 'left', valign: 'top', mtext: true }).length === 4);
+  // an R2018 ATTRIB's AcDbAttribute 71 (its type) is not its generation
+  const at = parseDXF(ents([[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],
+    [[0, 'ATTRIB'], [100, 'AcDbText'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'V'], [100, 'AcDbAttribute'], [2, 'T'], [70, 0], [71, 1], [72, 0]],
+    [[0, 'SEQEND'], [8, '0']])).texts[0];
+  assert.ok(!at.mirrorX && !at.mirrorY, 'type 1 is not "backward"');
+});
+test('round 14 (quality): oblique, polyline widths, LEADER drawn and the rest counted, MTEXT wrap', () => {
+  const d = parseDXF(ents(
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [51, 12], [1, 'SLANT']],
+    [[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [43, 2.5], [10, 0], [20, 0], [10, 10], [20, 0]],
+    [[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [10, 0], [20, 5], [40, 1], [41, 3], [10, 10], [20, 5]],
+    [[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 0], [40, 4], [41, 4]], [[0, 'VERTEX'], [8, '0'], [10, 0], [20, 9]], [[0, 'VERTEX'], [8, '0'], [10, 9], [20, 9]], [[0, 'SEQEND'], [8, '0']],
+    [[0, 'LEADER'], [8, '0'], [76, 3], [10, 0], [20, 20], [10, 5], [20, 25], [10, 9], [20, 25]],
+    [[0, 'WIPEOUT'], [8, '0']], [[0, 'MLINE'], [8, '0']], [[0, 'MLINE'], [8, '0']],
+    [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 40], [40, 1], [41, 20], [71, 1], [1, 'word '.repeat(12).trim()]],
+  ));
+  const slant = d.texts.find((t) => t.text === 'SLANT');
+  assert.ok(Math.abs(slant.oblique - (12 * Math.PI) / 180) < 1e-12);
+  assert.deepEqual(d.paths.slice(0, 3).map((p) => p.width), [2.5, 3, 4]);
+  assert.deepEqual([...d.paths[3].pts], [0, 20, 5, 25, 9, 25], 'the LEADER as its vertices');
+  assert.deepEqual(d.notDrawn, { WIPEOUT: 1, MLINE: 2 });
+  // the MTEXT wraps at 20 units (12 words of 4, ~0.6 a character): more than one line in the extents
+  const m = d.texts.find((t) => t.mtext);
+  assert.equal(m.wrap, 20);
+  const c = textCorners(m);
+  assert.ok(Math.max(...c.map((q) => q[0])) <= 20 + 1e-9, 'within its width');
+  assert.ok(Math.min(...c.map((q) => q[1])) < 40 - 2, 'more than one line');
+  assert.deepEqual(wrapLines(['aa bb cc'], (l) => l.length, 5), ['aa bb', 'cc']);
+});
+test('a text seen through a layout viewport is kept when its box meets the frame, clipped to it', () => {
+  const G = [[0, 'SECTION'], [2, 'ENTITIES'],
+    // model: a long text from the view's centre, and one starting just left of the view
+    [0, 'TEXT'], [8, '0'], [10, 50], [20, 0], [40, 2], [1, 'L'.repeat(50)],
+    [0, 'TEXT'], [8, '0'], [10, -1], [20, 0], [40, 2], [1, 'ACROSS'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    // a viewport 10 x 10 on paper at (5, 5) showing model (50, 0), 10 high: scale 1, model x 45..55
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 5], [20, 5], [40, 10], [41, 10], [69, 2], [12, 50], [22, 0], [45, 10],
+    [0, 'ENDSEC'], [0, 'EOF']];
+  const L = parseDXF(dxf(G)).layouts[0];
+  const long = L.texts.find((t) => t.text.startsWith('LLL'));
+  assert.ok(long && long.clip, 'the long text kept, clipped to the frame');
+  assert.deepEqual(long.clip, [0, 0, 10, 10]);
+  assert.ok(!L.texts.some((t) => t.text === 'ACROSS'), 'a text wholly outside is left out');
 });
 test('looksLikeDxf on blank lines and 999s that never reach SECTION: linear, not exponential (27 s for 127 bytes)', () => {
   const head = `${'999\n\n\n\n'.repeat(400)}solid x\n`;

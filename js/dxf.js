@@ -3,7 +3,9 @@
 // counted, not drawn), flattened to what a 2D canvas strokes:
 //   { units, sourceUnits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill }],
-//     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode? }] }
+//     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?, widthFactor? }] }
+//   (mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text, or one in
+//   a mirroring block; widthFactor: its width x that, its 41 and its block's stretch)
 //   (align left / center / right; valign baseline / bottom / middle / top for a TEXT, top / middle /
 //   bottom for an MTEXT, which hangs its lines from the point; fit: an aligned / fit text's
 //   baseline length, fitMode 'aligned' (both ways) or 'fit' (width): js/dxf-view.js draws them so,
@@ -21,8 +23,8 @@
 //
 // Pure ES module, no DOM.
 
-import { looksLikeDxf } from './formats.js';
-import { MBCS, codePageLabel, decoderFor, isDoubleByte } from './codepages.js';
+import { BINARY_DXF_SENTINEL, looksLikeDxf } from './formats.js';
+import { MBCS, codePageLabel, decoderFor, dxfDecoder, isDoubleByte } from './codepages.js';
 import { LENGTH_MM } from './units.js';
 import { PAPER, contrast } from './styles.js';
 
@@ -52,10 +54,9 @@ function pairs(s) {
 // A binary DXF: "AutoCAD Binary DXF\r\n\x1a\0", then group codes -- two
 // bytes from R13, one in R12 (255 escaping a two-byte code) -- each value
 // typed by its code. -> the same [code, string] pairs the text gives
-const BIN_SENTINEL = 'AutoCAD Binary DXF\r\n\x1a\x00';
 export function isBinaryDXF(buf) {
   const b = new Uint8Array(buf, 0, Math.min(22, buf.byteLength));
-  return b.length === 22 && String.fromCharCode(...b) === BIN_SENTINEL;
+  return b.length === 22 && String.fromCharCode(...b) === BINARY_DXF_SENTINEL;
 }
 export function valueKind(c) {
   if (c <= 9 || (c >= 100 && c <= 109) || (c >= 300 && c <= 309) || (c >= 320 && c <= 369) || (c >= 390 && c <= 399)
@@ -116,7 +117,9 @@ function binaryPairs(buf) {
     if (out[i][1] === '$ACADVER') ver = Number((/AC(\d{4})/.exec(out[i + 1][1]) || [])[1]) || 0;
     if (out[i][1] === '$DWGCODEPAGE') page = out[i + 1][1];
   }
-  const dec = ver >= 1021 ? new TextDecoder('utf-8') : decoderFor(codePageLabel(page)) || decoderFor('windows-1252');
+  // (js/codepages.js dxfDecoder: the choice the ASCII form makes too, its UTF-8 test over the strings)
+  const fatal = new TextDecoder('utf-8', { fatal: true });
+  const dec = dxfDecoder(ver, page, () => strs.every(([, s, e]) => { try { fatal.decode(b.subarray(s, e)); return true; } catch { return false; } }));
   for (const [i, s, e] of strs) out[i][1] = dec.decode(b.subarray(s, e));
   return out;
 }
@@ -155,10 +158,10 @@ export const UNITS = Object.fromEntries(INSUNITS.flatMap((n, code) => (n ? [[cod
 // page ($DWGCODEPAGE: ANSI_1252 for most, GBK for a Chinese drawing); with neither stated, UTF-8
 // when the bytes are valid UTF-8, else Windows-1252. (Read as UTF-8, a pre-2007 file's ° ± Ø
 // became U+FFFD; read as Latin-1, a UTF-8 one's accents were mangled.)
-// the first place an ASCII name occurs in bytes, or -1
-function indexOfBytes(u8, name) {
+// the first place an ASCII name occurs in bytes from `from` on, or -1
+function indexOfBytes(u8, name, from = 0) {
   const n = name.length, first = name.charCodeAt(0);
-  for (let i = u8.indexOf(first); i >= 0 && i + n <= u8.length; i = u8.indexOf(first, i + 1)) {
+  for (let i = u8.indexOf(first, from); i >= 0 && i + n <= u8.length; i = u8.indexOf(first, i + 1)) {
     let k = 1;
     while (k < n && u8[i + k] === name.charCodeAt(k)) k++;
     if (k === n) return i;
@@ -167,19 +170,25 @@ function indexOfBytes(u8, name) {
 }
 export function dxfText(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  // the header variable's value, wherever the header is (a byte search, then a short window read:
-  // the first 8000 bytes missed a header behind a long 999 comment, which parseDXF still read --
-  // the text in one code page, its %%nnn in another)
-  const at = (name, re) => { const i = indexOfBytes(u8, name); return i < 0 ? null : re.exec(new TextDecoder('latin1').decode(u8.subarray(i, i + 200))); };
-  const ver = at('$ACADVER', /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/);
-  if (ver && Number(ver[1]) >= 1021) return new TextDecoder('utf-8').decode(u8);
-  const cp = at('$DWGCODEPAGE', /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/);
-  if (cp) {
-    // (js/codepages.js: the one table, 850 included)
-    const dec = decoderFor(codePageLabel(cp[1]));
-    if (dec) return dec.decode(u8);
+  // the header variables, wherever the header is: the name as a group-9 value (the line before it
+  // "9"), so a comment naming it is passed over -- the first occurrence, a comment's, missed the
+  // header; then the decoder js/codepages.js chooses for both DXF forms
+  const ver = headerValue(u8, '$ACADVER', /\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/);
+  const cp = headerValue(u8, '$DWGCODEPAGE', /\$DWGCODEPAGE\s*\r?\n\s*3\s*\r?\n\s*(\S+)/);
+  const dec = dxfDecoder(ver, cp, () => { try { new TextDecoder('utf-8', { fatal: true }).decode(u8); return true; } catch { return false; } });
+  return dec.decode(u8);
+}
+
+// A header variable's value in an ASCII DXF's bytes: each place its name stands as a group-9 value
+// (the line before it is "9"), the value read by re from there; null if none
+function headerValue(u8, name, re) {
+  for (let i = indexOfBytes(u8, name, 0); i >= 0; i = indexOfBytes(u8, name, i + 1)) {
+    const before = new TextDecoder('latin1').decode(u8.subarray(Math.max(0, i - 16), i));
+    if (!/(^|\n)[ \t]*9[ \t]*\r?\n$/.test(before)) continue;
+    const m = re.exec(new TextDecoder('latin1').decode(u8.subarray(i, i + 200)));
+    if (m) return m[1];
   }
-  try { return new TextDecoder('utf-8', { fatal: true }).decode(u8); } catch { return new TextDecoder('windows-1252').decode(u8); }
+  return null;
 }
 
 // s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
@@ -195,6 +204,17 @@ export function parseDXF(s) {
   if (!ps) {
     if (!looksLikeDxf(s)) throw new Error('not a DXF file (no SECTION where it should start)');
     ps = pairs(s);
+  }
+  // names (a block's, a layer's, a line type's, a style's: 2, 6, 7, 8) with their \U+ / \M+
+  // characters decoded, as a pre-R2007 DXF writes them outside its code page (texts decode their
+  // own: textCodes, mtextPlain). The caller's pairs are left as they are
+  let copied = false;
+  for (let i = 0; i < ps.length; i++) {
+    const [c, v] = ps[i];
+    if ((c === 2 || c === 6 || c === 7 || c === 8) && typeof v === 'string' && v.indexOf('\\') >= 0) {
+      const u = unescapeDxf(v);
+      if (u !== v) { if (!copied) { ps = ps.slice(); copied = true; } ps[i] = [c, u]; }
+    }
   }
   // the sections by name
   const sec = {};
@@ -263,7 +283,8 @@ export function parseDXF(s) {
   const budget = { items: 0, pts: 0 };
   // (a path or text with a coordinate that is not a number is left out: one LINE with "10 abc"
   // made the whole drawing's extents NaN and Fit useless)
-  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget,
+  const notDrawn = {}; // kind -> how many met while drawing (model space and the layouts)
+  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn,
     add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
     addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -313,7 +334,14 @@ export function parseDXF(s) {
         const [x, y] = ap(M, t.x, t.y);
         // (every size of it scaled by the viewport: its height and an aligned / fit text's width --
         // the width unscaled drew it 10 times too long through a 0.1 viewport)
-        if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) addItem(budget, lo.texts, { ...t, x, y, h: t.h * s, ...(t.fit ? { fit: t.fit * s } : {}), rot: t.rot + tw }, 2);
+        const seen = { ...t, x, y, h: t.h * s, ...(t.fit ? { fit: t.fit * s } : {}), rot: t.rot + tw };
+        // kept when its box meets the viewport's frame, and clipped to it as the paths are (kept or
+        // dropped whole by its point, a text ran past the frame, or vanished though half inside)
+        const c = textCorners(seen);
+        const bx = [Math.min(...c.map((q) => q[0])), Math.max(...c.map((q) => q[0]))], by = [Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[1]))];
+        if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
+        const inside = bx[0] >= rect[0] && bx[1] <= rect[2] && by[0] >= rect[1] && by[1] <= rect[3];
+        addItem(budget, lo.texts, inside ? seen : { ...seen, clip: rect.slice() }, 2);
       }
       const layer = get(v, 8, '0');
       lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
@@ -321,11 +349,15 @@ export function parseDXF(s) {
     }
     return { name: li === 0 && active.length ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
   });
-  // (a layer no table names, in model space or a layout, is a layer too)
-  for (const p of [...out.paths, ...layouts.flatMap((l) => l.paths)]) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true });
+  // (a layer no table names, in model space or a layout, is a layer too -- one only texts use as
+  // well: its texts could not be hidden, and the layer count was short)
+  const untabled = (items) => { for (const p of items) if (!layers.has(p.layer)) layers.set(p.layer, { name: p.layer, colour: aciColour(7), on: true }); };
+  untabled(out.paths);
+  untabled(out.texts);
+  for (const l of layouts) { untabled(l.paths); untabled(l.texts); }
   const u = UNITS[insunits];
   return { units: u ? u[0] : null, mmPerUnit: u ? u[1] : null, insunits,
-    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts };
+    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts, notDrawn };
 }
 
 // One model path seen through a viewport (transform M, scale s) onto paper,
@@ -412,6 +444,8 @@ const IDENT = [1, 0, 0, 1, 0, 0];
 const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
   m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
 const ap = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+// the angle of a direction (dx, dy) through a transform's linear part
+const dirThrough = (m, dx, dy) => Math.atan2(m[1] * dx + m[3] * dy, m[0] * dx + m[2] * dy);
 
 // The arbitrary-axis rule: an entity's OCS x and y axes from its extrusion
 // N, projected onto the world XY plane (a 2D view from +Z)
@@ -546,10 +580,12 @@ function emit(recs, M, byBlock, depth, ctx) {
     else if (lw === -2) lw = byBlock && byBlock.weight !== undefined ? byBlock.weight : -3;
     const sty = { dash: pat ? pat.map((x) => x * k) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
     const O = mul(M, ocs(r));
-    const path = (pts, closed = false, fill = false) => {
+    // (width: a polyline's width in its own units, scaled by the transform into drawing units)
+    const path = (pts, closed = false, fill = false, width = 0) => {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
-      ctx.add({ layer, colour, ...sty,pts: f, closed, fill });
+      const w = width > 0 ? width * Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) : 0;
+      ctx.add({ layer, colour, ...sty, pts: f, closed, fill, ...(w > 0 ? { width: w } : {}) });
     };
     switch (r.type) {
       case 'LINE': {
@@ -604,26 +640,34 @@ function emit(recs, M, byBlock, depth, ctx) {
           for (const [c, v] of r.g) { if (c === 10) vi++; else if (c === 42 && vi >= 0) bul[vi] = Number(v); }
           const closed = (num(r, 70) & 1) === 1;
           const pts = bulgePts(xs, ys, bul, closed);
-          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed };
+          // its width: the constant width (43), else its vertices' start width when they all have
+          // the same one (a tapering width is drawn at its widest) -- a wide polyline was 1 px
+          let width = num(r, 43, 0) > 0 ? num(r, 43, 0) : 0;
+          if (!width) for (const [c, v] of r.g) if ((c === 40 || c === 41) && Number(v) > width) width = Number(v);
+          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed, width };
         }
-        if (r.shape.pts) path(r.shape.pts, r.shape.closed);
+        if (r.shape.pts) path(r.shape.pts, r.shape.closed, false, r.shape.width);
         break;
       }
       case 'POLYLINE': {
         // its VERTEX records follow it to SEQEND
         const xs = [], ys = [], bul = [];
-        let j = i + 1;
+        let j = i + 1, vertexWidth = 0;
         for (; j < recs.length && recs[j].type !== 'SEQEND'; j++) {
           if (recs[j].type !== 'VERTEX') continue;
           if (num(recs[j], 70) & 16) continue; // a spline frame control point
           xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); bul.push(num(recs[j], 42));
+          vertexWidth = Math.max(vertexWidth, num(recs[j], 40, 0) || 0, num(recs[j], 41, 0) || 0);
         }
         i = j;
         const flags = num(r, 70);
         if (flags & (16 | 64)) break; // a 3D mesh or a polyface: not drawn in 2D
         const closed = (flags & 1) === 1;
+        // (a 2D polyline's width: its default start / end width (40 / 41), else its vertices',
+        // drawn at its widest)
+        const width = Math.max(num(r, 40, 0) || 0, num(r, 41, 0) || 0) || vertexWidth;
         if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
-        else path(bulgePts(xs, ys, bul, closed), closed);
+        else path(bulgePts(xs, ys, bul, closed), closed, false, width);
         break;
       }
       case 'SPLINE': {
@@ -676,7 +720,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         // point in its 11 -- was read as its direction, and 334 MTEXTs at hand drew turned 73.83°)
         if (r.src === undefined) {
           const emb = r.type === 'ATTRIB' || r.type === 'MTEXT' ? r.g.findIndex((x) => x[0] === 101) : -1;
-          r.src = emb < 0 ? r : r.type === 'ATTRIB' ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : { type: 'MTEXT', g: r.g.slice(0, emb) };
+          r.src = emb < 0 ? (r.type === 'ATTRIB' ? { type: 'ATTRIB', g: attribTextGroups(r.g) } : r)
+            : r.type === 'ATTRIB' ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : { type: 'MTEXT', g: r.g.slice(0, emb) };
         }
         const e = r.src;
         const mt = e.type === 'MTEXT';
@@ -698,10 +743,11 @@ function emit(recs, M, byBlock, depth, ctx) {
           [item.x, item.y] = ap(P, num(e, 10), num(e, 20));
           item.align = mtextAlign(a);
           item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
-          if (get(e, 11, null) !== null) {
-            const dx = num(e, 11), dy = num(e, 21);
-            item.rot = Math.atan2(M[1] * dx + M[3] * dy, M[0] * dx + M[2] * dy);
-          } else item.rot = (num(e, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
+          // 41, its reference width: its lines wrap at it (they ran on in one line)
+          const rw = num(e, 41, 0);
+          if (Number.isFinite(rw) && rw > 0) item.wrap = rw * Math.hypot(P[0], P[1]);
+          if (get(e, 11, null) !== null) item.dir = dirThrough(M, num(e, 11), num(e, 21));
+          else { const a = (num(e, 50) * Math.PI) / 180; item.dir = dirThrough(O, Math.cos(a), Math.sin(a)); }
         } else {
           // TEXT / ATTRIB: 72 the horizontal alignment (0 left, 1 centre, 2 right, 3 aligned, 4
           // middle, 5 fit), 73 (an ATTRIB's 74) the vertical (0 baseline, 1 bottom, 2 middle,
@@ -709,7 +755,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const al = num(e, 72, 0) | 0;
           const va = num(e, e.type === 'ATTRIB' ? 74 : 73, 0) | 0;
           const p10 = ap(O, num(e, 10), num(e, 20)), p11 = ap(O, num(e, 11), num(e, 21));
-          item.rot = (num(e, 50) * Math.PI) / 180 + Math.atan2(O[1], O[0]);
+          { const a = (num(e, 50) * Math.PI) / 180; item.dir = dirThrough(O, Math.cos(a), Math.sin(a)); }
           if (al === 3 || al === 5) {
             // aligned / fit: drawn from the first point along the baseline to the second, its width
             // fitted to it (aligned keeps its proportions, fit its height) -- it was drawn from the
@@ -718,7 +764,7 @@ function emit(recs, M, byBlock, depth, ctx) {
             item.align = 'left';
             item.valign = 'baseline';
             const d = Math.hypot(p11[0] - p10[0], p11[1] - p10[1]);
-            if (d > 0) { item.rot = Math.atan2(p11[1] - p10[1], p11[0] - p10[0]); item.fit = d; item.fitMode = al === 3 ? 'aligned' : 'fit'; }
+            if (d > 0) { item.dir = Math.atan2(p11[1] - p10[1], p11[0] - p10[0]); item.fit = d; item.fitMode = al === 3 ? 'aligned' : 'fit'; }
           } else {
             [item.x, item.y] = al || va ? p11 : p10;
             item.align = ['left', 'center', 'right', 'left', 'center', 'left'][al] || 'left';
@@ -732,6 +778,22 @@ function emit(recs, M, byBlock, depth, ctx) {
           if (gen & 4) item.mirrorY = true;
           const wf = num(e, 41, 1);
           if (!item.fit && Number.isFinite(wf) && wf > 0 && wf !== 1) item.widthFactor = wf;
+          // 51, its oblique angle: the glyphs slanted by it (279 at hand were drawn upright)
+          const ob = num(e, 51, 0);
+          if (Number.isFinite(ob) && ob % 360 !== 0 && Math.abs(Math.cos((ob * Math.PI) / 180)) > 1e-3) item.oblique = (ob * Math.PI) / 180;
+        }
+        // Through the transform it is drawn by (its block's, its OCS): its direction is the
+        // transformed one; a mirroring transform (det < 0) mirrors it -- drawn backward, along the
+        // transformed direction -- and a stretch (x scale not y) widens it. Only the insert's
+        // rotation and y scale were taken: a block mirrored in x drew its text upside down, one
+        // mirrored in y upright, one stretched in x at its own width
+        {
+          const det = P[0] * P[3] - P[1] * P[2];
+          const sx = Math.hypot(P[0], P[1]), sy = Math.hypot(P[2], P[3]);
+          if (det < 0) { item.rot = item.dir - Math.PI; item.mirrorX = !item.mirrorX; } else item.rot = item.dir;
+          if (!item.mirrorX) delete item.mirrorX;
+          delete item.dir;
+          if (!item.fit && sy > 0 && Math.abs(sx / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sx / sy);
         }
         ctx.addText(item);
         break;
@@ -763,10 +825,26 @@ function emit(recs, M, byBlock, depth, ctx) {
         }
         break;
       }
+      case 'LEADER': {
+        // its vertices (10 / 20, world coordinates), as a polyline (the arrowhead is not drawn)
+        const xs = all(r, 10), ys = all(r, 20);
+        if (xs.length >= 2) {
+          const pts = [];
+          for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0));
+          if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: false, fill: false });
+        }
+        break;
+      }
       default:
+        // a kind the drawing does not draw, counted by name so the page can say so (MULTILEADER,
+        // WIPEOUT, MLINE, TOLERANCE... were left out without a word)
+        if (NOT_DRAWN.has(r.type)) ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1;
     }
   }
 }
+// entity kinds a drawing holds that this does not draw (structure -- VERTEX, SEQEND, ATTDEF,
+// VIEWPORT -- is not counted)
+const NOT_DRAWN = new Set(['MULTILEADER', 'MLEADER', 'WIPEOUT', 'MLINE', 'TOLERANCE', 'IMAGE', 'OLE2FRAME', 'OLEFRAME', '3DSOLID', 'BODY', 'REGION', 'SURFACE', 'MESH', 'RAY', 'XLINE', 'SHAPE', 'ACAD_TABLE', 'ACAD_PROXY_ENTITY', 'ARC_DIMENSION', 'HELIX', 'UNDERLAY', 'PDFUNDERLAY', 'DWFUNDERLAY', 'DGNUNDERLAY']);
 
 // an arc as points: radius r about (cx, cy) from a0 to a1 (radians, CCW)
 function arcPts(cx, cy, r, a0, a1) {
@@ -939,8 +1017,16 @@ function hatchLoops(r) {
 export function mtextPlain(s, codepage = 'windows-1252') {
   let out = '';
   const n = s.length;
-  // the ";" ending a code from j on, or -1 when a backslash (or the end) comes first
-  const endOf = (j) => { for (; j < n; j++) { if (s[j] === ';') return j; if (s[j] === '\\') return -1; } return -1; };
+  // the ";" ending a code from j on, or -1 when a backslash (or the end) comes first -- a character
+  // escape (\U+XXXX, \M+NXXXX) is part of the code (a font name written outside the code page: the
+  // code did not end, and showed as text)
+  const endOf = (j) => {
+    for (; j < n; j++) {
+      if (s[j] === ';') return j;
+      if (s[j] === '\\') { const esc = escapeAt(s, j); if (!esc) return -1; j += esc[1] - 1; }
+    }
+    return -1;
+  };
   for (let i = 0; i < n; i++) {
     const c = s[i];
     if (c === '{' || c === '}') continue;
@@ -1040,18 +1126,50 @@ function extentsOf(out) {
   return min[0] === Infinity ? null : { min, max };
 }
 
+// An ATTRIB's groups with its text placement (11 / 21, 41, 71, 72) from its AcDbText part only:
+// an R2018 ATTRIB's AcDbAttribute part writes these codes again with other meanings (71 its
+// attribute type, 1 in 2,082 of 7,083 at hand). The one rule for the reader and the DWG
+// validation's comparator
+const ATTRIB_TEXT_CODES = new Set([11, 21, 41, 71, 72]);
+export function attribTextGroups(g) {
+  const k = g.findIndex((x) => x[0] === 100 && x[1] === 'AcDbAttribute');
+  return k < 0 ? g : g.filter((x, i) => i < k || !ATTRIB_TEXT_CODES.has(x[0]));
+}
+
 // A drawing with nothing to show: no path or text in model space or any layout. The one rule for
 // the page (it refuses the file) and dwg-check.mjs (it reports it)
-export const drawsNothing = (d) => !d.paths.length && !d.texts.length && !d.layouts.some((l) => l.paths.length || l.texts.length);
+export const sheetDraws = (s) => s.paths.length > 0 || s.texts.length > 0; // (model space, or a layout)
+export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws);
+
+// Lines wrapped at a width, at spaces (a word longer than the width stands alone): width(line)
+// measures a line -- the view by the font, the extents by an estimate. The one wrap for both
+export function wrapLines(lines, width, max) {
+  const out = [];
+  for (const line of lines) {
+    if (width(line) <= max) { out.push(line); continue; }
+    let cur = '';
+    for (const word of line.split(' ')) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (cur && width(next) > max) { out.push(cur); cur = word; } else cur = next;
+    }
+    out.push(cur);
+  }
+  return out;
+}
 
 // A text's corners as js/dxf-view.js places it: its lines (1.4 heights apart), its width (its
 // fit, else 0.6 of a height per character of the longest line), shifted by its alignment and
 // vertical alignment, turned by its rotation. The extents took every text as left-aligned on its
 // baseline, one line high: a 20-line MTEXT drawn below its point was cut off by Fit
 export function textCorners(t) {
-  const lines = t.text.split('\n');
+  const per = t.h * 0.6 * (t.widthFactor || 1); // (a character's width, estimated)
+  // an MTEXT with a reference width wraps at it (as the view does, by measure): its lines estimated
+  const lines = t.mtext && t.wrap > 0 ? wrapLines(t.text.split('\n'), (l) => l.length * per, t.wrap) : t.text.split('\n');
   const lh = t.h * 1.4;
-  const w = t.fit > 0 ? t.fit : t.h * 0.6 * (t.widthFactor || 1) * Math.max(...lines.map((l) => l.length));
+  // (the longest line by a loop: spread into Math.max, 300k lines overflowed the stack)
+  let longest = 0;
+  for (const l of lines) if (l.length > longest) longest = l.length;
+  const w = t.fit > 0 ? t.fit : per * longest;
   const hBlock = (lines.length - 1) * lh + t.h;
   const x0 = t.fit > 0 ? 0 : t.align === 'center' ? -w / 2 : t.align === 'right' ? -w : 0;
   // (y up: the top of the block and its bottom, from the point)
