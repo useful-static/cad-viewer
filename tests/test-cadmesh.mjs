@@ -464,7 +464,8 @@ await test('noSurfaces: the one refusal for the page and stp2mesh; bodyLabels: o
 });
 await test('dwg-check refuses an option it does not know, and --dxf with no file (exit 2)', () => {
   const cli = join(HERE, '..', 'dwg-check.mjs');
-  for (const args of [['x.dwg', '--jsn'], ['x.dwg', '--dxf']]) {
+  // (and no DWG at all, and --dxf with two: each overwrote the one file)
+  for (const args of [['x.dwg', '--jsn'], ['x.dwg', '--dxf'], ['--json'], ['a.dwg', 'b.dwg', '--dxf', 'o.dxf']]) {
     let status = 0;
     try { execFileSync(process.execPath, [cli, ...args], { stdio: 'pipe' }); } catch (e) { status = e.status; }
     assert.equal(status, 2, args.join(' '));

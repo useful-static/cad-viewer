@@ -74,6 +74,10 @@ await test('--skip leaves out the bodies it matches; --out names the files', () 
   assert.equal(run(inp, '--to').status, 2);
   assert.equal(run(inp, '--skp', 'part').status, 2);
   assert.equal(run(inp, '--model_up', 'y').status, 2);
+  // a second input, an option twice, a --to of no format: usage errors (each was taken, exit 0)
+  assert.equal(run(inp, inp).status, 2);
+  assert.equal(run(inp, '--to', 'stl', '--to', 'glb').status, 2);
+  assert.equal(run(inp, '--to', ',').status, 2);
   const w = run(inp, '--to', 'stl', '--out', join(dir, 'no-such-dir', 'x'));
   assert.equal(w.status, 1);
   assert.match(w.stderr, /^cadmesh-export: could not write .*x\.stl: /);

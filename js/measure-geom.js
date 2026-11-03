@@ -126,9 +126,10 @@ function planeOf(P, I, t0, nt) {
 
 // The loops of one face: its edges used by one of its triangles, chained by
 // vertex index. -> [[vertex index, ...], ...]
-function faceLoops(I, t0, nt) {
+// (an edge's key a number, a * span + b: a string a triangle edge was 0.75 s of a 6,400-hole plate)
+function faceLoops(I, t0, nt, span = 2 ** 26) {
   const use = new Map();
-  const key = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
+  const key = (a, b) => (a < b ? a * span + b : b * span + a);
   for (let t = t0; t < t0 + nt; t++) {
     for (let j = 0; j < 3; j++) {
       const a = I[3 * t + j], b = I[3 * t + (j + 1) % 3];
@@ -187,15 +188,32 @@ export function bodyGeometry(model, meshIndex) {
       faces.push({ tri0: model.faces[2 * f], ntri: model.faces[2 * f + 1] });
     }
   } else faces.push({ tri0, ntri, whole: true });
-  // welded boundary graph across the body's faces
-  const node = new Map(); // bits -> { p, nb: Set }
+  // welded boundary graph across the body's faces: a node per position (its bits), numbered, with
+  // its neighbours' numbers; a segment a number too. (Keyed by the positions' strings, every
+  // segment built and compared strings: 1.2 s of a 6,400-hole plate's 3.9 s)
+  const nodeP = [], nodeNb = [];
+  // (a vertex's node, by its place in the body's own vertices: -1 until met)
+  const v0 = m.vtxStart || 0;
+  const idOfKey = new Map(), idOfVertex = new Int32Array(Math.max(1, m.vtxCount || P.length / 3)).fill(-1);
+  const idOf = (v) => {
+    let id = idOfVertex[v - v0];
+    if (id >= 0) return id;
+    const k = bitsKey(P, v);
+    id = idOfKey.get(k);
+    if (id === undefined) { id = nodeP.length; idOfKey.set(k, id); nodeP.push([P[3 * v], P[3 * v + 1], P[3 * v + 2]]); nodeNb.push(new Set()); }
+    idOfVertex[v - v0] = id;
+    return id;
+  };
+  const SEG = 2 ** 26;
+  const sk = (x, y) => (x < y ? x * SEG + y : y * SEG + x);
   const segs = new Set();
   const circles = [];
-  for (const f of faces) {
+  const span = P.length / 3 + 1;
+  for (const [fi, f] of faces.entries()) {
     f.plane = f.whole ? null : planeOf(P, I, f.tri0, f.ntri);
     f.circles = [];
     if (!f.ntri) continue;
-    const loops = faceLoops(I, f.tri0, f.ntri);
+    const loops = faceLoops(I, f.tri0, f.ntri, span);
     // the outer loop: the one with the largest extent (a face's holes lie
     // inside it); the others are inner, a hole's or a boss's foot
     const ext = loops.map((loop) => {
@@ -208,49 +226,47 @@ export function bodyGeometry(model, meshIndex) {
       const pts = loop.map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]);
       if (!f.whole) {
         const c = circleOf(pts, a);
-        if (c) { c.face = faces.indexOf(f); c.inner = li !== outer; f.circles.push(c); circles.push(c); }
+        // (its face by index: faces.indexOf for each circle was 1.3 s of 11,444 faces)
+        if (c) { c.face = fi; c.inner = li !== outer; f.circles.push(c); circles.push(c); }
       }
       for (let i = 0; i < loop.length; i++) {
-        const ka = bitsKey(P, loop[i]), kb = bitsKey(P, loop[(i + 1) % loop.length]);
+        const ka = idOf(loop[i]), kb = idOf(loop[(i + 1) % loop.length]);
         if (ka === kb) continue;
-        for (const [k, v] of [[ka, loop[i]], [kb, loop[(i + 1) % loop.length]]]) {
-          if (!node.has(k)) node.set(k, { p: [P[3 * v], P[3 * v + 1], P[3 * v + 2]], nb: new Set() });
-        }
-        node.get(ka).nb.add(kb);
-        node.get(kb).nb.add(ka);
-        segs.add(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+        nodeNb[ka].add(kb);
+        nodeNb[kb].add(ka);
+        segs.add(sk(ka, kb));
       }
     });
   }
   // corners: welded points where other than two boundary segments meet
   const corners = [];
-  const isCorner = (k) => node.get(k).nb.size !== 2;
-  for (const [k, v] of node) if (isCorner(k)) corners.push(v.p);
+  const isCorner = (k) => nodeNb[k].size !== 2;
+  for (let k = 0; k < nodeP.length; k++) if (isCorner(k)) corners.push(nodeP[k]);
   // b-rep edges: walk from each corner along unvisited segments to the next
   // corner; what is left over are closed edges (a full circle's rim)
   const seen = new Set();
-  const sk = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
   const edges = [];
   const walk = (start, first) => {
-    const line = [node.get(start).p];
+    const line = [nodeP[start]];
     let prev = start, cur = first;
     for (;;) {
       seen.add(sk(prev, cur));
-      line.push(node.get(cur).p);
+      line.push(nodeP[cur]);
       if (isCorner(cur) || cur === start) break;
-      const nx = [...node.get(cur).nb].find((n) => n !== prev && !seen.has(sk(cur, n)));
+      let nx;
+      for (const n of nodeNb[cur]) if (n !== prev && !seen.has(sk(cur, n))) { nx = n; break; }
       if (nx === undefined) break;
       prev = cur;
       cur = nx;
     }
     edges.push(line);
   };
-  for (const [k, v] of node) {
+  for (let k = 0; k < nodeP.length; k++) {
     if (!isCorner(k)) continue;
-    for (const n of v.nb) if (!seen.has(sk(k, n))) walk(k, n);
+    for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
-  for (const [k, v] of node) {
-    for (const n of v.nb) if (!seen.has(sk(k, n))) walk(k, n);
+  for (let k = 0; k < nodeP.length; k++) {
+    for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices)
   return { faces, corners, edges, circles, segments: segs.size, P, I };
@@ -330,8 +346,15 @@ function curvedBoxes(geom) {
       for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], P[v + k]); hi[k] = Math.max(hi[k], P[v + k]); }
     }
     return { lo, hi, fi };
-  }).filter(Boolean).sort((p, q) => p.lo[0] - q.lo[0]);
-  // (sorted by their low x, with the widest's width: a hole's x range finds its faces by search)
+  }).filter(Boolean);
+  // Sorted by their low x, with the widest's width: a hole's x range finds its faces by search. A
+  // face far wider than most (a panel-long fillet) is kept apart and always looked at: its width
+  // set the search's reach, and every rim scanned from the first box (6,400 holes: 290 -> 1,256 ms)
+  const all = geom.curvedBoxes;
+  const widths = all.map((x) => x.hi[0] - x.lo[0]).sort((p, q) => p - q);
+  const cap = Math.max(16 * (widths[Math.floor(widths.length * 0.9)] || 0), 1e-9);
+  geom.curvedBoxes = all.filter((x) => x.hi[0] - x.lo[0] <= cap).sort((p, q) => p.lo[0] - q.lo[0]);
+  geom.curvedBoxes.long = all.filter((x) => x.hi[0] - x.lo[0] > cap);
   geom.curvedBoxes.wide = geom.curvedBoxes.reduce((w, x) => Math.max(w, x.hi[0] - x.lo[0]), 0);
   return geom.curvedBoxes;
 }
@@ -342,10 +365,9 @@ function curvedNear(geom, lo, hi) {
   const from = lo[0] - bs.wide;
   while (a < b) { const mid = (a + b) >> 1; if (bs[mid].lo[0] < from) a = mid + 1; else b = mid; }
   const out = [];
-  for (let i = a; i < bs.length && bs[i].lo[0] <= hi[0]; i++) {
-    const x = bs[i];
-    if ([0, 1, 2].every((k) => x.hi[k] >= lo[k] && x.lo[k] <= hi[k])) out.push(x.fi);
-  }
+  const meets = (x) => [0, 1, 2].every((k) => x.hi[k] >= lo[k] && x.lo[k] <= hi[k]);
+  for (let i = a; i < bs.length && bs[i].lo[0] <= hi[0]; i++) if (meets(bs[i])) out.push(bs[i].fi);
+  for (const x of bs.long) if (meets(x)) out.push(x.fi);
   return out;
 }
 function wallJoins(geom, a, b) {
@@ -396,46 +418,62 @@ export function holesOf(geom) {
   // face looks the other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
   const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
-  // (the candidates by their axis line: its direction, rounded and signed one way, and where the
-  // line crosses the plane across it, in cells -- every rim against every other was 8.8 s of a
-  // 6,400-hole plate's 14.4 s on the page's thread)
+  // The candidates, by key: the radius, in steps of the radius test (and the steps either side),
+  // and the axis line's point nearest the origin, in cells (and the cells round it) -- the same for
+  // every rim on one line wherever along it, whatever its direction. (Every rim against every other
+  // was 8.8 s of a 6,400-hole plate's 14.4 s; keyed on a rounded direction, a 30-degree bore 600
+  // long drifted past the cells searched.) Each key's rims are sorted along their axis, and a rim
+  // walks behind its face from where it stands, nearest first, stopping at the first that pairs:
+  // 4,000 rims on one shared axis were each tried against all
   const CELL = 0.5;
-  const lineOf = (c) => {
-    let n = c.normal.map((v) => Math.round(v * 100) / 100);
-    const k = n.findIndex((v) => v !== 0);
-    if (k < 0) n = [0, 0, 1]; else if (n[k] < 0) n = n.map((v) => -v);
-    const nn = unit(n);
-    const u = unit(Math.abs(nn[0]) < 0.9 ? cross(nn, [1, 0, 0]) : cross(nn, [0, 1, 0])), v = cross(nn, u);
-    return { dir: n.join(','), x: Math.floor(dot(c.centre, u) / CELL), y: Math.floor(dot(c.centre, v) / CELL) };
+  const rStep = Math.log(1 + RADIUS_TOL);
+  const canon = (n) => { const k = n.findIndex((v) => Math.abs(v) > 1e-12); return k >= 0 && n[k] < 0 ? n.map((v) => -v) : n; };
+  const keyOf = (c) => {
+    const n = c.normal, al = dot(c.centre, n);
+    const q = c.centre.map((x, k) => x - n[k] * al);
+    return { r: Math.round(Math.log(c.radius) / rStep), q: q.map((x) => Math.floor(x / CELL)), t: dot(c.centre, canon(n)) };
   };
   const index = new Map();
-  const lines = rims.map(lineOf);
-  lines.forEach((l, i) => { const k = `${l.dir}|${l.x},${l.y}`; let a = index.get(k); if (!a) index.set(k, (a = [])); a.push(i); });
-  const near = (i) => {
-    const l = lines[i], out2 = [];
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const a = index.get(`${l.dir}|${l.x + dx},${l.y + dy}`); if (a) out2.push(...a); }
-    return out2;
-  };
+  const keys = rims.map(keyOf);
+  keys.forEach((k, i) => { const s = `${k.r}|${k.q.join(',')}`; let a = index.get(s); if (!a) index.set(s, (a = [])); a.push(i); });
+  for (const a of index.values()) a.sort((x, y) => keys[x].t - keys[y].t);
   const out = [];
   const used = new Set();
+  // whether rim j can be rim r's other end: its radius, its axis, facing the other way, on the
+  // line, behind r's face (into the material: the nearest either way crossed an air gap thinner than
+  // an arm -- a fork's arms 10 thick and 1 apart read as holes 1 and 21 deep) -> its distance, or -1
+  const pairs = (r, s) => {
+    if (Math.abs(s.radius - r.radius) > RADIUS_TOL * r.radius) return -1;
+    if (Math.abs(Math.abs(dot(s.normal, r.normal)) - 1) > 1e-3) return -1;
+    if (dot(faceN(s), faceN(r)) > -0.999) return -1;
+    const d = sub(s.centre, r.centre);
+    const along = dot(d, r.normal);
+    if (len(sub(d, r.normal.map((v) => v * along))) > 0.01 * r.radius + 1e-6) return -1;
+    if (dot(d, faceN(r)) >= 0) return -1;
+    return Math.abs(along);
+  };
   for (let i = 0; i < rims.length; i++) {
     if (used.has(i)) continue;
-    const r = rims[i];
+    const r = rims[i], k = keys[i];
+    // (behind r's face, along its own sorted axis: the direction t grows or falls)
+    const s = dot(faceN(r), canon(r.normal)) > 0 ? -1 : 1;
     let best = -1, bestAlong = Infinity;
-    for (const j of near(i)) {
-      if (j === i || used.has(j)) continue;
-      const s = rims[j];
-      if (Math.abs(s.radius - r.radius) > RADIUS_TOL * r.radius) continue;
-      if (Math.abs(Math.abs(dot(s.normal, r.normal)) - 1) > 1e-3) continue;
-      if (dot(faceN(s), faceN(r)) > -0.999) continue; // (the other end looks the other way)
-      const d = sub(s.centre, r.centre);
-      const along = dot(d, r.normal);
-      const off = len(sub(d, r.normal.map((v) => v * along)));
-      if (off > 0.01 * r.radius + 1e-6) continue;
-      // (and behind its face, into the material: the nearest either way crossed an air gap thinner
-      // than an arm -- a fork's arms 10 thick and 1 apart read as holes 1 and 21 deep)
-      if (dot(d, faceN(r)) >= 0) continue;
-      if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); best = j; }
+    for (let dr = -1; dr <= 1; dr++) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const a = index.get(`${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
+      if (!a) continue;
+      let lo = 0, hi = a.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (keys[a[mid]].t < k.t) lo = mid + 1; else hi = mid; }
+      // walk from there, behind (the equal t either side looked at too)
+      let p = s > 0 ? lo : lo - 1;
+      while (p > 0 && p - 1 < a.length && s > 0 && keys[a[p - 1]].t >= k.t - 1e-9) p--;
+      while (p + 1 < a.length && s < 0 && keys[a[p + 1]].t <= k.t + 1e-9) p++;
+      for (; p >= 0 && p < a.length; p += s) {
+        const j = a[p];
+        if ((keys[j].t - k.t) * s > bestAlong + 1e-6) break;
+        if (j === i || used.has(j)) continue;
+        const al = pairs(r, rims[j]);
+        if (al >= 0) { if (al < bestAlong) { bestAlong = al; best = j; } break; }
+      }
     }
     // (and a wall joins them: a curved face on the hole's cylinder spanning rim to rim -- two blind
     // holes drilled from either side, material between, read as one through-hole)

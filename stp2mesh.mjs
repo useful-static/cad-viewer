@@ -119,8 +119,10 @@ async function main() {
   let st = null;
   try { st = statSync(args.input); } catch { /* reported below */ }
   if (!st || !st.isFile()) {
+    // (an input that cannot be read is refused, exit 1, as cadmesh-export and dwg-check refuse it;
+    // 2 is for the options)
     process.stderr.write(`${args.input}: ${st ? 'not a file' : 'no such file'}\n`);
-    return 2;
+    return 1;
   }
   // a name that says nothing: told by the bytes, as the viewer does (r22)
   const format = FORMATS[ext] || sniffFile(args.input);

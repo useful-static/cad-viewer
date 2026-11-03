@@ -119,5 +119,22 @@ test('a pin wholly inside a solid block overlaps it: 0, not the gap between thei
   const r2 = clearance(s2.position, s2.index, trisOf(s2, [2]), trisOf(s2, [1]), { solidA: trisOf(s2, [2]), solidB: trisOf(s2, [1]) });
   assert.ok(Math.abs(r2.distance - 2) < 1e-9 && !r2.inside, JSON.stringify(r2));
 });
+test('containment names the part and the solid that holds it; a part in two overlapping solids is inside', () => {
+  // the pin in block 1; part 2 half a mm from block 2 (the nearest surfaces' pair, which was named)
+  const blocks = file('blocks', [['block1', [0, 0, 0], [10, 10, 10]], ['block2', [20, 0, 0], [30, 10, 10]]]);
+  const parts = file('parts', [['pin', [4, 4, 4], [6, 6, 6]], ['part2', [30.5, 4, 4], [32, 6, 6]]]);
+  const s = mergeModels([{ base: parts, name: 'parts.stp' }, { base: blocks, name: 'blocks.stp' }]);
+  const triOf = (id) => s.header.meshes[id - 1].idxStart / 3;
+  const r = clearance(s.position, s.index, trisOf(s, [1, 2]), trisOf(s, [3, 4]), { solidA: trisOf(s, [1, 2]), solidB: trisOf(s, [3, 4]) });
+  assert.equal(r.distance, 0);
+  assert.equal(r.triA, triOf(1), 'the pin');
+  const inBlock1 = r.triB >= triOf(3) && r.triB < triOf(4);
+  assert.ok(inBlock1, `named in block1 (tri ${r.triB})`);
+  // two overlapping solids, the pin in their overlap
+  const two = file('two', [['a', [0, 0, 0], [10, 10, 10]], ['b', [3, 0, 0], [13, 10, 10]]]);
+  const s2 = mergeModels([{ base: file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]), name: 'pin.stp' }, { base: two, name: 'two.stp' }]);
+  const r2 = clearance(s2.position, s2.index, trisOf(s2, [1]), trisOf(s2, [2, 3]), { solidA: trisOf(s2, [1]), solidB: trisOf(s2, [2, 3]) });
+  assert.deepEqual([r2.distance, r2.inside], [0, true]);
+});
 
 done();

@@ -7,6 +7,8 @@
 import assert from 'node:assert/strict';
 import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster } from '../js/raycast.js';
+import { KIND_NAME, MARK, SNAP_KINDS } from '../js/measure-ui.js';
+import { readFileSync } from 'node:fs';
 
 import { test, done } from './harness.mjs';
 
@@ -103,6 +105,14 @@ test('a board with four mounting holes: four holes, their spacing', () => {
   assert.deepEqual(at, [[3.5, 3.5], [3.5, 52.5], [61.5, 3.5], [61.5, 52.5]]);
   assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2));
 });
+test('every kind of point Measure snaps to has its mark and its name (a cut-face point read "undefined undefined")', () => {
+  for (const k of SNAP_KINDS) assert.ok(MARK[k] && KIND_NAME[k], k);
+  // and every kind the snapping code gives is one of them (read from its source)
+  const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
+  const given = new Set([...src.matchAll(/consider\([^)]*?'([a-z]+)'/g), ...src.matchAll(/return \{[^}]*kind: '([a-z]+)'/g)].map((m) => m[1]));
+  for (const k of given) assert.ok(SNAP_KINDS.includes(k), `${k} has no mark`);
+  assert.ok(given.has('cut') && given.has('surface'), [...given].join(','));
+});
 test('the hole table of 8,000 rims pairs them by their axis lines, fast (every rim against every other froze the page)', () => {
   // 4,000 holes' top and bottom rims on faces of their own, no walls (so every pair is tried and refused)
   const faces = [];
@@ -114,6 +124,26 @@ test('the hole table of 8,000 rims pairs them by their axis lines, fast (every r
   const h = holesOf({ faces, P: new Float32Array(0), I: new Uint32Array(0) });
   assert.equal(h.length, 8000);
   assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+});
+test('a tilted bore, 600 long at 30 degrees, is one through-hole (its rims fell in different cells)', () => {
+  const n = 40, ri = 2, ro = 6, L = 600, a = Math.PI / 6;
+  const ax = [Math.sin(a), 0, Math.cos(a)], u = [Math.cos(a), 0, -Math.sin(a)], v = [0, 1, 0];
+  const at = (r, z, i) => { const t = (2 * Math.PI * i) / n; return P(...[0, 1, 2].map((k) => r * Math.cos(t) * u[k] + r * Math.sin(t) * v[k] + z * ax[k] + 100)); };
+  const ring = (r, z) => Array.from({ length: n }, (_, i) => at(r, z, i));
+  const band = (p, q) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([p[i], q[i], q[j]], [p[i], q[j], p[j]]); } return t; };
+  const faces = [band(ring(ri, L), ring(ro, L)), band(ring(ro, 0), ring(ri, 0)), band(ring(ri, 0), ring(ri, L)), band(ring(ro, L), ring(ro, 0))];
+  const h = holesOf(bodyGeometry(model([{ name: 'bore', faces }]), 0));
+  assert.deepEqual(h.map((x) => [x.rims, Math.round(x.depth)]), [[2, 600]], JSON.stringify(h.map((x) => [x.rims, x.depth])));
+});
+test('4,000 rims on one axis (fins on a shaft): paired in order along it, fast', () => {
+  // fins 0.5 thick, 0.5 apart, on one axis: no walls (each pair tried and refused)
+  const faces = [];
+  for (let i = 0; i < 2000; i++) {
+    for (const [z, nz] of [[i + 0.5, 1], [i, -1]]) faces.push({ plane: { normal: [0, 0, nz], d: nz * z }, ntri: 0, circles: [{ centre: [0, 0, z], normal: [0, 0, 1], radius: 1, inner: true, face: faces.length }] });
+  }
+  let t0 = Date.now();
+  assert.equal(holesOf({ faces, P: new Float32Array(0), I: new Uint32Array(0) }).length, 4000);
+  assert.ok(Date.now() - t0 < 1000, `shared axis ${Date.now() - t0} ms`);
 });
 test('two blind holes drilled from either side, material between, are two holes, not one through-hole', () => {
   // a round block 0..10 high, radius 6; a hole of radius 2 from the top 3 deep and one from the

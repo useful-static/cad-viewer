@@ -1,7 +1,9 @@
 // Clearance (feature review item 18): the smallest distance between two sets
 // of triangles -- a board and the case around it, two boards -- and the two
 // points where it is, exactly on the tessellation. 0 means they touch or
-// overlap (a pierced triangle, a shared face).
+// overlap (a pierced triangle, a shared face), or that a part lies wholly inside
+// a closed body of the other set (opts.solidA / solidB: the closed bodies, from
+// the facts' closed flags; js/main.js waits for them).
 //
 // Each set gets a bounding-volume tree over its triangles (boxes split at the
 // median of their longest axis, 4 triangles a leaf); the two trees are walked
@@ -14,6 +16,7 @@
 // Pure ES module, no DOM.
 
 import { cross, dot, sub } from './vec3.js';
+import { makeCaster } from './raycast.js';
 
 const LEAF = 4;
 
@@ -144,31 +147,6 @@ export function triangleDistance(A, B) {
   return best;
 }
 
-// Whether point p lies inside the closed surface made of tris: the crossings of a ray from p (a
-// direction no model's axes follow), counted -- odd is inside
-export function insideClosed(pos, index, tris, p) {
-  const d = [0.5773, 0.5774, 0.5775];
-  let n = 0;
-  for (const [t0, c] of tris) {
-    for (let t = t0; t < t0 + c; t++) {
-      const v = [0, 1, 2].map((k) => { const i = index[t * 3 + k] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; });
-      // Moller-Trumbore, t > 0
-      const e1 = v[1].map((x, k) => x - v[0][k]), e2 = v[2].map((x, k) => x - v[0][k]);
-      const h = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
-      const a = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
-      if (Math.abs(a) < 1e-14) continue;
-      const s = p.map((x, k) => x - v[0][k]);
-      const u = (s[0] * h[0] + s[1] * h[1] + s[2] * h[2]) / a;
-      if (u < 0 || u > 1) continue;
-      const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
-      const w = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / a;
-      if (w < 0 || u + w > 1) continue;
-      if ((e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) / a > 0) n++;
-    }
-  }
-  return n % 2 === 1;
-}
-
 // pos: Float32Array xyz, index: Uint32Array triangles; trisA, trisB:
 // [[firstTriangle, count], ...]. Returns { distance, pa, pb, triA, triB,
 // pairs, inside } (pairs: triangle pairs tested), or null when a set is empty. opts.solidA /
@@ -178,9 +156,44 @@ export function insideClosed(pos, index, tris, p) {
 export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
+  // Each solid on its own (counted together, a part inside two overlapping solids read outside),
+  // by its box first, then one ray through the caster's tree: the first triangle it meets faces
+  // away from it when the point is inside (an inner cavity's wall faces into the cavity: outside).
+  // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
+  // The answer names the part and the solid that holds it (the nearest surfaces' pair named two
+  // others)
   const vertexOf = ([t0]) => { const i = index[t0 * 3] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; };
-  const within = (parts, solids) => solids && solids.length && parts.some((t) => t[1] > 0 && insideClosed(pos, index, solids, vertexOf(t)));
-  if (within(trisA, opts.solidB) || within(trisB, opts.solidA)) return { ...r, distance: 0, inside: true };
+  const within = (parts, solids, aFirst) => {
+    if (!solids || !solids.length) return null;
+    const boxes = solids.map(([t0, c]) => {
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (let t = t0; t < t0 + c; t++) for (let j = 0; j < 3; j++) { const i = index[t * 3 + j] * 3; for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], pos[i + k]); hi[k] = Math.max(hi[k], pos[i + k]); } }
+      return { lo, hi };
+    });
+    let caster = null;
+    const d = [0.5773, 0.5774, 0.5775];
+    for (const part of parts) {
+      if (!(part[1] > 0)) continue;
+      const p = vertexOf(part);
+      for (let s = 0; s < solids.length; s++) {
+        const b = boxes[s];
+        if ([0, 1, 2].some((k) => p[k] < b.lo[k] || p[k] > b.hi[k])) continue;
+        if (solids[s][0] === part[0]) continue; // (a part is not inside itself)
+        if (!caster) caster = makeCaster({ position: pos, index, header: { meshes: solids.map(([t0, c]) => ({ idxStart: t0 * 3, idxCount: c * 3 })) } });
+        const h = caster.cast([s], p, d);
+        if (!h) continue;
+        const v = [0, 1, 2].map((j) => { const i = index[h.tri * 3 + j] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; });
+        const e1 = v[1].map((x, k) => x - v[0][k]), e2 = v[2].map((x, k) => x - v[0][k]);
+        const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        if (n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0) {
+          return aFirst ? { triA: part[0], triB: h.tri, pa: p, pb: p } : { triA: h.tri, triB: part[0], pa: p, pb: p };
+        }
+      }
+    }
+    return null;
+  };
+  const inside = within(trisA, opts.solidB, true) || within(trisB, opts.solidA, false);
+  if (inside) return { ...r, ...inside, distance: 0, inside: true };
   return r;
 }
 

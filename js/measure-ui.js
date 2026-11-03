@@ -4,7 +4,8 @@
 // within 12 CSS px of the pointer (24 on a coarse pointer), to a b-rep corner
 // (◆), an edge's midpoint (▲), a circle's centre (⊙, with its Ø) or the
 // nearest point on an edge (―), from js/measure-geom.js; else the surface
-// under the pointer. Only VISIBLE candidates are offered: nothing may cut the
+// under the pointer -- under a section, where a closed body's cut face is drawn,
+// the point on the cut (▪; Face to face and Paint take no face there). Only VISIBLE candidates are offered: nothing may cut the
 // segment from the eye to the point (js/raycast.js), except where the style
 // draws hidden edges (Wire, X-ray, Hidden grey). Points are kept in model
 // coordinates; results are drawn on an SVG layer over the view, projected
@@ -21,8 +22,11 @@ import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
 
 const SVG = 'http://www.w3.org/2000/svg';
-const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
-const KIND_NAME = { vertex: 'corner', mid: 'midpoint', centre: 'centre', edge: 'edge', surface: 'surface' };
+// every kind of point Measure snaps to, its mark and its name (a 'cut' point -- on a section's cut
+// face -- had neither: its label read "undefined undefined")
+export const SNAP_KINDS = ['vertex', 'mid', 'centre', 'edge', 'surface', 'cut'];
+export const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•', cut: '▪' };
+export const KIND_NAME = { vertex: 'corner', mid: 'midpoint', centre: 'centre', edge: 'edge', surface: 'surface', cut: 'cut face' };
 
 
 // The colours Measure draws in, on the dark view and on paper (a light ground)

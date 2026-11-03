@@ -45,8 +45,10 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (!isApp(url)) return; // models, lists, everything else: the network alone
   e.respondWith((async () => {
-    // (the page itself under any query: ?src=, ?list= are read by the page)
-    const key = url.pathname.slice(scope.length) === '' || url.pathname.endsWith('/index.html') ? new Request(new URL('index.html', self.location.href)) : req;
+    // (a page under any query -- ?src=, ?list= are read by the page -- kept under its bare path:
+    // check.html?list= missed its kept copy; the scope's own path is index.html)
+    const p = url.pathname.slice(scope.length);
+    const key = p === '' ? new Request(new URL('index.html', self.location.href)) : p.endsWith('.html') ? new Request(new URL(p, self.location.href)) : req;
     try {
       const res = await fetch(req);
       // (the copy kept before the worker may stop: put, unawaited, could be lost -- the 12 MB

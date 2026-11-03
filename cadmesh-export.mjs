@@ -65,9 +65,15 @@ async function main() {
   a.forEach((x, i) => { if (x.startsWith('-') && !KNOWN.includes(x) && !(i > 0 && KNOWN.includes(a[i - 1]))) usage(`unknown option ${x}`); });
   // (an option given with no value is a usage error: --to or --out alone fell back to the default)
   const opt = (k) => { const i = a.indexOf(k); if (i < 0) return undefined; const v = a[i + 1]; if (v === undefined || v.startsWith('--')) usage(`${k} needs a value`); return v; };
-  const inp = a.find((x, i) => !x.startsWith('--') && !(i > 0 && a[i - 1].startsWith('--')));
+  const inputs = a.filter((x, i) => !x.startsWith('--') && !(i > 0 && a[i - 1].startsWith('--')));
+  const inp = inputs[0];
   if (!inp) usage('no input file');
+  // (one input, each option once, and a --to that names a format: a second file, a repeated option
+  // or "--to ," were taken without a word, exit 0)
+  if (inputs.length > 1) usage(`one input file, not ${inputs.length}`);
+  for (const k of KNOWN) if (a.filter((x) => x === k).length > 1) usage(`${k} given twice`);
   const to = (opt('--to') || 'stl,3mf,glb').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!to.length) usage('--to names no format');
   for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" (stl, 3mf, glb)`);
   const modelUp = opt('--model-up') || 'z';
   if (!MODEL_UP[modelUp]) usage(`--model-up must be y or z, not "${modelUp}"`);

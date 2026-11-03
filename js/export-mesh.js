@@ -126,7 +126,7 @@ const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/
 // said 2 bodies, and one of none was written: invalid glTF, a 3MF without a material)
 export const exportable = (model, ids) => ids.filter((id) => model.header.meshes[id - 1].idxCount > 0);
 // (the one refusal, said one way, by every writer -- STL's too, which wrote an 84-byte file)
-export const NOTHING_TO_EXPORT = 'nothing to export (no body shown has a triangle)';
+export const NOTHING_TO_EXPORT = 'nothing to export (no body left to write has a triangle)';
 function withTriangles(model, ids, names) {
   const keep = ids.map((id, j) => [id, names[j]]);
   const ok = new Set(exportable(model, ids));

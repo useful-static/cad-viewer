@@ -45,7 +45,11 @@ async function run(urls) {
     const result = await checkLists(urls, location.href, {
       onEntry: (entry, i, n) => {
         $('results').hidden = false;
-        body.append(row(entry));
+        // (in the list's order, wherever its check finished: they were in finishing order)
+        const rows = row(entry);
+        for (const tr of rows.children) tr.dataset.i = String(i);
+        const after = [...body.rows].find((x) => Number(x.dataset.i) > i);
+        body.insertBefore(rows, after || null);
         $('summary').textContent = `checked ${body.querySelectorAll('td.model:not(:empty)').length} of ${n} models…`;
       },
     });

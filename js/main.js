@@ -1043,7 +1043,7 @@ function currentView() {
   return {
     // (copies, never the live objects: a view kept -- a tour's starting view, put back as it
     // ends -- must not change as the viewer moves on)
-    cam: { target: [...c.target], dist: c.dist, q: [...(c.q || presetQuat(c.yaw, c.pitch, c.orient))], ortho: !!c.ortho, orient: c.orient },
+    cam: { target: [...c.target], dist: c.dist, q: [...camQ(c)], ortho: !!c.ortho, orient: c.orient },
     // always the style shown, the default too: a link without one opens in
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
@@ -1152,6 +1152,14 @@ function pictureName(source) {
   const d = new Date();
   const two = (n) => String(n).padStart(2, '0');
   return `${saveBase(source)}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+}
+// Whether body mi (0-based) of a mesh is closed: the facts' flag, and not closed while the facts are
+// not known (the edges worker still working, or failed) -- what the view draws then (no cut face).
+// The one answer for the view's cut fill, Measure's cut-face point and clearance's containment (the
+// three answered three ways while the facts were absent)
+function closedOf(mesh, mi) {
+  const c = mesh?.edgeInfo?.value?.facts?.closed;
+  return c ? !!c[mi] : false;
 }
 async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
@@ -1581,7 +1589,7 @@ async function readTour(url) {
 // (a step with no camera of its own)
 function stepPose(s) {
   const c = app.cam;
-  let q = c.q || presetQuat(c.yaw, c.pitch, c.orient);
+  let q = camQ(c);
   // the projection: the step's own ("ortho", or its view's camera), else the visitor's as the
   // tour began -- never the step before's, so stepping back gives the same picture
   const base = app.tour && app.tour.base && app.tour.base.view && app.tour.base.view.cam;
@@ -1734,7 +1742,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
     syncExplodeRow();
   };
   const c = app.cam;
-  const from = { target: c.target.slice(), dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient) };
+  const from = { target: c.target.slice(), dist: c.dist, q: camQ(c) };
   // (a cut: reduced motion, or a tour's pictures being taken)
   const ms = reducedMotion() || app.tour?.cut ? 0 : secs * 1000;
   const t0 = performance.now();
@@ -1981,7 +1989,7 @@ function captureStep({ camera = 'exact' } = {}) {
   tourParts([]); // (the name index for this model)
   const names = (ids) => namesFor(ids, app.header, app.tourIdx, app.partLabels);
   // (rounded as a link rounds it: roundCamera, the one rule)
-  const rc = roundCamera({ target: c.target, dist: c.dist, q: c.q || presetQuat(c.yaw, c.pitch, c.orient) });
+  const rc = roundCamera({ target: c.target, dist: c.dist, q: camQ(c) });
   const q = rc.q;
   const s = {};
   if (camera === 'frame') {
@@ -2434,6 +2442,9 @@ function edgesKey() {
 // A preset's camera orientation, taken in the model's orientation
 // (js/orient.js): the preset in the viewer's own frame, turned into the file's
 const presetQuat = (yaw, pitch, orient) => qMul(orientQuat(orient), quatFromView(yaw, pitch, 'y'));
+// the camera's turn: its own, else the preset its yaw and pitch name (the one fallback: written at
+// four callers, a fifth that forgot it made roundCamera throw)
+function camQ(c) { return c.q || presetQuat(c.yaw, c.pitch, c.orient); }
 
 // Iso on a tall view looks along a long model (js/orient.js isoView)
 const stageAspectNow = () => { const s = $('stage'); return s.clientWidth / Math.max(1, s.clientHeight); };
@@ -3529,9 +3540,9 @@ function pushState() {
   for (const id of app.selected) bytes[id * 4] = 255;
   for (const id of app.hidden) bytes[id * 4 + 1] = 255;
   if (app.hover) bytes[app.hover * 4 + 2] = 255;
-  // a: the body is closed (the facts), for the cut fill in the paper styles
-  const closed = app.baseMesh?.edgeInfo?.value?.facts?.closed;
-  if (closed) closed.forEach((c, i) => { if (c) bytes[(i + 1) * 4 + 3] = 255; });
+  // a: the body is closed (closedOf), for the cut fill in the paper styles
+  const n = app.header ? app.header.meshes.length : 0;
+  for (let i = 0; i < n; i++) if (closedOf(app.baseMesh, i)) bytes[(i + 1) * 4 + 3] = 255;
   app.renderer.setState(bytes, STATE_W, H);
   queueFrame();
 }
@@ -4083,11 +4094,13 @@ async function runClearance() {
   if (!A.length || !B.length) { $('clearval').textContent = 'nothing shown to measure between'; return; }
   $('clearval').textContent = `checking ${what}…`;
   await nextPaint();
-  const t0 = performance.now();
   const base = app.baseMesh;
-  // (each set's closed bodies, for a part lying wholly inside one: the facts' closed flags)
-  const closed = base.edgeInfo?.value?.facts?.closed;
-  const solids = (ids) => (closed ? tris(ids.filter((id) => closed[id - 1])) : []);
+  // (each set's closed bodies, for a part lying wholly inside one: closedOf -- the facts awaited
+  // when they are on their way: skipped, a pin inside a block read 4 mm after every scene change)
+  if (!base.edgeInfo?.value && base.edgeInfo?.ready) { try { await base.edgeInfo.ready; } catch { /* no facts: no containment */ } }
+  if (app.baseMesh !== base) return;
+  const t0 = performance.now();
+  const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
   const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B) });
   if (app.baseMesh !== base || !r) return;
   const ms = Math.round(performance.now() - t0);
@@ -5744,7 +5757,7 @@ function wireInput() {
   app.measure = createMeasure({
     $, view: measureView, sectionPlane,
     // whether a body is closed (the facts, as the cut fill reads them): only a closed one shows a cut face
-    closed: (mi) => { const c = app.baseMesh?.edgeInfo?.value?.facts?.closed; return c ? !!c[mi] : true; },
+    closed: (mi) => closedOf(app.baseMesh, mi),
     // the model as Measure reads it, at the time it reads it
     scene: {
       get mesh() { return app.baseMesh; },

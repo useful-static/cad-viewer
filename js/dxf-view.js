@@ -357,11 +357,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
     ctx.restore();
   }
 
-  // the snap point nearest css px (x, y) within 10 px, else none
-  // The snap points within 10 px, by a grid over them (drawing units, built on the first snap):
-  // every point scanned on every pointer move, with two layout reads each, was 0.6 s a move on a
-  // drawing of 5.2 million points
-  // (built when Measure is turned on, not on the first move: pointTree, js/dxf-view.js)
+  // the snap point nearest css px (x, y) within 10 px, else none: by a 2-d tree over the points
+  // (pointTree), built when Measure is turned on, not on its first move
   let tree = null;
   const SNAP_PX = 10;
   const snapTree = () => tree || (tree = pointTree(snaps));
@@ -369,9 +366,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const [ux, uy] = toUnits(px, py);
     return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !st.off.has(s[3]));
   }
-  // the lines, indexed once for the hover and a click's layer
+  // the lines, indexed once for the hover and a click's layer: built just after the drawing is
+  // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)
   let segGrid = null;
   const segments = () => segGrid || (segGrid = segmentGrid(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
+  setTimeout(() => { if (!segGrid) segments(); }, 0);
   // 6 significant figures; a value a billionth of the drawing's size is float
   // noise (a circle centre averaged from its points), shown as 0
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;

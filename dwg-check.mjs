@@ -20,6 +20,9 @@ const di = args.indexOf('--dxf');
 const dxfOut = di >= 0 ? args[di + 1] : null;
 if (di >= 0 && (dxfOut === undefined || dxfOut.startsWith('--'))) usageError('--dxf needs a file name');
 const files = args.filter((a, k) => !a.startsWith('--') && !(di >= 0 && k === di + 1));
+// (no drawing given, and --dxf with more than one -- each overwrote the one file -- are usage errors)
+if (!files.length) usageError('no DWG file given');
+if (dxfOut && files.length > 1) usageError('--dxf writes one file: give one DWG');
 let bad = 0;
 const reports = [];
 for (const f of files) {
