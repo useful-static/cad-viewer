@@ -17,6 +17,7 @@
 //
 // Pure ES module, no DOM.
 
+import { looksLikeDxf } from './formats.js';
 import { LENGTH_MM } from './units.js';
 import { PAPER, contrast } from './styles.js';
 
@@ -160,7 +161,7 @@ export function parseDXF(s) {
     else s = dxfText(s);
   }
   if (!ps) {
-    if (!/^\s*0\s*\r?\n\s*SECTION/.test(s)) throw new Error('not a DXF file (a DWG is not read)');
+    if (!looksLikeDxf(s)) throw new Error('not a DXF file (no SECTION where it should start)');
     ps = pairs(s);
   }
   // the sections by name
@@ -175,12 +176,17 @@ export function parseDXF(s) {
     }
   }
   // header: $INSUNITS, $LTSCALE
-  let insunits = 0, ltscale = 1;
+  // ($DWGCODEPAGE too: a %%nnn above 127 is a character of the drawing's code page)
+  let insunits = 0, ltscale = 1, codepage = 'windows-1252';
   if (sec.HEADER) {
     for (let i = sec.HEADER[0]; i < sec.HEADER[1]; i++) {
       if (ps[i][0] !== 9 || !ps[i + 1]) continue;
       if (ps[i][1].trim() === '$INSUNITS') insunits = Number(ps[i + 1][1]);
       if (ps[i][1].trim() === '$LTSCALE') ltscale = Number(ps[i + 1][1]) || 1;
+      if (ps[i][1].trim() === '$DWGCODEPAGE') {
+        const c = String(ps[i + 1][1]).trim().toUpperCase();
+        if (/^ANSI_(125\d|874)$/.test(c)) codepage = `windows-${c.slice(5)}`;
+      }
     }
   }
   // layers (colour, line type, line weight) and line types (dash patterns)
@@ -225,7 +231,7 @@ export function parseDXF(s) {
   const budget = { items: 0, pts: 0 };
   // (a path or text with a coordinate that is not a number is left out: one LINE with "10 abc"
   // made the whole drawing's extents NaN and Fit useless)
-  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, budget,
+  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget,
     add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
     addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -629,9 +635,13 @@ function emit(recs, M, byBlock, depth, ctx) {
         // flagged invisible (70 bit 1) is not drawn; its vertical alignment is 74, not 73)
         if (r.type === 'ATTRIB' && (num(r, 70) & 1)) break;
         // (the plain text, made once per entity: a block's text inserted many times is the same)
+        // (an R2018 multi-line ATTRIB holds its value as an embedded MTEXT after "101 Embedded
+        // Object": read as MTEXT -- its own group 1 is the first line only, which was drawn)
         if (r.plain === undefined) {
-          const raw = r.type === 'MTEXT' ? r.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
-          r.plain = r.type === 'MTEXT' ? mtextPlain(raw) : textCodes(raw);
+          const emb = r.type === 'ATTRIB' ? r.g.findIndex((x) => x[0] === 101) : -1;
+          const asM = r.type === 'MTEXT' || emb >= 0;
+          const raw = asM ? r.g.slice(emb >= 0 ? emb : 0).filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
+          r.plain = asM ? mtextPlain(raw, ctx.codepage) : textCodes(raw, ctx.codepage);
         }
         const t = r.plain;
         if (!t.trim()) break;
@@ -856,7 +866,7 @@ function hatchLoops(r) {
 // before the next backslash stays as written. (Run as replaces one after another, a typed path
 // "C:\Projects" lost its "P" to a new line, "\\" then "{3}" read wrong, and a typed "\\U+00B0"
 // turned into a degree sign.) Then the % codes.
-export function mtextPlain(s) {
+export function mtextPlain(s, codepage = 'windows-1252') {
   let out = '';
   const n = s.length;
   // the ";" ending a code from j on, or -1 when a backslash (or the end) comes first
@@ -880,7 +890,15 @@ export function mtextPlain(s) {
       let j = i + 2;
       while (j < n && !'^#/;\\'.includes(s[j])) j++;
       const e = j < n && '^#/'.includes(s[j]) ? endOf(j + 1) : -1;
-      if (e >= 0) { out += `${s.slice(i + 2, j)}/${s.slice(j + 1, e)}`; i = e; continue; }
+      if (e >= 0) {
+        // "/" and "#" stack a fraction (a/b); "^" a tolerance or, one side empty, a super- or
+        // subscript: its non-empty parts, a space apart ("m\S2^;" is m2, "+0.1^-0" is +0.1 -0;
+        // as a/b they read "m2/" and "+0.1/-0")
+        const a = s.slice(i + 2, j), b = s.slice(j + 1, e);
+        out += s[j] === '^' ? [a, b].filter((x) => x.trim()).join(' ') : `${a}/${b}`;
+        i = e;
+        continue;
+      }
       out += c;
       continue;
     }
@@ -889,19 +907,50 @@ export function mtextPlain(s) {
       i += 6;
       continue;
     }
+    if (k === 'M' && s[i + 2] === '+' && /^[1-5][0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 8))) {
+      const ch = mbcsChar(s.slice(i + 3, i + 8));
+      if (ch !== null) { out += ch; i += 7; continue; }
+    }
     out += c;
   }
-  return percentCodes(out);
+  return percentCodes(out, codepage);
 }
 
 // The % codes a TEXT, ATTRIB or MTEXT value holds, in one pass: %%c Ø, %%d °, %%p ±, %%u / %%o /
 // %%k (underline, overline, strike: toggles, dropped), %%% a "%", %%nnn the character of that code
 const PCT = { c: 'Ø', d: '°', p: '±', u: '', o: '', k: '', '%': '%' };
-const percentCodes = (s) => s.replace(/%%(\d{3})|%%([cdpuok%])/gi, (m, n, k) => (n ? String.fromCharCode(Number(n)) : PCT[k.toLowerCase()]));
-// ...and a single-line TEXT's or ATTRIB's: those and \U+nnnn, its Unicode character (a raw "%%u"
-// and "45\U+00B0" were drawn as written)
-export function textCodes(s) {
-  return percentCodes(s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (m, u) => String.fromCharCode(parseInt(u, 16))));
+// (%%nnn above 127 is a byte of the drawing's single-byte code page -- %%128 in a 1252 drawing is
+// "€", not U+0080 -- and from 256 a character code)
+const pageDecoders = {};
+function pageChar(n, codepage) {
+  if (n < 128 || n > 255) return String.fromCharCode(n);
+  try { pageDecoders[codepage] ||= new TextDecoder(codepage); } catch { pageDecoders[codepage] = new TextDecoder('windows-1252'); }
+  return pageDecoders[codepage].decode(Uint8Array.of(n));
+}
+const percentCodes = (s, codepage = 'windows-1252') => s.replace(/%%(\d{3})|%%([cdpuok%])/gi, (m, n, k) => (n ? pageChar(Number(n), codepage) : PCT[k.toLowerCase()]));
+// \M+NXXXX: a double-byte character of code page N (DXF reference: 1 Japanese, 2 Traditional
+// Chinese, 3 Korean, 5 Simplified Chinese), as an R14 drawing's DXF writes them
+export const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
+const mbcsDecoders = {};
+function mbcsChar(nxxxx) {
+  const enc = MBCS[nxxxx[0]];
+  if (!enc) return null;
+  try {
+    mbcsDecoders[enc] ||= new TextDecoder(enc);
+    return mbcsDecoders[enc].decode(Uint8Array.of(parseInt(nxxxx.slice(1, 3), 16), parseInt(nxxxx.slice(3, 5), 16)));
+  } catch { return null; }
+}
+// The character escapes a DXF string holds, \U+XXXX and \M+NXXXX: the one rule for the drawing
+// (textCodes, mtextPlain's scanner) and the DWG validation's comparator (tests/dwg-compare.mjs)
+export function unescapeDxf(s) {
+  if (s.indexOf('\\') < 0) return s;
+  return s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (m, u) => String.fromCharCode(parseInt(u, 16)))
+    .replace(/\\M\+([1-5][0-9A-Fa-f]{4})/g, (m, x) => mbcsChar(x) ?? m);
+}
+// ...and a single-line TEXT's or ATTRIB's: those and the % codes (a raw "%%u", "45\U+00B0" and
+// "\M+18277" were drawn as written)
+export function textCodes(s, codepage = 'windows-1252') {
+  return percentCodes(unescapeDxf(s), codepage);
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 

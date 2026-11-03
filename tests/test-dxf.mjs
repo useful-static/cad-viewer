@@ -6,7 +6,9 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, textCodes, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, bulgePts, mtextPlain, textCodes, unescapeDxf, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
+import { sniffFormat } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
 
@@ -341,6 +343,26 @@ test('MTEXT escapes are read in one pass: an escaped backslash or brace is text,
   assert.equal(mtextPlain('typed \\\\U+00B0'), 'typed \\U+00B0', 'an escaped backslash before U+ is not a Unicode escape');
   assert.equal(mtextPlain('45\\U+00B0 {\\fArial;x}\\Pnext'), '45° x\nnext');
 });
+test('round 11: \\M+ double-byte escapes, ^ stacks, %%nnn in the code page, a 999 comment first, a multi-line ATTRIB', () => {
+  // \M+18277 is shift_jis 82 77 (a hiragana); the comparator and the page share the one rule
+  assert.equal(textCodes('\\M+18277'), new TextDecoder('shift_jis').decode(Uint8Array.of(0x82, 0x77)));
+  assert.equal(mtextPlain('{\\M+18277}x'), `${new TextDecoder('shift_jis').decode(Uint8Array.of(0x82, 0x77))}x`);
+  assert.equal(dwgCompareUnescape, unescapeDxf, 'tests/dwg-compare.mjs uses the viewer\'s own unescapeDxf');
+  // ^ stacks: a superscript, a subscript, a tolerance; / and # stay fractions
+  assert.deepEqual(['6,5 m\\S2^;', '\\S^2;', '0,2\\S+0.1^-0;', '\\S1/2;', '\\S3#4;'].map((x) => mtextPlain(x)), ['6,5 m2', '2', '0,2+0.1 -0', '1/2', '3/4']);
+  // %%nnn above 127: the drawing's code page (1252 unless it says otherwise)
+  assert.equal(textCodes('%%128'), '€');
+  assert.equal(textCodes('%%065'), 'A');
+  // a DXF that starts with a 999 comment (LibreDWG writes one): opened, and sniffed as a DXF
+  const withComment = `999\nLibreDWG 0.13\n${dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDSEC'], [0, 'EOF']])}`;
+  assert.equal(parseDXF(withComment).paths.length, 1);
+  assert.equal(sniffFormat(new TextEncoder().encode(withComment)).label, 'DXF');
+  // an R2018 multi-line ATTRIB: its embedded MTEXT is the value, not group 1's first line
+  const d = parseDXF(ents([[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, 'LINE ONE'], [2, 'T'], [70, 0], [101, 'Embedded Object'], [10, 0], [20, 0], [40, 1], [1, 'LINE ONE\\PLINE TWO']],
+    [[0, 'SEQEND'], [8, '0']]));
+  assert.deepEqual(d.texts.map((t) => t.text), ['LINE ONE\nLINE TWO']);
+});
 test('an invisible INSERT of a block that exists draws nothing of the block', () => {
   const s = dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [0, 'ENDBLK'], [0, 'ENDSEC'],
     [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [60, 1], [2, 'B'], [10, 0], [20, 0], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 10], [0, 'ENDSEC'], [0, 'EOF']]);
@@ -432,10 +454,11 @@ test('a viewport still draws what it does see (the cull keeps a line inside its 
   assert.equal(d.layouts[0].paths.filter((p) => !p.frame).length, 1);
 });
 test('MTEXT stacking on 60,000 separators with no ";" is linear', () => {
-  fast(() => mtextPlain('x\\S' + '#'.repeat(60000)), 500);
+  assert.equal(fast(() => mtextPlain('x\\S' + '#'.repeat(60000)), 500), null, 'fast and without an error');
   assert.equal(mtextPlain('\\S1#2;'), '1/2');
   assert.equal(mtextPlain('\\S1/2;'), '1/2');
-  assert.equal(mtextPlain('\\Sa^b;'), 'a/b');
+  // ("^" is a tolerance or a super- / subscript, never a fraction: round 11)
+  assert.equal(mtextPlain('\\Sa^b;'), 'a b');
 });
 
 // --- review round 3 ---
@@ -460,8 +483,8 @@ test('a block\'s SPLINE inserted 2,000 times is evaluated once', () => {
   assert.equal(d.paths.length, 2000);
 });
 test('MTEXT codes with no ";" (\\A, \\S) are one pass, and real codes still strip', () => {
-  fast(() => mtextPlain('\\A'.repeat(60000)), 500);
-  fast(() => mtextPlain('\\Sa/'.repeat(60000)), 500);
+  assert.equal(fast(() => mtextPlain('\\A'.repeat(60000)), 500), null, 'fast and without an error');
+  assert.equal(fast(() => mtextPlain('\\Sa/'.repeat(60000)), 500), null, 'fast and without an error');
   assert.equal(mtextPlain('\\A1;\\fArial|b1;Bold\\H2.5x;x'), 'Boldx');
   assert.equal(mtextPlain('\\S1#2;'), '1/2');
 });

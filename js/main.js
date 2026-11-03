@@ -31,7 +31,7 @@ import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
-import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
+import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, resolveParts, tourAt, tourNames } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
@@ -1841,6 +1841,9 @@ function showTourStep(i) {
 // leaves the model as it is; returns whether the tour started.
 function startTour(tour, url, only = null) {
   if (!app.header) return false;
+  // (the whole tour, kept beside a one-step copy: File > Make a tour… edits the whole, not the copy
+  // ?step= shows -- it saved one step under the tour's title)
+  const full = tour;
   if (only) {
     const s = tour.steps.find((x) => x.id === only);
     if (!s) {
@@ -1859,7 +1862,7 @@ function startTour(tour, url, only = null) {
   // not; leaving puts it back as it was)
   const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), faceOverrides: app.faceOverrides, styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk };
-  app.tour = { tour, url, i: 0, saved, base, playing: false };
+  app.tour = { tour, full, url, i: 0, saved, base, playing: false };
   // (in place of another tour: the visitor's orientation, not that tour's,
   // unless this one sets its own below)
   if (prev && saved.cam && saved.cam.orient && saved.cam.orient !== app.cam.orient) {
@@ -1898,8 +1901,6 @@ function startTour(tour, url, only = null) {
   // the names it uses that this model lacks, once (a tour outlives a model update)
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) setStatus('ready', `${readyText()} · the tour names parts this model lacks: ${missing.join(', ')}`);
-  // made over the file read in another unit ("this file is in"): its cameras are at that size
-  else if ((tour.unit || 'mm') !== readUnit()) setStatus('ready', `${readyText()} · this tour was made with the file read in ${tour.unit || 'mm'}: set "this file is in" to ${tour.unit || 'mm'}`);
   showTourStep(0);
   return true;
 }
@@ -3882,7 +3883,9 @@ function askBigConversion(buf, name, seq) {
 function startAdd(fn) {
   if (!app.scene) return Promise.resolve();
   return startLoad(() => {
-    const p = fn();
+    app.startingAdd = true; // (loadUrl, run by fn: an added model's load keeps the first's list keys)
+    let p;
+    try { p = fn(); } finally { app.startingAdd = false; }
     app.adding = { seq: app.loadSeq }; // (fn's beginLoad numbered it; loadBuffer reads this later)
     return p;
   });
@@ -4358,6 +4361,9 @@ function addressUnit(url) {
 function setMeshUnit(u) {
   const src = app.meshSource;
   if (!src || u === src.unit || !MM_PER[u]) return Promise.resolve();
+  // (a tour shown is left first, the visitor's view put back: the re-read ends it anyway, and the
+  // hidden parts kept below were then the step's -- a "hide" step left every other part hidden)
+  if (app.tour) endTour();
   // (the same file, read again: it keeps the URL it came from -- the address, the view link, the
   // list entry and a saved tour all name it by that; a new seq dropped it)
   const url = app.sourceUrl;
@@ -4375,16 +4381,13 @@ function setMeshUnit(u) {
   });
 }
 
-// A tour opened by the page (?tour=, a list's tour, its File item) over a unit-less mesh read in
-// another unit than the tour was made in: the file is read again in the tour's unit first, as the
-// page chose the reading, not the visitor (it played 25.4 times off, with a note)
-async function startTourIn(tour, url, only = null) {
-  const h = app.header;
-  if ((tour.unit || 'mm') !== readUnit() && app.meshSource) {
-    await setMeshUnit(tour.unit || 'mm');
-    if (!app.header || app.header === h) return false; // (superseded, or not read again)
-  }
-  return startTour(tour, url, only);
+// A tour over a unit-less mesh read in another unit than the tour was made in plays at this
+// reading's size: its cameras, frames and callouts scaled (js/tour.js tourAt). The file is not read
+// again: that reset the visitor's view before the tour saved it, and left the model in the tour's
+// unit after ✕. A model with no reading to choose (no meshSource: a STEP, a .cadmesh) plays it as made.
+const tourReading = () => (app.meshSource ? readUnit() : null);
+function startTourIn(tour, url, only = null) {
+  return startTour(tourAt(tour, tourReading()), url, only);
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
@@ -4859,8 +4862,9 @@ async function fetchFailedText(url, name, e, lead = `could not download ${name}`
 async function loadUrl(url) {
   const seq = beginLoad();
   app.dropExtras = null; // (a URL brings no companions: an earlier drop's are not this file's)
-  app.autoTourFor = null; // (opened again: its list's tour plays again, once: applyListEntry)
-  app.listHideFor = null; // (and its list's hide is applied again)
+  // (a model opened again: its list's tour plays again, once, and its list's hide is applied again
+  // -- applyListEntry; not for a model added beside it, which left the first's keys reset)
+  if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; }
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
@@ -5431,6 +5435,8 @@ function syncUnitsRow() {
   if (src) {
     $('unitsrc').textContent = 'not stored in the file';
     $('meshunit').value = src.unit;
+    // (its title says the reading it is: it said "read as mm" whatever was chosen)
+    $('meshunit').title = `This mesh file stores no unit: it is read as ${unitWord(src.unit)}. Pick the unit it was made in and it is read again at that size`;
   }
 }
 
@@ -6249,7 +6255,7 @@ function wireInput() {
   // the tour maker: File > Make a tour… (a tour playing is opened in it)
   app.recorder = createTourRecorder({
     capture: captureStep,
-    preview: (tour, from, play) => { endTour(); if (!startTour(tour, null)) return; if (from) showTourStep(from); setTourPlaying(play); },
+    preview: (tour, from, play) => { endTour(); if (!startTourIn(tour, null)) return; if (from) showTourStep(from); setTourPlaying(play); },
     stopPreview: () => endTour(),
     modelUrl: () => {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
@@ -6258,14 +6264,15 @@ function wireInput() {
     // the model open now, by its content (the same file opened again is the same model)
     // (and the unit it was read in: the same file read in inches is another size, which steps
     // taken in mm do not fit)
-    model: () => (app.header ? { key: `${modelKeyOf(app.header)}@${readUnit()}`, unit: readUnit(), name: `${app.sourceName || 'another model'}${readUnit() !== 'mm' ? ` read in ${readUnit()}` : ''}` } : null),
+    // (and the unit it is read in, where it has a reading to choose: null for a STEP or a .cadmesh)
+    model: () => (app.header ? { key: modelKeyOf(app.header), unit: tourReading(), name: app.sourceName || 'another model' } : null),
     save: (text, name) => downloadText(text, name, 'application/json'),
     validate: (text) => parseTour(text, location.href),
     pictures: tourPictures,
     video: tourVideo,
     announce,
   });
-  $('tourmake').onclick = () => { closeMenus(); app.recorder.show(true, app.tour ? app.tour.tour : null); };
+  $('tourmake').onclick = () => { closeMenus(); app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
@@ -6669,7 +6676,7 @@ async function main() {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
-      if (app.header) await startTourIn(r.tour, tourUrl, params.get('step'));
+      if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
       else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
     }
     // (the next model picked from the list plays its own tour)

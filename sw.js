@@ -23,8 +23,8 @@ const scope = new URL('./', self.location.href).pathname;
 function isApp(url) {
   if (url.origin !== self.location.origin || !url.pathname.startsWith(scope)) return false;
   const p = url.pathname.slice(scope.length);
-  return p === '' || p === 'index.html' || p === 'favicon.svg' || p === 'manifest.webmanifest'
-    || /^js\/[\w.-]+\.js$/.test(p) || /^vendor\//.test(p);
+  // (the shell's own names: SHELL, the one list -- './' is the empty path here)
+  return SHELL.includes(p || './') || /^js\/[\w.-]+\.js$/.test(p) || /^vendor\//.test(p);
 }
 
 self.addEventListener('fetch', (e) => {

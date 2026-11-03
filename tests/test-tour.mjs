@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeCadmesh } from '../js/cadmesh.js';
-import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
+import { parseTour, partIndex, resolveParts, tourAt, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
 import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
@@ -61,6 +61,11 @@ await test('a tour over MAX_TOUR_BYTES is refused before it is parsed, in words;
   const cjk = '{"cadtour":1,"steps":[{"title":"' + '漢'.repeat(1.8e6) + '"}]}';
   assert.ok(cjk.length < MAX_TOUR_BYTES);
   assert.throws(() => parseTour(cjk), /over 4 MB/);
+  // a lone high surrogate before a 3-byte character is 3 + 3 bytes, not a 4-byte pair (which
+  // skipped the next character: 6.3 MB of real bytes passed)
+  const lone = '{"cadtour":1,"steps":[{"title":"' + '\ud800漢'.repeat(7e5) + '"}]}';
+  assert.ok(lone.length < MAX_TOUR_BYTES);
+  assert.throws(() => parseTour(lone), /over 4 MB/);
   // a streamed body: the reader is cancelled at the cap, not read whole
   let pulled = 0, cancelled = false;
   const chunk = new Uint8Array(2 ** 20).fill(32);
@@ -159,6 +164,27 @@ test('namesFor on a flat assembly of 40,000 bodies, half of them wanted: each na
   assert.equal(names.length, N / 2);
   assert.equal(names[0], 'part 1');
   assert.ok(ms < 1000, `${ms} ms (it was 4.9 s)`);
+});
+
+test('tourAt: a tour made in inches, played over the mm reading, has its sizes scaled by 1/25.4; fractions are not sizes', () => {
+  const t = parseTour(JSON.stringify({ cadtour: 2, unit: 'in', steps: [
+    { id: 'a', view: { cam: { target: [254, 0, 25.4], dist: 2540, q: [0, 0, 0, 1] } }, section: { axis: 'z', t: 0.3 }, explode: 0.5,
+      callouts: [{ text: 'p', at: [25.4, 50.8, 0] }, { text: 'q', part: 'x' }] },
+    { id: 'b', frame: { min: [0, 0, 0], max: [254, 254, 25.4] }, margin: 1.5 }] }));
+  const m = tourAt(t, 'mm');
+  assert.equal(m.unit, 'mm');
+  const near = (a, b) => a.every((x, i) => Math.abs(x - b[i]) < 1e-9);
+  assert.ok(near(m.steps[0].view.cam.target, [10, 0, 1]));
+  assert.ok(Math.abs(m.steps[0].view.cam.dist - 100) < 1e-9);
+  assert.ok(near(m.steps[0].callouts[0].at, [1, 2, 0]));
+  assert.deepEqual(m.steps[0].callouts[1], { text: 'q', part: 'x' });
+  assert.deepEqual([m.steps[0].section.t, m.steps[0].explode, m.steps[1].margin], [0.3, 0.5, 1.5]);
+  assert.ok(near(m.steps[1].frame.max, [10, 10, 1]));
+  // the same unit, or a model with no reading to choose (null): as made
+  assert.equal(tourAt(t, 'in'), t);
+  assert.equal(tourAt(t, null), t);
+  // and back: mm to inches
+  assert.ok(near(tourAt(m, 'in').steps[0].view.cam.target, [254, 0, 25.4]));
 });
 
 test('a tour made over a mesh read in inches says so ("unit"), and the parser takes only a known unit', () => {

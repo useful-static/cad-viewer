@@ -76,6 +76,10 @@ export const isDWGBytes = (b) => b.length >= 6 && b[0] === 0x41 && b[1] === 0x43
 // The format a file's first bytes say (after gunzip), or null. A binary STL has no magic (its
 // header is free text): only its name says it. 3MF and a zip of models are both zips: a zip is
 // "zip" here, and a 3MF by its name.
+// An ASCII DXF's start: its first SECTION, after any 999 comments (LibreDWG writes one first; 174
+// of 1178 DXFs at hand) -- one rule for the sniff here and the reader (js/dxf.js parseDXF)
+const DXF_HEAD = /^\s*(?:999\s*\r?\n[^\r\n]*\r?\n\s*)*(\d+\s*\r?\n\s*)?0\s*\r?\n\s*SECTION/;
+export const looksLikeDxf = (text) => DXF_HEAD.test(text);
 export function sniffFormat(bytes) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (isDWGBytes(b)) return BY_EXT.get('dwg');
@@ -87,7 +91,7 @@ export function sniffFormat(bytes) {
   if (text.startsWith('glTF')) return f('glb');
   if (text.startsWith('PK\x03\x04')) return f('zip');
   if (/^ply\r?\n/.test(text)) return f('ply');
-  if (/^\s*(\d+\s*\r?\n\s*)?0\s*\r?\n\s*SECTION/.test(text) || text.startsWith('AutoCAD Binary DXF')) return f('dxf');
+  if (looksLikeDxf(text) || text.startsWith('AutoCAD Binary DXF')) return f('dxf');
   if (/^\s*solid[\s\S]*facet/.test(text)) return f('stl');
   if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return f('gltf');
   if (/^\s*[CN]?OFF\s/.test(text)) return f('off');

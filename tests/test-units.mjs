@@ -9,6 +9,7 @@ import { test, done } from './harness.mjs';
 
 test('fixed decimals per unit: a measurement', () => {
   assert.equal(fmtLength(25.4, 'measure', 'mm'), '25.40 mm');
+  if (DISPLAY_UNITS.includes('um')) assert.match(fmtLength(1, 'measure', 'um'), / µm$/, 'the unit as written, not its id');
   assert.equal(fmtLength(25.4, 'measure', 'cm'), '2.540 cm');
   assert.equal(fmtLength(25.4, 'measure', 'm'), '0.0254 m');
   assert.equal(fmtLength(25.4, 'measure', 'in'), '1.000 in');
@@ -71,7 +72,7 @@ test('a unit as written for a reader: µm and µin typeset, the rest as named', 
 test('every display unit has decimals and a system; the pickers carry no unit list of their own', () => {
   for (const u of DISPLAY_UNITS) {
     assert.ok(Number.isFinite(MM_PER[u]), u);
-    assert.match(fmtLength(1, 'measure', u), new RegExp(`^\\d+\\.\\d+ ${u}$`));
+    assert.match(fmtLength(1, 'measure', u), new RegExp(`^\\d+\\.\\d+ ${unitWord(u)}$`));
   }
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   for (const id of ['unitsel', 'meshunit']) {

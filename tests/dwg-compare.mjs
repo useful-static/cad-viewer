@@ -3,7 +3,7 @@
 // DWG version) against the reader's js/dwg.js dwgToPairs output. Used by validate-dwg.mjs and
 // validate-dwg-versions.mjs, so both judge by the same rules.
 import { readFileSync } from 'node:fs';
-import { uncaret, valueKind, dxfText } from '../js/dxf.js';
+import { uncaret, unescapeDxf, valueKind, dxfText } from '../js/dxf.js';
 
 // the groups compared per DXF type (a group absent from the key is not compared)
 export const GROUPS = {
@@ -18,13 +18,9 @@ export const GROUPS = {
 // DXF defaults of compared groups a writer may leave out
 const DEFAULTS = { INSERT: { 41: '1', 42: '1', 43: '1', 50: '0' }, POLYLINE: { 71: '0', 72: '0' } };
 
-// \M+N: 1 Japanese, 2 Traditional Chinese, 3 Korean, 5 Simplified Chinese (DXF reference)
-const MBCS = { 1: 'shift_jis', 2: 'big5', 3: 'euc-kr', 5: 'gbk' };
-export function unescapeDxf(s) {
-  if (s.indexOf('\\') < 0) return s;
-  return s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, x) => String.fromCharCode(parseInt(x, 16)))
-    .replace(/\\M\+([1-5])([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})/g, (m, n, a, b) => (MBCS[n] ? new TextDecoder(MBCS[n]).decode(new Uint8Array([parseInt(a, 16), parseInt(b, 16)])) : m));
-}
+// (\U+ and \M+ escapes: the viewer's own rule, js/dxf.js unescapeDxf -- this file's copy decoded
+// what the page drew raw, so the comparisons passed over a fault)
+export { unescapeDxf };
 
 export function dxfPairs(path) {
   // read in the drawing's own code page, as the viewer reads it (js/dxf.js dxfText: UTF-8 from

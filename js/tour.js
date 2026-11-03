@@ -16,7 +16,7 @@
 import { VIEW_PRESETS, parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
-import { DISPLAY_UNITS } from './units.js';
+import { DISPLAY_UNITS, MM_PER } from './units.js';
 import { EXPLODE_MODES, NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 
 export const PRESETS = Object.keys(VIEW_PRESETS);
@@ -65,11 +65,33 @@ function utf8Length(s) {
     const c = s.charCodeAt(i);
     if (c < 0x80) n += 1;
     else if (c < 0x800) n += 2;
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++; } // a surrogate pair
+    else if (c >= 0xd800 && c <= 0xdbff && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { n += 4; i++; } // a surrogate pair (a lone high surrogate is 3, and the next character its own)
     else n += 3;
   }
   return n;
 }
+
+// A tour (as parseTour gives it) at the size a mesh is read in now: a tour made with the file read
+// in inches holds cameras, frame boxes and callout points 25.4 times those of the mm reading, so
+// its sizes are scaled by the ratio of the two units (fractions -- a section's t, explode, margin --
+// are not sizes). `unit` null: the model has no reading to choose (a STEP, a .cadmesh): as made.
+// One rule for the player (main.js startTourIn) and the tour maker (a tour read back)
+export function tourAt(tour, unit) {
+  const from = tour.unit || 'mm';
+  if (!unit || unit === from || !MM_PER[unit] || !MM_PER[from]) return tour;
+  // (the inch reading's coordinates are the mm reading's x 25.4: over the mm reading, / 25.4)
+  const k = MM_PER[unit] / MM_PER[from];
+  const v3 = (p) => p.map((x) => x * k);
+  const steps = tour.steps.map((s) => {
+    const o = { ...s };
+    if (s.view && typeof s.view === 'object') o.view = { ...s.view, cam: { ...s.view.cam, target: v3(s.view.cam.target), dist: s.view.cam.dist * k } };
+    if (s.frame && typeof s.frame === 'object' && !Array.isArray(s.frame)) o.frame = { min: v3(s.frame.min), max: v3(s.frame.max) };
+    if (s.callouts) o.callouts = s.callouts.map((c) => (c.at ? { ...c, at: v3(c.at) } : c));
+    return o;
+  });
+  return { ...tour, unit, steps };
+}
+
 export function parseTour(text, base = undefined) {
   // (counted in BYTES, as the page's read counts them (readCapped): a CJK tour of 1.8 M characters
   // is 5 MB, which the maker saved and check-tour passed, and the page refused)

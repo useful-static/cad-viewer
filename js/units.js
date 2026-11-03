@@ -70,7 +70,8 @@ export function fmtNum(mm, kind, unit) {
   return (mm / MM_PER[unit]).toFixed(d);
 }
 
-export const fmtLength = (mm, kind, unit) => `${fmtNum(mm, kind, unit)} ${unit}`;
+// (the unit as written, unitWord: "µm", never the id "um")
+export const fmtLength = (mm, kind, unit) => `${fmtNum(mm, kind, unit)} ${unitWord(unit)}`;
 
 export function fmtArea(mm2, unit) {
   if (imperial(unit)) {
