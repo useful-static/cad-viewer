@@ -17,6 +17,7 @@
 // Pure ES module, no DOM.
 
 import { LENGTH_MM } from './units.js';
+import { PAPER, contrast } from './styles.js';
 
 const SEG_RAD = Math.PI / 36; // arcs flattened at 5° a segment, at least 8 to an arc (arcPts)
 
@@ -225,6 +226,8 @@ export function parseDXF(s) {
   const active = every.filter(inPaper);
   if (active.length) sets.push(active);
   for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push(b.recs);
+  // each model path's box [x0, y0, x1, y1], once, for the viewports' cull
+  const pathBoxes = sets.length ? out.paths.map(boxOf) : [];
   const layouts = sets.map((recs, li) => {
     const lo = { paths: [], texts: [] };
     emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
@@ -239,7 +242,16 @@ export function parseDXF(s) {
       // (what a viewport draws of model space counts against the drawing's budget too: many
       // viewports multiply it)
       const p0 = lo.paths.length;
-      for (const p of out.paths) clipPath(p, M, s, rect, lo.paths);
+      // a path whose box lies outside what the viewport shows of model space is passed over
+      // with one box test; each one clipped is walked (many viewports onto a big model
+      // multiply it)
+      const seen = viewInModel(M, rect);
+      for (let k = 0; k < out.paths.length; k++) {
+        const bb = pathBoxes[k];
+        if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
+        walk(budget, 1);
+        clipPath(out.paths[k], M, s, rect, lo.paths);
+      }
       let coords = 0;
       for (let k = p0; k < lo.paths.length; k++) coords += lo.paths[k].pts.length;
       charge(budget, lo.paths.length - p0, coords);
@@ -316,6 +328,29 @@ function clipPath(p, M, s, rect, out) {
   flush();
 }
 
+// a path's box [x0, y0, x1, y1]
+function boxOf(p) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const q = p.pts;
+  for (let k = 0; k < q.length; k += 2) {
+    if (q[k] < x0) x0 = q[k]; if (q[k] > x1) x1 = q[k];
+    if (q[k + 1] < y0) y0 = q[k + 1]; if (q[k + 1] > y1) y1 = q[k + 1];
+  }
+  return [x0, y0, x1, y1];
+}
+// The box, in model space, of what a viewport (model -> paper transform M) shows of rect on
+// paper: the rect's corners taken back through M (a similarity, so its inverse is exact)
+function viewInModel(M, rect) {
+  const det = M[0] * M[3] - M[1] * M[2];
+  if (!det) return [-Infinity, -Infinity, Infinity, Infinity];
+  const inv = (x, y) => {
+    const u = x - M[4], v = y - M[5];
+    return [(M[3] * u - M[2] * v) / det, (-M[1] * u + M[0] * v) / det];
+  };
+  const c = [inv(rect[0], rect[1]), inv(rect[2], rect[1]), inv(rect[2], rect[3]), inv(rect[0], rect[3])];
+  return [Math.min(...c.map((p) => p[0])), Math.min(...c.map((p) => p[1])), Math.max(...c.map((p) => p[0])), Math.max(...c.map((p) => p[1]))];
+}
+
 // 2D affine [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f
 const IDENT = [1, 0, 0, 1, 0, 0];
 const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
@@ -363,9 +398,42 @@ function addItem(budget, list, item, coords) {
   charge(budget, 1, coords);
   list.push(item);
 }
+// Entities walked, drawn or not: blocks of empty blocks, each inserted many times, multiply the
+// walk without drawing anything for the drawn budget to count (17 levels of 10 inserts is 1e16
+// visits from a file of a few KB). A real drawing walks each entity a few times at most.
+export const MAX_WALKED = 5e7;
+function walk(budget, n) {
+  budget.walked = (budget.walked || 0) + n;
+  if (budget.walked > MAX_WALKED) {
+    throw new Error(`the drawing is too large to draw here (over ${MAX_WALKED / 1e6} million entities walked: nested blocks or viewports multiply it)`);
+  }
+}
+
+// How many entities walking a block walks, its inserts expanded (to the same 16 levels emit
+// goes), once per block name: an INSERT whose walk would pass the budget is refused before it
+// starts, not after minutes of walking empty blocks. A block inside its own insert chain counts
+// what one pass of it holds (emit's depth limit ends the real walk).
+function walkSize(ctx, name, depth = 0, open = new Set()) {
+  const memo = ctx.walkSizes || (ctx.walkSizes = new Map());
+  if (memo.has(name)) return memo.get(name);
+  const b = ctx.blocks.get(name);
+  if (!b || depth > 16 || open.has(name)) return b ? b.recs.length : 0;
+  open.add(name);
+  let n = b.recs.length;
+  for (const r of b.recs) {
+    if (r.type !== 'INSERT' && r.type !== 'DIMENSION') continue;
+    const cells = r.type === 'INSERT' ? Math.max(1, num(r, 70, 1)) * Math.max(1, num(r, 71, 1)) : 1;
+    n += cells * walkSize(ctx, get(r, 2, ''), depth + 1, open);
+    if (!(n <= MAX_WALKED)) { n = Infinity; break; }
+  }
+  open.delete(name);
+  memo.set(name, n);
+  return n;
+}
 
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
+  walk(ctx.budget, recs.length);
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
     let layer = get(r, 8, '0');
@@ -507,6 +575,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols * rows > MAX_DRAWN_ITEMS) {
           throw new Error(`the drawing is too large to draw here (an array of ${cols} × ${rows} inserts)`);
         }
+        if ((ctx.budget.walked || 0) + cols * rows * walkSize(ctx, get(r, 2, '')) > MAX_WALKED) {
+          throw new Error(`the drawing is too large to draw here (block ${get(r, 2, '')}, inserted ${cols * rows} times, walks over ${MAX_WALKED / 1e6} million entities: nested blocks multiply it)`);
+        }
         const dc = num(r, 44), dr = num(r, 45);
         const ix = isDim ? 0 : num(r, 10), iy = isDim ? 0 : num(r, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
@@ -572,7 +643,9 @@ function splinePts(r) {
     return fx.flatMap((x, k) => [x, fy[k]]);
   }
   const n = cx.length;
-  if (knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k]]);
+  // a degree that is not a whole number from 1 to n - 1, or knots that do not fit it: the
+  // control polygon (de Boor would read slots that do not exist)
+  if (!Number.isInteger(deg) || deg < 1 || deg >= n || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);
   const t0 = knots[deg], t1 = knots[n];
   const steps = Math.max(16, n * 8);
@@ -608,26 +681,34 @@ function hatchLoops(r) {
   const nLoops = Number(g[i][1]);
   i++;
   const at = (c) => { while (i < g.length && g[i][0] !== c) i++; return i < g.length ? Number(g[i++][1]) : 0; };
+  // a count is of items the entity holds, each at least one group: one larger than the groups
+  // left is a damaged file (looping on it read zeros past the end, up to 1e12 times)
+  const count = (n) => {
+    if (!Number.isInteger(n) || n < 0 || n > g.length - i) throw new Error(`a damaged HATCH: its boundary counts ${n} items, more than the entity holds`);
+    return n;
+  };
+  const append = (to, from) => { for (let k = 0; k < from.length; k++) to.push(from[k]); };
   for (let L = 0; L < nLoops && i < g.length; L++) {
     const type = at(92);
     const pts = [];
     if (type & 2) {
       const hasB = at(72);
       at(73); // "closed": a boundary is closed either way
-      const nv = at(93);
+      const nv = count(at(93));
       const xs = [], ys = [], bs = [];
       for (let v = 0; v < nv; v++) { xs.push(at(10)); ys.push(at(20)); bs.push(hasB ? at(42) : 0); }
-      // (a hatch boundary is closed whatever its 73 says)
-      pts.push(...bulgePts(xs, ys, bs, true));
+      // (a hatch boundary is closed whatever its 73 says; appended, not spread: a 200k-vertex
+      // boundary spread into call arguments overflowed the stack)
+      append(pts, bulgePts(xs, ys, bs, true));
     } else {
-      const ne = at(93);
+      const ne = count(at(93));
       for (let e = 0; e < ne; e++) {
         const et = at(72);
         if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
           const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
           if (at(73)) {
             // counter-clockwise from a0 to a1
-            pts.push(...arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));
+            append(pts, arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));
           } else {
             // clockwise: the angles are stored mirrored, so the edge runs from -a0 clockwise to
             // -a1 (0° to 90° stored is the quarter from 360° down to 270°): the same arc taken
@@ -643,7 +724,7 @@ function hatchLoops(r) {
           for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; pts.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
         } else if (et === 4) {
           // a spline edge: its control points
-          at(94); const nk = at(95), nc = at(96);
+          at(94); const nk = count(at(95)), nc = count(at(96));
           for (let k = 0; k < nk; k++) at(40);
           for (let k = 0; k < nc; k++) pts.push(at(10), at(20));
         }
@@ -655,9 +736,11 @@ function hatchLoops(r) {
 }
 
 // MTEXT without its formatting codes; \P is a new line
+// (a stack \S splits at its first separator, which the first group may not hold: one pass, no
+// backtracking on a run of separators with no ";")
 export function mtextPlain(s) {
   return s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;]*;/g, '').replace(/\\[LlOoKk]/g, '')
-    .replace(/\\S([^;^]*)[\^#/]([^;]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, '')
+    .replace(/\\S([^;^#/]*)[\^#/]([^;]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, '')
     .replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
@@ -706,12 +789,8 @@ function hsv(h, s, v) {
 export function onPaper(c) {
   if (c.aci === 7) return '#000000';
   let [r, g, b] = [c.r, c.g, c.b];
-  for (let k = 0; k < 40 && contrastOnPaper(r, g, b) < 3; k++) { r *= 0.9; g *= 0.9; b *= 0.9; }
-  return `#${[r, g, b].map((x) => Math.round(x).toString(16).padStart(2, '0')).join('')}`;
-}
-function contrastOnPaper(r, g, b) {
-  const lum = (x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
-  const L = 0.2126 * lum(r) + 0.7152 * lum(g) + 0.0722 * lum(b);
-  const P = 0.2126 * lum(244) + 0.7152 * lum(244) + 0.0722 * lum(242);
-  return (Math.max(L, P) + 0.05) / (Math.min(L, P) + 0.05);
+  const hex = () => `#${[r, g, b].map((x) => Math.round(x).toString(16).padStart(2, '0')).join('')}`;
+  // (the paper and the contrast formula are the display styles': js/styles.js)
+  for (let k = 0; k < 40 && contrast(hex(), PAPER) < 3; k++) { r *= 0.9; g *= 0.9; b *= 0.9; }
+  return hex();
 }

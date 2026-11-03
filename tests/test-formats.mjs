@@ -9,12 +9,24 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMATS, formatOfName, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes } from '../js/formats.js';
+import { FORMATS, formatOfName, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensText } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bytes = (s) => new TextEncoder().encode(s);
 
+await test('the "what opens" words name every format and every CAD extension in the table', () => {
+  const t = opensText();
+  for (const f of FORMATS) assert.ok(t.includes(f.label === 'cadmesh' ? '.cadmesh' : f.label), `${f.label} in "${t}"`);
+  for (const f of FORMATS.filter((x) => x.kind === 'cad')) for (const e of f.ext) assert.ok(t.includes(`.${e}`), `.${e}`);
+});
+await test('index.html carries no accept list of its own (main.js sets them from the table)', () => {
+  const html = readFileSync(join(here, '..', 'index.html'), 'utf8');
+  for (const id of ['open', 'addmodel']) {
+    const tag = new RegExp(`<input id="${id}"[^>]*>`).exec(html)[0];
+    assert.ok(!/accept=/.test(tag), tag);
+  }
+});
 await test('a name says its format, through .gz and a query', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');
   assert.equal(formatOfName('board.cadmesh.gz').label, 'cadmesh');

@@ -2,7 +2,8 @@
 // The unit formatter (js/units.js).   node tests/test-units.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtVolume } from '../js/units.js';
+import { readFileSync } from 'node:fs';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtVolume, unitWord } from '../js/units.js';
 
 let passed = 0;
 let failed = 0;
@@ -64,6 +65,23 @@ test('mass: g, kg, or lb for inches', () => {
   assert.equal(fmtMass(12.34, 'mm'), '12.34 g');
   assert.equal(fmtMass(12345, 'm'), '12.35 kg');
   assert.equal(fmtMass(453.59237, 'in'), '1 lb');
+});
+
+test('a unit as written for a reader: µm and µin typeset, the rest as named', () => {
+  assert.equal(unitWord('um'), 'µm');
+  assert.equal(unitWord('uin'), 'µin');
+  assert.equal(unitWord('mm'), 'mm');
+});
+test('every display unit has decimals and a system; the pickers carry no unit list of their own', () => {
+  for (const u of DISPLAY_UNITS) {
+    assert.ok(Number.isFinite(MM_PER[u]), u);
+    assert.match(fmtLength(1, 'measure', u), new RegExp(`^\\d+\\.\\d+ ${u}$`));
+  }
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  for (const id of ['unitsel', 'meshunit']) {
+    const sel = new RegExp(`<select id="${id}"[\\s\\S]*?</select>`).exec(html)[0];
+    assert.ok(!/<option value="(mm|cm|m|in)"/.test(sel), `${id}: ${sel}`);
+  }
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

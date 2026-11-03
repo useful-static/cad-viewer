@@ -33,5 +33,18 @@ test('the first product of a name wins; escapes decoded', () => {
   assert.equal(decodeStepString("a''b"), "a'b");
 });
 
+test('bytes read in slices give what the text gives, a record across a slice edge included', () => {
+  const pad = '#1=CARTESIAN_POINT(\'\',(0.,0.,0.));\n'.repeat(Math.ceil((4 << 20) / 36));
+  const big = new TextEncoder().encode(pad + STEP + pad + STEP);
+  const fromBytes = stepProducts(big), fromText = stepProducts(STEP);
+  assert.deepEqual([...fromBytes], [...fromText]);
+  assert.deepEqual([...stepProducts(new TextEncoder().encode(STEP).buffer)], [...fromText]);
+});
+test('a \\X2\\ run of 300,000 code units decodes (no spread onto the stack)', () => {
+  const s = decodeStepString(`\\X2\\${'0041'.repeat(300000)}\\X0\\`);
+  assert.equal(s.length, 300000);
+  assert.equal(s[0], 'A');
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -9,13 +9,13 @@
 
 import { fetchModelLists } from './model-list.js';
 import { parseTour } from './tour.js';
-import { formatOfName, sniffFormat as sniffBytes } from './formats.js';
+import { FORMATS, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { directUrl } from './open-url.js';
 
-// The format a file's name says ("board.cadmesh.gz" -> "cadmesh"), by the viewer's own table
-// (js/formats.js)
+// The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
+// by the viewer's own reading of a URL and its one table (js/formats.js)
 export function namedFormat(url) {
-  const f = formatOfName(new URL(url).pathname);
+  const f = formatOfName(fileNameOfUrl(new URL(url).href));
   return f ? f.label : null;
 }
 
@@ -24,9 +24,10 @@ export function sniffFormat(bytes) {
   const f = sniffBytes(bytes);
   return f ? f.label : null;
 }
-// (3MF and a zip of models are both zips; a binary STL has no magic: its
-// header is free text, so it is judged by its name)
-const SAME = { '3MF': 'zip', STL: null };
+const BY_LABEL = new Map(FORMATS.map((f) => [f.label, f]));
+// A start that disagrees with the name is a fault only where one of the two formats always
+// says itself in its first bytes (FORMATS magic); otherwise the viewer opens it by its name
+const sure = (label) => !!BY_LABEL.get(label)?.magic;
 
 // Read up to n bytes of a response's body, then stop (a server that ignores
 // Range sends it all; the rest is never downloaded)
@@ -115,10 +116,10 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     if (!inner) {
       bits.push('its gzip could not be read here');
       level = 'warn';
-    } else if (got && want && got !== want && SAME[want] !== got) {
+    } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
       bits.push(`named ${want}, but it starts as ${got}`);
-      level = 'bad';
-    } else if (!got && want && SAME[want] !== null) {
+      level = sure(want) || sure(got) ? 'bad' : 'warn';
+    } else if (!got && want && sure(want)) {
       bits.push(`named ${want}, but its start is no ${want} file`);
       level = 'bad';
     } else {

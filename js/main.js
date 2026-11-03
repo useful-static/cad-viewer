@@ -2,9 +2,9 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
-import { formatOfName, sniffFormat, isDWGBytes, isCompanion, MODEL_NAME, acceptList } from './formats.js';
+import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensText } from './formats.js';
 import { onPaper, parseDXF } from './dxf.js';
 import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
@@ -14,19 +14,19 @@ import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList,
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { entryByName, fetchModelLists } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, PORTRAIT, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { DEFAULT_ORIENT, PORTRAIT, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
 import { bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
-import { to3MF, toGLB, toSTL } from './export-mesh.js';
+import { EXPORTS } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges } from './scene.js';
 import { clearance } from './clearance.js';
-import { CUT_FILL, PAPER, STYLES, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
+import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
 import { namesFor, parseTour, partIndex, resolveParts, tourNames } from './tour.js';
@@ -38,7 +38,7 @@ import { WebGLRenderer } from './renderer-webgl.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const STATE_W = 1024;
-const BG = [0.114, 0.129, 0.153];
+const BG = rgb(VIEW_BG);
 // Selection tint (cyan; the 4th value is set per frame: 1 = something is
 // selected, so the shaders grey out everything else).
 const HIGHLIGHT = [0.1, 0.78, 1.0];
@@ -917,10 +917,7 @@ function fitTo(bbox) {
   viewChanged();
 }
 
-const VIEWS = {
-  iso: [0.7, 0.45], front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0],
-  right: [Math.PI / 2, 0], top: [0, Math.PI / 2 - 1e-4], bottom: [0, -Math.PI / 2 + 1e-4],
-};
+const VIEWS = VIEW_PRESETS; // (js/orient.js: the one table of named views)
 
 // Number-key views (Blender's numpad layout): 1 front, 3 right, 7 top,
 // 0 iso, 5 Ortho on/off, 9 the opposite of the preset nearest the view.
@@ -1081,7 +1078,7 @@ app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
 // in their drawn colours, turned the way the model opens: Z up for STL and
 // 3MF (a printer's convention), Y up for GLB (glTF's)
 async function exportMesh(fmt) {
-  if (!app.header || !fmt) return;
+  if (!app.header || !EXPORTS[fmt]) return;
   const ids = app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
   if (!ids.length) { flashHover('nothing shown to export'); return; }
   const b = orientBasis(app.cam.orient);
@@ -1094,14 +1091,13 @@ async function exportMesh(fmt) {
   await new Promise((r) => setTimeout(r, 0)); // the status line paints first
   let bytes;
   try {
-    bytes = fmt === 'stl' ? toSTL(model, ids, zUp, base) : fmt === '3mf' ? await to3MF(model, ids, zUp, names) : toGLB(model, ids, yUp, names);
+    bytes = await EXPORTS[fmt].write(model, ids, EXPORTS[fmt].up === 'z' ? zUp : yUp, { names, base });
   } catch (e) {
     setStatus('ready', readyText());
     flashHover(`export failed: ${e.message || e}`);
     return;
   }
-  const type = { stl: 'model/stl', '3mf': 'model/3mf', glb: 'model/gltf-binary' }[fmt];
-  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const url = URL.createObjectURL(new Blob([bytes], { type: EXPORTS[fmt].type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = `${base}.${fmt}`;
@@ -4042,11 +4038,6 @@ async function refreshCacheBar() {
   $('cacheinfo').title = list.map((e) => `${e.name} (${mb(e.size)} MB)`).join('\n');
 }
 
-function extOf(name) {
-  const m = /\.([a-z0-9]+)(?:$|\?)/i.exec(name);
-  return m ? m[1].toLowerCase() : '';
-}
-
 // One gzip layer unpacked, with its step on the progress card (loadAny's
 // three paths each had their own, and one showed none: review r22). null:
 // a newer load took over meanwhile.
@@ -4105,7 +4096,7 @@ async function loadAny(buf, name, seq) {
     if (b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf) buf = buf.slice(3);
     // the parts' ids and descriptions, from the STEP text itself (the
     // converter keeps only names; js/step-meta.js), for the info panel
-    app.stepMetaOf = { seq, map: format === 'step' ? stepProducts(new TextDecoder('latin1').decode(buf)) : null };
+    app.stepMetaOf = { seq, map: format === 'step' ? stepProducts(buf) : null };
     // A conversion of these exact bytes saved in this browser skips
     // OpenCascade (js/mesh-cache.js: everything stays on this device). The
     // key is hashed before the worker takes the buffer (posting detaches it).
@@ -4395,12 +4386,12 @@ function fillInfo2D(el) {
   if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (paper space, and model space through its viewports)`);
   const e = d.extents;
   if (e) {
-    const u = d.units || 'units';
+    const u = d.units ? unitWord(d.units) : 'units';
     // in the drawing's own unit, to 6 significant figures
     const n = (v) => String(Number(v.toPrecision(6)));
     row(`size (${u})`, `${n(e.max[0] - e.min[0])} × ${n(e.max[1] - e.min[1])}`);
   }
-  row('units', d.units ? `${d.units} ($INSUNITS ${d.insunits})` : 'not stored in the file');
+  row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
   row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
   // (model space is drawn; a layout's sheet, title block and viewport frames
@@ -4415,7 +4406,7 @@ function fillInfo2D(el) {
 }
 
 // what Open… and a drop take, for the messages that say so
-const OPENS = 'open a STEP (.stp, .step), IGES (.igs, .iges), BREP (.brep) or .cadmesh file, a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB), a 2D DXF or DWG (R13 to 2018), or a zip of one';
+const OPENS = opensText();
 
 // The conversion runs in this tab, in one call; the card shows the step it is
 // on, the time so far, and what to expect.
@@ -4588,26 +4579,8 @@ function tessellate(buf, format, seq, name, threads) {
   });
 }
 
-// The file name a URL names -- what is shown, announced, offered by Save and
-// read by extOf:
-//   rack.cadmesh?v=2                        -> rack.cadmesh   (path part, query dropped)
-//   /api/download?file=part.step&token=abc  -> part.step      (a query value naming a model file)
-//   /api/download?id=7                      -> download       (no extension anywhere)
-const MODEL_EXT = MODEL_NAME;
-const fileName = (url) => {
-  const [path, query = ''] = url.split('#')[0].split('?');
-  // decoded, so "my%20part.stp" shows and saves as "my part.stp" (r22)
-  let tail = path.split('/').pop();
-  try { tail = decodeURIComponent(tail); } catch { /* keep it raw */ }
-  if (/\.[a-z0-9]+$/i.test(tail)) return tail;
-  for (const kv of query.split('&')) {
-    let v = kv.slice(kv.indexOf('=') + 1);
-    try { v = decodeURIComponent(v); } catch { /* keep it raw */ }
-    v = v.split('/').pop();
-    if (MODEL_EXT.test(v)) return v;
-  }
-  return tail;
-};
+// The file name a URL names: js/formats.js fileNameOfUrl (check.html reads the same)
+const fileName = fileNameOfUrl;
 
 // A fetch that throws had no usable answer. From another site, a HEAD in
 // "no-cors" mode then tells whether the site answered at all: if it did, it
@@ -5154,7 +5127,8 @@ function select(ids, additive, name = null) {
 // The display unit in force, and a length (model units) in it. The geometry
 // is in mm (OpenCascade converts on import); a file whose header names
 // another unit is shown in that unit, unconverted.
-const geomMm = () => !app.header || app.header.units === 'millimeter';
+// ('mm': a mesh file's .cadmesh saved before the mesh readers wrote MM)
+const geomMm = () => !app.header || app.header.units === MM || app.header.units === 'mm';
 // (the model's largest extent, in mm, for Auto's choice: units.js autoUnit)
 const modelSizeMm = () => {
   const b = app.header && app.header.bbox;
@@ -5164,8 +5138,8 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 const lenUnit = () => (geomMm() ? curUnit() : app.header.units);
 const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : v.toFixed(1));
 
-// What the file declares, in the picker's spelling where it has one
-const UNIT_WORDS = { mixed: 'mixed (its parts disagree)', um: 'µm', uin: 'µin' };
+// What the file declares, as a reader spells it (js/units.js unitWord)
+const UNIT_WORDS = { mixed: 'mixed (its parts disagree)' };
 
 // The info block's units row: its select lives outside the rebuilt values,
 // so a refresh (a selection, a load) never closes an open picker. Only its
@@ -5176,7 +5150,7 @@ function syncUnitsRow() {
   if (!app.header) return;
   const declared = app.header.sourceUnits;
   $('unitsrc').textContent = !geomMm() ? `${app.header.units} (not converted)`
-    : declared ? (UNIT_WORDS[declared] || declared) : 'not recorded';
+    : declared ? (UNIT_WORDS[declared] || unitWord(declared)) : 'not recorded';
   const sel = $('unitsel');
   sel.disabled = !geomMm();
   sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
@@ -6051,6 +6025,8 @@ function wireInput() {
   syncStyleBg();
   blurAfterPick(sty);
   sty.onchange = () => setStyle(sty.value, true);
+  // the unit pickers' choices, from the one table (js/units.js DISPLAY_UNITS)
+  for (const u of DISPLAY_UNITS) { $('unitsel').add(new Option(u, u)); $('meshunit').add(new Option(u, u)); }
   blurAfterPick($('unitsel'));
   $('unitsel').onchange = (e) => setUnitChoice(e.target.value);
   // the 2D drawing's sheet: model space or a layout (a pick from the list is

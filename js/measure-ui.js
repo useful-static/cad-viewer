@@ -17,6 +17,7 @@
 import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
 import { faceOfTri, makeCaster } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
+import { PAPER, VIEW_BG } from './styles.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
@@ -25,8 +26,8 @@ const KIND_NAME = { vertex: 'corner', mid: 'midpoint', centre: 'centre', edge: '
 
 // The colours Measure draws in, on the dark view and on paper (a light ground)
 const INK = {
-  dark: { line: '#ffd23f', label: 'rgba(20,24,30,0.92)', text: '#fff', sub: '#c9d1db', loupe: '#1d2127' },
-  light: { line: '#9a6b00', label: 'rgba(255,255,255,0.95)', text: '#111', sub: '#444', loupe: '#f4f4f2' },
+  dark: { line: '#ffd23f', label: 'rgba(20,24,30,0.92)', text: '#fff', sub: '#c9d1db', loupe: VIEW_BG },
+  light: { line: '#9a6b00', label: 'rgba(255,255,255,0.95)', text: '#111', sub: '#444', loupe: PAPER },
 };
 const HOLE = '#5fd3ff';
 

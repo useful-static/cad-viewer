@@ -11,10 +11,11 @@
 // 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
 import { onPaper } from './dxf.js';
+import { PAPER, PAPER_EDGES } from './styles.js';
 
-const PAPER = '#f4f4f2';
-const SELECTED = '#085a72';
-const FADED = '#a8a8a4';
+// a selected or faded layer's lines: the 3D paper styles' visible-edge colours
+const SELECTED = PAPER_EDGES.selected[0];
+const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 
 export function createDxfView(canvas, drawing, cb = {}) {

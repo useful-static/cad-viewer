@@ -28,6 +28,8 @@ export const STYLES = [
 ];
 
 export const styleById = (id) => STYLES.find((s) => s.id === id) || null;
+// every style id, for the readers that check one (a tour step, a model list entry, a view link)
+export const STYLE_IDS = STYLES.map((s) => s.id);
 
 // Until a choice is made: Shaded, for every file. (A b-rep file started in
 // Shaded + edges; its outlines, drawn over every part once the edge list was
@@ -43,6 +45,8 @@ export const styleFor = (choice, isMeshFile) => (styleById(choice) ? choice : de
 export const toggleEdges = (id) => ({ shaded: 'edges', edges: 'shaded' }[id] || null);
 
 export const PAPER = '#f4f4f2';
+// the dark view's background (the shaded styles, the dark ground)
+export const VIEW_BG = '#1d2127';
 export const CUT_FILL = '#b8b8b2';
 
 // Paper edge colours by state: [visible, hidden]. Each state keeps hidden

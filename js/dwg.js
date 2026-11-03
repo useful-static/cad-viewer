@@ -367,6 +367,9 @@ const isSN = (b, o, s) => s.every((x, k) => b[o + k] === x);
 // 3: R13-R15, sections at absolute addresses
 function container15(b, chk) {
   const n = u32(b, 0x15);
+  // 9 bytes a locator, then the CRC and the sentinel: a count the file cannot hold is damage
+  // (0xffffffff looped for minutes; real files hold 3 to 6)
+  if (0x19 + 9 * n + 18 > b.length) throw new Error(`a damaged DWG: its file header lists ${n} sections, more than the file holds`);
   const rec = {};
   for (let k = 0; k < n; k++) { const o = 0x19 + 9 * k; rec[b[o]] = { at: u32(b, o + 1), size: u32(b, o + 5) }; }
   const end = 0x19 + 9 * n;
@@ -420,6 +423,8 @@ function container18(b, chk) {
     for (let k = 0; k < 64 && sm[o + 0x20 + k]; k++) name += String.fromCharCode(sm[o + 0x20 + k]);
     o += 0x60;
     const list = [];
+    // 16 bytes a page entry: a count past the section map's end is damage
+    if (o + 16 * count > sm.length) throw new Error(`a damaged DWG: section ${name || '(unnamed)'} lists ${count} pages, more than its section map holds`);
     for (let p = 0; p < count; p++) { list.push({ num: u32(sm, o), dsize: u32(sm, o + 4), start: u64(sm, o + 8) }); o += 16; }
     sections[name] = { size, maxSize, compressed, enc, list };
   }
@@ -1202,9 +1207,11 @@ export function readDWG(buf) {
   // (cad-extractor-ir's corrupt_01_truncated_header: 16 bytes)
   if (b.length < 0x100) throw new Error(`not a complete DWG: ${b.length} bytes, shorter than a file header`);
   let cont;
+  // (an error already in those words passes as it is; any other -- an engine TypeError, the
+  // decompressors' "R2007 literal past the end" -- is said as a damaged file, naming it)
   try { cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk); } catch (e) {
-    if (e instanceof TypeError || e instanceof RangeError) throw new Error(`a damaged or truncated DWG: its container cannot be read (${e.message})`);
-    throw e;
+    if (/^(a damaged|not a complete DWG)/.test(e.message)) throw e;
+    throw new Error(`a damaged or truncated DWG: its container cannot be read (${e.message})`);
   }
   // a file without the four sections every drawing has is refused by name (dwg-rs's 1440-byte
   // synthetic_2010/2013 fixtures: a container with no drawing in it)

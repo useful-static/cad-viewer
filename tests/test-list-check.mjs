@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
 import { checkFile, checkLists, namedFormat, sniffFormat, summary } from '../js/list-check.js';
+import { fileNameOfUrl } from '../js/formats.js';
 
 let passed = 0;
 let failed = 0;
@@ -36,6 +37,12 @@ const FILES = {
   [`${B}good.cadtour.json`]: tour,
   [`${B}liar.cadmesh.gz`]: stepInside,
   [`${B}bad.cadtour.json`]: '{ "cadtour": 1, "steps": [] }',
+  // formats whose start only hints: the viewer opens these by name
+  [`${B}normals-first.obj`]: '# exported\n\nvn 0 0 1\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1//1 2//1 3//1\n',
+  [`${B}sorted.gltf`]: '{"accessors":[],"asset":{"version":"2.0"}}',
+  [`${B}get?file=board.stl`]: 'solid b\n facet normal 0 0 1\n',
+  [`${B}ply-named-obj.obj`]: 'ply\nformat ascii 1.0\n',
+  [`${B}case.3mf`]: Buffer.from('PK\x03\x04rest'),
 };
 async function fakeFetch(url, opts = {}) {
   const u = String(url);
@@ -97,6 +104,31 @@ await test('file-missing-refused-mislabelled', async () => {
   const liar = await checkFile(`${B}liar.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(liar.level, 'bad');
   assert.match(liar.detail, /named cadmesh, but it starts as STEP/);
+});
+
+await test('name-only formats: a start that only hints is no fault; a magic one that disagrees is', async () => {
+  for (const f of ['normals-first.obj', 'sorted.gltf', 'case.3mf']) {
+    const r = await checkFile(`${B}${f}`, { fetchFn: fakeFetch, sniff: true });
+    assert.equal(r.level, 'ok', `${f}: ${r.detail}`);
+  }
+  const ply = await checkFile(`${B}ply-named-obj.obj`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(ply.level, 'bad', ply.detail);
+  assert.match(ply.detail, /named OBJ, but it starts as PLY/);
+});
+await test('a model named in the query: named as the viewer names it', async () => {
+  assert.equal(namedFormat(`${B}get?file=board.stl`), 'STL');
+  assert.equal(namedFormat(`${B}get.php?file=board.stl`), 'STL');
+  const r = await checkFile(`${B}get?file=board.stl`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(r.level, 'ok', r.detail);
+  assert.match(r.detail, /STL/);
+});
+await test('fileNameOfUrl: the path\'s model name, else a query value naming one, else the path\'s', () => {
+  assert.equal(fileNameOfUrl('https://x/rack.cadmesh?v=2'), 'rack.cadmesh');
+  assert.equal(fileNameOfUrl('https://x/api/download?file=part.step&token=abc'), 'part.step');
+  assert.equal(fileNameOfUrl('https://x/get.php?file=board.stl'), 'board.stl');
+  assert.equal(fileNameOfUrl('https://x/api/download?id=7'), 'download');
+  assert.equal(fileNameOfUrl('https://x/my%20part.stp'), 'my part.stp');
+  assert.equal(fileNameOfUrl('https://x/README.md'), 'README.md');
 });
 
 await test('whole-list', async () => {

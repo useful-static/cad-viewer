@@ -13,17 +13,20 @@
 // -y toward the viewer; js/orient.js), so its presets and "outside" mean the
 // same on every page that opens it.
 
-import { parseOrient } from './orient.js';
+import { VIEW_PRESETS, parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
+import { STYLE_IDS } from './styles.js';
 
-export const PRESETS = ['iso', 'front', 'back', 'left', 'right', 'top', 'bottom'];
+export const PRESETS = Object.keys(VIEW_PRESETS);
 export const EASES = ['linear', 'inOut'];
 export const DIMS = ['none', 'ghost', 'grey', 'hide'];
-export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
 export const MAX_STEPS = 200;
 export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' };
 
-const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
+// the format version a tour is written in (js/tour-recorder.js), and every
+// field a step may hold (version 2 adds "id")
+export const TOUR_VERSION = 2;
+export const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
   'explode', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
 export const STEP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];

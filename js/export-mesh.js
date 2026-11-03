@@ -215,3 +215,13 @@ export function toGLB(model, ids, basis, names = []) {
   for (const c of chunks) { out.set(c, o); o += c.length; }
   return out;
 }
+
+// The export formats, one row each: the file's MIME type, which way is up in it ('z' the
+// printing convention, 'y' glTF's own), and its writer, all called alike:
+// write(model, ids, basis, { names, base }) -> bytes (or a promise of them). main.js File >
+// Export reads this; a new format is a row here and its button.
+export const EXPORTS = {
+  stl: { label: 'STL', type: 'model/stl', up: 'z', write: (m, ids, b, { base }) => toSTL(m, ids, b, base) },
+  '3mf': { label: '3MF', type: 'model/3mf', up: 'z', write: (m, ids, b, { names }) => to3MF(m, ids, b, names) },
+  glb: { label: 'GLB', type: 'model/gltf-binary', up: 'y', write: (m, ids, b, { names }) => toGLB(m, ids, b, names) },
+};

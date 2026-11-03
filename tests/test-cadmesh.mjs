@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, idToBytes, inflateCadmesh,
-  isGzip, occtResultToModel,
+  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf,
 } from '../js/cadmesh.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
@@ -45,6 +45,17 @@ function quad(name, dx, color = null) {
   };
 }
 
+test('MODEL_FACTS is every header key that comes from the model, and modelFactsOf carries them through a rebuild', () => {
+  const facts = { units: MM, sourceUnits: 'in', angularDeflection: 0.3, recolour: 'a site' };
+  const h = decodeCadmesh(encodeCadmesh({ ...facts, meshes: [quad('a', 0)] })).header;
+  // the header's other keys are the geometry's own, computed by encodeCadmesh
+  const derived = ['bbox', 'vertexCount', 'indexCount', 'sections', 'meshes', 'root', 'facts', 'silhouettesOmitted'];
+  const fromModel = Object.keys(h).filter((k) => !derived.includes(k)).sort();
+  assert.deepEqual(fromModel, [...MODEL_FACTS].sort(), 'a header key that is neither derived nor carried: add it to MODEL_FACTS');
+  assert.deepEqual(modelFactsOf(h), facts);
+  const again = decodeCadmesh(encodeCadmesh({ ...modelFactsOf(h), meshes: [quad('b', 0)] })).header;
+  assert.deepEqual(modelFactsOf(again), facts);
+});
 test('id <-> RGBA bytes round-trips, 0 is reserved for background', () => {
   for (const id of [1, 255, 256, 65535, 65536, 16777215]) {
     assert.equal(bytesToId(...idToBytes(id)), id);

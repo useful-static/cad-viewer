@@ -16,12 +16,29 @@
 //   video(tour)            the tour played and recorded -> bytes, or why not
 //   announce(text)         the live region
 
-const STEP_KEYS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
-  'explode', 'section', 'style', 'callouts', 'transition', 'hold', 'orbit', 'ease'];
+import { STEP_FIELDS, TOUR_VERSION } from './tour.js';
+
+// what a step keeps when the draft is written: the parser's own field list
+const STEP_KEYS = ['id', ...STEP_FIELDS];
+
+// A draft ({ title, mode, loop, orient, steps }) as the file holds it, the
+// panel's own fields left out. Pure: tests/test-tour.mjs reads it back with
+// parseTour.
+export function draftToTour(draft, modelUrl = null) {
+  const out = { cadtour: TOUR_VERSION };
+  if (draft.title.trim()) out.title = draft.title.trim();
+  if (modelUrl) out.model = modelUrl;
+  if (draft.orient) out.orient = draft.orient;
+  out.mode = draft.mode;
+  if (draft.loop) out.loop = true;
+  out.steps = draft.steps.map((s) => Object.fromEntries(STEP_KEYS.filter((k) => s[k] !== undefined && s[k] !== '').map((k) => [k, s[k]])));
+  return out;
+}
 
 export function createTourRecorder(api) {
   const $ = (id) => document.getElementById(id);
-  const draft = { title: '', mode: 'static', loop: false, steps: [], sel: -1 };
+  // orient: an opened tour's orientation, written back as it was (a new tour has none)
+  const draft = { title: '', mode: 'static', loop: false, orient: null, steps: [], sel: -1 };
   let busy = false; // a picture or video export under way
 
   const el = {
@@ -33,17 +50,7 @@ export function createTourRecorder(api) {
 
   const note = (t) => { el.note.textContent = t; if (t) api.announce(t); };
 
-  // the draft as the file holds it (the panel's own fields left out)
-  function toJSON() {
-    const out = { cadtour: 1 };
-    if (draft.title.trim()) out.title = draft.title.trim();
-    const m = api.modelUrl();
-    if (m) out.model = m;
-    out.mode = draft.mode;
-    if (draft.loop) out.loop = true;
-    out.steps = draft.steps.map((s) => Object.fromEntries(STEP_KEYS.filter((k) => s[k] !== undefined && s[k] !== '').map((k) => [k, s[k]])));
-    return out;
-  }
+  const toJSON = () => draftToTour(draft, api.modelUrl());
   const text = () => JSON.stringify(toJSON(), null, 1);
 
   function renderList() {
@@ -197,6 +204,7 @@ export function createTourRecorder(api) {
     draft.title = tour.title || '';
     draft.mode = tour.mode;
     draft.loop = tour.loop;
+    draft.orient = tour.orient || null;
     draft.steps = tour.steps.map((s) => ({ ...s }));
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;

@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS } from '../js/tour.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
+import { draftToTour } from '../js/tour-recorder.js';
 import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 let passed = 0;
@@ -65,6 +66,19 @@ test('parse-v2-step-ids', () => {
   assert.equal(t.version, 2);
   assert.deepEqual(t.steps.map((s) => s.id), ['microsd', undefined, 'uart']);
   assert.equal(parseTour(JSON.stringify({ cadtour: 1, steps: [{}] })).version, 1);
+});
+
+test('recorder-round-trip: an opened tour saved again keeps its step ids, its orient and every step field', () => {
+  const src = { cadtour: 2, title: 'Board', orient: '+y-z', mode: 'static', loop: true,
+    steps: [{ id: 'microsd', title: 'microSD', view: 'top', style: 'wire', hold: 3 }, { title: 'no id', dim: 'ghost' }] };
+  const t = parseTour(JSON.stringify(src));
+  const draft = { title: t.title, mode: t.mode, loop: t.loop, orient: t.orient, steps: t.steps.map((s) => ({ ...s })) };
+  const back = parseTour(JSON.stringify(draftToTour(draft, null)));
+  assert.equal(back.version, 2);
+  assert.equal(back.orient, '+y-z');
+  assert.equal(back.loop, true);
+  assert.deepEqual(back.steps.map((s) => s.id), ['microsd', undefined]);
+  assert.deepEqual(back.steps, t.steps);
 });
 
 // an app serving the viewer and its files from its own scheme (lc://app/)

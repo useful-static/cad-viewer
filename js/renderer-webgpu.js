@@ -622,7 +622,11 @@ export class WebGPURenderer {
     f.set([frame.focalPx || 0, frame.edges ? frame.edges.minPx || 0 : 0, cull ? 1 : 0, cull && frame.cullFaces ? 1 : 0], 48);
     const fill = frame.fill || [0, 0, 0];
     f.set([fill[0], fill[1], fill[2], 1], 52);
-    f.set([frame.explode || 0, frame.ghost || 0, 0, 0], 56);
+    // Explode moves bodies by the body table's directions: only the table of the model drawn
+    // (a table the GPU could not take, or one still of the previous model, moves nothing;
+    // renderer-webgl.js checks the same)
+    const explode = this.bodiesFor === this.drawn ? frame.explode || 0 : 0;
+    f.set([explode, frame.ghost || 0, 0, 0], 56);
     this.device.queue.writeBuffer(this.ubo, 0, f);
   }
 

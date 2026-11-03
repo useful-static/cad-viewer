@@ -7,6 +7,7 @@ import {
   camDir, camUp, eyeDist, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy,
 } from '../js/camera.js';
 import { lookAt, ortho, perspective } from '../js/mat4.js';
+import { VIEW_PRESETS } from '../js/orient.js';
 
 let passed = 0;
 let failed = 0;
@@ -261,8 +262,8 @@ test('perspective keeps eyeDist == dist (ortho push-back is ortho-only)', () => 
 // ---- free rotation (2026-10-25: "infinite rotation on all axes") ----
 
 const near = (a, b, eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) < eps);
-const PRESETS = [[0.7, 0.45], [0, 0], [Math.PI, 0], [-Math.PI / 2, 0], [Math.PI / 2, 0],
-  [0, Math.PI / 2 - 1e-4], [0, -Math.PI / 2 + 1e-4], [2.1, -1.2]];
+// the viewer's own named views (js/orient.js), and one free view
+const PRESETS = [...Object.values(VIEW_PRESETS), [2.1, -1.2]];
 
 test('a preset as a quaternion looks and stands exactly like its yaw/pitch (both up axes)', () => {
   for (const up of ['y', 'z']) {

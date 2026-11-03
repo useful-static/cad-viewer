@@ -9,7 +9,7 @@ import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
-import { BODY_KINDS, encodeCadmesh, hashName, occtResultToModel, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { BODY_KINDS, conversionModel, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { FORMATS as CAD_FORMATS, sniffFormat } from './js/formats.js';
 
@@ -174,7 +174,7 @@ async function main() {
     process.stderr.write(`FAIL: OpenCascade could not import ${args.input}\n`);
     return 1;
   }
-  const model = occtResultToModel(result);
+  const model = conversionModel(result, { sourceUnits: declared, angularDeflection: args.params.angularDeflection });
   // no faces (curves or points only): nothing to show, as the viewer refuses
   // it, not an empty .cadmesh written as OK (review r22)
   if (!model.meshes.some((m) => m.indices.length)) {
@@ -184,8 +184,6 @@ async function main() {
       : `FAIL: ${args.input} has no surfaces to show: it holds no faces (only curves or points, or nothing)\n`);
     return 1;
   }
-  model.sourceUnits = declared;
-  model.angularDeflection = args.params.angularDeflection;
   // the statuses are reported (and digested for compare.sh) even when
   // --no-kind leaves them out of the header
   // the converter's own strings, not the filtered kind, so a status the JS

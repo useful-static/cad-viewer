@@ -79,6 +79,13 @@ export function orientRoles(o) {
 // js/camera.js fitBox). Every model long the same way turns the same way, so
 // a list's boards still open alike.
 export const ISO = [0.7, 0.45];
+
+// The named views, [yaw, pitch] about the orientation's up: the toolbar's View presets, the
+// number keys, and a tour step's "view" / "from" (js/tour.js reads the names from here)
+export const VIEW_PRESETS = {
+  iso: ISO, front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0],
+  right: [Math.PI / 2, 0], top: [0, Math.PI / 2 - 1e-4], bottom: [0, -Math.PI / 2 + 1e-4],
+};
 export const PORTRAIT = 0.8;
 export const LONG = 1.2;
 export function isoView(o, bbox, aspect) {

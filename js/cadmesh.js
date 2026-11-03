@@ -55,6 +55,10 @@ import { buildEdges } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
+// header.units when the geometry is in millimetres: what every reader writes
+// (OpenCascade's linearUnit word), and what the viewer's unit display needs
+// to convert lengths (main.js geomMm)
+export const MM = 'millimeter';
 
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
 // name -> element type; written only when the model carries them
@@ -175,7 +179,7 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
     off = align8(off + arrays[s].byteLength);
   }
   const header = {
-    units: model.units || 'millimeter',
+    units: model.units || MM,
     bbox: vertexCount ? { min: bbMin, max: bbMax } : null,
     vertexCount, indexCount, sections, meshes: metas,
     root: model.root || { name: 'model', meshes: metas.map((_, i) => i), children: [] },
@@ -472,10 +476,25 @@ export function computeNormals(positions, indices) {
   return n;
 }
 
+// A conversion's result as the model both converters encode (the page's js/step-worker.js and
+// stp2mesh.mjs): the meshes, the unit the file declared, the angular deflection it was meshed at
+export function conversionModel(result, { sourceUnits = null, angularDeflection } = {}) {
+  const model = occtResultToModel(result);
+  model.sourceUnits = sourceUnits;
+  model.angularDeflection = angularDeflection;
+  return model;
+}
+
+// The header facts about the whole model that a tool rebuilding a .cadmesh from a decoded one
+// carries over (split-board.mjs), as encodeCadmesh's model keys: one list, so a new fact is
+// carried by every such tool
+export const MODEL_FACTS = ['units', 'sourceUnits', 'angularDeflection', 'recolour'];
+export const modelFactsOf = (header) => Object.fromEntries(MODEL_FACTS.filter((k) => header[k] !== undefined && header[k] !== null).map((k) => [k, header[k]]));
+
 // occt-import-js ReadStepFile/ReadFile result -> model for encodeCadmesh.
 // Per-face b-rep colours become per-vertex colours (OCCT meshes each face
 // with its own vertices, so a face's triangles own their vertex range).
-export function occtResultToModel(result, units = 'millimeter') {
+export function occtResultToModel(result, units = MM) {
   // (said for IGES and BREP too, naming no library, with what to try: r21)
   if (!result || !result.success) {
     // (OpenCascade reports running out of memory while reading the same way,
@@ -562,7 +581,7 @@ function paletteByPart(meshes, root) {
 }
 
 export const DEFAULT_TESSELLATION = Object.freeze({
-  linearUnit: 'millimeter',
+  linearUnit: MM,
   linearDeflectionType: 'bounding_box_ratio',
   linearDeflection: 0.001,
   angularDeflection: 0.5,

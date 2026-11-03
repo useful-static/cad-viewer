@@ -9,22 +9,27 @@
 // Pure ES module, no DOM.
 
 // kind: 'cad' (converted by OpenCascade: cad names its reader), 'cadmesh' (the viewer's own),
-// 'mesh' (js/mesh-formats.js), '2d' (js/dxf.js, js/dwg.js), 'zip' (opened for the model in it)
+// 'mesh' (js/mesh-formats.js), '2d' (js/dxf.js, js/dwg.js), 'zip' (opened for the model in it).
+// magic: every file of the format starts with bytes that say it (sniffFormat finds it, and a
+// file named so that does not start so is not one). Without it the start only hints (an OBJ may
+// open with any statement, a glTF's JSON keys come in any order, a binary STL has no magic): the
+// viewer opens such a file by its name, so a start that says nothing is no fault.
 export const FORMATS = [
-  { label: 'STEP', ext: ['stp', 'step'], kind: 'cad', cad: 'step' },
+  { label: 'STEP', ext: ['stp', 'step'], kind: 'cad', cad: 'step', magic: true },
   { label: 'IGES', ext: ['igs', 'iges'], kind: 'cad', cad: 'iges' },
-  { label: 'BREP', ext: ['brep', 'brp'], kind: 'cad', cad: 'brep' },
-  { label: 'cadmesh', ext: ['cadmesh'], kind: 'cadmesh' },
+  { label: 'BREP', ext: ['brep', 'brp'], kind: 'cad', cad: 'brep', magic: true },
+  { label: 'cadmesh', ext: ['cadmesh'], kind: 'cadmesh', magic: true },
   { label: 'STL', ext: ['stl'], kind: 'mesh' },
   { label: 'OBJ', ext: ['obj'], kind: 'mesh' },
-  { label: 'PLY', ext: ['ply'], kind: 'mesh' },
+  { label: 'PLY', ext: ['ply'], kind: 'mesh', magic: true },
   { label: 'OFF', ext: ['off'], kind: 'mesh' },
-  { label: '3MF', ext: ['3mf'], kind: 'mesh' },
+  { label: '3MF', ext: ['3mf'], kind: 'mesh', magic: true, as: 'zip' },
   { label: 'glTF', ext: ['glb', 'gltf'], kind: 'mesh' },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
-  { label: 'DWG', ext: ['dwg'], kind: '2d' },
-  { label: 'zip', ext: ['zip'], kind: 'zip' },
+  { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true },
+  { label: 'zip', ext: ['zip'], kind: 'zip', magic: true },
 ];
+// (as: a 3MF is a zip, and its start says only that)
 const BY_EXT = new Map(FORMATS.flatMap((f) => f.ext.map((e) => [e, f])));
 
 // files that come with a model and are not one: an OBJ's .mtl, a .gltf's buffers and pictures
@@ -46,6 +51,24 @@ export const formatOfExt = (ext) => BY_EXT.get(String(ext || '').toLowerCase()) 
 // a name that is a model file of any kind ("part.step", "board.stl.gz"): a query value naming one
 // is the file a download URL serves
 export const MODEL_NAME = new RegExp(`\\.(?:${[...BY_EXT.keys()].join('|')})(?:\\.gz)?$`, 'i');
+
+// The file name a URL names -- what the viewer shows, announces, offers to Save and opens by:
+//   rack.cadmesh?v=2                        -> rack.cadmesh   (the path's, query dropped)
+//   /api/download?file=part.step&token=abc  -> part.step      (a query value naming a model file)
+//   /get.php?file=board.stl                 -> board.stl      (the path's name is no model file)
+//   /api/download?id=7                      -> download       (no model name anywhere)
+// Decoded, so "my%20part.stp" is "my part.stp".
+export function fileNameOfUrl(url) {
+  const [path, query = ''] = String(url).split('#')[0].split('?');
+  const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  const tail = dec(path.split('/').pop());
+  if (MODEL_NAME.test(tail)) return tail;
+  for (const kv of query.split('&')) {
+    const v = dec(kv.slice(kv.indexOf('=') + 1)).split('/').pop();
+    if (MODEL_NAME.test(v)) return v;
+  }
+  return tail;
+}
 
 // A DWG by its bytes: "AC10" and two digits (R13 to R2018 are read; an older one reaches the
 // reader, which refuses it by name)
@@ -73,6 +96,17 @@ export function sniffFormat(bytes) {
   const line = text.split(/\r?\n/)[0];
   if (line.length >= 73 && line[72] === 'S') return f('igs');
   return null;
+}
+
+// What the viewer opens, in words, from the table ("open a STEP (.stp, .step), IGES (.igs,
+// .iges), BREP (.brep, .brp) or .cadmesh file, a mesh (STL, OBJ, ...), a 2D DXF or DWG, or a
+// zip of one"): the end of every "not a file this viewer opens" message
+export function opensText() {
+  const of = (kind) => FORMATS.filter((f) => f.kind === kind);
+  const cad = of('cad').map((f) => `${f.label} (${f.ext.map((e) => `.${e}`).join(', ')})`);
+  const mesh = of('mesh').map((f) => (f.label === 'glTF' ? 'glTF / GLB' : f.label));
+  const twoD = of('2d').map((f) => (f.label === 'DWG' ? 'DWG (R13 to 2018)' : f.label));
+  return `open a ${cad.slice(0, -1).join(', ')}, ${cad[cad.length - 1]} or .cadmesh file, a mesh (${mesh.join(', ')}), a 2D ${twoD.join(' or ')}, or a zip of one`;
 }
 
 // An <input type=file> accept list: the formats of these kinds, gzipped too, and the companions

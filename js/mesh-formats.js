@@ -13,13 +13,49 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { MAX_FILE_BYTES, inflate } from './cadmesh.js';
+import { MAX_FILE_BYTES, MM, inflate } from './cadmesh.js';
 import { FORMATS } from './formats.js';
 import { LENGTH_MM } from './units.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
 export const MESH_EXTS = FORMATS.filter((f) => f.kind === 'mesh').flatMap((f) => f.ext);
 const CREASE_DEG = 30;
+// A 3MF or glTF names a part once and places it many times; the placements are counted
+// before any is built (a part shared two ways down 40 levels is 2^40 placements from a few
+// hundred bytes). Real assemblies of several million placed triangles stay under these.
+const MAX_PLACED_TRIANGLES = 10_000_000;
+const MAX_PLACED_PARTS = 2_000_000;
+// a glTF accessor's values, refused past this before it is allocated (3 coordinates of
+// 3 corners of the triangle cap; a 200-byte file asked for 2^30 vertices)
+const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
+const big = (n) => n.toLocaleString('en-US');
+// the placement counts of a part tree, from its counts per part (memoised: a shared part is
+// walked once). kids(id) -> child ids, own(id) -> its own triangles, refuse(why) -> an Error;
+// a cycle, a missing part or a tree deeper than maxDepth is refused in words.
+function placements(roots, kids, own, maxDepth, refuse, who) {
+  const memo = new Map(); // id -> { parts, tris, height }
+  const onPath = new Set();
+  const count = (id, depth, from) => {
+    const seen = memo.get(id);
+    if (seen) { if (depth + seen.height > maxDepth) throw refuse('deep'); return seen; }
+    if (onPath.has(id)) throw refuse('cycle', id);
+    if (depth > maxDepth) throw refuse('deep');
+    const ks = kids(id, from);
+    onPath.add(id);
+    const r = { parts: 1, tris: own(id), height: 0 };
+    for (const k of ks) {
+      const c = count(k, depth + 1, id);
+      r.parts += c.parts; r.tris += c.tris; r.height = Math.max(r.height, c.height + 1);
+    }
+    onPath.delete(id);
+    memo.set(id, r);
+    return r;
+  };
+  let parts = 0, tris = 0;
+  for (const id of roots) { const c = count(id, 0, null); parts += c.parts; tris += c.tris; }
+  if (parts > MAX_PLACED_PARTS) throw new Error(`${who} places ${big(parts)} parts once its shared parts are repeated, more than the ${big(MAX_PLACED_PARTS)} this viewer opens`);
+  if (tris > MAX_PLACED_TRIANGLES) throw new Error(`${who} places ${big(tris)} triangles once its shared parts are repeated, more than the ${big(MAX_PLACED_TRIANGLES)} this viewer opens`);
+}
 
 // The mesh format a file is, by its name and first bytes, or null
 export function meshFormatOf(name, buf) {
@@ -72,7 +108,7 @@ function finish(rootName, bodies, sourceUnits, root = null) {
   }
   // (a tree given by the file names its meshes by number: they are kept as they are)
   const meshes = root ? welded : welded.filter((m) => m.indices.length);
-  const model = { units: 'mm', meshes, root: root || { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
+  const model = { units: MM, meshes, root: root || { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
   if (sourceUnits) model.sourceUnits = sourceUnits;
   return model;
 }
@@ -107,7 +143,9 @@ export function weld(b) {
   }
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
   const unit = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
-  // per welded vertex: its groups [{ n: unit seed, s: [sum], col, out }]
+  // per welded vertex: its groups [{ n: unit seed, out }], with colours kept apart by a Map
+  // colour -> groups (a linear search over every colour at a vertex was quadratic: a fan of
+  // 60 k triangles, each its own colour, about one centre took 13.5 s)
   const groups = new Array(wp.length / 3);
   const corner = new Uint32Array(kept * 3); // the group (output vertex) each corner uses
   const outPos = [], outNrmSum = [], outCol = [];
@@ -117,10 +155,15 @@ export function weld(b) {
     const ck = cols ? cols[t].join(',') : '';
     for (let c = 0; c < 3; c++) {
       const w = tri[t * 3 + c];
-      const gs = groups[w] || (groups[w] = []);
-      let g = gs.find((x) => x.ck === ck && x.n[0] * n[0] + x.n[1] * n[1] + x.n[2] * n[2] >= cosC);
+      let gs;
+      if (cols) {
+        const byCol = groups[w] || (groups[w] = new Map());
+        gs = byCol.get(ck);
+        if (!gs) { gs = []; byCol.set(ck, gs); }
+      } else gs = groups[w] || (groups[w] = []);
+      let g = gs.find((x) => x.n[0] * n[0] + x.n[1] * n[1] + x.n[2] * n[2] >= cosC);
       if (!g) {
-        g = { n, ck, out: outPos.length / 3 };
+        g = { n, out: outPos.length / 3 };
         gs.push(g);
         outPos.push(wp[w * 3], wp[w * 3 + 1], wp[w * 3 + 2]);
         outNrmSum.push(0, 0, 0);
@@ -163,13 +206,18 @@ function parseSTL(buf, base) {
   const re = /^\s*(solid|endsolid|vertex|endfacet)\b(.*)$/gm;
   let m;
   let fv = [];
+  // (a body is started by whichever record comes first: "solidx" passes the ASCII test but is
+  // not a solid record, and an endfacet with no body met null)
+  const body = () => { if (!cur) { cur = { name: base, pos: [], tri: [] }; bodies.push(cur); } return cur; };
   while ((m = re.exec(s))) {
     if (m[1] === 'solid') { cur = { name: m[2].trim() || base, pos: [], tri: [] }; bodies.push(cur); }
-    else if (m[1] === 'vertex') { if (!cur) { cur = { name: base, pos: [], tri: [] }; bodies.push(cur); } fv.push(...m[2].trim().split(/\s+/).slice(0, 3).map(Number)); }
+    else if (m[1] === 'vertex') { body(); fv.push(...m[2].trim().split(/\s+/).slice(0, 3).map(Number)); }
     else if (m[1] === 'endfacet') {
-      // a facet of more than 3 vertices: a fan
+      // a facet of more than 3 vertices: a fan (appended by a loop: spread into push, a
+      // 300 k-vertex facet overflowed the stack)
+      body();
       const k0 = cur.pos.length / 3;
-      cur.pos.push(...fv);
+      for (const x of fv) cur.pos.push(x);
       for (let i = 1; i + 1 < fv.length / 3; i++) cur.tri.push(k0, k0 + i, k0 + i + 1);
       fv = [];
     }
@@ -254,8 +302,13 @@ function parsePLY(buf, base) {
     else if (sp[0] === 'element') els.push({ name: sp[1], n: +sp[2], props: [] });
     else if (sp[0] === 'property' && els.length) {
       const e = els[els.length - 1];
-      if (sp[1] === 'list') e.props.push({ list: true, ct: PLY_T[sp[2]], t: PLY_T[sp[3]], name: sp[4] });
-      else e.props.push({ t: PLY_T[sp[1]], name: sp[2] });
+      // a type PLY does not have is refused here, not met as the engine's "dv[t] is not a function"
+      const ty = (t, nm) => {
+        if (!Object.hasOwn(PLY_T, t)) throw new Error(`${base}.ply is damaged: property ${nm} has type ${t}, which is not a PLY type`);
+        return PLY_T[t];
+      };
+      if (sp[1] === 'list') e.props.push({ list: true, ct: ty(sp[2], sp[4]), t: ty(sp[3], sp[4]), name: sp[4] });
+      else e.props.push({ t: ty(sp[1], sp[2]), name: sp[2] });
     }
   }
   const pos = [], tri = [], vcol = [];
@@ -269,18 +322,31 @@ function parsePLY(buf, base) {
       for (let i = 1; i + 1 < ids.length; i++) tri.push(ids[0], ids[i], ids[i + 1]);
     }
   };
-  // a count the data cannot hold is a damaged header, refused before looping on it (1e999
-  // vertices looped until the tab ran out of memory)
-  const badCount = (e, room) => !Number.isInteger(e.n) || e.n < 0 || e.n > room;
+  // the counts the data cannot hold are a damaged header, refused before looping on them (1e999
+  // vertices looped until the tab ran out of memory). Summed over the elements, each record
+  // charged its least size and at least 1: checked one by one, 2000 empty elements each
+  // counting the file's size looped 11.8 s.
+  const checkCounts = (room, least) => {
+    let sum = 0;
+    for (const e of els) {
+      sum += Number.isInteger(e.n) && e.n >= 0 ? e.n * Math.max(1, least(e)) : Infinity;
+      if (sum > room) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
+    }
+  };
+  // a list's count: a whole number the rest of the data can hold
+  const listCount = (c, pr, e, room) => {
+    if (!Number.isInteger(c) || c < 0 || c > room) throw new Error(`${base}.ply is damaged: a ${pr.name} list in element ${e.name} counts ${c} items${c > room ? ', more than the file holds' : ''}`);
+    return c;
+  };
   if (fmt === 'ascii') {
     const toks = new TextDecoder('latin1').decode(u8.subarray(bodyStart)).trim().split(/\s+/);
-    for (const e of els) if (badCount(e, toks.length)) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
+    checkCounts(toks.length, (e) => e.props.length);
     let p = 0;
     for (const e of els) {
       for (let i = 0; i < e.n; i++) {
         const rec = {};
         for (const pr of e.props) {
-          if (pr.list) { const c = +toks[p++]; rec[pr.name] = toks.slice(p, p + c).map(Number); p += c; } else rec[pr.name] = +toks[p++];
+          if (pr.list) { const c = listCount(+toks[p++], pr, e, toks.length - p); rec[pr.name] = toks.slice(p, p + c).map(Number); p += c; } else rec[pr.name] = +toks[p++];
         }
         take(e, rec);
       }
@@ -290,7 +356,7 @@ function parsePLY(buf, base) {
     if (!le && fmt !== 'binary_big_endian') throw new Error(`${base}.ply: format ${fmt} is not ascii or binary`);
     const dv = new DataView(buf);
     let o = bodyStart;
-    for (const e of els) if (badCount(e, buf.byteLength - bodyStart)) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
+    checkCounts(buf.byteLength - bodyStart, (e) => e.props.reduce((s, pr) => s + PLY_SIZE[pr.list ? pr.ct : pr.t], 0));
     const rd = (t) => {
       if (o + PLY_SIZE[t] > buf.byteLength) throw new Error(`${base}.ply is damaged: its data ends early`);
       const v = dv[`get${t}`](o, le); o += PLY_SIZE[t]; return v;
@@ -299,7 +365,7 @@ function parsePLY(buf, base) {
       for (let i = 0; i < e.n; i++) {
         const rec = {};
         for (const pr of e.props) {
-          if (pr.list) { const c = rd(pr.ct); const a = new Array(c); for (let j = 0; j < c; j++) a[j] = rd(pr.t); rec[pr.name] = a; } else rec[pr.name] = rd(pr.t);
+          if (pr.list) { const c = listCount(rd(pr.ct), pr, e, (buf.byteLength - o) / PLY_SIZE[pr.t]); const a = new Array(c); for (let j = 0; j < c; j++) a[j] = rd(pr.t); rec[pr.name] = a; } else rec[pr.name] = rd(pr.t);
         }
         take(e, rec);
       }
@@ -448,10 +514,20 @@ async function parse3MF(buf, base) {
       default:
     }
   }
+  // the component tree counted before it is built: a missing object, a cycle or a tree over 32
+  // deep is a damaged file (they were dropped without a word), and a shared object placed past
+  // the caps is refused (each object holding two of the next, 30 deep, ran the tab out of memory)
+  const who = `${base}.3mf`;
+  placements(build.map((it) => it.id), (id, from) => {
+    const o = objects.get(id);
+    if (!o) throw new Error(`${who} is damaged: ${from === null ? 'its build' : `object ${from}`} names object ${id}, which is not there`);
+    return o.comps.map((c) => c.id);
+  }, (id) => objects.get(id).tris.length / 3, 32,
+  (why, id) => new Error(why === 'cycle' ? `${who} is damaged: object ${id} is its own ancestor` : `${who} is damaged: its component tree is more than 32 deep`), who);
   const bodies = [];
   const node = (id, m, depth) => {
     const o = objects.get(id);
-    if (!o || depth > 32) return null;
+    if (!o) return null; // (not met: the count above refused it)
     const n = { name: o.name, meshes: [], children: [] };
     if (o.tris.length) {
       const pos = new Array(o.verts.length);
@@ -475,7 +551,7 @@ async function parse3MF(buf, base) {
   checkBodies(`${base}.3mf`, bodies);
   const meshes = bodies.map(weld);
   if (!meshes.length) throw new Error(`${base}.3mf has no triangles to show`);
-  return { units: 'mm', meshes, root, sourceUnits: UNIT_NAME[unit] || undefined };
+  return { units: MM, meshes, root, sourceUnits: UNIT_NAME[unit] || undefined };
 }
 function hexColour(h) {
   const m = /^#?([0-9a-f]{6})/i.exec(h || '');
@@ -507,6 +583,8 @@ function parseJSON(s, what) {
 async function parseGLTF(buf, format, base, files) {
   let json, bin = null;
   if (format === 'glb') {
+    // (a file shorter than the header met the engine's "Offset is outside the bounds of the DataView")
+    if (buf.byteLength < 12) throw new Error(`${base}.glb is damaged: ${buf.byteLength} bytes, shorter than a GLB header`);
     const dv = new DataView(buf);
     if (dv.getUint32(0, true) !== 0x46546c67) throw new Error(`${base}.glb: not a GLB file`);
     let o = 12;
@@ -519,33 +597,50 @@ async function parseGLTF(buf, format, base, files) {
     }
   } else json = parseJSON(text(buf), `${base}.gltf`);
   if (!json) throw new Error(`${base}: no glTF JSON`);
-  const refused = [...(json.extensionsRequired || [])].filter((x) => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_mesh_quantization'].includes(x));
+  const damaged = (what) => new Error(`${base} is damaged: ${what}`);
+  // the JSON's shapes are checked where they are used: a list that is not one, or an index to
+  // an entry that is not an object, is a damaged file, not the engine's "is not a function"
+  const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  if (!isObj(json)) throw damaged('its JSON is not an object');
+  const list = (x, what) => { if (x === undefined) return []; if (!Array.isArray(x)) throw damaged(`${what} is not a list`); return x; };
+  const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
+  const nat = (x) => Number.isInteger(x) && x >= 0;
+  const refused = list(json.extensionsRequired, '"extensionsRequired"').filter((x) => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_mesh_quantization'].includes(x));
   if (refused.length) throw new Error(`${base} needs ${refused.join(', ')}, which this viewer does not decode: export it without compression`);
-  const buffers = await Promise.all((json.buffers || []).map(async (b, i) => {
+  const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
+  const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
+  const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {
+    if (!isObj(b)) throw damaged(`buffer ${i} is not an object`);
     if (b.uri === undefined) { if (i === 0 && bin) return bin; throw new Error(`${base}: buffer ${i} has no data`); }
+    if (typeof b.uri !== 'string') throw damaged(`buffer ${i}'s uri is not text`);
     // (a data: URI decoded by fetch: new Response(uri) gave the URI's own text as the buffer)
     if (b.uri.startsWith('data:')) return (await fetch(b.uri)).arrayBuffer();
     const f = files.get(decodeURIComponent(b.uri).split('/').pop().toLowerCase());
     if (!f) throw new Error(`${base}.gltf needs ${b.uri}: drop it together with the .gltf`);
     return f;
   }));
-  const damaged = (what) => new Error(`${base} is damaged: ${what}`);
   const acc = (i) => {
-    const a = json.accessors && json.accessors[i];
-    if (!a || !COMP[a.componentType] || !NCOMP[a.type] || !Number.isInteger(a.count) || a.count < 0) throw damaged(`accessor ${i} is missing or malformed`);
+    const a = at(accessors, i);
+    if (!a || !Object.hasOwn(COMP, a.componentType) || !Object.hasOwn(NCOMP, a.type) || !nat(a.count)) throw damaged(`accessor ${i} is missing or malformed`);
     const [Ctor, max] = COMP[a.componentType];
     const nc = NCOMP[a.type];
-    const out = new Float64Array(a.count * nc);
-    if (a.bufferView === undefined) return out;
-    const bv = json.bufferViews && json.bufferViews[a.bufferView];
-    const data = bv && buffers[bv.buffer];
-    if (!data) throw damaged(`accessor ${i} names a buffer view that is not there`);
-    const start = (bv.byteOffset || 0) + (a.byteOffset || 0);
+    // the count is bounded before anything is allocated: by a cap, then by its buffer view
+    // (2^30 vertices with no buffer view ran the tab out of memory from a 200-byte file)
+    if (a.count * nc > MAX_ACCESSOR_VALUES) throw new Error(`${base}: accessor ${i} holds ${big(a.count * nc)} values, more than the ${big(MAX_ACCESSOR_VALUES)} this viewer reads`);
+    if (a.bufferView === undefined) return new Float64Array(a.count * nc);
+    const bv = at(views, a.bufferView);
+    const data = bv && Number.isInteger(bv.buffer) ? buffers[bv.buffer] : undefined;
+    if (!(data instanceof ArrayBuffer)) throw damaged(`accessor ${i} names a buffer view that is not there`);
+    const bvOff = bv.byteOffset ?? 0, aOff = a.byteOffset ?? 0;
+    const bvLen = bv.byteLength ?? data.byteLength - bvOff;
+    if (!nat(bvOff) || !nat(bvLen) || bvOff + bvLen > data.byteLength) throw damaged(`buffer view ${a.bufferView} runs past the end of its buffer`);
     const size = Ctor.BYTES_PER_ELEMENT;
     const stride = bv.byteStride || size * nc;
-    // every read inside the buffer (checked once, not met as a DataView RangeError)
-    if (a.count && start + (a.count - 1) * stride + nc * size > data.byteLength) throw damaged(`accessor ${i} reads past the end of its buffer`);
-    const bytes = new DataView(data, start);
+    if (!Number.isInteger(stride) || stride < 1) throw damaged(`buffer view ${a.bufferView} has a byteStride of ${bv.byteStride}`);
+    // every read inside the view (checked once, not met as a DataView RangeError)
+    if (!nat(aOff) || aOff + (a.count ? (a.count - 1) * stride + nc * size : 0) > bvLen) throw damaged(`accessor ${i} reads past the end of its buffer`);
+    const out = new Float64Array(a.count * nc);
+    const bytes = new DataView(data, bvOff + aOff);
     const get = { 1: (o) => (Ctor === Int8Array ? bytes.getInt8(o) : bytes.getUint8(o)), 2: (o) => (Ctor === Int16Array ? bytes.getInt16(o, true) : bytes.getUint16(o, true)),
       4: (o) => (Ctor === Float32Array ? bytes.getFloat32(o, true) : bytes.getUint32(o, true)) }[size];
     for (let e = 0; e < a.count; e++) {
@@ -559,31 +654,50 @@ async function parseGLTF(buf, format, base, files) {
   };
   // each material's colour: baseColorFactor, times its base texture's average
   // colour when it has one and the image can be decoded here
-  const matColour = await Promise.all((json.materials || []).map(async (mat) => {
-    const pbr = mat.pbrMetallicRoughness || {};
-    const f = pbr.baseColorFactor ? linearToSrgb(pbr.baseColorFactor) : null;
-    const tex = pbr.baseColorTexture ? await textureAverage(json, buffers, pbr.baseColorTexture.index, files) : null;
+  const matColour = await Promise.all(list(json.materials, '"materials"').map(async (mat) => {
+    const pbr = (isObj(mat) && isObj(mat.pbrMetallicRoughness) && mat.pbrMetallicRoughness) || {};
+    const f = Array.isArray(pbr.baseColorFactor) ? linearToSrgb(pbr.baseColorFactor) : null;
+    const tex = isObj(pbr.baseColorTexture) ? await textureAverage(json, buffers, pbr.baseColorTexture.index, files) : null;
     if (!tex) return f;
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
   }));
-  const bodies = [];
-  // the node tree walked once per path: a node among its own ancestors (a cycle), a missing
-  // node, or a tree deeper than 64 is a damaged file (a self-child overflowed the stack)
-  const onPath = new Set();
-  const nodeOf = (ni, parent, depth) => {
-    const nd = json.nodes && json.nodes[ni];
+  const si = json.scene ?? 0;
+  const scene = json.scenes !== undefined ? at(list(json.scenes, '"scenes"'), si) : { nodes: nodes.map((_, i) => i) };
+  if (!scene) throw damaged(`its scene ${si} is not there`);
+  const roots = list(scene.nodes, `scene ${si}'s "nodes"`);
+  // the node tree counted before it is built: a node among its own ancestors (a cycle), a
+  // missing node, or a tree deeper than 64 is a damaged file (a self-child overflowed the
+  // stack), and a node shared past the caps is refused (each node holding the next twice,
+  // 40 deep, was 2^40 visits)
+  const meshTris = (mi) => {
+    const me = at(meshDefs, mi);
+    let n = 0;
+    for (const pr of (me && Array.isArray(me.primitives) ? me.primitives : [])) {
+      if (!isObj(pr) || (pr.mode ?? 4) !== 4) continue;
+      const a = pr.indices !== undefined ? at(accessors, pr.indices) : isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
+      if (a && nat(a.count)) n += Math.floor(a.count / 3);
+    }
+    return n;
+  };
+  placements(roots, (ni) => {
+    const nd = at(nodes, ni);
     if (!nd) throw damaged(`node ${ni} is not there`);
-    if (onPath.has(ni)) throw damaged(`node ${ni} is its own ancestor`);
-    if (depth > 64) throw damaged('its node tree is more than 64 deep');
-    onPath.add(ni);
-    const m = mul4(parent, localMatrix(nd));
+    return list(nd.children, `node ${ni}'s "children"`);
+  }, (ni) => (nodes[ni].mesh !== undefined ? meshTris(nodes[ni].mesh) : 0), 64,
+  (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), base);
+  const bodies = [];
+  const nodeOf = (ni, parent) => {
+    const nd = nodes[ni];
+    const m = mul4(parent, localMatrix(nd, (k, n) => damaged(`node ${ni}'s "${k}" is not a list of ${n} numbers`)));
     const n = { name: nd.name || `node ${ni}`, meshes: [], children: [] };
     if (nd.mesh !== undefined) {
-      const me = json.meshes && json.meshes[nd.mesh];
+      const me = at(meshDefs, nd.mesh);
       if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
-      (me.primitives || []).forEach((pr, k) => {
+      list(me.primitives, `mesh ${nd.mesh}'s "primitives"`).forEach((pr, k) => {
+        if (!isObj(pr)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} is not an object`);
         if ((pr.mode ?? 4) !== 4) return; // points, lines, strips: not drawn
         if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${base} uses Draco compression, which this viewer does not decode`);
+        if (!isObj(pr.attributes)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} has no attributes`);
         const P = acc(pr.attributes.POSITION);
         const nv = P.length / 3;
         const pos = new Array(nv * 3);
@@ -599,20 +713,17 @@ async function parseGLTF(buf, format, base, files) {
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
         n.meshes.push(bodies.length);
         bodies.push({ name: me.primitives.length > 1 ? `${me.name || n.name} ${k + 1}` : (me.name || n.name), pos, tri: idx,
-          color: pr.material !== undefined ? matColour[pr.material] || null : null });
+          color: Number.isInteger(pr.material) ? matColour[pr.material] || null : null });
       });
     }
-    for (const c of nd.children || []) n.children.push(nodeOf(c, m, depth + 1));
-    onPath.delete(ni);
+    for (const c of nd.children || []) n.children.push(nodeOf(c, m));
     return n;
   };
-  const scene = json.scenes ? json.scenes[json.scene || 0] : { nodes: (json.nodes || []).map((_, i) => i) };
-  if (!scene) throw damaged(`its scene ${json.scene || 0} is not there`);
-  const root = { name: base, meshes: [], children: (scene.nodes || []).map((ni) => nodeOf(ni, IDENT, 0)) };
+  const root = { name: base, meshes: [], children: roots.map((ni) => nodeOf(ni, IDENT)) };
   checkBodies(base, bodies);
   const meshes = bodies.map(weld);
   if (!meshes.length) throw new Error(`${base} has no triangles to show`);
-  return { units: 'mm', meshes, root, sourceUnits: 'm' };
+  return { units: MM, meshes, root, sourceUnits: 'm' };
 }
 // A texture's average colour (sRGB, 0..1), or null where the image cannot be
 // decoded here (no createImageBitmap / OffscreenCanvas: Node, an old browser)
@@ -651,11 +762,18 @@ function mul4(a, b) {
   for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) r[c * 4 + rr] = a[rr] * b[c * 4] + a[4 + rr] * b[c * 4 + 1] + a[8 + rr] * b[c * 4 + 2] + a[12 + rr] * b[c * 4 + 3];
   return r;
 }
-function localMatrix(nd) {
-  if (nd.matrix) return nd.matrix;
-  const [tx, ty, tz] = nd.translation || [0, 0, 0];
-  const [qx, qy, qz, qw] = nd.rotation || [0, 0, 0, 1];
-  const [sx, sy, sz] = nd.scale || [1, 1, 1];
+// (bad(key, n) -> the Error for a key that is not a list of n numbers)
+function localMatrix(nd, bad) {
+  const v = (k, n, d) => {
+    const x = nd[k];
+    if (x === undefined) return d;
+    if (!Array.isArray(x) || x.length !== n) throw bad(k, n);
+    return x;
+  };
+  if (nd.matrix !== undefined) return v('matrix', 16);
+  const [tx, ty, tz] = v('translation', 3, [0, 0, 0]);
+  const [qx, qy, qz, qw] = v('rotation', 4, [0, 0, 0, 1]);
+  const [sx, sy, sz] = v('scale', 3, [1, 1, 1]);
   const xx = qx * qx, yy = qy * qy, zz = qz * qz, xy = qx * qy, xz = qx * qz, yz = qy * qz, wx = qw * qx, wy = qw * qy, wz = qw * qz;
   return [(1 - 2 * (yy + zz)) * sx, 2 * (xy + wz) * sx, 2 * (xz - wy) * sx, 0,
     2 * (xy - wz) * sy, (1 - 2 * (xx + zz)) * sy, 2 * (yz + wx) * sy, 0,

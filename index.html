@@ -540,7 +540,7 @@
   <span class="title">CAD viewer</span>
   <!-- narrow layout: an icon, named by aria-label -->
   <button id="panelbtn" aria-expanded="false" aria-controls="parts" aria-label="Parts" title="Parts list"><span aria-hidden="true">☰</span><span class="lbl">Parts</span></button>
-  <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin,.dxf,.dwg,.zip" hidden></label>
+  <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" multiple hidden></label>
   <!-- ?list=: the models a site offers, by name; beside Open… (main.js moves it with Open…) -->
   <select id="modellist" autocomplete="off" hidden aria-label="Model" title="Open another model from the list this page was given"></select>
   <!-- A .menu shows its controls in the row where they fit, and folds them
@@ -555,7 +555,7 @@
          under its heading where they fold into File), Share, Save -->
     <div class="menu-panel" id="filepanel" aria-label="File">
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
-      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple accept=".stp,.step,.igs,.iges,.brep,.cadmesh,.gz,.stl,.obj,.mtl,.ply,.off,.3mf,.glb,.gltf,.bin" hidden>
+      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
       <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><span class="split"><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at the size and background chosen in the picture options (▾), without the hover highlight, with Measure's results drawn in (P)">Save picture</button><button id="picmore" class="mini" autocomplete="off" disabled aria-expanded="false" aria-controls="picopts" aria-label="Picture options" title="Picture options: size, background, selection">▾</button></span>
       <div id="picopts" role="group" aria-label="Picture options" hidden>
@@ -639,11 +639,10 @@
       <div id="clearval" role="status"></div></div>
     <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
       <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the unit the file was drawn in, mm when it does not say (a choice other than Auto is remembered in this browser)">
-        <option value="auto">Auto</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
+        <option value="auto">Auto</option>
       </select>
       <span id="meshunitrow" hidden>; this file is in
       <select id="meshunit" autocomplete="off" aria-label="The unit this file is in" title="This mesh file stores no unit: it was read as mm. Pick the unit it was made in and it is read again at that size">
-        <option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
       </select></span></div></div>
   <!-- the flat sheet bodies a board carries (pads, silkscreen, labels: the
        b-rep kind "sheet"), shown or hidden in one go -->

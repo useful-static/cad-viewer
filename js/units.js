@@ -18,9 +18,24 @@ export const LENGTH_MM = {
   mi: 1609344, AU: 1.495978707e14, ly: 9.4607304725808e18, pc: 3.0856775814913673e19,
 };
 
-export const DISPLAY_UNITS = ['mm', 'cm', 'm', 'in'];
+// A unit as it is written for a reader: the short names above that are not plain letters
+// spelled as typeset ("um" -> "µm")
+const SPELLED = { um: 'µm', uin: 'µin' };
+export const unitWord = (u) => SPELLED[u] || u;
+
+// The units lengths may be shown in, one row each: its decimals for a measurement (a size or
+// a section position one fewer), and its system (an area, volume and mass follow it: in², lb).
+// main.js builds both unit pickers from this table.
+const DISPLAY = [
+  { id: 'mm', decimals: 2, system: 'metric' },
+  { id: 'cm', decimals: 3, system: 'metric' },
+  { id: 'm', decimals: 4, system: 'metric' },
+  { id: 'in', decimals: 3, system: 'imperial' },
+];
+export const DISPLAY_UNITS = DISPLAY.map((d) => d.id);
 export const MM_PER = Object.fromEntries(DISPLAY_UNITS.map((u) => [u, LENGTH_MM[u]]));
-const DECIMALS = { mm: 2, cm: 3, m: 4, in: 3 };
+const DECIMALS = Object.fromEntries(DISPLAY.map((d) => [d.id, d.decimals]));
+const imperial = (u) => DISPLAY.find((d) => d.id === u)?.system === 'imperial';
 
 // The display unit Auto gives for a declared unit: itself when it is one of
 // the four; the nearest of them in the same system otherwise; mm when the
@@ -53,8 +68,8 @@ export function fmtNum(mm, kind, unit) {
 export const fmtLength = (mm, kind, unit) => `${fmtNum(mm, kind, unit)} ${unit}`;
 
 export function fmtArea(mm2, unit) {
-  if (unit === 'in') {
-    const in2 = mm2 / 25.4 ** 2;
+  if (imperial(unit)) {
+    const in2 = mm2 / LENGTH_MM.in ** 2;
     return in2 < 1e4 ? `${sig4(in2)} in²` : `${sig4(in2 / 144)} ft²`;
   }
   if (mm2 < 1e4) return `${sig4(mm2)} mm²`;
@@ -63,8 +78,8 @@ export function fmtArea(mm2, unit) {
 }
 
 export function fmtVolume(mm3, unit) {
-  if (unit === 'in') {
-    const in3 = mm3 / 25.4 ** 3;
+  if (imperial(unit)) {
+    const in3 = mm3 / LENGTH_MM.in ** 3;
     return in3 < 1e5 ? `${sig4(in3)} in³` : `${sig4(in3 / 1728)} ft³`;
   }
   if (mm3 < 1e3) return `${sig4(mm3)} mm³`;
@@ -72,8 +87,8 @@ export function fmtVolume(mm3, unit) {
   return `${sig4(mm3 / 1e9)} m³`;
 }
 
-// grams -> g or kg, or lb when the display unit is in
+// grams -> g or kg, or lb when the display unit is imperial
 export function fmtMass(g, unit) {
-  if (unit === 'in') return `${sig4(g / 453.59237)} lb`;
+  if (imperial(unit)) return `${sig4(g / 453.59237)} lb`;
   return g < 1000 ? `${sig4(g)} g` : `${sig4(g / 1000)} kg`;
 }

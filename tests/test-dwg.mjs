@@ -77,6 +77,15 @@ t('pairsToDXF writes control characters and carets in caret notation, and parseD
   assert.equal(parseDXF(s).texts[0].text, parseDXF(P).texts[0].text);
 });
 
+t('an R2000 file header listing 0xffffffff sections is refused at once, in words', () => {
+  const b = new Uint8Array(0x400);
+  b.set(new TextEncoder().encode('AC1015'));
+  new DataView(b.buffer).setUint32(0x15, 0xffffffff, true);
+  const t0 = Date.now();
+  assert.throws(() => readDWG(b), /a damaged DWG: its file header lists 4294967295 sections/);
+  assert.ok(Date.now() - t0 < 1000);
+});
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };
@@ -108,14 +117,15 @@ for (const [rel, f] of Object.entries(files)) {
     t('R2004: a byte changed in the encrypted file header fails its CRC-32 (must fire)', () => {
       const bad = b.slice();
       bad[0x80 + 0x30] ^= 0x01;
-      let d2 = null;
-      try { d2 = readDWG(bad); } catch { /* a header this broken may not open at all: also a failure seen */ }
-      assert.ok(!d2 || d2.failures.some((x) => x.startsWith('file header CRC-32')));
+      // the file still opens (one byte of the header's padding) and the CRC-32 says it changed;
+      // any throw, an engine message included, fails this arm
+      const d2 = readDWG(bad);
+      assert.ok(d2.failures.some((x) => x.startsWith('file header CRC-32')), JSON.stringify(d2.failures));
     });
   }
   if (rel === 'R2007') {
     t('R2007: a truncated file is refused, not drawn from garbage (must fire)', () => {
-      assert.throws(() => readDWG(b.slice(0, Math.floor(b.length / 3))));
+      assert.throws(() => readDWG(b.slice(0, Math.floor(b.length / 3))), /^Error: a damaged or truncated DWG/);
     });
   }
 }

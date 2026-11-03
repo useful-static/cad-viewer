@@ -52,9 +52,7 @@ onmessage = async (ev) => {
     const result = occt.ReadFile(format, new Uint8Array(buffer), tess);
     const t1 = performance.now();
     post('packing mesh');
-    const model = fmt.occtResultToModel(result);
-    model.sourceUnits = declared;
-    model.angularDeflection = tess.angularDeflection;
+    const model = fmt.conversionModel(result, { sourceUnits: declared, angularDeflection: tess.angularDeflection });
     const out = fmt.encodeCadmesh(model);
     postMessage({ type: 'done', buffer: out, ms: Math.round(t1 - t0), unmeshedFaces: model.unmeshedFaces }, [out]);
   } catch (e) {

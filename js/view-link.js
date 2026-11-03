@@ -24,6 +24,7 @@
 // edited by hand still opens the model.
 
 import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull } from './orient.js';
+import { STYLE_IDS } from './styles.js';
 
 const num = (v) => Number(v.toPrecision(6));
 // The target to a step a millionth of the distance: its error must be small
@@ -153,7 +154,7 @@ export function decodeView(s) {
     } else if (k === 'p') out.ortho = val === 'o';
     else if (k === 'w') { const a = Number(val); if (a > 0.05 && a < 20) out.aspect = a; }
     else if (k === 'u') out.orient = val === 'z' ? Z_UP_ORIENT : val === 'y' ? DEFAULT_ORIENT : orientOrNull(val);
-    else if (k === 's' && /^[a-z]+$/.test(val)) out.style = val;
+    else if (k === 's' && STYLE_IDS.includes(val)) out.style = val;
     else if (k === 'x') {
       const [axis, t, f] = val.split(',');
       const tn = Number(t);

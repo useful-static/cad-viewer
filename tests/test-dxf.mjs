@@ -304,5 +304,62 @@ test('a rational quadratic spline of a quarter circle lies on the circle (weight
   for (let k = 0; k < p.length; k += 2) assert.ok(Math.abs(Math.hypot(p[k], p[k + 1]) - 1) < 1e-9, `radius ${Math.hypot(p[k], p[k + 1])}`);
 });
 
+// --- hostile drawings (review round 2): each fails fast in words, or draws within a budget ---
+const text = (blocks, ents) => ['0', 'SECTION', '2', 'BLOCKS', ...blocks, '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES', ...ents, '0', 'ENDSEC', '0', 'EOF'].join('\n');
+const ENGINE = /Cannot read|is not a function|RangeError|Invalid array length|call stack|out of bounds|outside the bounds/;
+const fast = (fn, ms) => { const t0 = Date.now(); let err = null; try { fn(); } catch (e) { err = e; } const dt = Date.now() - t0; assert.ok(dt < ms, `${dt} ms`); return err; };
+test('blocks of empty blocks inserted many times: refused in words, fast (the walk is budgeted)', () => {
+  const blocks = [];
+  for (let k = 0; k < 17; k++) {
+    blocks.push('0', 'BLOCK', '2', `B${k}`, '10', '0', '20', '0');
+    if (k < 16) for (let j = 0; j < 10; j++) blocks.push('0', 'INSERT', '2', `B${k + 1}`, '10', '0', '20', '0');
+    blocks.push('0', 'ENDBLK');
+  }
+  const e = fast(() => parseDXF(text(blocks, ['0', 'INSERT', '2', 'B0', '10', '0', '20', '0'])), 10000);
+  assert.ok(e && /too large to draw here/.test(e.message) && !ENGINE.test(e.message), String(e && e.message));
+});
+test('a HATCH counting more vertices or edges than it holds: refused as damaged, fast', () => {
+  for (const g of [['92', '2', '72', '0', '73', '1', '93', '1000000000000'], ['92', '0', '93', '1000000000000']]) {
+    const e = fast(() => parseDXF(text([], ['0', 'HATCH', '70', '1', '91', '1', ...g])), 1000);
+    assert.ok(e && /damaged HATCH/.test(e.message) && !ENGINE.test(e.message), String(e && e.message));
+  }
+});
+test('a HATCH boundary of 200,000 vertices draws (appended, not spread onto the stack)', () => {
+  const g = ['0', 'HATCH', '70', '1', '91', '1', '92', '2', '72', '0', '73', '1', '93', '200000'];
+  for (let i = 0; i < 200000; i++) g.push('10', String(i % 1000), '20', String((i / 1000) | 0));
+  const d = parseDXF(text([], g));
+  assert.equal(d.paths.length, 1);
+  assert.equal(d.paths[0].pts.length, 400002, 'every vertex, and the first again to close it');
+});
+test('a SPLINE of degree -1 or 1.5 draws its control polygon, no engine error', () => {
+  for (const deg of [['71', '-1', '40', '0', '40', '1'], ['71', '1.5', '40', '0', '40', '0', '40', '1', '40', '1', '40', '1']]) {
+    const d = parseDXF(text([], ['0', 'SPLINE', ...deg, '10', '0', '20', '0', '10', '1', '20', '1']));
+    assert.deepEqual([...d.paths[0].pts], [0, 0, 1, 1]);
+  }
+});
+test('3000 viewports onto empty space over 20,000 lines: fast (a viewport passes over what it cannot see)', () => {
+  const e = [];
+  for (let i = 0; i < 20000; i++) e.push('0', 'LINE', '8', '0', '10', String(i), '20', '0', '11', String(i + 1), '21', '1');
+  for (let i = 0; i < 3000; i++) e.push('0', 'VIEWPORT', '67', '1', '69', String(i + 2), '10', '0', '20', '0', '40', '1', '41', '1', '45', '1', '12', '-1e9', '22', '-1e9');
+  let d;
+  const err = fast(() => { d = parseDXF(['0', 'SECTION', '2', 'ENTITIES', ...e, '0', 'ENDSEC', '0', 'EOF'].join('\n')); }, 3000);
+  assert.equal(err, null, String(err && err.message));
+  assert.equal(d.paths.length, 20000);
+  // only the frames: no model line is in view
+  assert.ok(d.layouts[0].paths.every((p) => p.frame));
+});
+test('a viewport still draws what it does see (the cull keeps a line inside its view)', () => {
+  const e = ['0', 'LINE', '8', '0', '10', '0', '20', '0', '11', '1', '21', '1',
+    '0', 'VIEWPORT', '67', '1', '69', '2', '10', '0', '20', '0', '40', '4', '41', '4', '45', '4', '12', '0', '22', '0'];
+  const d = parseDXF(['0', 'SECTION', '2', 'ENTITIES', ...e, '0', 'ENDSEC', '0', 'EOF'].join('\n'));
+  assert.equal(d.layouts[0].paths.filter((p) => !p.frame).length, 1);
+});
+test('MTEXT stacking on 60,000 separators with no ";" is linear', () => {
+  fast(() => mtextPlain('x\\S' + '#'.repeat(60000)), 500);
+  assert.equal(mtextPlain('\\S1#2;'), '1/2');
+  assert.equal(mtextPlain('\\S1/2;'), '1/2');
+  assert.equal(mtextPlain('\\Sa^b;'), 'a/b');
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

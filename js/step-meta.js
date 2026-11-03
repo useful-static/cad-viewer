@@ -7,11 +7,32 @@
 //
 // Pure ES module, no DOM.
 
-// text: the STEP file as text (latin1 is fine: the encodings are ASCII).
+// file: the STEP file's bytes (Uint8Array or ArrayBuffer), or its text (latin1 is fine: the
+// encodings are ASCII). Bytes are read in slices cut at a record's end, as js/source-units.js
+// reads them: a whole file of over ~512 MB as one string is more than a browser makes, and the
+// load failed there before the converter saw the file.
 // Returns Map(name -> { id, description }) of the products whose id or
 // description says more than the name does.
-export function stepProducts(text) {
+const SLICE = 4 << 20;
+export function stepProducts(file) {
   const out = new Map();
+  if (typeof file === 'string') { scan(file, out); return out; }
+  const u8 = file instanceof Uint8Array ? file : new Uint8Array(file);
+  const dec = new TextDecoder('latin1');
+  let carry = '';
+  for (let at = 0; at < u8.byteLength; at += SLICE) {
+    const last = at + SLICE >= u8.byteLength;
+    const text = carry + dec.decode(u8.subarray(at, Math.min(u8.byteLength, at + SLICE)));
+    // (a record cut by the slice waits for the next; a string holding ';' may be cut there,
+    // and a product named so is missed, which costs only its metadata)
+    const cut = last ? text.length : text.lastIndexOf(';') + 1;
+    scan(text.slice(0, cut), out);
+    carry = text.slice(cut);
+    if (carry.length > SLICE) carry = ''; // no ';' in a whole slice: not records
+  }
+  return out;
+}
+function scan(text, out) {
   const re = /\bPRODUCT\s*\(\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'/gi;
   let m;
   while ((m = re.exec(text))) {
@@ -21,12 +42,17 @@ export function stepProducts(text) {
     if (!useful(id) && !useful(description)) continue;
     if (!out.has(name)) out.set(name, { id: useful(id) ? id : '', description: useful(description) ? description : '' });
   }
-  return out;
 }
 
-// a STEP string's escapes undone
+// a STEP string's escapes undone (a \X2\ run built a code unit at a time: spread into one call,
+// 300k of them overflowed the stack)
 export function decodeStepString(s) {
+  const utf16 = (_, h) => {
+    let t = '';
+    for (let k = 0; k < h.length; k += 4) t += String.fromCharCode(parseInt(h.slice(k, k + 4), 16));
+    return t;
+  };
   return s.replace(/''/g, "'")
-    .replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gi, (_, h) => String.fromCharCode(...h.match(/.{4}/g).map((x) => parseInt(x, 16))))
+    .replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gi, utf16)
     .replace(/\\X\\([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }

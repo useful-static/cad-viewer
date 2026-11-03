@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
-import { crc32, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
+import { EXPORTS, crc32, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
 
 let passed = 0;
 let failed = 0;
@@ -100,6 +100,17 @@ await test('GLB: the header and chunks; per body a node, positions in metres wit
   const cv = j.bufferViews[ca.bufferView];
   assert.deepEqual([...g.slice(binOff + cv.byteOffset, binOff + cv.byteOffset + 4)], [0, 0, 255, 255]);
   for (const v of j.bufferViews) assert.equal(v.byteOffset % 4, 0);
+});
+
+await test('EXPORTS: each row writes its own format through the one call shape', async () => {
+  const magic = { stl: (b) => b.length === 84 + 50 * 3, '3mf': (b) => b[0] === 0x50 && b[1] === 0x4b, glb: (b) => new TextDecoder().decode(b.slice(0, 4)) === 'glTF' };
+  for (const [fmt, row] of Object.entries(EXPORTS)) {
+    const b = await row.write(model, [1, 2], IDENT, { names: ['plate', 'tri'], base: 'plate' });
+    assert.ok(magic[fmt](b), fmt);
+    assert.match(row.type, /^model\//);
+    assert.ok(row.up === 'z' || row.up === 'y');
+  }
+  assert.deepEqual(Object.keys(EXPORTS).sort(), Object.keys(magic).sort());
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

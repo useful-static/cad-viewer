@@ -29,6 +29,7 @@
 
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
+import { STYLE_IDS } from './styles.js';
 
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
@@ -142,7 +143,6 @@ export function entryByName(entries, name) {
 //            over the chips), unless a view link brings its own view; Show all
 //            brings them back. Names as a tour names parts (js/tour.js
 //            resolveParts: a label, a node, a body, a path, or "#<id>")
-export const STYLE_IDS = ['shaded', 'edges', 'hidden', 'hiddengrey', 'wire', 'xray'];
 function extras(file, v, listUrl) {
   const out = {};
   const bad = (field, why) => new Error(`"${file}": its ${field} ${why}`);
