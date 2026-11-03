@@ -32,7 +32,10 @@ export function draftToTour(draft, modelUrl = null) {
   if (draft.orient) out.orient = draft.orient;
   out.mode = draft.mode;
   if (draft.loop) out.loop = true;
-  out.steps = draft.steps.map((s) => Object.fromEntries(STEP_KEYS.filter((k) => s[k] !== undefined && s[k] !== '').map((k) => [k, s[k]])));
+  // (each field as the file writes it: a section turned off is "off" in a file, { axis: 'off' }
+  // once read)
+  const asFile = (k, v) => (k === 'section' && v && v.axis === 'off' ? 'off' : v);
+  out.steps = draft.steps.map((s) => Object.fromEntries(STEP_KEYS.filter((k) => s[k] !== undefined && s[k] !== '').map((k) => [k, asFile(k, s[k])])));
   return out;
 }
 

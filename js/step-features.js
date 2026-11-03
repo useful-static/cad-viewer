@@ -39,9 +39,13 @@ function count(text, f) {
   f.bounds += (text.match(/=\s*FACE_(?:OUTER_)?BOUND\s*\(/g) || []).length;
   f.bsplines += (text.match(/B_SPLINE_SURFACE/g) || []).length;
   // ADVANCED_FACE('name',(#b1,#b2,...),#surface,.T.): the bound list is the
-  // first parenthesised list after the name
-  const re = /=\s*ADVANCED_FACE\s*\(\s*'(?:[^']|'')*'\s*,\s*\(([^)]*)\)/g;
-  for (let m; (m = re.exec(text));) {
+  // first parenthesised list after the name. Read once per record, anchored at its start (a
+  // regex over the whole slice ran to the next ')' from every match start: a 1 MB file, 56 s)
+  const re = /^\s*#\d+\s*=\s*ADVANCED_FACE\s*\(\s*'(?:[^']|'')*'\s*,\s*\(([^)]*)\)/;
+  for (const rec of text.split(';')) {
+    if (!rec.includes('ADVANCED_FACE')) continue;
+    const m = re.exec(rec);
+    if (!m) continue;
     const k = m[1].split(',').length;
     f.faces++;
     f.bounds15 += k * Math.sqrt(k);

@@ -5,11 +5,7 @@
 import assert from 'node:assert/strict';
 import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, contrast, defaultStyle, edgePasses, styleFor, toggleEdges } from '../js/styles.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 test('six styles; the paper ones are Hidden line, Hidden grey and Wire; outlines in those and X-ray', () => {
   assert.equal(STYLES.length, 6);
@@ -58,5 +54,4 @@ test('the paper colours meet the plan\'s contrast figures', () => {
   for (const [v, h] of Object.values(PAPER_EDGES)) assert.ok(contrast(h, PAPER) < contrast(v, PAPER));
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

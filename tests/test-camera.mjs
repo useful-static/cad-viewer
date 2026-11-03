@@ -9,11 +9,7 @@ import {
 import { lookAt, ortho, perspective } from '../js/mat4.js';
 import { VIEW_PRESETS } from '../js/orient.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 // screen-up of the rendered view, as the view matrix carries it
@@ -451,5 +447,4 @@ test('levelOrbitBy: no roll, tilts as orbitBy does, stops short of the pole', ()
   assert.ok(dot(camDir(lvl), up) < Math.sin(Math.PI / 2 - 0.019) && dot(camDir(lvl), up) > 0.99);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

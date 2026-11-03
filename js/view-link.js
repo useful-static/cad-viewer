@@ -62,7 +62,20 @@ export function parseRuns(s, max = 1e6) {
 }
 
 export const MAX_NAMED = 32;
-const EXPLODE_MODES = ['assembly', 'x', 'y', 'z'];
+// A note's text, at most this long, wherever it is written (a model list's notes, a tour's
+// callouts, a view link, Measure > Note)
+export const NOTE_TEXT_MAX = 200;
+// A note's place, one rule for lists and tours: its part when it names one (text with more than
+// spaces), else its point [x, y, z]; null for neither
+export function notePlace(x) {
+  if (typeof x.part === 'string' && x.part.trim()) return { part: x.part.trim() };
+  if (Array.isArray(x.at) && x.at.length === 3 && x.at.every(Number.isFinite)) return { at: x.at.slice() };
+  return null;
+}
+
+// how Explode pulls the parts apart: by assembly, or along one model axis (a view link's
+// "e:" and a tour step's "explodeAlong" name one of these)
+export const EXPLODE_MODES = ['assembly', 'x', 'y', 'z'];
 export const MAX_NOTES = 20;
 
 // A body's key: its label, numbered from its second repeat ("A › SOLID #2"),
@@ -171,7 +184,7 @@ export function decodeView(s) {
         const q = s.split(',');
         const p = q.slice(0, 3).map(Number);
         if (q.length !== 4 || !p.every(Number.isFinite) || !/^[A-Za-z0-9_-]+$/.test(q[3])) return [];
-        try { return [{ p, text: unb64u(q[3]).slice(0, 200) }]; } catch { return []; }
+        try { return [{ p, text: unb64u(q[3]).slice(0, NOTE_TEXT_MAX) }]; } catch { return []; }
       });
     }
     else if (k === 'n') {

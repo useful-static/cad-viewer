@@ -9,11 +9,7 @@ import { CACHE_CAP_BYTES, CACHE_VERSION, cacheKey, evictionPlan, staleKeys } fro
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto; // Node 18 has no global crypto
 
-let passed = 0;
-let failed = 0;
-async function test(name, fn) {
-  try { await fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 const bytes = (s) => new TextEncoder().encode(s).buffer;
 const P = { linearUnit: 'millimeter', linearDeflection: 0.001, angularDeflection: 0.5 };
 
@@ -53,5 +49,4 @@ await test('the cap is generous for a large assembly (the rack is 3.2 MB gzipped
   assert.ok(CACHE_CAP_BYTES >= 100e6);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

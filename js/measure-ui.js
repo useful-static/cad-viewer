@@ -18,6 +18,7 @@ import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid 
 import { faceOfTri, makeCaster } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
+import { NOTE_TEXT_MAX } from './view-link.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const MARK = { vertex: '◆', mid: '▲', centre: '⊙', edge: '―', surface: '•' };
@@ -264,7 +265,7 @@ export function createMeasure(deps) {
     $('measnotetext').hidden = true;
     st.pending = [];
     if (p && text.trim()) {
-      st.results.push({ mode: 'note', pts: [p.p], main: text.trim().slice(0, 200), sub: '', value: null });
+      st.results.push({ mode: 'note', pts: [p.p], main: text.trim().slice(0, NOTE_TEXT_MAX), sub: '', value: null });
       deps.announce(`note: ${text.trim()}`);
     }
     syncRow();

@@ -4,11 +4,7 @@
 import assert from 'node:assert/strict';
 import { aboveBelow, rangesFrom } from '../js/datum.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // a 85 x 56 x 1.6 board at z 0..1.6; a connector overhanging its -x edge by
 // 1.5 mm, standing 7.8 mm above it; a part underneath, 2 mm below
@@ -36,5 +32,4 @@ test('above / below along -y (a file drawn with -y up) and +y', () => {
   assert.equal(up.below, 20 - 30);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

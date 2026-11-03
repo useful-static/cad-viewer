@@ -7,11 +7,7 @@ import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
 import { EXPORTS, crc32, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
 
-let passed = 0;
-let failed = 0;
-async function test(name, fn) {
-  try { await fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // two bodies: a red triangle pair (a 10 x 20 quad at z 0) and a blue triangle
 // at z 5; the second body's indices are absolute, as in a .cadmesh
@@ -113,5 +109,4 @@ await test('EXPORTS: each row writes its own format through the one call shape',
   assert.deepEqual(Object.keys(EXPORTS).sort(), Object.keys(magic).sort());
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

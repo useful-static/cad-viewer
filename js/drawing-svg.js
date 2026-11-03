@@ -8,7 +8,7 @@
 // DOM.
 
 import { circleOf } from './measure-geom.js';
-import { dot } from './vec3.js';
+import { cross, dot } from './vec3.js';
 
 const esc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const n3 = (v) => (Math.abs(v) < 5e-4 ? '0' : v.toFixed(3).replace(/\.?0+$/, ''));
@@ -18,7 +18,7 @@ const n3 = (v) => (Math.abs(v) < 5e-4 ? '0' : v.toFixed(3).replace(/\.?0+$/, '')
 // is the viewer); a: the file's angular deflection (for the circle test);
 // title: a caption. -> { svg, width, height } (mm)
 export function drawingSVG(parts, right, up, { a = 0.5, title = '', margin = 5 } = {}) {
-  const toward = [right[1] * up[2] - right[2] * up[1], right[2] * up[0] - right[0] * up[2], right[0] * up[1] - right[1] * up[0]];
+  const toward = cross(right, up);
   const P = (p) => [dot(p, right), -dot(p, up)];
   const groups = [];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

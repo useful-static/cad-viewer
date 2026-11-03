@@ -123,6 +123,64 @@ function crafted(E, P) {
   b.set(w.bytes(), objAt + 2);
   return b;
 }
+t('R2004: a page map claiming 0x7fffffff bytes is refused before it is checksummed', () => {
+  const b = new Uint8Array(0x400);
+  b.set(new TextEncoder().encode('AC1018'), 0);
+  const h = new Uint8Array(0x6c);
+  h.set(new TextEncoder().encode('AcFssFcAJMB'), 0);
+  new DataView(h.buffer).setUint32(0x54, 0x100, true);
+  let seed = 1;
+  for (let i = 0; i < 0x6c; i++) { seed = (Math.imul(seed, 0x343fd) + 0x269ec3) | 0; b[0x80 + i] = h[i] ^ ((seed >>> 16) & 0xff); }
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0x200, 0x41630e3b, true); dv.setUint32(0x204, 16, true); dv.setUint32(0x208, 0x7fffffff, true);
+  const t0 = Date.now();
+  assert.throws(() => readDWG(b), /a damaged DWG: a system page of 2147483647 bytes runs past the end of the file/);
+  assert.ok(Date.now() - t0 < 500);
+});
+t('R2007: a page map of 1e9 bytes is refused before its blocks are allocated', () => {
+  const b = new Uint8Array(0x1000);
+  b.set(new TextEncoder().encode('AC1021'), 0);
+  const fh = new Uint8Array(3 * 239);
+  const fdv = new DataView(fh.buffer);
+  fdv.setInt32(0x18, -0x110, true);
+  const set64 = (o, v) => { fdv.setUint32(0x20 + o, v % 2 ** 32, true); fdv.setUint32(0x20 + o + 4, Math.floor(v / 2 ** 32), true); };
+  set64(0, 0x70); set64(0x18, 1); set64(0x38, 0); set64(0x50, 1e9); set64(0x58, 16);
+  for (let bl = 0; bl < 3; bl++) for (let j = 0; j < 239; j++) b[0x80 + j * 3 + bl] = fh[bl * 239 + j];
+  const t0 = Date.now();
+  assert.throws(() => readDWG(b), /a damaged DWG: \d+ Reed-Solomon blocks at 0x480 run past the end of the file/);
+  assert.ok(Date.now() - t0 < 500);
+});
+t('an object map pointing 32,000 times into one long run of 0xff: each size is two words at most, fast', () => {
+  // an R2000 file whose map's 32,000 entries land 2 bytes apart in a 64 KB run of 0xff: each
+  // size read ran the run to its end, and its CRC over the rest (128 KB: 22.6 s)
+  const N = 32000, L = 2 * N + 16, R = 0x200;
+  const mcs = (v) => { const out = []; while (v >= 0x40) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128); } out.push(v & 0x3f); return out; };
+  const mcsU = (v) => { const out = []; while (v >= 0x80) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128); } out.push(v); return out; };
+  const hs = [];
+  let left = N, loc0 = R, handle = 1;
+  while (left > 0) {
+    const n = Math.min(left, 30000); left -= n;
+    const body = [...mcsU(handle), ...mcs(loc0)];
+    for (let k = 1; k < n; k++) body.push(0x01, 0x02);
+    handle += n; loc0 += 2 * n;
+    const size = body.length + 2;
+    hs.push((size >> 8) & 255, size & 255, ...body, 0, 0);
+  }
+  hs.push(0, 2, 0, 0);
+  const M = R + L + 64;
+  const b = new Uint8Array(M + hs.length + 64);
+  b.set(new TextEncoder().encode('AC1015'), 0);
+  b[0x15] = 3;
+  const dv = new DataView(b.buffer);
+  const loc = (k, at, size) => { const o = 0x19 + 9 * k; b[o] = k; dv.setUint32(o + 1, at, true); dv.setUint32(o + 5, size, true); };
+  loc(0, 0x140, 0x40); loc(1, 0x100, 0x20); loc(2, M, hs.length);
+  b.fill(0xff, R, R + L);
+  b.set(hs, M);
+  const t0 = Date.now();
+  const d = readDWG(b);
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+  assert.equal(d.objects.size, 0);
+});
 t('an object\'s count past its own end stops at the object, and a map naming it 20,000 times reads it once', () => {
   const t0 = Date.now();
   const d = readDWG(crafted(20000, 1000000));
@@ -171,7 +229,7 @@ for (const [rel, f] of Object.entries(files)) {
   }
   if (rel === 'R2007') {
     t('R2007: a truncated file is refused, not drawn from garbage (must fire)', () => {
-      assert.throws(() => readDWG(b.slice(0, Math.floor(b.length / 3))), /^Error: a damaged or truncated DWG/);
+      assert.throws(() => readDWG(b.slice(0, Math.floor(b.length / 3))), /^Error: a damaged (or truncated )?DWG/);
     });
   }
 }

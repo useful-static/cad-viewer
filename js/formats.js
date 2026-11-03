@@ -24,7 +24,8 @@ export const FORMATS = [
   { label: 'PLY', ext: ['ply'], kind: 'mesh', magic: true },
   { label: 'OFF', ext: ['off'], kind: 'mesh' },
   { label: '3MF', ext: ['3mf'], kind: 'mesh', magic: true, as: 'zip' },
-  { label: 'glTF', ext: ['glb', 'gltf'], kind: 'mesh' },
+  { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true },
+  { label: 'glTF', ext: ['gltf'], kind: 'mesh' },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
   { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true },
   { label: 'zip', ext: ['zip'], kind: 'zip', magic: true },
@@ -104,7 +105,7 @@ export function sniffFormat(bytes) {
 export function opensText() {
   const of = (kind) => FORMATS.filter((f) => f.kind === kind);
   const cad = of('cad').map((f) => `${f.label} (${f.ext.map((e) => `.${e}`).join(', ')})`);
-  const mesh = of('mesh').map((f) => (f.label === 'glTF' ? 'glTF / GLB' : f.label));
+  const mesh = of('mesh').map((f) => f.label);
   const twoD = of('2d').map((f) => (f.label === 'DWG' ? 'DWG (R13 to 2018)' : f.label));
   return `open a ${cad.slice(0, -1).join(', ')}, ${cad[cad.length - 1]} or .cadmesh file, a mesh (${mesh.join(', ')}), a 2D ${twoD.join(' or ')}, or a zip of one`;
 }

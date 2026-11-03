@@ -10,11 +10,7 @@ import assert from 'node:assert/strict';
 import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
 import { setColours } from '../set-colours.mjs';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const quad = (name, dx) => ({
   name, color: [0.5, 0.5, 0.5], normals: null, colors: null,
@@ -63,5 +59,4 @@ test('the encoder keeps "recolour" (what split-board.mjs writes through)', () =>
   assert.equal(decodeCadmesh(none).header.recolour, undefined);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

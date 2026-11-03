@@ -7,11 +7,7 @@ import { readFileSync } from 'node:fs';
 import { DEFAULT_ORIENT, ISO, PORTRAIT, VIEWS as VIEW_ROWS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
 import { camDir, camUp, qMul, quatFromView } from '../js/camera.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 const close = (a, b, msg) => a.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 1e-9, `${msg}: ${a} vs ${b}`));
 // a preset's camera in an orientation, as main.js composes it
 const preset = (o, yaw, pitch) => ({ q: qMul(orientQuat(o), quatFromView(yaw, pitch, 'y')) });
@@ -107,5 +103,4 @@ test('the views table: unique ids and keys, opposites that point back, and the p
   assert.ok(!/data-view=|data-fmt=/.test(html), 'index.html carries no view or export button of its own');
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

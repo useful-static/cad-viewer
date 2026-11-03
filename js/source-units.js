@@ -47,12 +47,16 @@ export function stepUnits(u8) {
   if (!/ISO-10303-21/.test(head)) return null;
   const units = new Map(); // id -> record text: units, measures, contexts
   const used = new Set(); // context ids a shape representation names
-  // only records naming a unit or a shape representation are kept
-  const re = /#(\d+)\s*=\s*([^;]*?(?:UNIT|SHAPE_REPRESENTATION)[^;]*);/g;
+  // only records naming a unit or a shape representation are kept. Each record is read once, as
+  // the text between two ';' (a regex run over the whole slice rescanned to the next ';' from
+  // every "#n=" inside one record: a 1 MB file took 112 s)
+  const head1 = /^\s*#(\d+)\s*=\s*([\s\S]*)$/;
   // (in slices cut at a record's end: js/step-text.js)
   forEachStepSlice(u8, (slice) => {
-    const text = flat(slice);
-    for (let m; (m = re.exec(text));) {
+    for (const rec of flat(slice).split(';')) {
+      if (!/UNIT|SHAPE_REPRESENTATION/.test(rec)) continue;
+      const m = head1.exec(rec);
+      if (!m) continue;
       const body = m[2];
       // REPRESENTATION(name, items, context): the context is the last argument.
       // CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and the relationships are not

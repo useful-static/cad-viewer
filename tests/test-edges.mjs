@@ -8,11 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { EDGE_STRIDE, SIL_STRIDE, bodyTable, buildEdges, edgeInstances, silhouetteInstances } from '../js/edges.js';
 import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // one body from faces, each a list of quads [p0, p1, p2, p3] (CCW seen from
 // outside) sharing vertices within the face only
@@ -216,5 +212,4 @@ test('one-triangle faces and a triangle soup finish: no hash table fills', () =>
   }
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

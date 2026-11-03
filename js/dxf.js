@@ -109,7 +109,18 @@ function records(ps, from, to) {
   }
   return out;
 }
-const get = (r, c, d) => { const p = r.g.find((x) => x[0] === c); return p ? p[1].trim() : d; };
+// A record's first value of each code, indexed once (on first use, the record being complete):
+// a block's entity is visited once per insert, and a scan of its groups for each of the dozen
+// codes read per visit cost groups x inserts (one 100k-group entity in a 20 x 20 MINSERT: 9.5 s)
+const firstOf = (r) => {
+  if (!r.first) {
+    const m = new Map();
+    for (const [c, v] of r.g) if (!m.has(c)) m.set(c, v);
+    r.first = m;
+  }
+  return r.first;
+};
+const get = (r, c, d) => { const v = firstOf(r).get(c); return v === undefined ? d : v.trim(); };
 const num = (r, c, d = 0) => { const v = get(r, c, null); return v === null ? d : Number(v); };
 const all = (r, c) => r.g.filter((x) => x[0] === c).map((x) => Number(x[1]));
 
@@ -418,7 +429,10 @@ function walkSize(ctx, name, depth = 0, open = new Set()) {
   const memo = ctx.walkSizes || (ctx.walkSizes = new Map());
   if (memo.has(name)) return memo.get(name);
   const b = ctx.blocks.get(name);
-  if (!b || depth > 16 || open.has(name)) return b ? b.recs.length : 0;
+  // a block on its own insert chain: AutoCAD writes none, and counted as one pass it hid a
+  // fan-out of K^16 (a 147-byte block inserting itself 3 times walked for 21 s)
+  if (b && open.has(name)) throw new Error(`a damaged drawing: block ${name} inserts itself`);
+  if (!b || depth > 16) return b ? b.recs.length : 0;
   open.add(name);
   let n = b.recs.length;
   for (const r of b.recs) {
@@ -560,8 +574,12 @@ function emit(recs, M, byBlock, depth, ctx) {
         break;
       }
       case 'TEXT': case 'MTEXT': {
-        const raw = r.type === 'MTEXT' ? r.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
-        const t = r.type === 'MTEXT' ? mtextPlain(raw) : raw.replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
+        // (the plain text, made once per entity: a block's text inserted many times is the same)
+        if (r.plain === undefined) {
+          const raw = r.type === 'MTEXT' ? r.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
+          r.plain = r.type === 'MTEXT' ? mtextPlain(raw) : raw.replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
+        }
+        const t = r.plain;
         if (!t.trim()) break;
         // TEXT with an alignment uses its second point
         const al = r.type === 'TEXT' ? num(r, 72, 0) : 0;

@@ -5,11 +5,7 @@
 import assert from 'node:assert/strict';
 import { stepProducts, decodeStepString } from '../js/step-meta.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const STEP = `ISO-10303-21;
 DATA;
@@ -46,5 +42,4 @@ test('a \\X2\\ run of 300,000 code units decodes (no spread onto the stack)', ()
   assert.equal(s[0], 'A');
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

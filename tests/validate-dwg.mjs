@@ -49,7 +49,15 @@ export function validate(std, path) {
   const P = dwgToPairs(d);
   const st = P.stats;
   const unexplained = Object.entries(st.dropped).filter(([k]) => !/\((not drawn|block not in the file)\)$/.test(k));
-  const viaPairs = parseDXF(P), viaText = parseDXF(pairsToDXF(P));
+  // (a drawing the viewer refuses to draw -- over its drawing budget, say -- is this file's
+  // failure, said in its notes; it does not end the run over the rest of the list)
+  let viaPairs, viaText;
+  try { viaPairs = parseDXF(P); viaText = parseDXF(pairsToDXF(P)); } catch (e) {
+    res.ok = false;
+    res.notes.push(`the drawing is refused: ${e.message}`);
+    res.adapter = { owned: st.owned, emitted: st.emitted, dropped: st.dropped, unexplained: unexplained.length, roundTrip: false, drawn: 0, refused: e.message };
+    return res;
+  }
   res.adapter = { owned: st.owned, emitted: st.emitted, dropped: st.dropped, unexplained: unexplained.length, roundTrip: summary(viaPairs) === summary(viaText), drawn: viaPairs.paths.length + viaPairs.texts.length };
   if (unexplained.length || !res.adapter.roundTrip) res.ok = false;
   if (!res.adapter.drawn) res.notes.push('nothing 2D to draw (3D solids are not read)');

@@ -47,7 +47,7 @@ await test('a name says its format, through .gz and a query', () => {
 await test('first bytes say the format, for each that has a signature', () => {
   const cases = [
     ['ISO-10303-21;\nHEADER;', 'STEP'], ['﻿ISO-10303-21;', 'STEP'], ['DBRep_DrawableShape\n', 'BREP'],
-    ['CADM\x01\x00', 'cadmesh'], ['glTF\x02\x00\x00\x00', 'glTF'], ['{ "asset": { "version": "2.0" } }', 'glTF'],
+    ['CADM\x01\x00', 'cadmesh'], ['glTF\x02\x00\x00\x00', 'GLB'], ['{ "asset": { "version": "2.0" } }', 'glTF'],
     ['PK\x03\x04', 'zip'], ['ply\nformat ascii 1.0\n', 'PLY'], ['solid cube\n facet normal 0 0 1\n', 'STL'],
     ['OFF\n8 6 0\n', 'OFF'], ['# made by hand\nv 0 0 0\n', 'OBJ'], ['  0\nSECTION\n  2\nHEADER\n', 'DXF'],
     ['AutoCAD Binary DXF\r\n\x1a\x00', 'DXF'], ['AC1032\x00\x00', 'DWG'], ['AC1009', 'DWG'],

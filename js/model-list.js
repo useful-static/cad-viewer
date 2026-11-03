@@ -31,6 +31,8 @@ import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
 import { STEP_ID } from './tour.js';
+import { NOTE_TEXT_MAX, notePlace } from './view-link.js';
+import { directUrl } from './open-url.js';
 
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
@@ -152,13 +154,16 @@ function extras(file, v, listUrl) {
   // a PAGE a visitor opens in a tab (page, links) must be http(s)
   const fetched = (u, field, raw) => { if (!samePlace(u.href, listUrl)) throw bad(field, `"${raw}" is not an http(s) URL, nor on the list's own scheme and host`); };
   const page = (u, field, raw) => { if (!/^https?:$/.test(u.protocol)) throw bad(field, `"${raw}" is not an http(s) URL`); };
+  // a fetched file named by a share page (a GitHub blob, a Dropbox link) is read from the file
+  // itself, as the model file is (js/open-url.js): what check.html checks is what is loaded
+  const direct = (href) => (/^https?:/i.test(href) ? directUrl(href).url : href);
   for (const field of ['step', 'page', 'image']) {
     if (v[field] === undefined) continue;
     if (typeof v[field] !== 'string' || !v[field].trim()) throw bad(field, 'must be a URL');
     let u;
     try { u = new URL(v[field], listUrl); } catch { throw bad(field, `"${v[field]}" is not a URL`); }
     (field === 'page' ? page : fetched)(u, field, v[field]);
-    out[field] = u.href;
+    out[field] = field === 'page' ? u.href : direct(u.href);
   }
   for (const field of ['author', 'license']) {
     if (v[field] === undefined) continue;
@@ -185,7 +190,7 @@ function extras(file, v, listUrl) {
       let u;
       try { u = new URL(x.url, listUrl); } catch { throw bad('tours', `"${x.url}" is not a URL`); }
       fetched(u, 'tours', x.url);
-      return { name: (x.name || '').trim() || 'Tour', url: u.href };
+      return { name: (x.name || '').trim() || 'Tour', url: direct(u.href) };
     });
   }
   if (v.links !== undefined) {
@@ -202,12 +207,13 @@ function extras(file, v, listUrl) {
   }
   if (v.notes !== undefined) {
     const n = v.notes;
-    const ok = (x) => x && typeof x === 'object' && typeof x.text === 'string' && x.text.trim() && x.text.length <= 200
-      && ((Array.isArray(x.at) && x.at.length === 3 && x.at.every(Number.isFinite)) || (typeof x.part === 'string' && x.part.trim()));
+    // (placed by the notes' one rule, js/view-link.js notePlace: its part when it names one,
+    // else its point -- as a tour's callouts are)
+    const ok = (x) => x && typeof x === 'object' && typeof x.text === 'string' && x.text.trim() && x.text.length <= NOTE_TEXT_MAX && notePlace(x);
     if (!Array.isArray(n) || n.length > 100 || !n.every(ok)) {
-      throw bad('notes', 'must be a list (at most 100) of { "text": "…" (200 characters at most), and "at": [x, y, z] (mm) or "part": "<a part\'s name>" }');
+      throw bad('notes', `must be a list (at most 100) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<a part's name>" or "at": [x, y, z] (mm) }`);
     }
-    out.notes = n.map((x) => ({ text: x.text.trim(), ...(Array.isArray(x.at) ? { at: x.at.slice() } : { part: x.part.trim() }) }));
+    out.notes = n.map((x) => ({ text: x.text.trim(), ...notePlace(x) }));
   }
   if (v.hide !== undefined) {
     const h = v.hide;

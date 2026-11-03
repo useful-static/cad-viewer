@@ -117,9 +117,11 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       bits.push('its gzip could not be read here');
       level = 'warn';
     } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
-      // two meshes: the viewer opens a mesh by its bytes where they are conclusive
-      // (js/mesh-formats.js meshFormatOf), so a .stl holding a PLY opens, as a PLY
-      const opens = sure(got) && BY_LABEL.get(got)?.kind === 'mesh' && BY_LABEL.get(want)?.kind === 'mesh';
+      // the viewer opens a mesh or a 2D drawing by its bytes where they are conclusive
+      // (js/mesh-formats.js meshFormatOf; a DWG by its "AC10" whatever its name), so a .stl
+      // holding a PLY opens as a PLY, a .dxf holding a DWG as a DWG
+      const kind = (label) => BY_LABEL.get(label)?.kind;
+      const opens = sure(got) && kind(got) === kind(want) && ['mesh', '2d'].includes(kind(got));
       bits.push(opens ? `named ${want}, but it is a ${got} (opens as one)` : `named ${want}, but it starts as ${got}`);
       level = opens ? 'warn' : sure(want) || sure(got) ? 'bad' : 'warn';
     } else if (!got && want && sure(want)) {
@@ -129,9 +131,18 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       bits.push(got || want || 'format unknown');
       if (!got && !want) level = 'warn';
     }
-    if (url.toLowerCase().endsWith('.gz') && !gz) {
-      bits.push('named .gz but not gzip');
-      level = 'bad';
+    // named .gz but not gzip: a server that sends it with Content-Encoding: gzip has the browser
+    // unpack it on the way, and the viewer opens what arrives (main.js loadAny) -- so it is a
+    // fault only when what arrived is not the file its name says
+    if (fileNameOfUrl(url).toLowerCase().endsWith('.gz') && !gz) {
+      if (got && got === want) bits.push('arrives unpacked (sent with Content-Encoding: gzip), which the viewer opens');
+      else if (!got && want && !sure(want)) {
+        bits.push('not gzip as it arrives: sent unpacked (Content-Encoding), or not compressed at all; its start does not say which');
+        if (level === 'ok') level = 'warn';
+      } else {
+        bits.push('named .gz but not gzip');
+        level = 'bad';
+      }
     }
   }
   return { level, detail: bits.join(' · '), url };

@@ -5,11 +5,7 @@
 import assert from 'node:assert/strict';
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from '../js/face-order.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const index = Uint32Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 const body = (idxStart, idxCount, kind) => ({ idxStart, idxCount, kind });
@@ -46,5 +42,4 @@ test('solids sit further back than sheets', () => {
   assert.ok(BIAS_SHEET[0] > 0 && BIAS_SHEET[1] > 0, 'sheets stay behind their own edges');
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

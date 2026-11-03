@@ -15,23 +15,10 @@ import {
   isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader,
 } from '../js/cadmesh.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { test, skip, done } from './harness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const align8 = (n) => (n + 7) & ~7;
-let passed = 0;
-let failed = 0;
-const skipped = [];
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`PASS ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}: ${e.message}`);
-  }
-}
 
 // a unit quad (2 triangles) offset by `dx`
 function quad(name, dx, color = null) {
@@ -135,6 +122,16 @@ test('decode rejects mesh ranges that overlap (3000 meshes on one range cost mes
   const t0 = Date.now();
   assert.throws(() => withHeader(header, data), /mesh 1 range overlaps the mesh before it/);
   assert.ok(Date.now() - t0 < 500);
+});
+test('decode rejects a mesh or tree node name that is not text, in its own words', () => {
+  for (const bad of [5, {}, ['x']]) {
+    const { header, data } = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }));
+    header.meshes[0].name = bad;
+    assert.throws(() => withHeader(header, data), /mesh 0 name is not text/);
+    const h2 = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }));
+    h2.header.root.name = bad;
+    assert.throws(() => withHeader(h2.header, h2.data), /assembly tree node name is not text/);
+  }
 });
 test('decode rejects a mesh range outside the vertex data (review r5)', () => {
   const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
@@ -353,22 +350,11 @@ test('stp2mesh refuses a non-positive or non-numeric --angular (review r2)', () 
   }
 });
 
-async function atest(name, fn) {
-  try {
-    await fn();
-    passed++;
-    console.log(`PASS ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}: ${e.message}`);
-  }
-}
-
 const sample = () => encodeCadmesh({
   units: 'mm', meshes: [quad('a', 0, [1, 0, 0]), quad('b', 2)], root: { name: 'r', meshes: [0, 1], children: [] },
 });
 
-await atest('a gzipped file inflates to the same bytes; a raw one passes through untouched', async () => {
+await test('a gzipped file inflates to the same bytes; a raw one passes through untouched', async () => {
   const raw = sample();
   assert.equal(isGzip(raw), false);
   assert.equal(await inflateCadmesh(raw), raw, 'raw input is returned as-is (no copy)');
@@ -381,20 +367,20 @@ await atest('a gzipped file inflates to the same bytes; a raw one passes through
   assert.equal(decodeCadmesh(await inflateCadmesh(await deflateCadmesh(raw))).header.meshes.length, 2);
 });
 
-await atest('a gzip that unpacks past the limit stops and says why (review r14)', async () => {
+await test('a gzip that unpacks past the limit stops and says why (review r14)', async () => {
   // 1 MB of zeros gzips to about 1 kB: a cap of 1000 bytes refuses it, the default does not
   const gz = new Uint8Array(gzipSync(Buffer.alloc(1 << 20))).buffer;
   await assert.rejects(gunzip(gz, 1000), /the gzip file is too big: it unpacks to over/);
   assert.equal((await gunzip(gz)).byteLength, 1 << 20);
 });
 
-await atest('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {
+await test('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {
   const gz = await deflateCadmesh(sample());
   await assert.rejects(inflateCadmesh(gz.slice(0, gz.byteLength >> 1)), /cadmesh: the gzip data is corrupt or truncated/);
   assert.equal(isGzip(new ArrayBuffer(1)), false, 'a 1-byte buffer is not gzip');
 });
 
-await atest('gunzip unpacks any gzip file (a part.stp.gz) to the bytes inside', async () => {
+await test('gunzip unpacks any gzip file (a part.stp.gz) to the bytes inside', async () => {
   const step = new TextEncoder().encode('ISO-10303-21;\nHEADER;\nENDSEC;\n').buffer;
   const gz = new Uint8Array(gzipSync(Buffer.from(step))).buffer;
   assert.deepEqual(new Uint8Array(await gunzip(gz)), new Uint8Array(step));
@@ -423,9 +409,7 @@ if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
     }
   });
 } else {
-  skipped.push('stp2mesh conversion (needs fetch-deps.sh + CADV_STEP_FIXTURE=<file.stp>)');
+  skip('stp2mesh conversion', 'needs fetch-deps.sh + CADV_STEP_FIXTURE=<file.stp>');
 }
 
-for (const s of skipped) console.log(`SKIP ${s}`);
-console.log(`RESULT: ${passed} passed, ${failed} failed, ${skipped.length} skipped`);
-process.exit(failed ? 1 : 0);
+done();

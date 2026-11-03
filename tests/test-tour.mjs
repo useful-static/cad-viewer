@@ -6,16 +6,13 @@
 // its poses and moves steadily between them.
 
 import assert from 'node:assert/strict';
-import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS } from '../js/tour.js';
+import { readFileSync } from 'node:fs';
+import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES } from '../js/tour.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
 import { draftToTour, stepFromView } from '../js/tour-recorder.js';
 import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // the plan's example, as written there
 const EXAMPLE = {
@@ -68,6 +65,17 @@ test('parse-v2-step-ids', () => {
   assert.equal(parseTour(JSON.stringify({ cadtour: 1, steps: [{}] })).version, 1);
 });
 
+test('recorder-round-trip of the field forms: section "off" and a cut, explode, parts, callouts, timing', () => {
+  const src = { cadtour: 2, steps: [
+    { id: 'a', view: 'front', section: 'off', explode: 0.5, explodeAlong: 'z', hide: ['fan'], callouts: [{ text: 'here', part: 'fan' }, { text: 'there', at: [1, 2, 3] }], ease: 'linear', orbit: 45 },
+    { view: 'top', section: { axis: 'z', t: 0.3, flip: true }, isolate: ['board'], dim: 'grey', transition: 2, hold: 1 },
+  ] };
+  const t = parseTour(JSON.stringify(src));
+  assert.equal(t.steps[0].explodeAlong, 'z');
+  const back = parseTour(JSON.stringify(draftToTour({ title: '', mode: 'static', loop: false, orient: null, steps: t.steps.map((s) => ({ ...s })) }, null)));
+  assert.deepEqual(back.steps, t.steps);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, steps: [{ explodeAlong: 'w' }] })), /explodeAlong.*must be one of assembly, x, y, z/);
+});
 test('recorder-round-trip: an opened tour saved again keeps its step ids, its orient and every step field', () => {
   const src = { cadtour: 2, title: 'Board', orient: '+y-z', mode: 'static', loop: true,
     steps: [{ id: 'microsd', title: 'microSD', view: 'top', style: 'wire', hold: 3 }, { title: 'no id', dim: 'ghost' }] };
@@ -103,6 +111,13 @@ test('partIndex: 300,000 bodies under one node (no spread onto the stack)', () =
   const header = { meshes: Array.from({ length: n }, (_, i) => ({ name: `b${i}` })), root: { name: '', meshes: [], children: [{ name: 'all', meshes: Array.from({ length: n }, (_, i) => i), children: [] }] } };
   const idx = partIndex(header);
   assert.equal(idx.get('all').size, n);
+});
+
+test('the tour maker\'s menus offer exactly the values the parser takes (DIMS, MODES)', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const values = (id) => [...new RegExp(`<select id="${id}"[\\s\\S]*?</select>`).exec(html)[0].matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(values('tes-dim'), DIMS);
+  assert.deepEqual(values('temode'), MODES);
 });
 
 // an app serving the viewer and its files from its own scheme (lc://app/)
@@ -314,5 +329,4 @@ test('ease', () => {
   assert.ok(EASE.inOut(0.1) < 0.1 && EASE.inOut(0.9) > 0.9); // slow at both ends
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
 import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
+import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, sniffFormat } from './js/formats.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -165,7 +166,7 @@ async function main() {
   const unpacked = read[0] === 0x1f && read[1] === 0x8b ? gunzipSync(read) : read;
   // a UTF-8 byte-order mark first (some exporters write one): OpenCascade
   // refuses it ("unexpected QUID, expecting STEP"), so it is dropped (r21)
-  const bytes = unpacked[0] === 0xef && unpacked[1] === 0xbb && unpacked[2] === 0xbf ? unpacked.subarray(3) : unpacked;
+  const bytes = withoutBom(unpacked);
   // the unit the file declares, read before the converter sees the bytes
   const declared = sourceUnits(bytes, format);
   const result = occt.ReadFile(format, bytes, args.params);

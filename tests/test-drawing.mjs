@@ -7,11 +7,7 @@ import assert from 'node:assert/strict';
 import { drawingSVG } from '../js/drawing-svg.js';
 import { bodyGeometry } from '../js/measure-geom.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 function model(bodies, angularDeflection = 0.5) {
   const pos = [], idx = [], faces = [], meshes = [];
@@ -75,5 +71,4 @@ test('the caption and names are escaped', () => {
   assert.match(d.svg, />x &lt; y<\/text>/);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

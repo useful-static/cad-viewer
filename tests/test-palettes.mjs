@@ -6,11 +6,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_GREY, PALETTE, occtResultToModel } from '../js/cadmesh.js';
 import { MONO, PALETTES, bodyColours, distinct, hexToRgb, rgbToHex, schemeColours } from '../js/palettes.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 const key = (c) => c.map((x) => x.toFixed(4)).join(',');
 
 // an assembly: a wrapper, then two subassemblies (A with a screw used twice
@@ -125,5 +121,4 @@ test('a painted face colours its triangles\' vertices, over the scheme', () => {
   assert.equal(schemeColours(mesh, 'file', new Map(), new Map()), mesh.color);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

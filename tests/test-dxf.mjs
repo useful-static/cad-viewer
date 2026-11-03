@@ -8,11 +8,7 @@
 import assert from 'node:assert/strict';
 import { parseDXF, bulgePts, mtextPlain, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const dxf = (groups) => `${groups.map(([c, v]) => `${c}\n${v}`).join('\n')}\n`;
 const D = [
@@ -396,5 +392,21 @@ test('20,000 viewports onto 200,000 lines: refused in words within a few seconds
   assert.ok(err && /viewports look at the model/.test(err.message), String(err && err.message));
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+// --- review round 4 ---
+test('a block that inserts itself is refused at once, by name', () => {
+  const err = fast(() => parseDXF(text(['0', 'BLOCK', '2', 'A', '10', '0', '20', '0', ...Array(10).fill(['0', 'INSERT', '2', 'A']).flat(), '0', 'ENDBLK'], ['0', 'INSERT', '2', 'A'])), 500);
+  assert.ok(err && /block A inserts itself/.test(err.message), String(err && err.message));
+});
+test('a block entity of 100,000 groups inserted 2,500 times: its groups are read once, fast', () => {
+  const fat = ['0', 'FOO'];
+  for (let k = 0; k < 100000; k++) fat.push('999', 'x');
+  const mt = ['0', 'MTEXT', '10', '0', '20', '0'];
+  for (let k = 0; k < 100000; k++) mt.push('3', '{}');
+  mt.push('1', 'hi');
+  let d;
+  const err = fast(() => { d = parseDXF(text(['0', 'BLOCK', '2', 'B', '10', '0', '20', '0', ...fat, ...mt, '0', 'ENDBLK'], ['0', 'INSERT', '2', 'B', '70', '50', '71', '50', '44', '1', '45', '1'])); }, 3000);
+  assert.equal(err, null, String(err && err.message));
+  assert.equal(d.texts.length, 2500);
+});
+
+done();

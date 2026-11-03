@@ -5,13 +5,18 @@
 //   import { test, skip, done } from './harness.mjs';
 //   await test('a cube', () => { ... });
 //   done();
+//
+//   node tests/test-x.mjs [name-part]   runs only the arms whose name holds name-part (an arm
+//   that ends the process, a heap OOM say, is then run alone)
 
 let passed = 0;
 let failed = 0;
 let skipped = 0;
+const ONLY = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : '';
 
 // a synchronous arm is counted at once; an async one when it settles (await it before done())
 export function test(name, fn) {
+  if (ONLY && !name.includes(ONLY)) return undefined;
   const pass = () => { passed++; console.log(`PASS ${name}`); };
   const fail = (e) => { failed++; console.log(`FAIL ${name}: ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e}`); };
   let r;

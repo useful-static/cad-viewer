@@ -11,11 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { checkFile, checkLists, namedFormat, sniffFormat, summary } from '../js/list-check.js';
 import { fileNameOfUrl } from '../js/formats.js';
 
-let passed = 0;
-let failed = 0;
-async function test(name, fn) {
-  try { await fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const B = 'https://example.com/boards/';
 const cadmesh = gzipSync(Buffer.concat([Buffer.from('CADM'), Buffer.alloc(200)]));
@@ -44,6 +40,10 @@ const FILES = {
   [`${B}ply-named-obj.obj`]: 'ply\nformat ascii 1.0\n',
   [`${B}case.3mf`]: Buffer.from('PK\x03\x04rest'),
   [`${B}ply-named-stl.stl`]: 'ply\nformat ascii 1.0\n',
+  [`${B}dwg-named-dxf.dxf`]: Buffer.from('AC1015\0\0\0\0'),
+  // sent with Content-Encoding: gzip: the browser has unpacked it by the time it is read
+  [`${B}unpacked.stp.gz`]: 'ISO-10303-21;\nHEADER;\n',
+  [`${B}text.stp.gz`]: 'hello',
 };
 async function fakeFetch(url, opts = {}) {
   const u = String(url);
@@ -67,7 +67,7 @@ await test('formats', () => {
   assert.equal(namedFormat(`${B}a.bin`), null);
   assert.equal(sniffFormat(Buffer.from('CADM\0\0')), 'cadmesh');
   assert.equal(sniffFormat(Buffer.from('ISO-10303-21;')), 'STEP');
-  assert.equal(sniffFormat(Buffer.from('glTF\x02\0\0\0')), 'glTF');
+  assert.equal(sniffFormat(Buffer.from('glTF\x02\0\0\0')), 'GLB');
   assert.equal(sniffFormat(Buffer.from('solid x\n facet normal 0 0 1')), 'STL');
   assert.equal(sniffFormat(Buffer.from('\x00\x01\x02')), null);
   assert.equal(sniffFormat(Buffer.from('AutoCAD Binary DXF\r\n\x1a\x00\x00\x00SECTION\x00')), 'DXF');
@@ -121,6 +121,16 @@ await test('name-only formats: a start that only hints is no fault; a mesh holdi
   const liar = await checkFile(`${B}liar.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(liar.level, 'bad');
 });
+await test('a .dxf holding a DWG opens (a warning); a .gz that arrives unpacked opens; one that is something else is bad', async () => {
+  const dwg = await checkFile(`${B}dwg-named-dxf.dxf`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(dwg.level, 'warn', dwg.detail);
+  assert.match(dwg.detail, /named DXF, but it is a DWG \(opens as one\)/);
+  const up = await checkFile(`${B}unpacked.stp.gz`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(up.level, 'ok', up.detail);
+  assert.match(up.detail, /arrives unpacked/);
+  const junk = await checkFile(`${B}text.stp.gz`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(junk.level, 'bad', junk.detail);
+});
 await test('a model named in the query: named as the viewer names it', async () => {
   assert.equal(namedFormat(`${B}get?file=board.stl`), 'STL');
   assert.equal(namedFormat(`${B}get.php?file=board.stl`), 'STL');
@@ -164,5 +174,4 @@ await test('list-not-read', async () => {
   assert.match(summary(r), /1 list not read/);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

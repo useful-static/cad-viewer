@@ -9,16 +9,11 @@ import assert from 'node:assert/strict';
 import { meshFormatOf, parseMesh, unzip, weld } from '../js/mesh-formats.js';
 import { MM, encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 
-let passed = 0;
-let failed = 0;
-const ONLY = process.argv[2];
-async function test(name, fn) {
-  if (ONLY && !name.includes(ONLY)) return;
-  try { await fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+// (the shared harness; its name filter: node tests/test-mesh-formats.mjs <name-part>)
+import { test, done } from './harness.mjs';
 
 // a hostile file is refused in the reader's own words, quickly: never an engine message
-const ENGINE = /Cannot|is not a function|RangeError|Invalid array length|out of bounds|outside the bounds|is not iterable|string longer/;
+const ENGINE = /Cannot|is not a function|RangeError|URIError|URI malformed|fetch failed|Invalid array length|out of bounds|outside the bounds|is not iterable|string longer|heap/;
 async function refusedFast(fn, re, ms = 2000) {
   const t0 = Date.now();
   let err = null;
@@ -326,20 +321,20 @@ await test('a glTF accessor counting 2^30 elements: refused before it is allocat
   // (the accessor's own cap, on values: a POSITION of 16 values per element under the vertex cap)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
-  /x: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
+  /x\.gltf: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
   // (under the cap, a count its buffer view cannot hold is refused before the 400 MB it asks for)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, buffers: [{ uri: 'data:application/octet-stream;base64,AAAAAAAAAAAAAAAA', byteLength: 12 }],
     bufferViews: [{ buffer: 0, byteLength: 12 }], accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 2 ** 24 }] }), 'x.gltf'),
-  /x is damaged: accessor 0 reads past the end of its buffer/);
+  /x\.gltf is damaged: accessor 0 reads past the end of its buffer/);
 });
 await test('glTF/GLB shapes refused in words: a 3-byte GLB, a view past its buffer, a primitive with no attributes, scene nodes and extensionsRequired not lists', async () => {
   await refusedFast(() => parseMesh('glb', new ArrayBuffer(3), 'x.glb'), /x\.glb is damaged: 3 bytes, shorter than a GLB header/);
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ uri: 'data:application/octet-stream;base64,AAAA' }], bufferViews: [{ buffer: 0, byteOffset: 100 }],
     accessors: [{ componentType: 5126, type: 'VEC3', count: 0, bufferView: 0 }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }] }), 'x.gltf'),
-  /x is damaged: buffer view 0 runs past the end of its buffer/);
-  await refusedFast(() => parseMesh('gltf', gltf({ nodes: [{ mesh: 0 }], meshes: [{ primitives: [{}] }] }), 'x.gltf'), /x is damaged: mesh 0 primitive 1 has no attributes/);
-  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: 5 }], nodes: [] }), 'x.gltf'), /x is damaged: scene 0's "nodes" is not a list/);
-  await refusedFast(() => parseMesh('gltf', gltf({ extensionsRequired: 5 }), 'x.gltf'), /x is damaged: "extensionsRequired" is not a list/);
+  /x\.gltf is damaged: buffer view 0 runs past the end of its buffer/);
+  await refusedFast(() => parseMesh('gltf', gltf({ nodes: [{ mesh: 0 }], meshes: [{ primitives: [{}] }] }), 'x.gltf'), /x\.gltf is damaged: mesh 0 primitive 1 has no attributes/);
+  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: 5 }], nodes: [] }), 'x.gltf'), /x\.gltf is damaged: scene 0's "nodes" is not a list/);
+  await refusedFast(() => parseMesh('gltf', gltf({ extensionsRequired: 5 }), 'x.gltf'), /x\.gltf is damaged: "extensionsRequired" is not a list/);
 });
 await test('STL and PLY in words: "solidx" then endfacet, a 300 k-vertex facet, an unknown PLY type, a negative list count', async () => {
   await refusedFast(() => parseMesh('stl', enc('solidx\nendfacet\n'), 'a.stl'), /a has no triangles to show/);
@@ -442,9 +437,9 @@ await test('r3-11 glTF sparse accessors: a sparse POSITION with no buffer view, 
   const binBad = bin.slice(); binBad.set(new Uint8Array(bad.buffer), 0);
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 44, uri: b64uri(binBad) }], bufferViews: [{ buffer: 0, byteLength: 6 }, { buffer: 0, byteOffset: 8, byteLength: 36 }],
     accessors: [{ componentType: 5126, type: 'VEC3', count: 3, sparse: { count: 3, indices: { bufferView: 0, componentType: 5123 }, values: { bufferView: 1 } } }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], nodes: [{ mesh: 0 }] }), 'x.gltf'), /x is damaged: accessor 0's sparse index 7 is past its 3 elements/);
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], nodes: [{ mesh: 0 }] }), 'x.gltf'), /x\.gltf is damaged: accessor 0's sparse index 7 is past its 3 elements/);
   await refusedFast(() => parseMesh('gltf', sparseTri({ componentType: 5126, type: 'VEC3', count: 3, sparse: { count: 4, indices: { bufferView: 0, componentType: 5123 }, values: { bufferView: 1 } } }), 'x.gltf'),
-    /x is damaged: accessor 0's sparse count 4 is not 1 to its 3 elements/);
+    /x\.gltf is damaged: accessor 0's sparse count 4 is not 1 to its 3 elements/);
 });
 await test('r3-12 a glTF with no "scenes": the roots are the nodes no node names as a child (a child is placed once, under its parent)', async () => {
   const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
@@ -470,5 +465,64 @@ await test('r3-14 an ASCII STL vertex line of fewer than 3 numbers: refused as d
     /a\.stl is damaged: "vertex 1 0" is not three numbers/);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+// --- review round 4 ---
+// a zip of one deflated entry (zipStored's entry made method 8, its unpacked size given)
+async function zipDeflated(name, raw) {
+  const { deflateRawSync } = await import('node:zlib');
+  const z = new Uint8Array(zipStored([[name, deflateRawSync(raw, { level: 9 })]]));
+  const cd = z.length - 22 - (46 + name.length);
+  const dv = new DataView(z.buffer);
+  dv.setUint16(cd + 10, 8, true);
+  dv.setUint32(cd + 24, raw.length, true);
+  return z.buffer;
+}
+await test('r4-3 an ASCII STL holding 64 KB of blank lines: refused at once (the record regex\'s \\s* crossed newlines from every line start)', async () => {
+  await refusedFast(() => parseMesh('stl', enc(`solid a\n${'\n'.repeat(64 * 1024)}${' \t\r\n'.repeat(16 * 1024)}x\n`), 'a.stl'), /a has no triangles to show/, 1000);
+});
+await test('r4-4 a 3MF model part of 200 MB of "<a/>" tags, and one of 10 M + 1 triangles: refused in words, not the heap run out by one object per tag', async () => {
+  const flood = await zipDeflated('3D/3dmodel.model', Buffer.alloc(200 * 2 ** 20, '<a/>'));
+  // (most of the bound is inflating and decoding the 200 MB part: 0.56 s measured)
+  await refusedFast(() => parseMesh('3mf', flood, 'a.3mf'), /a\.3mf has no triangles to show/, 2500);
+  const head = '<model unit="millimeter"><resources><object id="1"><mesh><triangles>';
+  const n = 10_000_001, t = '<triangle/>';
+  const tris = await zipDeflated('3D/3dmodel.model', Buffer.concat([Buffer.from(head), Buffer.alloc(n * t.length, t)]));
+  await refusedFast(() => parseMesh('3mf', tris, 'b.3mf'), /b\.3mf holds more than the 10,000,000 triangles this viewer opens/, 5000);
+});
+await test('r4-5 an OBJ of 4 MB of "g" lines and an STL of 32 MB of "solid" lines: no body per empty group, refused at once', async () => {
+  await refusedFast(() => parseMesh('obj', Buffer.alloc(4 * 2 ** 20, 'g\n').buffer, 'x.obj'), /x has no triangles to show/, 1500);
+  await refusedFast(() => parseMesh('stl', Buffer.alloc(32 * 2 ** 20, 'solid\n').buffer, 'x.stl'), /x has no triangles to show/, 1500);
+  // (a group named before its faces still names the body; an empty group between two is dropped)
+  const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\ng empty\ng tri\nf 1 2 3\ng after\n'), 'n.obj');
+  assert.equal(m.meshes.length, 1);
+  assert.equal(m.meshes[0].name, 'tri');
+  const s = await parseMesh('stl', enc('solid none\nendsolid none\nsolid one\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid one\n'), 's.stl');
+  assert.equal(s.meshes.length, 1);
+  assert.equal(s.meshes[0].name, 'one');
+});
+await test('r4-11 a 199-byte glTF whose POSITION counts 30 M with no buffer view: no geometry, said so at once (it was allocated and walked as zeros)', async () => {
+  await refusedFast(() => parseMesh('gltf', gltf({ accessors: [{ componentType: 5126, type: 'VEC3', count: 30_000_000 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'x.gltf'), /x has no triangles to show \(every triangle has no area\)/, 1000);
+  // (indices with no buffer view are all vertex 0: no triangle either)
+  const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 36, uri: b64uri(new Uint8Array(pos.buffer)) }], bufferViews: [{ buffer: 0, byteLength: 36 }],
+    accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }, { componentType: 5125, type: 'SCALAR', count: 9_000_000 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }], nodes: [{ mesh: 0 }] }), 'y.gltf'), /y has no triangles to show \(every triangle has no area\)/, 1000);
+});
+await test('r4-12 a glTF buffer uri with a bad % escape, and a data: uri that does not decode: "damaged", not URIError or "fetch failed"', async () => {
+  await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ uri: 'a%zz.bin', byteLength: 4 }] }), 'x.gltf'), /x\.gltf is damaged: buffer 0's uri "a%zz\.bin" cannot be read/);
+  await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ uri: 'data:application/octet-stream;base64,%%%', byteLength: 4 }] }), 'x.gltf'),
+    /x\.gltf is damaged: buffer 0's uri "data:application\/octet-stream;base64,%%%" cannot be read/);
+});
+await test('r4-14 PLY and glTF refusals name the file with its extension, in the "is damaged" form', async () => {
+  await refusedFast(() => parseMesh('ply', enc('ply\nformat ascii 1.0\n'), 'x.ply'), /x\.ply is damaged: it has no end_header line/);
+  await refusedFast(() => parseMesh('gltf', enc('null'), 'x.gltf'), /x\.gltf is damaged: it holds no glTF JSON/);
+  const glbNoJson = new ArrayBuffer(12);
+  new DataView(glbNoJson).setUint32(0, 0x46546c67, true);
+  await refusedFast(() => parseMesh('glb', glbNoJson, 'x.glb'), /x\.glb is damaged: it holds no glTF JSON/);
+  await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 4 }] }), 'x.gltf'), /x\.gltf is damaged: buffer 0 has no data/);
+  await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
+  /x\.gltf: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
+});
+
+done();

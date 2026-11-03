@@ -11,11 +11,7 @@ import assert from 'node:assert/strict';
 import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
 import { splitBoard } from '../split-board.mjs';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // a body built face by face: each face its own vertices (as OpenCascade meshes)
 function builder() {
@@ -127,5 +123,4 @@ test('refuses a file without b-rep faces', () => {
   assert.throws(() => splitBoard({ ...d, faces: null }), /no faces section/);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

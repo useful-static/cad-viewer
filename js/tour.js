@@ -16,10 +16,13 @@
 import { VIEW_PRESETS, parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
+import { EXPLODE_MODES, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 
 export const PRESETS = Object.keys(VIEW_PRESETS);
 export const EASES = ['linear', 'inOut'];
 export const DIMS = ['none', 'ghost', 'grey', 'hide'];
+// how a tour plays: a step at a time, or by itself (the first is the default)
+export const MODES = ['static', 'animated'];
 export const MAX_STEPS = 200;
 export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' };
 
@@ -27,7 +30,7 @@ export const DEFAULTS = { transition: 1.2, hold: 4, ease: 'inOut', dim: 'none' }
 // field a step may hold (version 2 adds "id")
 export const TOUR_VERSION = 2;
 export const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
-  'explode', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
+  'explode', 'explodeAlong', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit'];
 export const STEP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
 
@@ -57,8 +60,8 @@ export function parseTour(text, base = undefined) {
   if (t.orient !== undefined) {
     try { orient = parseOrient(t.orient); } catch (e) { throw bad('"orient"', e.message); }
   }
-  const mode = t.mode === undefined ? 'static' : t.mode;
-  if (!['static', 'animated'].includes(mode)) throw bad('"mode"', 'must be "static" or "animated"');
+  const mode = t.mode === undefined ? MODES[0] : t.mode;
+  if (!MODES.includes(mode)) throw bad('"mode"', `must be ${MODES.map((m) => `"${m}"`).join(' or ')}`);
   if (t.loop !== undefined && typeof t.loop !== 'boolean') throw bad('"loop"', 'must be true or false');
   const defaults = { ...DEFAULTS };
   if (t.defaults !== undefined) {
@@ -148,6 +151,11 @@ function parseStep(s, where, defaults, bad, version) {
     out[k] = s[k].map((x) => x.trim());
   }
   if (s.explode !== undefined) { if (!isNum(s.explode, 0, 1)) throw bad(at('explode'), 'must be 0 to 1'); out.explode = s.explode; }
+  // which way it explodes (a view link keeps it too); without it, the way the viewer is set
+  if (s.explodeAlong !== undefined) {
+    if (!EXPLODE_MODES.includes(s.explodeAlong)) throw bad(at('explodeAlong'), `must be one of ${EXPLODE_MODES.join(', ')}`);
+    out.explodeAlong = s.explodeAlong;
+  }
   if (s.section !== undefined) {
     const x = s.section;
     if (x === 'off') out.section = { axis: 'off' };
@@ -157,15 +165,13 @@ function parseStep(s, where, defaults, bad, version) {
   }
   if (s.style !== undefined) { if (!STYLE_IDS.includes(s.style)) throw bad(at('style'), `must be one of ${STYLE_IDS.join(', ')}`); out.style = s.style; }
   if (s.callouts !== undefined) {
-    const ok = (c) => c && typeof c === 'object' && isText(c.text, 200) && c.text.trim()
-      && ((typeof c.part === 'string' && c.part.trim()) || isVec(c.at, 3));
+    // (placed by the notes' one rule, js/view-link.js notePlace: its part when it names one,
+    // else its point -- as a model list's notes are)
+    const ok = (c) => c && typeof c === 'object' && isText(c.text, NOTE_TEXT_MAX) && c.text.trim() && notePlace(c);
     if (!Array.isArray(s.callouts) || s.callouts.length > 50 || !s.callouts.every(ok)) {
-      throw bad(at('callouts'), 'must be a list (at most 50) of { "text": "…", and "part": "<name>" or "at": [x, y, z] }');
+      throw bad(at('callouts'), `must be a list (at most 50) of { "text": "…" (${NOTE_TEXT_MAX} characters at most), and "part": "<name>" or "at": [x, y, z] }`);
     }
-    // (the part when it names one -- text with more than spaces -- else the point: the same
-    // choice the check above made, so a part of 5 or of "  " beside a valid "at" takes the at)
-    const named = (c) => typeof c.part === 'string' && c.part.trim();
-    out.callouts = s.callouts.map((c) => ({ text: c.text.trim(), ...(named(c) ? { part: c.part.trim() } : { at: c.at.slice() }) }));
+    out.callouts = s.callouts.map((c) => ({ text: c.text.trim(), ...notePlace(c) }));
   }
   for (const k of ['transition', 'hold', 'ease', 'dim']) {
     if (s[k] === undefined) { out[k] = defaults[k]; continue; }

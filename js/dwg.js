@@ -133,7 +133,16 @@ class Bits {
       v += (x & 0x7f) * 2 ** sh; sh += 7;
     }
   }
-  MS() { let v = 0, sh = 0, x; do { x = this.RSu(); v += (x & 0x7fff) * 2 ** sh; sh += 15; } while (x & 0x8000); return v; }
+  // (words: the most a value may take; an object's size takes at most 2, and a run of 0xff bytes
+  // read as one endless value cost the run's length per object it was asked for)
+  MS(words = Infinity) {
+    let v = 0, sh = 0, x, n = 0;
+    do {
+      if (++n > words) throw new Error('a damaged DWG: an object size runs on past two words');
+      x = this.RSu(); v += (x & 0x7fff) * 2 ** sh; sh += 15;
+    } while (x & 0x8000);
+    return v;
+  }
   OT() { if (this.v < 24) return this.BS(); switch (this.BB()) { case 0: return this.RC(); case 1: return this.RC() + 0x1f0; default: return this.RSu(); } }
   // T: to R2004 a character outside the drawing's code page is stored as \U+XXXX (AutoCAD shows
   // the character; R2007 stores it as itself): decoded here, so every version reads the same text
@@ -329,6 +338,11 @@ export function decompress21(src, from, len, outLen) {
 // --- 5.13: Reed-Solomon, de-interleaved (no correction: the checks catch a damaged page) --------
 
 function deRS(b, at, blocks, k, interleaved) {
+  // blocks of 255 bytes the file must hold, checked before the allocation (a page map claiming
+  // 1e9 bytes allocated 1 GB and looped for 10 s; 1e15 overflowed the engine's length)
+  if (!Number.isInteger(blocks) || blocks < 0 || !(at >= 0) || at + blocks * 255 > b.length) {
+    throw new Error(`a damaged DWG: ${blocks} Reed-Solomon blocks at 0x${(at >>> 0).toString(16)} run past the end of the file`);
+  }
   const out = new Uint8Array(blocks * k);
   for (let bl = 0; bl < blocks; bl++) {
     for (let j = 0; j < k; j++) out[bl * k + j] = interleaved ? b[at + j * blocks + bl] : b[at + bl * 255 + j];
@@ -405,6 +419,10 @@ function container18(b, chk) {
   const sysPage = (at, type) => {
     chk.ok('system page type', u32(b, at) === type);
     const dsize = u32(b, at + 4), csize = u32(b, at + 8);
+    // sizes checked against the file before they are summed or allocated (a page map claiming
+    // 0x7fffffff bytes checksummed for 7 s before failing)
+    if (at + 0x14 + csize > b.length) throw new Error(`a damaged DWG: a system page of ${csize} bytes runs past the end of the file`);
+    if (dsize > 1024 * csize + 65536) throw new Error(`a damaged DWG: a system page of ${csize} bytes claims to unpack to ${dsize}`);
     const hdr = b.slice(at, at + 0x14); hdr[0x10] = hdr[0x11] = hdr[0x12] = hdr[0x13] = 0;
     // 4.3: the header's checksum (its checksum field zeroed), then the data seeded with it
     chk.ok('system page checksum', checksum04(checksum04(0, hdr, 0, 0x14), b, at + 0x14, csize) === u32(b, at + 0x10));
@@ -446,6 +464,7 @@ function container18(b, chk) {
       for (let k = 0; k < 32; k += 4) { const v = (u32(b, at + k) ^ mask) >>> 0; hdr[k] = v & 0xff; hdr[k + 1] = (v >>> 8) & 0xff; hdr[k + 2] = (v >>> 16) & 0xff; hdr[k + 3] = v >>> 24; }
       chk.ok('data page type', u32(hdr, 0) === 0x4163043b);
       const dsize = u32(hdr, 8), start = u64(hdr, 0x10);
+      if (at + 32 + dsize > b.length) throw new Error(`a damaged DWG: section ${name}'s page ${pg.num} of ${dsize} bytes runs past the end of the file`);
       const dataSum = checksum04(0, b, at + 32, dsize);
       chk.ok('data page data checksum', dataSum === u32(hdr, 0x1c));
       const hz = hdr.slice(); hz[0x18] = hz[0x19] = hz[0x1a] = hz[0x1b] = 0;
@@ -543,6 +562,9 @@ function container21(b, chk) {
   const read = (name) => {
     const s = sections[name];
     if (!s) return null;
+    // (R2007's maxSize is not a page's limit -- AutoCAD's files hold more than pages x maxSize --
+    // so a section is bounded by what the file can unpack to: 1024 times its bytes)
+    if (s.size > 1024 * b.length) throw new Error(`a damaged DWG: section ${name} claims ${s.size} bytes, more than a ${b.length}-byte file holds`);
     const out = new Uint8Array(s.size);
     for (const pg of s.list) {
       const p = pages.get(pg.id);
@@ -769,12 +791,20 @@ class ObjectReader {
     const b = sec.b;
     const at = sec.absolute ? loc : sec.at + loc;
     const r = new Bits(b, v, at, this.dec);
-    const size = r.MS();
+    // an object lies inside its section: a size past the section's end is not one
+    const secEnd = sec.absolute ? b.length : Math.min(b.length, sec.at + sec.size);
+    r.end = secEnd * 8;
+    const size = r.MS(2);
     let hsize = 0;
     if (v >= 24) hsize = r.MC();
     const dataBit = r.p;
     const crcAt = (dataBit >>> 3) + size;
-    if (crcAt + 2 > b.length) return null;
+    if (crcAt + 2 > secEnd) return null;
+    // Objects do not overlap, so their CRCs cover the section at most once: a map pointing into
+    // one long run at many places made each CRC the run again (128 KB: 22.6 s). Past twice the
+    // section, no more CRCs are run -- the objects are refused as unreadable.
+    this.crcBytes = (this.crcBytes || 0) + size;
+    if (this.crcBytes > 2 * (secEnd - (sec.absolute ? 0 : sec.at)) + 65536) return null;
     r.end = dataBit + size * 8;
     const crcOk = crc16(0xc0c1, b, at, crcAt) === (b[crcAt] | (b[crcAt + 1] << 8));
     this.chk.ok('object CRC', crcOk);
@@ -1219,7 +1249,10 @@ export function readDWG(buf) {
   // decompressors' "R2007 literal past the end" -- is said as a damaged file, naming it)
   try { cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk); } catch (e) {
     if (/^(a damaged|not a complete DWG)/.test(e.message)) throw e;
-    throw new Error(`a damaged or truncated DWG: its container cannot be read (${e.message})`);
+    // (the reader's own words are kept -- "R2007 literal past the end" says where; an engine's
+    // TypeError or RangeError is not repeated to the user)
+    const own = !(e instanceof TypeError || e instanceof RangeError);
+    throw new Error(`a damaged or truncated DWG: its container cannot be read${own ? ` (${e.message})` : ''}`);
   }
   // a file without the four sections every drawing has is refused by name (dwg-rs's 1440-byte
   // synthetic_2010/2013 fixtures: a container with no drawing in it)

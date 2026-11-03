@@ -69,7 +69,6 @@ function placements(roots, kids, own, maxDepth, refuse, who) {
 // as check.html judges them), else by the name
 export function meshFormatOf(name, buf) {
   const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, 400));
-  if (u8.length >= 4 && u8[0] === 0x67 && u8[1] === 0x6c && u8[2] === 0x54 && u8[3] === 0x46) return 'glb';
   const s = sniffFormat(u8);
   if (s && s.magic && s.kind === 'mesh') return s.ext[0];
   const ext = extOf(name);
@@ -223,14 +222,21 @@ function parseSTL(buf, base) {
   if (!/^\s*solid/.test(s)) throw new Error(`${base}.stl is neither a binary STL (its size does not match its triangle count) nor an ASCII one`);
   const bodies = [];
   let cur = null;
-  const re = /^\s*(solid|endsolid|vertex|endfacet)\b(.*)$/gm;
+  // (the indent is [ \t]*, not \s*: \s crossed newlines from every line start, so 256 KB of
+  // blank lines was quadratic, 91 s)
+  const re = /^[ \t]*(solid|endsolid|vertex|endfacet)\b(.*)$/gm;
   let m;
   let fv = [];
-  // (a body is started by whichever record comes first: "solidx" passes the ASCII test but is
-  // not a solid record, and an endfacet with no body met null)
-  const body = () => { if (!cur) { cur = { name: base, pos: [], tri: [] }; bodies.push(cur); } return cur; };
+  // a body is made at its first record (a "solid" only names the next one: 40 MB of "solid"
+  // lines made a body each, 1.1 GB): "solidx" passes the ASCII test but is not a solid record,
+  // and an endfacet with no body met null
+  let name = base;
+  const body = () => { if (!cur) { cur = { name, pos: [], tri: [] }; bodies.push(cur); } return cur; };
   while ((m = re.exec(s))) {
-    if (m[1] === 'solid') { cur = { name: m[2].trim() || base, pos: [], tri: [] }; bodies.push(cur); }
+    if (m[1] === 'solid') {
+      name = m[2].trim() || base;
+      if (cur && !cur.pos.length) cur.name = name; else cur = null;
+    }
     else if (m[1] === 'vertex') {
       // three numbers, or the file is damaged (a short line shifted every later coordinate)
       body();
@@ -258,14 +264,34 @@ function parseOBJ(s, files, base) {
   let cur = null;
   let mat = null;
   const mtl = new Map(); // name -> [r, g, b]
-  const start = (nm) => { cur = { name: nm, pos: [], tri: [], col: [], map: new Map() }; bodies.push(cur); };
-  for (const raw of s.split(/\r?\n/)) {
-    const line = raw.trim();
+  // an "o"/"g" line names the next body; the body is made at its first face, so an empty group
+  // costs nothing (10 MB of "g" lines made a body, a Map and three arrays each: 11 s, 3.8 GB)
+  // (the pending name is kept as its span of s, read only when its body is made: a file of
+  // empty groups makes no strings; nameAt -1 = the name in nameStr)
+  let nameAt = -1, nameEnd = 0, nameStr = base;
+  const nameOf = () => (nameAt < 0 ? nameStr : s.slice(nameAt, nameEnd).trim().split(/\s+/).join(' ') || base);
+  // (an empty current body, made by a face of no vertices, is dropped for the next)
+  const start = (from, to, str) => { if (cur && !cur.pos.length) bodies.pop(); cur = null; nameAt = from; nameEnd = to; nameStr = str; };
+  const body = () => { if (!cur) { cur = { name: nameOf(), pos: [], tri: [], col: [], map: new Map() }; bodies.push(cur); } return cur; };
+  // one pass over the lines (splitting 40 MB of "g" lines into 20 M strings first was 1.6 s)
+  const ws = (c) => c === 32 || c === 9 || c === 13 || c === 11 || c === 12;
+  const n = s.length;
+  for (let i = 0; i < n;) {
+    let e = s.indexOf('\n', i);
+    if (e < 0) e = n;
+    let a = i;
+    i = e + 1;
+    while (a < e && ws(s.charCodeAt(a))) a++;
+    if (a === e) continue;
+    const c0 = s.charCodeAt(a);
+    if (c0 === 35) continue; // '#'
+    if ((c0 === 103 || c0 === 111) && (a + 1 === e || ws(s.charCodeAt(a + 1)))) { start(a + 1, e, base); continue; } // "g", "o"
+    const line = s.slice(a, e).trim();
     if (!line || line[0] === '#') continue;
     const sp = line.split(/\s+/);
     const k = sp[0];
     if (k === 'v') v.push(+sp[1], +sp[2], +sp[3]);
-    else if (k === 'o' || k === 'g') start(sp.slice(1).join(' ') || base);
+    else if (k === 'o' || k === 'g') start(-1, 0, sp.slice(1).join(' ') || base);
     else if (k === 'mtllib') {
       for (const f of sp.slice(1)) {
         const t = files.get(f.toLowerCase());
@@ -273,7 +299,7 @@ function parseOBJ(s, files, base) {
       }
     } else if (k === 'usemtl') mat = sp.slice(1).join(' ');
     else if (k === 'f') {
-      if (!cur) start(base);
+      body();
       const ids = sp.slice(1).map((x) => {
         const i = parseInt(x, 10);
         const k = i < 0 ? v.length / 3 + i : i - 1;
@@ -315,7 +341,7 @@ const PLY_SIZE = { Int8: 1, Uint8: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, 
 function parsePLY(buf, base) {
   const u8 = new Uint8Array(buf);
   const hdrEnd = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 65536))).indexOf('end_header');
-  if (hdrEnd < 0) throw new Error(`${base}.ply: no end_header`);
+  if (hdrEnd < 0) throw new Error(`${base}.ply is damaged: it has no end_header line`);
   let bodyStart = hdrEnd + 'end_header'.length;
   while (u8[bodyStart] === 13) bodyStart++;
   if (u8[bodyStart] === 10) bodyStart++;
@@ -497,19 +523,29 @@ export async function unzip(buf) {
   };
 }
 
-// a small XML tokenizer: [{ tag, attrs, close, self }] (a worker has no DOMParser)
-function xmlTags(s) {
-  const out = [];
-  const re = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
-  let m;
-  while ((m = re.exec(s))) {
+// A small XML tag walker (a worker has no DOMParser): onTag({ tag, attrs, close, self }) for each
+// tag whose local name (its prefix dropped) is in `want`, in document order; every other tag is
+// passed over without being parsed or kept. onTag returning true stops the walk. (A list of
+// every tag, built before anything was counted, ran out of heap on a 204 KB 3MF holding 200 MB
+// of "<a/>".)
+const TAG_RE = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/y;
+function xmlWalk(s, want, onTag) {
+  // the wanted tags' starts found by one regex (the engine passes over every other tag
+  // natively: 200 MB of "<a/>" in 0.5 s, against 1.2 s for a loop over each '<'), then each read
+  // whole by TAG_RE where it starts. A name is matched to its end, one prefix run at most per '<'.
+  const find = new RegExp(`<\\/?(?:[A-Za-z_][\\w:.-]*:)?(?:${want.join('|')})(?![\\w:.-])`, 'g');
+  let f;
+  while ((f = find.exec(s))) {
+    TAG_RE.lastIndex = f.index;
+    const m = TAG_RE.exec(s);
+    if (!m) continue;
     const attrs = {};
     const ar = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
     let a;
     while ((a = ar.exec(m[3]))) attrs[a[1].replace(/^.*:/, '')] = a[2] ?? a[3];
-    out.push({ tag: m[2].replace(/^.*:/, ''), attrs, close: !!m[1], self: !!m[4] });
+    if (onTag({ tag: m[2].replace(/^.*:/, ''), attrs, close: !!m[1], self: !!m[4] })) return;
+    find.lastIndex = TAG_RE.lastIndex;
   }
-  return out;
 }
 
 // 3MF's unit attribute -> the viewer's unit name (js/units.js holds mm per unit)
@@ -522,40 +558,51 @@ async function parse3MF(buf, base) {
   let path = '3D/3dmodel.model';
   const rels = await xmlPart('_rels/.rels', 'relationships part');
   if (rels) {
-    const t = xmlTags(text(rels, `${base}.3mf's relationships part`)).find((x) => x.tag === 'Relationship' && /3dmodel$/.test(x.attrs.Type || ''));
-    if (t && t.attrs.Target) path = t.attrs.Target;
+    xmlWalk(text(rels, `${base}.3mf's relationships part`), ['Relationship'], (t) => {
+      if (!/3dmodel$/.test(t.attrs.Type || '')) return false;
+      if (t.attrs.Target) path = t.attrs.Target;
+      return true;
+    });
   }
   const xml = await xmlPart(path, 'model part');
   if (!xml) throw new Error(`${base}.3mf has no model part (${path})`);
-  const tags = xmlTags(text(xml, `${base}.3mf's model part`));
-  const modelTag = tags.find((x) => x.tag === 'model');
-  const unit = (modelTag && modelTag.attrs.unit) || 'millimeter';
-  const k = LENGTH_MM[UNIT_NAME[unit]] ?? 1;
+  const who = `${base}.3mf`;
+  // what the model part holds is counted as it is read, and refused past the viewer's caps
+  // before it is kept (each vertex, triangle, placement, material and object costs memory)
+  const caps = { vertices: MAX_PLACED_VERTICES, triangles: MAX_PLACED_TRIANGLES, 'parts and placements': MAX_PLACED_PARTS,
+    'base materials': MAX_PLACED_PARTS, objects: MAX_PLACED_PARTS };
+  const held = Object.fromEntries(Object.keys(caps).map((c) => [c, 0]));
+  const hold = (what) => { if (++held[what] > caps[what]) throw new Error(`${who} holds more than the ${big(caps[what])} ${what} this viewer opens`); };
+  let unit = null, k = 1;
   const objects = new Map(); // id -> { name, verts, tris, pids, comps }
   const mats = new Map();    // basematerials id -> [[r,g,b], ...]
   const build = [];
   let obj = null, matGroup = null;
-  for (const t of tags) {
-    if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials') matGroup = null; continue; }
+  xmlWalk(text(xml, `${base}.3mf's model part`), ['model', 'basematerials', 'base', 'object', 'vertex', 'triangle', 'component', 'item'], (t) => {
+    if (t.close) { if (t.tag === 'object') obj = null; if (t.tag === 'basematerials') matGroup = null; return false; }
     switch (t.tag) {
-      case 'basematerials': matGroup = []; mats.set(t.attrs.id, matGroup); break;
-      case 'base': if (matGroup) matGroup.push(hexColour(t.attrs.displaycolor)); break;
-      case 'object': obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(t.attrs.id, obj); break;
-      case 'vertex': if (obj) obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); break;
+      // (the first model tag gives the unit, as before)
+      case 'model': if (unit === null) { unit = t.attrs.unit || 'millimeter'; k = LENGTH_MM[UNIT_NAME[unit]] ?? 1; } break;
+      case 'basematerials': hold('objects'); matGroup = []; mats.set(t.attrs.id, matGroup); break;
+      case 'base': if (matGroup) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
+      case 'object': hold('objects'); obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(t.attrs.id, obj); break;
+      case 'vertex': if (obj) { hold('vertices'); obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); } break;
       case 'triangle': if (obj) {
+        hold('triangles');
         obj.tris.push(+t.attrs.v1, +t.attrs.v2, +t.attrs.v3);
         const pid = t.attrs.pid ?? obj.pid, pi = t.attrs.p1 !== undefined ? +t.attrs.p1 : obj.pindex;
         obj.tcol.push(pid !== undefined && mats.get(pid) ? mats.get(pid)[pi] || null : null);
       } break;
-      case 'component': if (obj) obj.comps.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); break;
-      case 'item': build.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); break;
+      case 'component': if (obj) { hold('parts and placements'); obj.comps.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); } break;
+      case 'item': hold('parts and placements'); build.push({ id: t.attrs.objectid, m: mat3mf(t.attrs.transform, k) }); break;
       default:
     }
-  }
+    return false;
+  });
+  if (unit === null) unit = 'millimeter';
   // the component tree counted before it is built: a missing object, a cycle or a tree over 32
   // deep is a damaged file (they were dropped without a word), and a shared object placed past
   // the caps is refused (each object holding two of the next, 30 deep, ran the tab out of memory)
-  const who = `${base}.3mf`;
   placements(build.map((it) => it.id), (id, from) => {
     const o = objects.get(id);
     if (!o) throw new Error(`${who} is damaged: ${from === null ? 'its build' : `object ${from}`} names object ${id}, which is not there`);
@@ -634,8 +681,10 @@ async function parseGLTF(buf, format, base, files) {
       o += 8 + len;
     }
   } else json = parseJSON(text(buf, `${base}.gltf`), `${base}.gltf`);
-  if (!json) throw new Error(`${base}: no glTF JSON`);
-  const damaged = (what) => new Error(`${base} is damaged: ${what}`);
+  // its refusals name the file as the other readers do: name and extension
+  const file = `${base}.${format}`;
+  const damaged = (what) => new Error(`${file} is damaged: ${what}`);
+  if (!json) throw damaged('it holds no glTF JSON');
   // the JSON's shapes are checked where they are used: a list that is not one, or an index to
   // an entry that is not an object, is a damaged file, not the engine's "is not a function"
   const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -644,16 +693,23 @@ async function parseGLTF(buf, format, base, files) {
   const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
   const nat = (x) => Number.isInteger(x) && x >= 0;
   const refused = list(json.extensionsRequired, '"extensionsRequired"').filter((x) => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_mesh_quantization'].includes(x));
-  if (refused.length) throw new Error(`${base} needs ${refused.join(', ')}, which this viewer does not decode: export it without compression`);
+  if (refused.length) throw new Error(`${file} needs ${refused.join(', ')}, which this viewer does not decode: export it without compression`);
   const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
   const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
   const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {
     if (!isObj(b)) throw damaged(`buffer ${i} is not an object`);
-    if (b.uri === undefined) { if (i === 0 && bin) return bin; throw new Error(`${base}: buffer ${i} has no data`); }
+    if (b.uri === undefined) { if (i === 0 && bin) return bin; throw damaged(`buffer ${i} has no data`); }
     if (typeof b.uri !== 'string') throw damaged(`buffer ${i}'s uri is not text`);
+    // a uri that does not decode (a bad % escape, a data: URI fetch refuses) is a damaged file,
+    // not the engine's "URIError: URI malformed" / "TypeError: fetch failed"
+    const unread = () => damaged(`buffer ${i}'s uri "${b.uri.length > 80 ? `${b.uri.slice(0, 80)}...` : b.uri}" cannot be read`);
     // (a data: URI decoded by fetch: new Response(uri) gave the URI's own text as the buffer)
-    if (b.uri.startsWith('data:')) return (await fetch(b.uri)).arrayBuffer();
-    const f = files.get(decodeURIComponent(b.uri).split('/').pop().toLowerCase());
+    if (b.uri.startsWith('data:')) {
+      try { return await (await fetch(b.uri)).arrayBuffer(); } catch { throw unread(); }
+    }
+    let nm;
+    try { nm = decodeURIComponent(b.uri); } catch { throw unread(); }
+    const f = files.get(nm.split('/').pop().toLowerCase());
     if (!f) throw new Error(`${base}.gltf needs ${b.uri}: drop it together with the .gltf`);
     return f;
   }));
@@ -664,7 +720,11 @@ async function parseGLTF(buf, format, base, files) {
     const nc = NCOMP[a.type];
     // the count is bounded before anything is allocated: by a cap, then by its buffer view
     // (2^30 vertices with no buffer view ran the tab out of memory from a 200-byte file)
-    if (a.count * nc > MAX_ACCESSOR_VALUES) throw new Error(`${base}: accessor ${i} holds ${big(a.count * nc)} values, more than the ${big(MAX_ACCESSOR_VALUES)} this viewer reads`);
+    if (a.count * nc > MAX_ACCESSOR_VALUES) throw new Error(`${file}: accessor ${i} holds ${big(a.count * nc)} values, more than the ${big(MAX_ACCESSOR_VALUES)} this viewer reads`);
+    // with neither a buffer view nor sparse values every element is zero (glTF 2.0 3.6.2.1): it
+    // holds no geometry, so null is returned in place of the zeros (a 199-byte file of 30 M zero
+    // vertices was allocated and walked, 9.3 s and 1 GB, to reach "has no triangles")
+    if (a.bufferView === undefined && a.sparse === undefined) return null;
     const out = a.bufferView === undefined ? new Float64Array(a.count * nc)
       : readView(a.bufferView, a.byteOffset, Ctor, nc, a.count, true, `accessor ${i}`, a.normalized && max);
     // a sparse accessor: its listed elements replaced by its values, over the view or zeros
@@ -764,9 +824,19 @@ async function parseGLTF(buf, format, base, files) {
       list(me.primitives, `mesh ${nd.mesh}'s "primitives"`).forEach((pr, k) => {
         if (!isObj(pr)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} is not an object`);
         if ((pr.mode ?? 4) !== 4) return; // points, lines, strips: not drawn
-        if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${base} uses Draco compression, which this viewer does not decode`);
+        if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${file} uses Draco compression, which this viewer does not decode`);
         if (!isObj(pr.attributes)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} has no attributes`);
         const P = acc(pr.attributes.POSITION);
+        const I = pr.indices !== undefined ? acc(pr.indices) : undefined;
+        const name = me.primitives.length > 1 ? `${me.name || n.name} ${k + 1}` : (me.name || n.name);
+        // all-zero positions (every vertex at one point) or all-zero indices (every corner vertex
+        // 0): each triangle has no area, so the primitive is an empty body, as one whose every
+        // triangle the weld collapses
+        if (P === null || I === null) {
+          n.meshes.push(bodies.length);
+          bodies.push({ name, pos: [], tri: [], color: null });
+          return;
+        }
         const nv = P.length / 3;
         const pos = new Array(nv * 3);
         for (let v = 0; v < nv; v++) {
@@ -776,11 +846,11 @@ async function parseGLTF(buf, format, base, files) {
           pos[v * 3 + 1] = (m[1] * x + m[5] * y + m[9] * z + m[13]) * 1000;
           pos[v * 3 + 2] = (m[2] * x + m[6] * y + m[10] * z + m[14]) * 1000;
         }
-        const idx = pr.indices !== undefined ? Array.from(acc(pr.indices)) : Array.from({ length: nv }, (_, i) => i);
+        const idx = I !== undefined ? Array.from(I) : Array.from({ length: nv }, (_, i) => i);
         // a mirroring transform flips the winding back
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
         n.meshes.push(bodies.length);
-        bodies.push({ name: me.primitives.length > 1 ? `${me.name || n.name} ${k + 1}` : (me.name || n.name), pos, tri: idx,
+        bodies.push({ name, pos, tri: idx,
           color: Number.isInteger(pr.material) ? matColour[pr.material] || null : null });
       });
     }

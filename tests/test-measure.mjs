@@ -8,11 +8,7 @@ import assert from 'node:assert/strict';
 import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster } from '../js/raycast.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 // A model builder: bodies of faces, each face a list of triangles given as
 // point triples; points are deduplicated within a face only (OpenCascade's way)
@@ -162,5 +158,4 @@ test(`the BVH (bodies over ${BVH_MIN} triangles) answers as the scan does`, () =
   assert.equal(agree, 300, `${agree}/300 agree (${hits} hit)`);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

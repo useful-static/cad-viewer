@@ -7,11 +7,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { igesUnits, sourceUnits, unitOfFactor } from '../js/source-units.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 const enc = (s) => new TextEncoder().encode(s);
 const step = (data) => enc(`ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n${data}\nENDSEC;\nEND-ISO-10303-21;\n`);
 
@@ -134,5 +130,4 @@ if (inchFile && existsSync(inchFile)) {
   console.log('SKIP inch file: set CADV_INCH_STEP=<an inch STEP file>');
 }
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

@@ -8,6 +8,10 @@
 
 export const STEP_SLICE = 4 << 20;
 
+// The bytes OpenCascade is given: a UTF-8 byte-order mark first is dropped (it refuses one,
+// "unexpected QUID, expecting STEP"). The page (main.js) and stp2mesh.mjs both convert through it.
+export const withoutBom = (u8) => (u8[0] === 0xef && u8[1] === 0xbb && u8[2] === 0xbf ? u8.subarray(3) : u8);
+
 // u8 (Uint8Array) -> fn(text) once per slice, line breaks kept. The text after a slice's last
 // ";" (a record cut by the slice) is carried into the next. A carry longer than a slice holds
 // no ";" at all, so it is not records: it is dropped, not carried on (carried, a 600 MB file

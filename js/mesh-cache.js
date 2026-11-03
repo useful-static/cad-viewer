@@ -11,7 +11,8 @@
 // entries are dropped. Without IndexedDB or crypto.subtle (plain http is not a
 // secure context) every call is a no-op and the viewer converts as before.
 
-// Bump when a converter change alters the meshes. 2: file colours read as
+// Bump when a change to how a conversion becomes a .cadmesh alters the meshes. (A new converter
+// build needs no bump: main.js puts the staged build's VERSION in the key's parameters.) 2: file colours read as
 // sRGB (they were darkened), and faces that ran out of memory now mesh.
 // 3: open solids with planar missing faces are closed, and every body
 // carries its b-rep status (kind) (converter 0.0.23-progress7).

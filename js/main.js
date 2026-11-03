@@ -10,6 +10,7 @@ import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
 import { directUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
+import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
@@ -941,6 +942,17 @@ for (const v of VIEW_ROWS) {
     b.append(k);
   }
   document.querySelector('.presets').append(b);
+  // and its key in the ? box, before "the opposite side"
+  if (v.key) {
+    const dt = document.createElement('dt');
+    const k = document.createElement('kbd');
+    k.textContent = v.key;
+    dt.append(k);
+    const dd = document.createElement('dd');
+    dd.textContent = v.name;
+    $('viewkeys').insertBefore(dt, $('viewkey9'));
+    $('viewkeys').insertBefore(dd, $('viewkey9'));
+  }
 }
 for (const [fmt, x] of Object.entries(EXPORTS)) {
   const b = document.createElement('button');
@@ -1123,17 +1135,11 @@ async function exportMesh(fmt) {
     flashHover(`export failed: ${e.message || e}`);
     return;
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: EXPORTS[fmt].type }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${base}.${fmt}`;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-  app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name: a.download }; // (for tests)
+  const name = `${base}.${fmt}`;
+  downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
+  app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name }; // (for tests)
   setStatus('ready', readyText());
-  const note = `saved ${a.download}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`;
+  const note = `saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`;
   flashHover(note, 3000);
   announce(note);
 }
@@ -1146,15 +1152,12 @@ async function exportMesh(fmt) {
 async function savePicture(print = false) {
   // a drawing: its canvas as it is drawn
   if (app.dxf) {
-    const a = document.createElement('a');
     const blob = await new Promise((res) => $('view2d').toBlob(res, 'image/png'));
     if (!blob) return;
     if (print) return printPng(blob);
-    a.href = URL.createObjectURL(blob);
-    a.download = `${app.dxf.name.replace(/\.[^.]+$/, '')}.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    flashHover(`saved ${a.download}`, 3000);
+    const name = `${app.dxf.name.replace(/\.[^.]+$/, '')}.png`;
+    downloadBlob(blob, name);
+    flashHover(`saved ${name}`, 3000);
     return;
   }
   if (!app.header || !app.renderer) return;
@@ -1168,14 +1171,7 @@ async function savePicture(print = false) {
   const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
   const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
   const save = () => {
-    const url = URL.createObjectURL(png);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const url = downloadBlob(png, name);
     app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
     // (a size the view has grown too big for saves at the largest allowed)
     const note = `saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`;
@@ -1406,16 +1402,10 @@ function saveDrawing() {
   const label = $('model').querySelector('.mname')?.textContent || base;
   const d = drawingSVG(parts, right, up, { a: app.header.angularDeflection ?? 0.5,
     title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${app.selected.size ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
-  const url = URL.createObjectURL(new Blob([d.svg], { type: 'image/svg+xml' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-  app.lastDrawing = { name: a.download, preset, width: d.width, height: d.height, lines: d.lines, circles: d.circles, svg: d.svg }; // (for tests)
-  const note = `saved ${a.download}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`;
+  const name = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
+  downloadBlob(new Blob([d.svg], { type: 'image/svg+xml' }), name);
+  app.lastDrawing = { name, preset, width: d.width, height: d.height, lines: d.lines, circles: d.circles, svg: d.svg }; // (for tests)
+  const note = `saved ${name}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`;
   flashHover(note, 3000);
   announce(note);
 }
@@ -1801,6 +1791,8 @@ function showTourStep(i) {
   const x = app.explode;
   const ex1 = app.renderer ? s.explode ?? 0 : 0;
   if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; setExplode(true); }
+  // the way the step explodes, as it was recorded (as a view link sets it)
+  if (ex1 > 0 && x.on && s.explodeAlong && x.mode !== s.explodeAlong) setExplodeMode(s.explodeAlong);
   const exNow = x.t;
   if (x.on) x.t = ex1;
   const to = stepPose(s);
@@ -1926,7 +1918,10 @@ function captureStep({ camera = 'exact' } = {}) {
       s.isolate = names(shown);
     } else s.hide = names([...app.hidden]);
   }
-  if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) s.explode = r(app.explode.t, 3);
+  if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) {
+    s.explode = r(app.explode.t, 3);
+    if (app.explode.mode) s.explodeAlong = app.explode.mode;
+  }
   if (app.section.axis !== 'off') s.section = { axis: app.section.axis, t: r(app.section.t, 4), flip: !!app.section.flip };
   s.style = currentStyle().id;
   const notes = app.measure ? app.measure.notes() : [];
@@ -1934,6 +1929,8 @@ function captureStep({ camera = 'exact' } = {}) {
   return s;
 }
 
+// Every file the viewer saves goes through here (exports, pictures, drawings, a .cadmesh, a
+// tour): the object URL lives a minute, long enough for the browser to take it -> the URL
 function downloadBlob(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1944,6 +1941,7 @@ function downloadBlob(blob, name) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
   app.lastDownload = { name, bytes: blob.size, blob }; // (for tests)
+  return url;
 }
 function downloadText(text, name, type) {
   downloadBlob(new Blob([text], { type }), name);
@@ -2924,22 +2922,12 @@ function orientFor(src) {
   return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
 }
 
-// Where a list's note for a part goes: the top of that part (a tree node's
-// name, else a body's), at the middle of its box, along the view's up; null
-// for a name the model does not have
+// Where a list's note for a part goes: the top of that part, at the middle of its box, along
+// the view's up; null for a name the model does not have. The part is named as a list's "hide"
+// and a tour's callouts name one (js/tour.js resolveParts: a label, any case, a path, "#<id>")
 function notePoint(part) {
   if (!part || !app.header) return null;
-  let ids = null;
-  const walk = (n) => {
-    if (ids) return;
-    if (n.name === part) { ids = collect(n); return; }
-    for (const c of n.children) walk(c);
-  };
-  walk(app.header.root);
-  if (!ids || !ids.length) {
-    ids = app.header.meshes.flatMap((m, i) => (m.name === part ? [i + 1] : []));
-  }
-  return topOf(ids);
+  return topOf(tourParts([part]).ids);
 }
 
 // The top of these bodies along the model's up axis, at their middle: where
@@ -4120,8 +4108,8 @@ async function loadAny(buf, name, seq) {
     // is unpacked; a UTF-8 byte-order mark first is dropped: OpenCascade
     // refuses it ("unexpected QUID, expecting STEP"), as stp2mesh does (r21)
     if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
-    const b3 = new Uint8Array(buf, 0, Math.min(3, buf.byteLength));
-    if (b3[0] === 0xef && b3[1] === 0xbb && b3[2] === 0xbf) buf = buf.slice(3);
+    const kept = withoutBom(new Uint8Array(buf));
+    if (kept.byteOffset) buf = buf.slice(kept.byteOffset);
     // the parts' ids and descriptions, from the STEP text itself (the
     // converter keeps only names; js/step-meta.js), for the info panel
     app.stepMetaOf = { seq, map: format === 'step' ? stepProducts(buf) : null };
@@ -4131,7 +4119,8 @@ async function loadAny(buf, name, seq) {
     let key = null;
     if (cacheAvailable()) {
       setStatus('loading', `checking for a saved conversion of ${name}`);
-      key = await cacheKey(buf, format, DEFAULT_TESSELLATION).catch(() => null);
+      // (the converter build is part of what the mesh depends on: a new build is a new key)
+      key = await cacheKey(buf, format, { ...DEFAULT_TESSELLATION, converter: await converterBuild() }).catch(() => null);
       const hit = key && await cacheGet(key);
       if (stale(seq)) return;
       if (hit) {
@@ -4606,6 +4595,13 @@ function tessellate(buf, format, seq, name, threads) {
     w.postMessage({ buffer: buf, format, threads }, threads ? [] : [buf]);
   });
 }
+
+// The converter build staged beside the page (fetch-deps.sh writes its VERSION), read once: a
+// saved conversion's key names it, so a page on a new build converts again rather than serving
+// meshes the old one made. "unknown" when it cannot be read.
+let converterBuildP = null;
+const converterBuild = () => converterBuildP || (converterBuildP = fetch(new URL('vendor/occt-import-js/VERSION', location.href))
+  .then((r) => (r.ok ? r.text() : ''), () => '').then((t) => t.trim().slice(0, 80) || 'unknown'));
 
 // The file name a URL names: js/formats.js fileNameOfUrl (check.html reads the same)
 const fileName = fileNameOfUrl;
@@ -6108,12 +6104,7 @@ function wireInput() {
       setStatus(app.status, `could not save ${name}: ${e.message || e}`);
       return;
     }
-    const a = document.createElement('a');
-    const url = URL.createObjectURL(new Blob([bytes]));
-    a.href = url;
-    a.download = `${name.replace(/\.[^.]+$/, '')}.cadmesh`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBlob(new Blob([bytes]), `${name.replace(/\.[^.]+$/, '')}.cadmesh`);
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);

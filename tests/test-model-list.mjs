@@ -4,12 +4,9 @@
 
 import assert from 'node:assert/strict';
 import { entryByName, fetchModelLists, joinModelLists, parseModelList } from '../js/model-list.js';
+import { parseTour } from '../js/tour.js';
 
-let passed = 0;
-let failed = 0;
-async function test(name, fn) {
-  try { await fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const L = 'https://site.example/api/models.json';
 
@@ -40,6 +37,19 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('{"a": 3}', L), /"a": its name must be a string/);
   assert.throws(() => parseModelList('{"a": ', L), /not JSON/);
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
+});
+await test('an entry\'s picture, STEP and tours named by a share page are read from the file, as check.html checks them', () => {
+  const e = parseModelList(JSON.stringify({ 'b.cadmesh': { name: 'B', image: 'https://github.com/o/r/blob/main/b.webp', step: 'https://github.com/o/r/blob/main/b.stp', tours: [{ url: 'https://github.com/o/r/blob/main/t.cadtour.json' }], page: 'https://github.com/o/r/blob/main/README.md' } }), 'https://a.example/l.json');
+  assert.equal(e[0].image, 'https://raw.githubusercontent.com/o/r/main/b.webp');
+  assert.equal(e[0].step, 'https://raw.githubusercontent.com/o/r/main/b.stp');
+  assert.equal(e[0].tours[0].url, 'https://raw.githubusercontent.com/o/r/main/t.cadtour.json');
+  assert.equal(e[0].page, 'https://github.com/o/r/blob/main/README.md', 'a page stays the page');
+});
+await test('a note with both "part" and "at" is placed as a tour\'s callout is: by its part', () => {
+  const e = parseModelList(JSON.stringify({ 'b.cadmesh': { name: 'B', notes: [{ text: 'x', part: 'Fan', at: [1, 2, 3] }, { text: 'y', part: '  ', at: [4, 5, 6] }] } }), 'https://a.example/l.json');
+  assert.deepEqual(e[0].notes, [{ text: 'x', part: 'Fan' }, { text: 'y', at: [4, 5, 6] }]);
+  const t = parseTour(JSON.stringify({ cadtour: 2, steps: [{ callouts: [{ text: 'x', part: 'Fan', at: [1, 2, 3] }] }] }));
+  assert.deepEqual(t.steps[0].callouts, [{ text: 'x', part: 'Fan' }]);
 });
 await test('on an app\'s own scheme an entry\'s picture, STEP and tours are its own files too; a page must be http(s)', () => {
   const A = 'lc://app/data/cad/list.json';
@@ -186,5 +196,4 @@ await test('a wrong extra field refuses the list, naming the file and the field'
   }
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

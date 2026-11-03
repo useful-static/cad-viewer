@@ -5,11 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtVolume, unitWord } from '../js/units.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 test('fixed decimals per unit: a measurement', () => {
   assert.equal(fmtLength(25.4, 'measure', 'mm'), '25.40 mm');
@@ -84,5 +80,4 @@ test('every display unit has decimals and a system; the pickers carry no unit li
   }
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

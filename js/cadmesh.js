@@ -443,6 +443,7 @@ function validateHeader(h) {
     idxEnd = m.idxStart + m.idxCount;
     vtxEnd = m.vtxStart + m.vtxCount;
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
+    if (m.name !== undefined && m.name !== null && typeof m.name !== 'string') bad(`mesh ${i} name is not text`);
     if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
     // the UI maps a body's colour to #rrggbb: anything else threw there
     if (m.color !== undefined && m.color !== null
@@ -461,6 +462,9 @@ function validateHeader(h) {
   const walk = (node, depth) => {
     if (depth > 256) bad('assembly tree deeper than 256 levels (cycle?)');
     if (!node || !Array.isArray(node.meshes) || !Array.isArray(node.children)) bad('malformed assembly tree node');
+    // (names are text, or absent: a name of 5 passed here and failed later in the tour and
+    // colour code's own engine words)
+    if (node.name !== undefined && node.name !== null && typeof node.name !== 'string') bad('an assembly tree node name is not text');
     for (const i of node.meshes) {
       if (!Number.isInteger(i) || i < 0 || i >= n) bad(`assembly tree names mesh ${i} of ${n}`);
     }

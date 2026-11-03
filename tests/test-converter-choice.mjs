@@ -7,11 +7,7 @@ import assert from 'node:assert/strict';
 import { browserEnv, useThreads } from '../js/converter-choice.js';
 import { THREADED_MESH, forecast } from '../js/import-progress.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const DESKTOP_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36';
 const PHONE_UA = 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36';
@@ -72,5 +68,4 @@ test('the multi-core forecast shortens meshing only', () => {
   assert.ok(Math.abs(forecast(g, true).mesh - forecast(g).mesh * THREADED_MESH) < 1e-9, 'and for a file with only its size');
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

@@ -4,11 +4,7 @@
 import assert from 'node:assert/strict';
 import { MAX_NAMED, MAX_NOTES, bodyKeys, decodeView, encodeView, modelPrint, parseRuns, resolveBodies, runs } from '../js/view-link.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const view = {
   cam: { target: [12.3456789, -4, 1e-7], dist: 1234.56789, q: [0.1, 0.2, 0.3, Math.sqrt(1 - 0.14)], ortho: true, orient: '+z-y' },
@@ -139,5 +135,4 @@ test('Explode rides in the link: how far and how; off leaves it out; a bad one i
   for (const e of ['1.5,z', '-0.1,z', 'x,z', '0.5,diagonal', '0.5']) assert.equal(decodeView(`c:0,0,0,10,0,0,0,1;e:${e}`).explode, undefined, e);
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();

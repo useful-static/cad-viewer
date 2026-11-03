@@ -5,11 +5,7 @@
 import assert from 'node:assert/strict';
 import { directUrl } from '../js/open-url.js';
 
-let passed = 0;
-let failed = 0;
-function test(name, fn) {
-  try { fn(); passed++; console.log(`PASS ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
-}
+import { test, done } from './harness.mjs';
 
 const cases = [
   ['GitHub blob', 'https://github.com/acme/board/blob/main/cad/board.step', 'https://raw.githubusercontent.com/acme/board/main/cad/board.step', 'GitHub'],
@@ -31,5 +27,4 @@ test('left as they are: a raw URL, a GitHub repo page, Dropbox dl=1, not a URL',
   }
 });
 
-console.log(`RESULT: ${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+done();
