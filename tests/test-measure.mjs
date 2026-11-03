@@ -103,6 +103,32 @@ test('a board with four mounting holes: four holes, their spacing', () => {
   assert.deepEqual(at, [[3.5, 3.5], [3.5, 52.5], [61.5, 3.5], [61.5, 52.5]]);
   assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2));
 });
+test('two blind holes drilled from either side, material between, are two holes, not one through-hole', () => {
+  // a round block 0..10 high, radius 6; a hole of radius 2 from the top 3 deep and one from the
+  // bottom 3 deep (their walls: z 7..10 and 0..3; 4 of material between)
+  const n = 40, ri = 2, ro = 6;
+  const ring = (r, z) => Array.from({ length: n }, (_, i) => P(r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n), z));
+  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+  const faces = [band(ring(ri, 10), ring(ro, 10)), band(ring(ro, 0), ring(ri, 0)), band(ring(ri, 7), ring(ri, 10)), band(ring(ri, 0), ring(ri, 3)), band(ring(ro, 10), ring(ro, 0))];
+  const h = holesOf(bodyGeometry(model([{ name: 'block', faces }]), 0));
+  assert.deepEqual(h.map((x) => x.rims), [1, 1], JSON.stringify(h));
+  // with a wall the whole way through: one hole 10 deep
+  const through = [faces[0], faces[1], band(ring(ri, 0), ring(ri, 10)), faces[4]];
+  const t = holesOf(bodyGeometry(model([{ name: 'block', faces: through }]), 0));
+  assert.deepEqual(t.map((x) => [x.rims, Math.round(x.depth * 1e4) / 1e4]), [[2, 10]], JSON.stringify(t));
+});
+test('under a section the cast skips by the hit point, as the view cuts: not by the triangle', () => {
+  // a box 0..10, its top two triangles; the cut at x = 6 keeps x < 6
+  const m = model([{ name: 'box', faces: box([0, 0, 0], [10, 10, 2]) }]);
+  const caster = makeCaster(m);
+  const cut = (q) => q[0] > 6; // (the cut-away side)
+  // a ray down at (5, 1): on the drawn top (whatever its triangle's centroid says)
+  const kept = caster.cast([0], [5, 1, 10], [0, 0, -1], Infinity, cut);
+  assert.ok(kept && Math.abs(kept.t - 8) < 1e-6, JSON.stringify(kept));
+  // a ray down at (6.5, 8): cut away -- it goes on through to nothing of the top
+  const gone = caster.cast([0], [6.5, 8, 10], [0, 0, -1], Infinity, cut);
+  assert.ok(!gone || gone.t > 8 + 1e-6, JSON.stringify(gone));
+});
 test('a clevis: two flanges on one axis are two holes of their own depth, not one through the gap', () => {
   const faces = [...washer(2, 6, 1.6, 40, 0, 0), ...washer(2, 6, 1.6, 40, 0, 0, 11.6)];
   const holes = holesOf(bodyGeometry(model([{ name: 'clevis', faces }]), 0));

@@ -199,6 +199,9 @@ async function main() {
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
   const buf = encodeCadmesh(model, { edges: !args.noEdges });
+  // (the page saves a conversion only once it loads; decoded here first too -- written and printed
+  // OK before, a model past the viewer's bound left its file behind with an OK line, then FAIL)
+  const h = decodeCadmesh(buf).header;
   if (model.unmeshedFaces) {
     process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }
@@ -211,7 +214,6 @@ async function main() {
     + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s`
     + `, declared unit ${declared || 'not recorded'}\n`);
   // the edge list and body facts encodeCadmesh built
-  const h = decodeCadmesh(buf).header;
   const sec = (s) => (h.sections[s] ? h.sections[s].byteLength / 8 : 0);
   if (h.facts) {
     process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`

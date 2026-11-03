@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
-import { drawsNothing, isShape } from './js/dxf.js';
+import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 const args = process.argv.slice(2);
@@ -48,7 +48,7 @@ for (const f of files) {
     try {
       const dr = drawDWG(d, P);
       // (and what it holds that is not drawn, by kind, as the page's info panel says it)
-      rep.drawn = { paths: dr.paths.filter(isShape).length, texts: dr.texts.length, layouts: dr.layouts.length, notDrawn: dr.notDrawn };
+      rep.drawn = { paths: dr.paths.filter(isShape).length, texts: dr.texts.length, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
     if (d.failures.length || rep.drawError) bad++;

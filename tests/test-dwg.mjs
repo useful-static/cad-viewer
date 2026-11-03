@@ -479,6 +479,19 @@ t('round 18: drops counted only where the drawing reaches them; a missing block\
   };
   assert.deepEqual(two(false), {});
   assert.deepEqual(two(true), { INSERT: 1, 'ATTRIB (multi-line)': 1 });
+  // a drawn block whose name keeps an escape (A\U+00B0, B\M+18277): its failed child counted (the
+  // raw name never matched the decoded one parseDXF walks)
+  for (const bn of ['PLAIN', 'A\\U+00B0', 'B\\M+18277']) {
+    const o3 = new Map([
+      [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [10] } }],
+      [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, flags: 0 } }],
+      [3, { handle: 3, name: 'BLOCK_RECORD', decoded: true, d: { name: bn, base: [0, 0, 0], entities: [14] } }],
+      [10, { handle: 10, name: 'INSERT', decoded: true, e: E(1), d: { block: 3, p: [0, 0, 0], s: [1, 1, 1], rot: 0 } }],
+      [14, { handle: 14, name: 'LINE', decoded: true, e: E(3), d: { p0: [0, 0, 0], p1: [1, 0, 0] } }],
+      [15, { handle: 15, name: 'CIRCLE', entity: true, error: 'read past the end', e: E(3) }],
+    ]);
+    assert.deepEqual(drawDWG({ objects: o3, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 }).notDrawn, { 'CIRCLE (could not be read)': 1 }, bn);
+  }
 });
 
 // --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:

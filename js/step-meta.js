@@ -53,8 +53,19 @@ export function decodeStepString(s) {
   };
   // (one pass, left to right, an escaped backslash taken first: undone one kind at a time,
   // 'A\\S\\B' -- "A\S\B" -- read as "A\ÜB")
-  const one = (m, x2, x4, x1, s1) => (m === '\\\\' ? '\\' : x2 ? run(4)(m, x2) : x4 ? run(8)(m, x4)
-    : x1 ? String.fromCharCode(parseInt(x1, 16)) : String.fromCharCode(s1.charCodeAt(0) + 0x80));
+  // (\PX\ chooses the page \S\ reads in, ISO 8859-1 .. 9 for A .. I, and is no text itself: it
+  // stayed in the name, "\PA\Café", where the converter drops it)
+  let page = 'A';
+  const upper = (c) => {
+    const b = c.charCodeAt(0) + 0x80;
+    if (page === 'A') return String.fromCharCode(b);
+    try { return new TextDecoder(`iso-8859-${page.charCodeAt(0) - 64}`).decode(Uint8Array.of(b)); } catch { return String.fromCharCode(b); }
+  };
+  const one = (m, x2, x4, x1, s1, pg) => {
+    if (m === '\\\\') return '\\';
+    if (pg) { page = pg; return ''; }
+    return x2 ? run(4)(m, x2) : x4 ? run(8)(m, x4) : x1 ? String.fromCharCode(parseInt(x1, 16)) : upper(s1);
+  };
   return s.replace(/''/g, "'")
-    .replace(/\\\\|\\X2\\((?:[0-9A-Fa-f]{4})+)\\X0\\|\\X4\\((?:[0-9A-Fa-f]{8})+)\\X0\\|\\X\\([0-9A-Fa-f]{2})|\\S\\(.)/g, one);
+    .replace(/\\\\|\\X2\\((?:[0-9A-Fa-f]{4})+)\\X0\\|\\X4\\((?:[0-9A-Fa-f]{8})+)\\X0\\|\\X\\([0-9A-Fa-f]{2})|\\S\\(.)|\\P([A-I])\\/g, one);
 }

@@ -20,7 +20,7 @@ export async function readMeshFile({ buf, format, name, extras, unit = 'mm' }) {
     for (const b of model.meshes) for (let i = 0; i < b.positions.length; i++) b.positions[i] *= k;
     // (scaled past float32's range, read in the unit asked: refused in the reader's own words,
     // not the encoder's "header bounding box malformed")
-    for (const b of model.meshes) for (const x of b.positions) if (!Number.isFinite(x) || Math.abs(x) > MAX_COORD) throw new Error(`${name} is too large to show in ${unit} (a coordinate past ${MAX_COORD_WORDS} mm)`);
+    for (const b of model.meshes) for (const x of b.positions) if (!Number.isFinite(x) || Math.abs(x) > MAX_COORD) throw new Error(`${name} is too large to show in ${unit} (a coordinate past ${MAX_COORD_WORDS})`);
   }
   if (unitless) model.sourceUnits = unit;
   return { raw: encodeCadmesh(model), unitless };

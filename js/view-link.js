@@ -5,6 +5,8 @@
 //   c  camera: target (to a millionth of the distance), distance and
 //      orientation quaternion (6 significant digits)
 //   p  projection: o ortho (absent: perspective)
+//   w  the view's shape (width / height) when the link was made: opened on
+//      another shape, the view is reframed
 //   u  orientation (js/orient.js), canonical up then front: +z+x; z is
 //      +z-y (Z up, the older links' only value); absent: the file's own +y+z
 //   s  display style id (js/styles.js; absent: the viewer's own default)
@@ -13,8 +15,9 @@
 //   h  hidden bodies, k selected bodies: ids as runs ("1-3,7")
 //   m  the model's body names, fingerprinted (8 hex): ids mean the bodies
 //      they meant only while it matches
-//   a  notes pinned to points (at most MAX_NOTES): x,y,z,text as base64url,
-//      "~" between them
+//   a  notes pinned to points (at most MAX_NOTES): x,y,z (to the micrometre,
+//      roundNotePoint),text as base64url, "~" between them
+// Every number is read by linkNumber: an empty value is none, never 0.
 //   n  the selected bodies by name (at most MAX_NAMED), each its key
 //      (bodyKeys) as base64url: a link made before the model's file was
 //      regenerated or revised, whose ids now name other bodies, still selects
@@ -27,6 +30,9 @@ import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull } from './orient.js';
 import { STYLE_IDS } from './styles.js';
 
 const num = (v) => Number(v.toPrecision(6));
+// A section's position and an explode's amount (0..1) as a link or a tour keeps them: 6 significant
+// figures (a tour kept 4 and 3 decimals: a cut typed at 584.441 mm came back 0.033 mm off)
+export const roundFraction = num;
 // A note's point as a link or a tour keeps it: to the micrometre (mm, 3 decimals), whatever its
 // size -- six significant figures moved a note at 123456.789 by 0.2 mm, while the tour kept it
 // exact. The one rule for both (js/main.js tour steps)
@@ -185,7 +191,7 @@ export function decodeView(s) {
         out.cam = { target: n.slice(0, 3), dist: n[3], q: n.slice(4).map((x) => x / qlen) };
       }
     } else if (k === 'p') out.ortho = val === 'o';
-    else if (k === 'w') { const a = Number(val); if (a > 0.05 && a < 20) out.aspect = a; }
+    else if (k === 'w') { const a = linkNumber(val); if (a > 0.05 && a < 20) out.aspect = a; }
     else if (k === 'u') out.orient = val === 'z' ? Z_UP_ORIENT : val === 'y' ? DEFAULT_ORIENT : orientOrNull(val);
     else if (k === 's' && STYLE_IDS.includes(val)) out.style = val;
     else if (k === 'x') {

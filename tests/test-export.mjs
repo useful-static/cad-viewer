@@ -5,7 +5,8 @@
 
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
-import { EXPORTS, crc32, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
+import { EXPORTS, crc32, exportable, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
+import { parseMesh } from '../js/mesh-formats.js';
 
 import { test, done } from './harness.mjs';
 
@@ -116,8 +117,14 @@ await test('an empty body is left out of the GLB and the 3MF (it made a count-0 
   const j = JSON.parse(new TextDecoder().decode(g.slice(20, 20 + jl)));
   assert.equal(j.nodes.length, 2);
   assert.ok(j.accessors.every((a) => a.count > 0 && (!a.min || a.min.every((x) => x !== null))));
+  // the 3MF read back by our own reader: its two bodies, by name (the empty one left out)
   const z = await to3MF(m3, [1, 2, 3], IDENT, ['plate', 'tri', 'empty']);
-  assert.ok(z.length > 0);
+  const back = await parseMesh('3mf', z.buffer.slice(z.byteOffset, z.byteOffset + z.byteLength), 'two.3mf');
+  assert.deepEqual(back.meshes.map((x) => x.name), ['plate', 'tri']);
+  // the one count the page and the CLI say and refuse by; none left: refused, not an empty file
+  assert.deepEqual(exportable(m3, [1, 2, 3]), [1, 2]);
+  assert.throws(() => toGLB(m3, [3], YUP, ['empty']), /nothing to export/);
+  await assert.rejects(to3MF(m3, [3], IDENT, ['empty']), /nothing to export/);
 });
 
 done();

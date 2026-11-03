@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, drawsNothing, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed } from '../js/dxf-view.js';
@@ -671,6 +671,7 @@ test('round 19: a sheet of viewport frames alone draws nothing; a Uint8Array or 
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 20], [41, 20], [69, 2], [0, 'ENDSEC'], [0, 'EOF']]));
   assert.equal(frames.layouts[0].paths.length, 1);
   assert.equal(drawsNothing(frames), true);
+  assert.deepEqual(sheetsOf(frames), [], 'no sheet offered (the Sheet menu, the info row and dwg-check agree)');
   const text = dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDSEC'], [0, 'EOF']]);
   assert.equal(parseDXF(new TextEncoder().encode(text)).paths.length, 1);
   assert.equal(parseDXF(Buffer.from(text)).paths.length, 1);

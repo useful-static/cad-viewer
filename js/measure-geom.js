@@ -22,6 +22,9 @@
 const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
+// what float32 positions can tell apart near a coordinate of size `far`: 2^-23 of it, eight times
+// over (a sum of a few rounded terms). The one floor for planeOf and circleOf
+const storedFloor = (far) => 8 * 2 ** -23 * far;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
@@ -76,7 +79,7 @@ export function circleOf(pts, angularDeflection) {
   // "not a circle")
   let far = 0;
   for (const p of pts) far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
-  const stored = 8 * 2 ** -23 * far;
+  const stored = storedFloor(far);
   for (const [x, y, z] of xy) {
     if (Math.abs(z) > Math.max(EPS_PLANAR * r, stored)) return null;
     if (Math.abs(Math.hypot(x - cx, y - cy) - r) > Math.max(RADIUS_TOL * r, stored)) return null;
@@ -100,7 +103,8 @@ function planeOf(P, I, t0, nt) {
     if (!n || l > area) { n = cr.map((v) => v / l); p0 = pa; area = l; }
   }
   if (!n) return null;
-  // every vertex on that plane, to a millionth of the face's size
+  // every vertex on that plane, to 1e-5 of the face's size (at least a micrometre, and no finer than
+  // the positions are stored)
   let lo = Infinity, hi = -Infinity, ext = 0, far = 0;
   for (let t = t0; t < t0 + nt; t++) {
     for (let j = 0; j < 3; j++) {
@@ -116,7 +120,7 @@ function planeOf(P, I, t0, nt) {
   // the positions are stored -- float32 rounds a coordinate to 2^-23 of itself. At 1e-6 a flat
   // tilted face 1 m out read "not flat", and a board's bottom whose 4 vertices of 1,873 sit 0.3 um
   // off lost its 38 holes' depths)
-  if (hi - lo > Math.max(1e-5 * ext, PLANE_FLOOR_MM, 8 * 2 ** -23 * far)) return null;
+  if (hi - lo > Math.max(1e-5 * ext, PLANE_FLOOR_MM, storedFloor(far))) return null;
   return { normal: n, d: dot(n, p0) };
 }
 
@@ -248,7 +252,8 @@ export function bodyGeometry(model, meshIndex) {
   for (const [k, v] of node) {
     for (const n of v.nb) if (!seen.has(sk(k, n))) walk(k, n);
   }
-  return { faces, corners, edges, circles, segments: segs.size };
+  // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices)
+  return { faces, corners, edges, circles, segments: segs.size, P, I };
 }
 
 // The midpoint of a polyline, by length
@@ -310,6 +315,38 @@ export function faceGap(a, b) {
 
 // ---- holes (the hole table) ----
 
+// Whether the body's curved faces lying on rim a's cylinder (its axis, its radius) cover the axis
+// from a to rim b: the hole's wall. A geometry without its positions (geom.P) is taken as joined
+function wallJoins(geom, a, b) {
+  const { P, I } = geom;
+  if (!P || !I) return true;
+  const n = a.normal, c = a.centre;
+  const end = dot(sub(b.centre, c), n);
+  const lo = Math.min(0, end), hi = Math.max(0, end);
+  const spans = [];
+  for (const f of geom.faces) {
+    if (f.plane || !f.ntri) continue;
+    let t0 = Infinity, t1 = -Infinity, on = true;
+    for (let t = f.tri0; t < f.tri0 + f.ntri && on; t++) {
+      for (let j = 0; j < 3; j++) {
+        const v = I[3 * t + j] * 3;
+        const d = [P[v] - c[0], P[v + 1] - c[1], P[v + 2] - c[2]];
+        const along = dot(d, n);
+        const off = len(sub(d, n.map((x) => x * along)));
+        const tol = Math.max(RADIUS_TOL * a.radius, storedFloor(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
+        if (Math.abs(off - a.radius) > tol) { on = false; break; }
+        t0 = Math.min(t0, along); t1 = Math.max(t1, along);
+      }
+    }
+    if (on && t1 > lo && t0 < hi) spans.push([t0, t1]);
+  }
+  spans.sort((x, y) => x[0] - y[0]);
+  const eps = 1e-3 * (hi - lo) + PLANE_FLOOR_MM;
+  let at = lo;
+  for (const [s0, s1] of spans) { if (s0 > at + eps) break; at = Math.max(at, s1); }
+  return at >= hi - eps;
+}
+
 // The holes of a body: circles on its planar faces that bound an inner loop
 // (a face's loops other than its outer one), merged where the two rims of one
 // through-hole meet the top and bottom faces (same axis, same radius).
@@ -348,6 +385,9 @@ export function holesOf(geom) {
       if (dot(d, faceN(r)) >= 0) continue;
       if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); best = j; }
     }
+    // (and a wall joins them: a curved face on the hole's cylinder spanning rim to rim -- two blind
+    // holes drilled from either side, material between, read as one through-hole)
+    if (best >= 0 && !wallJoins(geom, r, rims[best])) best = -1;
     used.add(i);
     if (best >= 0) used.add(best);
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });

@@ -91,10 +91,13 @@ export function makeCaster(model) {
     const m = meshes[mi];
     const t0 = m.idxStart / 3, nt = m.idxCount / 3;
     let best = tmax, bt = -1;
+    // (skip(point) says whether a hit there is not there to hit -- the cut side of a section: judged
+    // at the hit, as the view cuts each pixel, not by the triangle)
     const test = (t) => {
-      if (skip && skip(t)) return;
       const h = hitTri(P, I, t, o, d);
-      if (h < best) { best = h; bt = t; }
+      if (!(h < best)) return;
+      if (skip && skip([o[0] + h * d[0], o[1] + h * d[1], o[2] + h * d[2]])) return;
+      best = h; bt = t;
     };
     if (nt < BVH_MIN) {
       for (let t = t0; t < t0 + nt; t++) test(t);

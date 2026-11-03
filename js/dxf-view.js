@@ -241,14 +241,37 @@ export function createDxfView(canvas, drawing, cb = {}) {
   }
 
   // the snap point nearest css px (x, y) within 10 px, else none
-  function snapAt(px, py) {
-    let best = null, bd = 100;
+  // The snap points within 10 px, by a grid over them (drawing units, built on the first snap):
+  // every point scanned on every pointer move, with two layout reads each, was 0.6 s a move on a
+  // drawing of 5.2 million points
+  let grid = null;
+  const SNAP_PX = 10;
+  function snapGrid() {
+    const span0 = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
+    const g = { cell: span0 / 1024, cells: new Map() };
     for (const s of snaps) {
-      if (st.off.has(s[3])) continue;
-      const [sx, sy] = toPx(s[0], s[1]);
-      const d = (sx - px) ** 2 + (sy - py) ** 2;
-      if (d < bd) { bd = d; best = s; }
+      const k = `${Math.floor(s[0] / g.cell)},${Math.floor(s[1] / g.cell)}`;
+      let c = g.cells.get(k);
+      if (!c) g.cells.set(k, (c = []));
+      c.push(s);
     }
+    return g;
+  }
+  function snapAt(px, py) {
+    if (!grid) grid = snapGrid();
+    const [ux, uy] = toUnits(px, py);
+    const r = SNAP_PX / st.s;
+    let best = null, bd = r * r;
+    const look = (s) => {
+      if (st.off.has(s[3])) return;
+      const d = (s[0] - ux) ** 2 + (s[1] - uy) ** 2;
+      if (d < bd) { bd = d; best = s; }
+    };
+    const x0 = Math.floor((ux - r) / grid.cell), x1 = Math.floor((ux + r) / grid.cell);
+    const y0 = Math.floor((uy - r) / grid.cell), y1 = Math.floor((uy + r) / grid.cell);
+    // (zoomed far out, more cells than points: every point once instead)
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > grid.cells.size) { for (const s of snaps) look(s); return best; }
+    for (let i = x0; i <= x1; i++) for (let j = y0; j <= y1; j++) { const c = grid.cells.get(`${i},${j}`); if (c) for (const s of c) look(s); }
     return best;
   }
   // 6 significant figures; a value a billionth of the drawing's size is float

@@ -48,7 +48,8 @@ await test('3MF is a zip; GLB has the glTF magic and the bodies as named nodes',
   const g = readFileSync(join(dir, 'two.glb'));
   assert.equal(g.subarray(0, 4).toString(), 'glTF');
   const json = JSON.parse(g.subarray(20, 20 + g.readUInt32LE(12)).toString());
-  assert.deepEqual(json.nodes.map((n) => n.name), ['floor', 'arrow 1']);
+  // (labelled as the page labels them: the part's tree node, then the body)
+  assert.deepEqual(json.nodes.map((n) => n.name), ['t › floor', 't › arrow 1']);
 });
 
 await test('--skip leaves out the bodies it matches; --out names the files', () => {
@@ -56,8 +57,24 @@ await test('--skip leaves out the bodies it matches; --out names the files', () 
   assert.equal(r.status, 0, r.stderr);
   const g = readFileSync(join(dir, 'only.glb'));
   const json = JSON.parse(g.subarray(20, 20 + g.readUInt32LE(12)).toString());
-  assert.deepEqual(json.nodes.map((n) => n.name), ['floor']);
+  assert.deepEqual(json.nodes.map((n) => n.name), ['t › floor']);
   assert.match(r.stdout, /1 of 2 bodies/);
+  // a pattern copied from the page's label matches too
+  const r2 = run(inp, '--to', 'glb', '--skip', '^t › arrow', '--out', join(dir, 'only2'), '--model-up', 'y');
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.match(r2.stdout, /1 of 2 bodies/);
+  // every body skipped: refused, nothing written (an empty GLB is invalid glTF)
+  const r3 = run(inp, '--to', 'glb', '--skip', '.', '--out', join(dir, 'none'), '--model-up', 'y');
+  assert.equal(r3.status, 1, r3.stderr);
+  assert.ok(!existsSync(join(dir, 'none.glb')));
+  // help is not an error; a bad --skip is an option's error
+  assert.equal(run('-h').status, 0);
+  assert.equal(run(inp, '--skip', '(').status, 2);
+  // an option with no value is a usage error; a write that fails is one line, exit 1
+  assert.equal(run(inp, '--to').status, 2);
+  const w = run(inp, '--to', 'stl', '--out', join(dir, 'no-such-dir', 'x'));
+  assert.equal(w.status, 1);
+  assert.match(w.stderr, /^cadmesh-export: could not write .*x\.stl: /);
 });
 
 await test('a bad option is refused with exit 2', () => {

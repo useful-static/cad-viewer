@@ -51,6 +51,9 @@ test('a STEP name written as raw UTF-8, \\S\\ or \\X4\\ decodes as the converter
   assert.equal(decodeStepString('\\X2\\00E900E8\\X0\\'), 'éè');
   // an escaped backslash is taken first, in one pass: 'A\\S\\B' is "A\S\B", not "A\ÜB"
   assert.equal(decodeStepString('A\\\\S\\\\B'), 'A\\S\\B');
+  // \PA\ (a page directive) is no text; \PB\ makes the \S\ that follow ISO 8859-2 (0xB1 is ą there)
+  assert.equal(decodeStepString('\\PA\\Caf\\S\\i'), 'Café');
+  assert.equal(decodeStepString('\\PB\\\\S\\1'), 'ą');
   // bytes that are not UTF-8 stay as read
   assert.equal(decodeStepString('na\xefve'), 'na\xefve');
 });

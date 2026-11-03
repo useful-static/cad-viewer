@@ -109,19 +109,13 @@ export function createMeasure(deps) {
     return out;
   }
 
-  // the cut side of a section is not there to hit
+  // the cut side of a section is not there to hit: a hit point past the plane, as the view cuts
+  // each pixel (by a triangle's centroid, a click on the drawn top near the cut found nothing, one
+  // on the cut-away side snapped)
   function skipCut() {
     const p = deps.sectionPlane();
     if (!p) return null;
-    const P = st.model.position, I = st.model.index;
-    return (t) => {
-      let s = 0;
-      for (let j = 0; j < 3; j++) {
-        const v = I[3 * t + j] * 3;
-        s += p[0] * P[v] + p[1] * P[v + 1] + p[2] * P[v + 2];
-      }
-      return s / 3 > p[3];
-    };
+    return (q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2] > p[3];
   }
 
   // nothing in front of p on the segment from the eye (ortho: from far back
@@ -513,6 +507,9 @@ export function createMeasure(deps) {
     }
     if (st.holes) {
       ctx.font = `${12 * s}px system-ui, sans-serif`;
+      // (its own baseline: set only in the results' loop, a picture without results drew the
+      // numbers 12 px higher)
+      ctx.textBaseline = 'top';
       st.holes.list.forEach((h, i) => {
         const q = P(h.centre);
         if (!q) return;

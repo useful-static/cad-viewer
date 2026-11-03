@@ -257,7 +257,25 @@ export const MAX_FILE_BYTES = 2 * 2 ** 30;
 // float32 (its matrices, the depth range), so float32's range is not the bound -- a model at 1e38
 // loaded and showed blank, every vertex NaN. 1e15 squared stays well inside it
 export const MAX_COORD = 1e15;
-export const MAX_COORD_WORDS = '10^15';
+export const MAX_COORD_WORDS = '10^15 mm';
+
+// Each body's label as the page shows it: "owner › body", its nearest named tree node and its own
+// name (CAD exporters name bodies generically -- COMPONENT1..n -- while the tree carries the part's
+// name), or its name alone. The one rule for the page and cadmesh-export.mjs (the CLI named
+// a node COMPONENT1 where the page said BOARD › COMPONENT1)
+export function bodyLabels(header) {
+  const labels = header.meshes.map((m) => m.name);
+  const walk = (n, owner) => {
+    const nm = n.name || owner;
+    for (const i of n.meshes) {
+      const mn = header.meshes[i].name;
+      labels[i] = nm && nm !== mn ? `${nm} › ${mn}` : mn;
+    }
+    for (const c of n.children) walk(c, nm);
+  };
+  if (header.root) walk(header.root, '');
+  return labels;
+}
 
 // gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz),
 // counted as they come, at most `max`
@@ -425,7 +443,13 @@ function validateHeader(h) {
   const bad = (msg) => { throw new Error(`cadmesh: ${msg}`); };
   const ok = (v) => Number.isInteger(v) && v >= 0;
   const vec3 = (v) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
-  const box = (b) => b && vec3(b.min) && vec3(b.max);
+  // (a box's corners held to the coordinates' bound too, in the same words: the view frames by the
+  // stored boxes, and one of +-1e38 over in-range positions decoded)
+  const box = (b) => {
+    if (!(b && vec3(b.min) && vec3(b.max))) return false;
+    if ([...b.min, ...b.max].some((x) => Math.abs(x) > MAX_COORD)) bad(`too large to show (a coordinate past ${MAX_COORD_WORDS})`);
+    return true;
+  };
   if (!ok(h.vertexCount) || !ok(h.indexCount)) bad('header vertex/index counts missing or invalid');
   if (h.indexCount % 3) bad('index count is not a whole number of triangles');
   if (h.vertexCount ? !box(h.bbox) : h.bbox !== null) bad('header bounding box malformed');

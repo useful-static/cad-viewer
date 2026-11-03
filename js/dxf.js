@@ -342,7 +342,13 @@ export function parseDXF(s, opts = {}) {
   const sets = [];
   const active = every.filter(inPaper);
   if (active.length) sets.push({ recs: active, sheet: sheetOf.get('*PAPER_SPACE') });
-  for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push({ recs: b.recs, sheet: sheetOf.get(name.toUpperCase()) });
+  // (a layout's block is walked as its sheet: opts.walked holds it, so drawDWG need not know the
+  // layouts' naming)
+  for (const [name, b] of blocks) {
+    if (!/^\*Paper_Space\d+$/i.test(name)) continue;
+    if (walked) walked.add(name);
+    if (b.recs.length) sets.push({ recs: b.recs, sheet: sheetOf.get(name.toUpperCase()) });
+  }
   // (in tab order where the drawing gives one: 13 sheets came in an order of their own)
   const tabOf = (s) => (s.sheet && Number.isFinite(s.sheet.tab) ? s.sheet.tab : Infinity);
   sets.sort((a, b) => tabOf(a) - tabOf(b));
@@ -1343,6 +1349,10 @@ export function attribTextGroups(g) {
 export const isShape = (p) => !p.outline && !p.frame;
 // (a viewport's frame alone is not a drawing: a sheet of frames passed as one)
 export const sheetDraws = (s) => s.paths.some(isShape) || s.texts.length > 0; // (model space, or a layout)
+// The layouts a drawing offers -- those that draw something -- with their index: the one rule for
+// the Sheet menu, the info panel's paper-space row and dwg-check (the row pointed at a menu the
+// page hid, and the CLI counted every layout)
+export const sheetsOf = (d) => d.layouts.map((l, i) => ({ l, i })).filter(({ l }) => sheetDraws(l));
 export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws);
 
 // Lines wrapped at a width, at spaces (a word longer than the width stands alone): width(line)

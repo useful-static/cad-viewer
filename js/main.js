@@ -2,11 +2,11 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
-import { drawsNothing, isShape, onPaper, sheetDraws } from './dxf.js';
+import { drawsNothing, isShape, onPaper, sheetDraws, sheetsOf } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
@@ -21,9 +21,9 @@ import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft }
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
-import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundNotePoint } from './view-link.js';
+import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
-import { EXPORTS, exportBasis } from './export-mesh.js';
+import { EXPORTS, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges } from './scene.js';
@@ -1145,11 +1145,19 @@ app.openUrl = (u) => loadUrl(u);
 // A saved file's name from the model's: its .gz, then its extension, off ("board.stp.gz" ->
 // "board"). The one rule for exports and Save .cadmesh (which named it "board.stp.cadmesh")
 const saveBase = (name) => (name || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+// a picture's name: the model's or the drawing's, and when it was taken (a drawing's had its own
+// rule, no time and its .gz kept)
+function pictureName(source) {
+  const d = new Date();
+  const two = (n) => String(n).padStart(2, '0');
+  return `${saveBase(source)}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+}
 async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
-  const ids = app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
-  if (!ids.length) { flashHover('nothing shown to export'); return; }
   const model = { ...app.baseMesh, color: app.mesh.color };
+  // (the bodies shown that have a triangle: what is written, counted and said -- js/export-mesh.js)
+  const ids = exportable(model, app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id)));
+  if (!ids.length) { flashHover('nothing shown to export'); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
   setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
@@ -1182,7 +1190,7 @@ async function savePicture(print = false) {
     const blob = await new Promise((res) => $('view2d').toBlob(res, 'image/png'));
     if (!blob) return;
     if (print) return printPng(blob);
-    const name = `${app.dxf.name.replace(/\.[^.]+$/, '')}.png`;
+    const name = pictureName(app.dxf.name);
     downloadBlob(blob, name);
     flashHover(`saved ${name}`, 3000);
     return;
@@ -1193,10 +1201,7 @@ async function savePicture(print = false) {
   const out = pic.canvas;
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
   if (print) return printPng(png);
-  const d = new Date();
-  const two = (n) => String(n).padStart(2, '0');
-  const base = saveBase(app.sourceName);
-  const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+  const name = pictureName(app.sourceName);
   const save = () => {
     const url = downloadBlob(png, name);
     app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
@@ -2020,17 +2025,19 @@ function captureStep({ camera = 'exact' } = {}) {
     } else s.hide = names([...hiddenNow]);
   } else s.show = 'all';
   if (app.explode.on && app.explode.for === app.header && app.explode.t > 0) {
-    s.explode = r(app.explode.t, 3);
+    s.explode = roundFraction(app.explode.t); // (as a link keeps it: js/view-link.js)
     if (app.explode.mode) s.explodeAlong = app.explode.mode;
   }
-  s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: r(app.section.t, 4), flip: !!app.section.flip } : { axis: 'off' };
+  s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: roundFraction(app.section.t), flip: !!app.section.flip } : { axis: 'off' };
   s.style = currentStyle().id;
   // (the visitor's own notes: a model list's are the page's, shown again whatever the tour says)
   const notes = app.measure ? app.measure.notes().filter((nt) => nt.own) : [];
   // (and, with a tour shown, the shown step's own callouts, as it names them: they are on the
   // view, as the tour's notes, so the visitor-only filter above left them out)
   const shownStep = app.tour && app.tour.tour.steps[app.tour.i];
-  const callouts = [...(shownStep && shownStep.callouts ? shownStep.callouts : []), ...notes.map((nt) => ({ text: nt.text, at: roundNotePoint(nt.p) }))];
+  // (each point by the one rounding: the shown step's too, scaled by a reading's unit)
+  const shown = (shownStep && shownStep.callouts ? shownStep.callouts : []).map((c) => (c.at ? { ...c, at: roundNotePoint(c.at) } : c));
+  const callouts = [...shown, ...notes.map((nt) => ({ text: nt.text, at: roundNotePoint(nt.p) }))];
   if (callouts.length) s.callouts = callouts;
   return s;
 }
@@ -4503,7 +4510,7 @@ function show2D(drawing, name, url) {
   forgetAddressModel();
   // the sheets: model space, then each layout that draws anything; a
   // drawing with nothing in model space opens on its first layout
-  const sheets = drawing.layouts.map((l, i) => ({ l, i })).filter(({ l }) => sheetDraws(l));
+  const sheets = sheetsOf(drawing);
   const sel = $('sheet');
   sel.replaceChildren(...[['-1', 'Model'], ...sheets.map(({ l, i }) => [String(i), l.name])].map(([v, t]) => {
     const o = document.createElement('option'); o.value = v; o.textContent = t; return o;
@@ -4621,7 +4628,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${full.layouts.length ? '; the Sheet menu shows the layouts' : ''})`);
+    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${sheetsOf(full).length ? '; the Sheet menu shows the layouts' : ''})`);
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
@@ -5064,16 +5071,7 @@ function collect(node, out = []) {
 // Label a body by the part that owns it: CAD exporters name bodies generically
 // (some exporters: COMPONENT1..n), while the tree carries the real part names.
 function labelMeshes() {
-  const labels = app.header.meshes.map((m) => m.name);
-  const walk = (n, owner) => {
-    const nm = n.name || owner;
-    for (const i of n.meshes) {
-      const mn = app.header.meshes[i].name;
-      labels[i] = nm && nm !== mn ? `${nm} › ${mn}` : mn;
-    }
-    for (const c of n.children) walk(c, nm);
-  };
-  walk(app.header.root, '');
+  const labels = bodyLabels(app.header);
   // a view link names its selection by the file's own names, so a list's
   // labels never change what an old link selects
   app.bodyKeys = bodyKeys(labels);

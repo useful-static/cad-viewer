@@ -6,8 +6,18 @@
 // model lists are never cached here (a visitor's files are theirs, and a
 // site's lists change): only the app.
 
-const CACHE = 'cadv-app-v1';
-const SHELL = ['./', 'index.html', 'favicon.svg', 'manifest.webmanifest'];
+const CACHE = 'cadv-app-v2';
+// The page and every module it can load, kept at install: with the shell alone, a visitor offline
+// after one visit got the page and not js/main.js -- a dead page. (The converter, vendor/, is kept
+// once fetched: a STEP file opens offline after one has been converted online.) APP_JS is every
+// file in js/ (tests/test-sw.mjs holds the two to each other)
+const APP_JS = ['cadmesh.js', 'camera.js', 'check-page.js', 'clearance.js', 'codepages.js', 'converter-choice.js', 'crc32.js', 'datum.js',
+  'drawing-svg.js', 'dwg.js', 'dxf-view.js', 'dxf.js', 'edges-worker.js', 'edges.js', 'export-mesh.js', 'face-order.js', 'formats.js',
+  'import-progress.js', 'list-check.js', 'main.js', 'mat4.js', 'measure-geom.js', 'measure-ui.js', 'mesh-cache.js', 'mesh-formats.js',
+  'model-list.js', 'open-url.js', 'orient.js', 'palettes.js', 'prefs.js', 'raycast.js', 'read-file.js', 'read-worker.js', 'renderer-webgl.js',
+  'renderer-webgpu.js', 'same-place.js', 'scene.js', 'source-units.js', 'step-features.js', 'step-meta.js', 'step-text.js', 'step-worker.js',
+  'styles.js', 'tour-path.js', 'tour-recorder.js', 'tour-sight.js', 'tour.js', 'units.js', 'vec3.js', 'view-link.js'];
+const SHELL = ['./', 'index.html', 'favicon.svg', 'manifest.webmanifest', ...APP_JS.map((f) => `js/${f}`)];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
