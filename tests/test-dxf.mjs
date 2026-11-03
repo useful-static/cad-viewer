@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { parseDXF, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
+import { addedReversed } from '../js/dxf-view.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
@@ -604,6 +605,42 @@ test('round 16: one width through a stretch; outlines apart; hatch islands even-
   assert.deepEqual(wrapLines(['あいう。えお'], (l) => l.length, 3), ['あい', 'う。え', 'お']);
   // a non-breaking space does not break
   assert.deepEqual(wrapLines(['Ø 12 x'], (l) => l.length, 4), ['Ø 12', 'x']);
+});
+test('round 17: a mesh polyline counted; a hatch\'s even-odd id unique across sheets and viewports', () => {
+  const pm = parseDXF(ents([[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 64]], [[0, 'VERTEX'], [8, '0'], [10, 0], [20, 0], [70, 192]], [[0, 'SEQEND'], [8, '0']],
+    [[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 16]], [[0, 'SEQEND'], [8, '0']]));
+  assert.deepEqual(pm.notDrawn, { 'POLYLINE (polyface)': 1, 'POLYLINE (3D mesh)': 1 });
+  const sq = (a, b) => [a, a, b, a, b, b, a, b];
+  const H = (loops, paper) => [[0, 'HATCH'], [8, '0'], ...(paper ? [[67, 1]] : []), [2, 'SOLID'], [70, 1], [75, 0], [91, loops.length], ...loops.flatMap((L) => [[92, 2], [72, 0], [73, 1], [93, L.length / 2], ...L.flatMap((v, k) => [[k % 2 ? 20 : 10, v]])])];
+  const d = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...H([sq(0, 10), sq(3, 7)]), ...H([sq(0, 10), sq(3, 7)], true),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 5], [20, 5], [40, 10], [41, 10], [69, 2], [12, 5], [22, 5], [45, 10],
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  const model = new Set(d.paths.map((p) => p.evenodd)), sheet = new Set(d.layouts[0].paths.filter((p) => p.evenodd).map((p) => p.evenodd));
+  assert.equal(model.size, 1);
+  assert.equal(sheet.size, 2, 'the sheet\'s own hatch and the model\'s seen through the viewport: two ids');
+  assert.ok(![...sheet].some((x) => model.has(x)), 'none shared with model space');
+  // two SOLIDs wound opposite ways: the clockwise one is added reversed, so their overlap fills
+  const so = parseDXF(ents([[0, 'SOLID'], [8, '0'], [10, 0], [20, 0], [11, 4], [21, 0], [12, 0], [22, 4], [13, 4], [23, 4]],
+    [[0, 'SOLID'], [8, '0'], [10, 2], [20, 2], [11, 2], [21, 6], [12, 6], [22, 2], [13, 6], [23, 6]])).paths;
+  assert.deepEqual(so.map(addedReversed), [false, true]);
+  assert.equal(addedReversed({ fill: true, evenodd: 1, pts: so[1].pts }), false, 'a hatch\'s even-odd loops keep their winding');
+  // an opening mark goes with the character after it; an ideograph past the BMP breaks, as one
+  assert.ok(!wrapLines(['あい「うえ」お'], (l) => [...l].length, 3).some((x) => x.endsWith('「')), 'no line ends in an opening mark');
+  assert.deepEqual(wrapLines(['\u{20000}\u{20001}\u{20002}\u{20003}'], (l) => [...l].length, 2), ['\u{20000}\u{20001}', '\u{20002}\u{20003}']);
+  // a paper-space POLYLINE whose vertices lack 67 does not take the paper entities after it
+  const pp = parseDXF(ents([[0, 'POLYLINE'], [8, '0'], [67, 1], [66, 1], [70, 0]], [[0, 'VERTEX'], [8, '0'], [10, 0], [20, 0]], [[0, 'VERTEX'], [8, '0'], [10, 1], [20, 0]], [[0, 'SEQEND'], [8, '0']],
+    [[0, 'LINE'], [8, '0'], [67, 1], [10, 0], [20, 5], [11, 5], [21, 5]], [[0, 'POLYLINE'], [8, '0'], [67, 1], [66, 1], [70, 0]], [[0, 'VERTEX'], [8, '0'], [67, 1], [10, 0], [20, 9]], [[0, 'VERTEX'], [8, '0'], [67, 1], [10, 9], [20, 9]], [[0, 'SEQEND'], [8, '0'], [67, 1]]));
+  assert.ok(pp.layouts[0].paths.some((p) => p.pts[1] === 5), 'the LINE after it is drawn');
+});
+test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {
+  const texts = [], vps = [];
+  for (let k = 0; k < 300; k++) texts.push([0, 'MTEXT'], [8, '0'], [10, k], [20, 0], [40, 1], [41, 30], [71, 1], [1, `t${k} ${'word '.repeat(400).trim()}`]);
+  for (let k = 0; k < 300; k++) vps.push([0, 'VIEWPORT'], [8, '0'], [67, 1], [10, k * 20], [20, 5], [40, 10], [41, 10], [69, k + 2], [12, 150], [22, 0], [45, 400]);
+  const G = [[0, 'SECTION'], [2, 'ENTITIES'], ...texts, [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210], ...vps, [0, 'ENDSEC'], [0, 'EOF']];
+  const t0 = Date.now();
+  parseDXF(dxf(G));
+  assert.ok(Date.now() - t0 < 10000, `${Date.now() - t0} ms`);
 });
 test('a long MTEXT through 1,000 layout viewports is wrapped once, not once a viewport', () => {
   const vps = [];

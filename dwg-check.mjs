@@ -5,7 +5,7 @@
 // DXF (one file only); --json prints the report as JSON.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { readDWG, dwgToPairs, pairsToDXF } from './js/dwg.js';
+import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, parseDXF } from './js/dxf.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
@@ -46,7 +46,7 @@ for (const f of files) {
     // does over the same reader's), refused by the page's own rule (drawsNothing): a DWG the page
     // refuses, or that draws nothing, is not "all checks pass"
     try {
-      const dr = parseDXF(P);
+      const dr = drawDWG(d, P);
       // (and what it holds that is not drawn, by kind, as the page's info panel says it)
       rep.drawn = { paths: dr.paths.length, texts: dr.texts.length, layouts: dr.layouts.length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';

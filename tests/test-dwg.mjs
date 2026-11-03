@@ -9,7 +9,7 @@
 //   DWG_CORPUS=DIR node tests/test-dwg.mjs   -> "RESULT: N passed, 0 failed[, M skipped]"
 import { readFileSync, existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { readDWG, dwgToPairs, pairsToDXF, decompress18, decompress21, _internal, crc16, crc32 } from '../js/dwg.js';
+import { readDWG, dwgToPairs, drawDWG, pairsToDXF, decompress18, decompress21, _internal, crc16, crc32 } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { test as t, skip, done } from './harness.mjs';
 
@@ -376,6 +376,51 @@ t('an entity kind not decoded passes through the adapter by name and layer, and 
   const k = P.findIndex(([c, v]) => c === 0 && v === 'AEC_WALL');
   assert.ok(k >= 0, 'named');
   assert.deepEqual(parseDXF(P).notDrawn, { AEC_WALL: 1 });
+});
+
+t('the head-only decision: a custom entity class and an R2010+ table are read to their common part; an object class is not; a failure is counted', () => {
+  const read = (name, type, v, entity = () => {}) => {
+    const chk = new _internal.Checks();
+    const self = { v, chk, classes: new Map([[500, { item: 0x1f2, dxf: 'AEC_WALL' }], [501, { item: 0x1f3, dxf: 'AEC_STYLE' }], [502, { item: 0x1f2, dxf: 'ACAD_TABLE' }]]),
+      open: () => ({ name, type, r: {}, h: {} }), entity: (o) => { entity(o); o.e = { owner: 1 }; }, entityHandles: () => {} };
+    self.isEntityType = _internal.ObjectReader.prototype.isEntityType;
+    const o = _internal.ObjectReader.prototype.read.call(self, 0);
+    return { o, f: chk.failures };
+  };
+  assert.equal(read('AEC_WALL', 500, 32).o.headOnly, true, 'a custom entity class');
+  assert.equal(read('AEC_STYLE', 501, 32).o.headOnly, undefined, 'an object class');
+  assert.equal(read('ACAD_TABLE', 502, 24).o.headOnly, true, 'an R2010+ table');
+  assert.equal(read('LEADER', 45, 15).o.headOnly, true, 'a fixed entity type not decoded');
+  const bad = read('AEC_WALL', 500, 32, () => { throw new Error('read past the end'); });
+  assert.ok(bad.o.error && !bad.o.headOnly && bad.f.some((x) => x.startsWith('decode AEC_WALL')), JSON.stringify(bad));
+});
+t('round 17: a missing block, a multi-line ATTRIB, a viewport and the active layout reach the page', () => {
+  const E = (owner, extra = {}) => ({ entmode: 0, owner, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0, ...extra });
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [10, 11, 12] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, flags: 0 } }],
+    [3, { handle: 3, name: 'BLOCK_RECORD', decoded: true, d: { name: 'B', base: [0, 0, 0], entities: [13] } }],
+    // two records named *Paper_Space: the block table says 5 is the active one
+    [4, { handle: 4, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Paper_Space', base: [0, 0, 0], entities: [20, 21] } }],
+    [5, { handle: 5, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Paper_Space', base: [0, 0, 0], entities: [22, 23] } }],
+    [6, { handle: 6, name: 'BLOCK_CONTROL', decoded: true, d: { n: 1, model: 1, paper: 5 } }],
+    [10, { handle: 10, name: 'INSERT', decoded: true, e: E(1), d: { block: 99, p: [0, 0, 0], s: [1, 1, 1], rot: 0 } }],
+    [11, { handle: 11, name: 'INSERT', decoded: true, e: E(1), d: { block: 3, p: [0, 0, 0], s: [1, 1, 1], rot: 0, atts: true } }],
+    [12, { handle: 12, name: 'ATTRIB', decoded: true, e: E(11), d: { multi: true } }],
+    [13, { handle: 13, name: 'LINE', decoded: true, e: E(3), d: { p0: [0, 0, 0], p1: [10, 0, 0] } }],
+    // each layout: its paper view (first), then a viewport onto model (0..10) at 1:1
+    ...[[4, 20, 21], [5, 22, 23]].flatMap(([own, a, b]) => [
+      [a, { handle: a, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [148, 105, 0], w: 297, h: 210, vh: 210, vc: [148, 105], target: [0, 0, 0], twist: 0 } }],
+      [b, { handle: b, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [50, 50, 0], w: 20, h: 20, vh: 20, vc: [5, 0], target: [0, 0, 0], twist: 0 } }]]),
+  ]);
+  const dwg = { objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 };
+  const dr = drawDWG(dwg);
+  assert.deepEqual(dr.notDrawn, { INSERT: 1, 'ATTRIB (multi-line)': 1 });
+  assert.equal(dr.layouts.length, 2, 'the active layout and *Paper_Space0');
+  for (const l of dr.layouts) {
+    assert.equal(l.paths.filter((p) => p.frame).length, 1, 'one viewport frame (the paper view is not one)');
+    assert.ok(l.paths.some((p) => !p.frame && p.pts[0] >= 40 && p.pts[0] <= 60), 'model space seen through it');
+  }
 });
 
 // --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:

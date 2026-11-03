@@ -8,7 +8,7 @@ import { parseMesh } from './mesh-formats.js';
 import { encodeCadmesh } from './cadmesh.js';
 import { MM_PER } from './units.js';
 import { parseDXF } from './dxf.js';
-import { readDWG, dwgToPairs } from './dwg.js';
+import { readDWG, drawDWG } from './dwg.js';
 
 // A mesh file's bytes as a .cadmesh, in `unit` where the file stores none (STL, OBJ, PLY, OFF are
 // read as mm until the units row's "this file is in" says otherwise) -> { raw, unitless }
@@ -27,5 +27,5 @@ export async function readMeshFile({ buf, format, name, extras, unit = 'mm' }) {
 // holds; a DXF is passed as its bytes (parseDXF reads a binary one from them, an ASCII one in the
 // drawing's own code page)
 export function readDrawing({ buf, dwg }) {
-  return parseDXF(dwg ? dwgToPairs(readDWG(buf)) : buf);
+  return dwg ? drawDWG(readDWG(buf)) : parseDXF(buf);
 }

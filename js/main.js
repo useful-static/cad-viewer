@@ -4579,6 +4579,8 @@ function syncLayerRows() {
   for (const li of $('tree').children) li.querySelector('.row').classList.toggle('sel', !!app.dxf && li.dataset.layer === app.dxf.view.selected);
 }
 
+// a drawing path that is one of its lines and shapes: not a wide polyline's outline, not a frame
+const isShape = (p) => !p.outline && !p.frame;
 // the info panel in 2D mode: the drawing's size, unit, layers and contents
 function fillInfo2D(el) {
   // (the sheet shown: model space, or a layout)
@@ -4595,7 +4597,9 @@ function fillInfo2D(el) {
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
-  row('contents', `${fmtInt(d.paths.filter((p) => !p.outline).length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  // (a wide polyline's outline is its polyline's, a viewport's frame is not the drawing's: neither
+  // a shape -- the layer list still counts a frame, so its layer can be hidden)
+  row('contents', `${fmtInt(d.paths.filter(isShape).length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));
@@ -4607,7 +4611,7 @@ function fillInfo2D(el) {
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
     // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines")
-    const np = d.paths.filter((p) => p.layer === l && !p.outline).length, nt = d.texts.filter((t) => t.layer === l).length;
+    const np = d.paths.filter((p) => p.layer === l && isShape(p)).length, nt = d.texts.filter((t) => t.layer === l).length;
     row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
   }
 }

@@ -19,7 +19,7 @@
 // layers. Exit status 0 only when every file passes 1-4.
 import { readFileSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { readDWG, dwgToPairs, pairsToDXF } from '../js/dwg.js';
+import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { dxfPairs, byHandle, compare, hexHandle } from './dwg-compare.mjs';
 
@@ -56,7 +56,8 @@ export function validate(std, path) {
   // (a drawing the viewer refuses to draw -- over its drawing budget, say -- is this file's
   // failure, said in its notes; it does not end the run over the rest of the list)
   let viaPairs, viaText;
-  try { viaPairs = parseDXF(P); viaText = parseDXF(pairsToDXF(P)); } catch (e) {
+  // (the round trip compares the reader on both forms; what is drawn is the page's: drawDWG)
+  try { viaPairs = parseDXF(P); viaText = parseDXF(pairsToDXF(P)); res.notDrawn = drawDWG(d, P).notDrawn; } catch (e) {
     res.ok = false;
     res.notes.push(`the drawing is refused: ${e.message}`);
     res.adapter = { owned: st.owned, emitted: st.emitted, dropped: st.dropped, unexplained: unexplained.length, roundTrip: false, drawn: 0, refused: e.message };

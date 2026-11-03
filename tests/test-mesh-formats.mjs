@@ -626,6 +626,8 @@ await test('r5-11 every refusal names the file with its extension: STL, OBJ, glT
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 36, uri: b64uri(nan) }], bufferViews: [{ buffer: 0, byteLength: 36 }],
     accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
     nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'e.gltf'), /^e\.gltf is damaged: a vertex coordinate is not a number/);
+  // a coordinate past float32's range (stored as Infinity): refused in the same words
+  await refusedFast(() => parseMesh('obj', enc('v 1e39 0 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\n'), 'big.obj'), /^big\.obj is damaged: a vertex coordinate is not a number/);
   await refusedFast(() => parseMesh('gltf', gltf({ accessors: [{ componentType: 5126, type: 'VEC3', count: 3 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
     nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }] }), 'z.gltf'), /^z\.gltf has no triangles to show/);
   await refusedFast(() => parseMesh('3mf', enc('not a zip at all, just some text'), 'a.3mf'), /^a\.3mf: not a zip file/);

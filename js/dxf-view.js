@@ -21,6 +21,16 @@ const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
 
+// whether a path is added to its group reversed: a fill (not a hatch's even-odd loops) wound
+// clockwise, so every such fill runs counter-clockwise and a group's non-zero fill is their union
+export function addedReversed(p) {
+  if (!p.fill || p.evenodd) return false;
+  const n = p.pts.length / 2;
+  let a = 0;
+  for (let i = 0; i < n; i++) { const j = (i + 1) % n; a += p.pts[2 * i] * p.pts[2 * j + 1] - p.pts[2 * j] * p.pts[2 * i + 1]; }
+  return a < 0;
+}
+
 export function createDxfView(canvas, drawing, cb = {}) {
   const ctx = canvas.getContext('2d');
   const ext = drawing.extents || { min: [0, 0], max: [1, 1] };
@@ -62,8 +72,13 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // drawing units (it scales with the zoom, as on paper)
     if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, path: new Path2D(), points: [] }; groups.set(key, g); }
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
-    g.path.moveTo(p.pts[0] - o[0], p.pts[1] - o[1]);
-    for (let k = 2; k < p.pts.length; k += 2) g.path.lineTo(p.pts[k] - o[0], p.pts[k + 1] - o[1]);
+    // (a fill not a hatch's even-odd loops is added counter-clockwise: the group's fills are one
+    // non-zero path, and two overlapping SOLIDs wound opposite ways left their overlap empty)
+    const n = p.pts.length / 2;
+    const rev = addedReversed(p);
+    const at = (i) => (rev ? n - 1 - i : i);
+    g.path.moveTo(p.pts[2 * at(0)] - o[0], p.pts[2 * at(0) + 1] - o[1]);
+    for (let i = 1; i < n; i++) g.path.lineTo(p.pts[2 * at(i)] - o[0], p.pts[2 * at(i) + 1] - o[1]);
     if (p.closed) g.path.closePath();
   }
   const css = () => [canvas.clientWidth || 1, canvas.clientHeight || 1];
@@ -79,6 +94,19 @@ export function createDxfView(canvas, drawing, cb = {}) {
       w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.widthFactor || 1), t.wrap);
       ctx.restore();
       wrapped.set(t, w);
+    }
+    return w;
+  };
+  // the width of its widest line as drawn (the font's measure, times its width factor), once per text
+  const widths = new WeakMap();
+  const widthOf = (t) => {
+    let w = widths.get(t);
+    if (w === undefined) {
+      ctx.save(); ctx.font = `${t.h}px sans-serif`;
+      w = 0;
+      for (const l of linesOf(t)) w = Math.max(w, ctx.measureText(l).width * (t.widthFactor || 1));
+      ctx.restore();
+      widths.set(t, w);
     }
     return w;
   };
@@ -272,7 +300,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     for (const t of drawing.texts) {
       if (st.off.has(t.layer) || t.h * st.s < MIN_TEXT_PX) continue;
       if (t.clip && !(ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3])) continue;
-      const c = textCorners(t, linesOf(t)).map(([x, y]) => [x - o[0], y - o[1]]);
+      const c = textCorners(t, linesOf(t), widthOf(t)).map(([x, y]) => [x - o[0], y - o[1]]);
       // the corners are bottom-left, bottom-right, top-left, top-right: inside when on one side of
       // each edge of the quad taken in order
       const q = [c[0], c[1], c[3], c[2]];

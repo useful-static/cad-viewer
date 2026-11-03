@@ -1,6 +1,7 @@
 // 2D DXF drawings (plan feature 23; feature review item 23): a group-code
-// parser, ASCII or binary, model space only (paper-space entities are
-// counted, not drawn), flattened to what a 2D canvas strokes:
+// parser, ASCII or binary: model space, and each layout (paper space: its own
+// entities and model space through its viewports), flattened to what a 2D
+// canvas strokes:
 //   { units, insunits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, dash, weight, ltype, width?,
 //               point?, outline?, evenodd?, frame? }],
@@ -22,9 +23,11 @@
 // LINE, LWPOLYLINE (bulges), POLYLINE / VERTEX, CIRCLE, ARC, ELLIPSE, SPLINE
 // (evaluated: weights, fit points as the polyline when no control points),
 // POINT, TEXT, MTEXT (formatting stripped), INSERT and MINSERT (nested,
-// scaled, rotated, arrayed), DIMENSION (its block), HATCH (solid fill, else
+// scaled, rotated, arrayed), DIMENSION, ARC_DIMENSION, LARGE_RADIAL_DIMENSION
+// and ACAD_TABLE (their blocks), LEADER (its vertices), HATCH (solid fill, else
 // its outline), SOLID / TRACE, 3DFACE (its visible edges), ATTRIB (an insert's attribute values,
-// as TEXT; invisible ones left out). The object coordinate system (210/220/230,
+// as TEXT; invisible ones left out). Every other kind but structure (STRUCTURE) is counted in
+// notDrawn by name. The object coordinate system (210/220/230,
 // the arbitrary-axis rule) is applied; BYLAYER and BYBLOCK resolve through
 // nested inserts; ACI and true colour (420). $INSUNITS gives the unit
 // (0: not stored). A DWG arrives here as group-code pairs from js/dwg.js:
@@ -314,14 +317,22 @@ export function parseDXF(s) {
   const layouts = sets.map((recs, li) => {
     const lo = { paths: [], texts: [] };
     emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
+    // a viewport's frame, on its layer
+    const frame = (v, rect) => {
+      const layer = get(v, 8, '0');
+      lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
+        pts: Float64Array.of(rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]), closed: true, fill: false, frame: true });
+    };
     for (const v of recs) {
       if (v.type !== 'VIEWPORT' || num(v, 69, 0) === 1) continue;
       const cx = num(v, 10), cy = num(v, 20), w = num(v, 40), h = num(v, 41), vh = num(v, 45);
-      if (!(w > 0 && h > 0 && vh > 0)) continue;
+      if (!(w > 0 && h > 0)) continue;
+      const rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+      // (one whose view is not known -- an R13-R14 DWG's, kept in a table not read -- is its frame)
+      if (!(vh > 0)) { frame(v, rect); continue; }
       const s = h / vh, tw = (num(v, 51) * Math.PI) / 180;
       const c = Math.cos(tw) * s, si = Math.sin(tw) * s, mx = num(v, 12), my = num(v, 22);
       const M = [c, si, -si, c, cx - (c * mx - si * my), cy - (si * mx + c * my)];
-      const rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
       // (what a viewport draws of model space counts against the drawing's budget too: many
       // viewports multiply it)
       const p0 = lo.paths.length;
@@ -339,6 +350,15 @@ export function parseDXF(s) {
         clipped(budget, out.paths[k].pts.length / 2);
         clipPath(out.paths[k], M, s, rect, lo.paths);
       }
+      // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
+      // not cancel with the sheet's hatches or another viewport's view of it)
+      const ids = new Map();
+      for (let k = p0; k < lo.paths.length; k++) {
+        const e = lo.paths[k].evenodd;
+        if (!e) continue;
+        if (!ids.has(e)) ids.set(e, (budget.hatches = (budget.hatches || 0) + 1));
+        lo.paths[k].evenodd = ids.get(e);
+      }
       let coords = 0;
       for (let k = p0; k < lo.paths.length; k++) coords += lo.paths[k].pts.length;
       charge(budget, lo.paths.length - p0, coords);
@@ -346,7 +366,7 @@ export function parseDXF(s) {
         const [x, y] = ap(M, t.x, t.y);
         // (every length of it scaled by the viewport, TEXT_LENGTHS: a fit width unscaled drew it 10
         // times too long through a 0.1 viewport, and a wrap width unscaled ran it on in one line)
-        const seen = { ...t, x, y, rot: t.rot + tw };
+        const seen = sameLines(t, { ...t, x, y, rot: t.rot + tw });
         for (const k of TEXT_LENGTHS) if (t[k]) seen[k] = t[k] * s;
         // kept when its box meets the viewport's frame, and clipped to it as the paths are (kept or
         // dropped whole by its point, a text ran past the frame, or vanished though half inside)
@@ -354,11 +374,9 @@ export function parseDXF(s) {
         const bx = [Math.min(...c.map((q) => q[0])), Math.max(...c.map((q) => q[0]))], by = [Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[1]))];
         if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
         const inside = bx[0] >= rect[0] && bx[1] <= rect[2] && by[0] >= rect[1] && by[1] <= rect[3];
-        addItem(budget, lo.texts, inside ? seen : { ...seen, clip: rect.slice() }, 2);
+        addItem(budget, lo.texts, inside ? seen : sameLines(t, { ...seen, clip: rect.slice() }), 2);
       }
-      const layer = get(v, 8, '0');
-      lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
-        pts: Float64Array.of(rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]), closed: true, fill: false, frame: true });
+      frame(v, rect);
     }
     return { name: li === 0 && active.length ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
   });
@@ -711,15 +729,19 @@ function emit(recs, M, byBlock, depth, ctx) {
         const xs = [], ys = [], bul = [], w0 = [], w1 = [];
         const d0 = num(r, 40, 0) || 0, d1 = num(r, 41, 0) || 0;
         let j = i + 1;
-        for (; j < recs.length && recs[j].type !== 'SEQEND'; j++) {
-          if (recs[j].type !== 'VERTEX') continue;
+        // (its vertices are the VERTEX records right after it, to its SEQEND -- walked to the next
+        // SEQEND whatever came between, a polyline missing its vertices took every entity up to a
+        // later one's SEQEND with it, undrawn and uncounted)
+        for (; j < recs.length && recs[j].type === 'VERTEX'; j++) {
           if (num(recs[j], 70) & 16) continue; // a spline frame control point
           xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); bul.push(num(recs[j], 42));
           w0.push(num(recs[j], 40, d0) || 0); w1.push(num(recs[j], 41, d1) || 0);
         }
-        i = j;
+        i = j < recs.length && recs[j].type === 'SEQEND' ? j : j - 1;
         const flags = num(r, 70);
-        if (flags & (16 | 64)) break; // a 3D mesh or a polyface: not drawn in 2D
+        // a 3D mesh or a polyface: not drawn in 2D, and counted so (467 at hand were left out without
+        // a word, while a 3D solid was counted)
+        if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.notDrawn[k] = (ctx.notDrawn[k] || 0) + 1; break; }
         const closed = (flags & 1) === 1;
         if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
         else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, ...widthsOf(xs, ys, bul, w0, w1, closed) });
@@ -748,7 +770,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         // with the drawing's other fills, non-zero, an island wound as its outer loop was filled --
         // 82 of 901 at hand). Style "ignore islands" (75 = 2) fills every loop, with the others
         if (solid && r.loops.length > 1 && num(r, 75, 0) !== 2) {
-          const id = (ctx.hatches = (ctx.hatches || 0) + 1);
+          // (one counter for the drawing -- model space and every layout: counted per sheet, a model
+          // hatch seen through a viewport and the sheet's own shared an id, and cancelled)
+          const id = (ctx.budget.hatches = (ctx.budget.hatches || 0) + 1);
           for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id });
         } else for (const loop of r.loops) path(loop, true, solid);
         break;
@@ -1282,13 +1306,19 @@ export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws)
 // Japanese paragraph never wrapped); the spaces at a break are dropped
 // (the ideographic space U+3000 is a space; a closing mark -- 、。，」） and the like -- never starts a
 // line: it stays with the character before it)
-const WRAP_TOKEN = /[⺀-⿿、-鿿가-힯豈-﫿＀-￯]|[^ 　⺀-⿿、-鿿가-힯豈-﫿＀-￯]+|[ 　]+/g;
-const NO_LINE_START = /^[、。，．：；？！）」』】〕〉》ー々ゝゞ・…‥〜％，．：；？！）］｝]$/u;
+// (and an opening mark -- 「（ and the like -- never ends one: it goes with the character after it;
+// ideographs past the BMP, CJK extensions B on, break as the others do)
+const WRAP_TOKEN = /[⺀-⿿、-鿿가-힯豈-﫿＀-￯\u{20000}-\u{3134f}]|[^ 　⺀-⿿、-鿿가-힯豈-﫿＀-￯\u{20000}-\u{3134f}]+|[ 　]+/gu;
+const NO_LINE_START = /^[、。，．：；？！）」』】〕〉》ー々ゝゞ・…‥〜％］｝]$/u;
+const NO_LINE_END = /[「『【〔〈《（［｛]$/u;
 const wrapTokens = (line) => {
   const out = [];
+  let glue = false; // the token before ends in an opening mark: this one joins it
   for (const tok of line.match(WRAP_TOKEN) || []) {
     const prev = out.length ? out[out.length - 1] : null;
-    if (prev !== null && NO_LINE_START.test(tok) && !/^[ 　]/.test(prev)) out[out.length - 1] = prev + tok; else out.push(tok);
+    const space = /^[ 　]/.test(tok);
+    if (prev !== null && !space && (glue || (NO_LINE_START.test(tok) && !/^[ 　]/.test(prev)))) out[out.length - 1] = prev + tok; else out.push(tok);
+    glue = !space && NO_LINE_END.test(tok);
   }
   return out;
 };
@@ -1314,31 +1344,31 @@ export function wrapLines(lines, width, max) {
 // fit, else 0.6 of a height per character of the longest line), shifted by its alignment and
 // vertical alignment, turned by its rotation. The extents took every text as left-aligned on its
 // baseline, one line high: a 20-line MTEXT drawn below its point was cut off by Fit
-// An MTEXT's lines wrapped by the estimate (a character 0.6 of a height): at most `chars`
-// characters a line. The ratio is the same at any scale, so a text seen through many viewports is
-// wrapped once (each wrapped it again: 1,400 viewports of one long MTEXT reached the worker's 60 s)
-const WRAP_CACHE = new Map();
-function estimatedWrap(text, chars) {
-  const key = `${chars}\u0000${text}`;
-  let w = WRAP_CACHE.get(key);
-  if (!w) {
-    w = wrapLines(text.split('\n'), (l) => l.length, chars);
-    if (WRAP_CACHE.size >= 256) WRAP_CACHE.delete(WRAP_CACHE.keys().next().value);
-    WRAP_CACHE.set(key, w);
-  }
+// An MTEXT's lines wrapped by the estimate (a character -- a code point -- 0.6 of a height). The
+// ratio is the same at any scale, so a text seen through many viewports is wrapped once (each
+// wrapped it again: 1,400 viewports of one long MTEXT reached the worker's 60 s): the lines are kept
+// with the text and given to each viewport's copy of it (a cache of 256 texts missed on every
+// viewport for a drawing of 300)
+const WRAPPED = new WeakMap();
+function estimatedLines(t) {
+  if (!(t.mtext && t.wrap > 0)) return null;
+  let w = WRAPPED.get(t);
+  if (!w) { w = wrapLines(t.text.split('\n'), (l) => [...l].length, t.wrap / (t.h * 0.6 * (t.widthFactor || 1))); WRAPPED.set(t, w); }
   return w;
 }
+const sameLines = (from, to) => { const w = estimatedLines(from); if (w) WRAPPED.set(to, w); return to; };
 
 // (drawn: its lines as the view drew them, when it has; else estimated)
-export function textCorners(t, drawn = null) {
+// (width: the drawn width of its widest line, when the caller measured it -- the view, by its font)
+export function textCorners(t, drawn = null, width = null) {
   const per = t.h * 0.6 * (t.widthFactor || 1); // (a character's width, estimated)
   // an MTEXT with a reference width wraps at it (as the view does, by measure): its lines estimated
-  const lines = drawn || (t.mtext && t.wrap > 0 ? estimatedWrap(t.text, t.wrap / per) : t.text.split('\n'));
+  const lines = drawn || estimatedLines(t) || t.text.split('\n');
   const lh = t.h * 1.4;
   // (the longest line by a loop: spread into Math.max, 300k lines overflowed the stack)
   let longest = 0;
-  for (const l of lines) if (l.length > longest) longest = l.length;
-  const w = t.fit > 0 ? t.fit : per * longest;
+  for (const l of lines) { const n = l.length > longest ? [...l].length : 0; if (n > longest) longest = n; } // (code points: an astral character is one)
+  const w = t.fit > 0 ? t.fit : width !== null ? width : per * longest;
   const hBlock = (lines.length - 1) * lh + t.h;
   const x0 = t.fit > 0 ? 0 : t.align === 'center' ? -w / 2 : t.align === 'right' ? -w : 0;
   // (y up: the top of the block and its bottom, from the point)

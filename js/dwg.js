@@ -2,8 +2,11 @@
 // (v5.4.1; chapter and section numbers below are that document's). It reads
 // R13 to R2018 (AC1012 .. AC1032): the file container of each version, the
 // classes, the object map, the header variables, and the objects a 2D drawing
-// draws (tables, blocks, and the entities js/dxf.js draws), and hands them on
-// as DXF group-code pairs, so parseDXF draws a DWG exactly as it draws a DXF.
+// draws (tables, blocks, the entities js/dxf.js draws, layouts' viewports), and
+// hands them on as DXF group-code pairs, so parseDXF draws a DWG as it draws a
+// DXF -- but for the kinds not decoded (leaders, multileaders, R2010+ tables,
+// solids, custom kinds), which are passed on by name and counted as not drawn
+// (drawDWG), and R13-R14 viewports, whose view is not read (their frame alone).
 //
 // Every check the format carries is made and counted, never skipped:
 // CRC-16 of each object, of the header, classes and object map (2.14.1), the
@@ -13,7 +16,7 @@
 //
 // No other reader's code was consulted: the clean-room rule of the project.
 
-import { caret, valueKind, aciColour, STRUCTURE } from './dxf.js';
+import { caret, valueKind, aciColour, STRUCTURE, parseDXF } from './dxf.js';
 import { crc32 } from './crc32.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
 
@@ -934,6 +937,7 @@ class ObjectReader {
   read(loc) {
     const o = this.open(loc);
     if (!o) return null;
+    o.entity = this.isEntityType(o.type); // (what drawDWG counts when it does not decode)
     const fn = DECODE[o.name];
     if (!fn || (o.name === 'ACAD_TABLE' && this.v >= 24)) {
       // a type not decoded (not an error). An entity kind the drawing does not draw keeps its
@@ -963,7 +967,7 @@ class ObjectReader {
   }
 }
 const ENTITY_NAMES = new Set(['TEXT', 'ATTRIB', 'ATTDEF', 'BLOCK', 'ENDBLK', 'SEQEND', 'INSERT', 'MINSERT', 'VERTEX', 'POLYLINE', 'ARC', 'CIRCLE', 'LINE', 'DIMENSION', 'POINT', 'SOLID', 'TRACE',
-  'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', '3DFACE']);
+  'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', '3DFACE', 'VIEWPORT']);
 
 // the per-type prescriptions (20.4.x); each reads its data with r and its handles with o.h
 const DECODE = {
@@ -1077,6 +1081,18 @@ const DECODE = {
     d.dimstyle = o.h.Ha(o.handle); d.block = o.h.Ha(o.handle);
   },
   POINT(o, r) { o.d = { p: r.BD3(), thick: r.BT(), ext: r.BE(), xang: r.BD() }; this.entityHandles(o); },
+  // 20.4.38: a layout's viewport -- its centre and size on paper, and from R2000 the view it shows
+  // (twist, view height, view centre); what follows (snap, grid, UCS, lights) is not read. R13-R14
+  // keep the view in the viewport entity header, not read: there the frame alone is known
+  VIEWPORT(o, r, v) {
+    const d = (o.d = { c: r.BD3(), w: r.BD(), h: r.BD() });
+    if (v >= 15) {
+      d.target = r.BD3(); d.dir = r.BD3(); d.twist = r.BD(); d.vh = r.BD();
+      r.BD(); r.BD(); r.BD(); r.BD(); // lens length, front and back clip, snap angle
+      d.vc = [r.RD(), r.RD()];
+    }
+    this.entityHandles(o);
+  },
   SOLID(o, r) { const thick = r.BT(), z = r.BD(); o.d = { thick, z, c: [r.RD2(), r.RD2(), r.RD2(), r.RD2()], ext: r.BE() }; this.entityHandles(o); },
   TRACE(o, r) { DECODE.SOLID.call(this, o, r); },
   ELLIPSE(o, r) { o.d = { c: r.BD3(), major: r.BD3(), ext: r.BD3(), ratio: r.BD(), t0: r.BD(), t1: r.BD() }; this.entityHandles(o); },
@@ -1209,6 +1225,22 @@ const DECODE = {
     d.endBlk = h.Ha(o.handle);
     for (let k = 0; k < inserts; k++) h.H();
     if (v >= 15) d.layout = h.Ha(o.handle);
+  },
+  // 20.4.51: the block table: its entries, then *MODEL_SPACE and *PAPER_SPACE -- which of the
+  // block records named *Paper_Space is the active layout (from R2000 every layout's is so named)
+  BLOCK_CONTROL(o, r) {
+    const n = r.BL();
+    o.d = { n };
+    // (LibreCAD's writer stores neither space's handle: then there is no answer here, a soft
+    // check, and the adapter takes the one record named *Paper_Space -- read as required, two of
+    // its drawings failed "decode BLOCK_CONTROL")
+    try {
+      this.objectHandles(o);
+      const h = o.h;
+      for (let k = 0; k < n; k++) h.H();
+      o.d.model = h.Ha(o.handle); o.d.paper = h.Ha(o.handle);
+    } catch { delete o.d.model; delete o.d.paper; o.h = null; } // (its handles not read: not checked as read)
+    this.chk.ok('block table names model and paper space', o.d.paper !== undefined, true);
   },
   LAYER(o, r, v) {
     const d = (o.d = { name: r.TV() });
@@ -1400,6 +1432,20 @@ const hex = (h) => h.toString(16).toUpperCase();
 
 // The drawing as DXF group-code pairs [[code, 'value'], ...]: HEADER ($INSUNITS,
 // $LTSCALE, $EXTMIN/MAX), TABLES (LTYPE, LAYER), BLOCKS, ENTITIES
+// A DWG drawn as the page draws it: its pairs through parseDXF, with what the adapter itself could
+// not pass on counted as not drawn too (an R2018 multi-line attribute: 131 in the drawings at hand
+// were dropped where only the adapter's stats knew, and the page, dwg-check and the validation
+// called those drawings complete). The one way for the page and the CLIs
+export function drawDWG(dwg, P = dwgToPairs(dwg)) {
+  const dr = parseDXF(P);
+  const add = (k, n) => { if (n) dr.notDrawn[k] = (dr.notDrawn[k] || 0) + n; };
+  add('ATTRIB (multi-line)', P.stats.dropped['ATTRIB, multi-line (not drawn)']);
+  // and an entity whose decode failed (a counted check failure): the page drew the rest and said
+  // nothing was missing
+  for (const o of dwg.objects.values()) if (o.entity && o.error && !STRUCTURE.has(o.name)) add(`${o.name} (could not be read)`, 1);
+  return dr;
+}
+
 export function dwgToPairs(dwg) {
   const { objects, header } = dwg;
   const P = [];
@@ -1418,10 +1464,17 @@ export function dwgToPairs(dwg) {
   };
   // anonymous blocks are stored as "*D", "*U", "*T", "*X" ...; a drawing has many with one
   // name, so each gets a number, one counter in handle order (AutoCAD numbers them on output too)
+  const vpIds = new Map(); // a layout's viewports counted, for their ids (69)
   const blockName = new Map();
-  let anon = 1;
+  let anon = 1, sheet = 0;
+  // the active layout's block record, as the block table names it (from R2000 every layout's record
+  // is named *Paper_Space: the rest are written *Paper_Space0, 1, ... as a DXF names them -- read
+  // as one name, a drawing of seven layouts showed one, holding the viewports of four)
+  const ctl = [...objects.values()].find((x) => x.decoded && x.name === 'BLOCK_CONTROL');
+  const activePaper = ctl ? ctl.d.paper : undefined;
   for (const o of [...objects.values()].filter((x) => x.decoded && x.name === 'BLOCK_RECORD').sort((a, b) => hcmp(a.handle, b.handle))) {
-    blockName.set(o.handle, /^\*[A-Za-z]$/.test(o.d.name) ? `${o.d.name}${anon++}` : o.d.name);
+    const n = o.d.name;
+    blockName.set(o.handle, /^\*[A-Za-z]$/.test(n) ? `${n}${anon++}` : /^\*paper_space$/i.test(n) && activePaper !== undefined && o.handle !== activePaper ? `*Paper_Space${sheet++}` : n);
   }
   const bname = (h) => blockName.get(h);
   put(0, 'SECTION'); put(2, 'HEADER');
@@ -1459,7 +1512,8 @@ export function dwgToPairs(dwg) {
   for (const o of objects.values()) {
     if (!o.decoded || o.name !== 'BLOCK_RECORD') continue;
     const n = o.d.name.toUpperCase();
-    if (n === '*MODEL_SPACE') model = o; else if (n === '*PAPER_SPACE') paper = o;
+    if (n === '*MODEL_SPACE') model = o;
+    else if (n === '*PAPER_SPACE' && (activePaper !== undefined ? o.handle === activePaper : !paper)) paper = o;
     blocks.push(o);
   }
   const owned = new Map(); // block record handle -> [entity]
@@ -1490,7 +1544,7 @@ export function dwgToPairs(dwg) {
       if (e.invisible) put(60, 1);
     };
     const ext = (x) => { if (x && (x[0] || x[1] || x[2] !== 1)) { put(210, x[0]); put(220, x[1]); put(230, x[2]); } };
-    // a kind read only to its common part (DWG.read's HEAD_ONLY): named, with its layer, and
+    // a kind read only to its common part (DWG.read: isEntityType, o.headOnly): named, with its layer, and
     // nothing else -- what the DXF reader needs to count it as not drawn
     if (o.headOnly) { common(o.name); return; }
     switch (o.name) {
@@ -1498,6 +1552,16 @@ export function dwgToPairs(dwg) {
       case 'CIRCLE': common('CIRCLE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.rad); ext(d.ext); break;
       case 'ARC': common('ARC'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.rad); put(50, deg(d.a0)); put(51, deg(d.a1)); ext(d.ext); break;
       case 'POINT': common('POINT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); ext(d.ext); break;
+      case 'VIEWPORT': {
+        // its id (69) is its place among its layout's viewports, the first the layout's own paper
+        // view (AutoCAD numbers them so; the DWG stores no id); the view where it is known
+        const key = inPaper ? 'paper' : e.owner;
+        const id = (vpIds.get(key) || 0) + 1;
+        vpIds.set(key, id);
+        common('VIEWPORT'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.w); put(41, d.h); put(69, id);
+        if (d.vh !== undefined) { put(12, d.vc[0]); put(22, d.vc[1]); put(17, d.target[0]); put(27, d.target[1]); put(37, d.target[2]); put(45, d.vh); if (d.twist) put(51, deg(d.twist)); }
+        break;
+      }
       case 'ELLIPSE': common('ELLIPSE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(11, d.major[0]); put(21, d.major[1]); put(31, d.major[2]); ext(d.ext); put(40, d.ratio); put(41, d.t0); put(42, d.t1); break;
       case '3DFACE':
         common('3DFACE');
@@ -1555,7 +1619,9 @@ export function dwgToPairs(dwg) {
           const vx = kids.get(vh) || objects.get(vh);
           if (!vx || vx.name !== 'VERTEX' || !vx.d) continue;
           const pt = vx.d.pt || [0, 0, 0]; // a PFACE face record has no point (DXF writes 0,0,0)
-          put(0, 'VERTEX'); put(5, hex(vh)); put(8, name(vx.e.layer) || '0'); put(10, pt[0]); put(20, pt[1]); put(30, pt[2]);
+          // (in paper space as its polyline is: without 67 a paper polyline's vertices were read as
+          // model space's, and the reader's vertex walk passed over the paper entities after them)
+          put(0, 'VERTEX'); put(5, hex(vh)); if (inPaper) put(67, 1); put(8, name(vx.e.layer) || '0'); put(10, pt[0]); put(20, pt[1]); put(30, pt[2]);
           // (written whenever either it or its polyline has a width: a vertex's 0 left out took the
           // polyline's default when read, and 36 paths of a drawing at hand drew 1.5 wide)
           if (vx.d.sw || vx.d.ew || d.sw || d.ew) { put(40, vx.d.sw || 0); put(41, vx.d.ew || 0); }
@@ -1563,7 +1629,7 @@ export function dwgToPairs(dwg) {
           put(70, vx.d.flags);
           if (vx.d.idx) vx.d.idx.forEach((x, k) => { if (x) put(71 + k, x); });
         }
-        put(0, 'SEQEND'); break;
+        put(0, 'SEQEND'); if (inPaper) put(67, 1); break;
       }
       case 'SPLINE': {
         common('SPLINE');
@@ -1577,7 +1643,9 @@ export function dwgToPairs(dwg) {
       }
       case 'INSERT': case 'MINSERT': case 'ACAD_TABLE': {
         const bn = bname(d.block);
-        if (!bn) break;
+        // (a reference to a block not in the file: passed on without its name, as a DIMENSION's
+        // is, so the page counts it as not drawn -- dropped here, only the adapter's stats knew)
+        if (!bn) { common(o.name === 'ACAD_TABLE' ? 'ACAD_TABLE' : 'INSERT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); break; }
         common('INSERT'); put(2, bn); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]);
         if (d.s[0] !== 1) put(41, d.s[0]);
         if (d.s[1] !== 1) put(42, d.s[1]);
@@ -1611,7 +1679,7 @@ export function dwgToPairs(dwg) {
           ext(ad.ext);
           if (ad.va) put(74, ad.va);
         }
-        put(0, 'SEQEND');
+        put(0, 'SEQEND'); if (inPaper) put(67, 1);
         break;
       }
       case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {

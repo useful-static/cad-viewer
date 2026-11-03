@@ -131,7 +131,9 @@ const text = (buf, what = 'the file', encoding = 'utf-8') => {
 function checkBodies(rootName, bodies) {
   for (const b of bodies) {
     const n = b.pos.length / 3;
-    for (const x of b.pos) if (!Number.isFinite(x)) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
+    // (past float32's range a coordinate is stored as Infinity: 1e39 passed here, and the view's fit
+    // came out NaN, the view blank)
+    for (const x of b.pos) if (!Number.isFinite(x) || Math.abs(x) > 3.4e38) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
     for (const t of b.tri) if (!Number.isInteger(t) || t < 0 || t >= n) throw new Error(`${rootName} is damaged: a face refers to vertex ${t + 1} of ${n}`);
   }
 }
