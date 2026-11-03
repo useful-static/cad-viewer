@@ -123,6 +123,8 @@ function loadOverrides(key, bodies) {
 // The VISITOR's colours: while a tour plays, app.overrides is the tour's map (its step's colours,
 // every other part grey), which the visitor's own colours are kept under app.tour.base
 const ownOverrides = () => (app.tour ? app.tour.base.overrides : app.overrides);
+// ...and Paint's face colours, set aside while a tour plays (startTour)
+const ownFaces = () => (app.tour ? app.tour.base.faceOverrides : app.faceOverrides);
 function saveOverrides() {
   if (!app.modelKey) return;
   const own = ownOverrides();
@@ -376,7 +378,7 @@ function graphicsNote() {
 let gpuChain = Promise.resolve();
 const rendererWaiters = [];
 
-const isDead = (r) => !r || r.lost || (r.gl && r.gl.isContextLost());
+const isDead = (r) => !r || r.isLost();
 
 // Resolves once app.renderer is no longer `old` (recovery adopted a new one);
 // rejects when recovery gives up (failRendererWaiters). The timeout is only a
@@ -453,8 +455,9 @@ const edgeData = new WeakMap();
 // X / Y / Z keep one file axis of it. Scaled so the farthest-moving body
 // travels one model diagonal at 100 %. The directions go in the body table
 // (js/edges.js bodyTable's slot 0..2, which the vertex shaders read); the
-// fraction is the frame's `explode`. A renderer without a vertex-readable
-// table (a WebGL1 with no vertex textures) does not offer it.
+// fraction is the frame's `explode`. Every renderer offers it: a WebGL1 with
+// no vertex textures takes the directions as a vertex attribute instead
+// (js/renderer-webgl.js aXd).
 app.explode = { on: false, t: 0.4, mode: null, dirs: null, len: 0, flat: false, for: null };
 const cen = (b) => [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
 
@@ -1367,6 +1370,8 @@ function setPaint(on) {
   // while exploded)
   if (on && app.measure && app.measure.on) app.measure.setOn(false);
   if (on && app.explode.on) setExplode(false);
+  // (not while a tour plays: no step holds face colours, and they are set aside meanwhile)
+  if (on && app.tour) { flashHover('Paint is off while a tour plays: a tour step holds no face colours'); on = false; }
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) flashHover('this model has no b-rep faces to paint');
@@ -1426,6 +1431,7 @@ function setModelParam(u, url) {
   const list = url && params.getAll('list').length ? app.listEntries || [] : [];
   const i = list.findIndex((e) => e.url === url);
   for (const k of MODEL_PARAMS) u.searchParams.delete(k);
+  u.searchParams.delete('unit'); // (another model, or the same named again: read as it reads)
   if (i >= 0 && list[i].id) u.searchParams.set('model', list[i].id);
   else if (i >= 0) u.searchParams.set('index', String(i + 1));
   else if (url) u.searchParams.set('src', url);
@@ -1474,6 +1480,7 @@ function viewLink() {
   // the model lists too, in their order, so the link keeps the drop-down
   for (const l of params.getAll('list')) u.searchParams.append('list', l);
   if (app.sourceUrl) setModelParam(u, app.sourceUrl);
+  if (app.sourceUrl && readUnit() !== 'mm') u.searchParams.set('unit', readUnit());
   // the added models opened from a URL, and where they were moved to
   if (app.sourceUrl && app.scene) {
     for (const m of app.scene.slice(1)) {
@@ -1523,7 +1530,7 @@ async function shareView() {
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
 
 function tourParts(names) {
-  if (app.tourIdxFor !== app.header) { app.tourIdx = partIndex(app.header, app.partLabels); app.tourIdxFor = app.header; }
+  if (app.tourIdxFor !== app.header) { app.tourIdx = partIndex(app.header, app.partLabels, firstModelBodies()); app.tourIdxFor = app.header; }
   return resolveParts(names, app.tourIdx);
 }
 
@@ -1867,7 +1874,15 @@ function startTour(tour, url, only = null) {
   app.hover = 0;
   // Paint's face colours are the visitor's, and no step holds them: not drawn while it plays, so
   // the maker's Show and Preview show what the saved tour will (leaving puts them back)
+  if (app.paintFaces) setPaint(false);
   if (app.faceOverrides.size) { app.faceOverrides = new Map(); recolour(); }
+  // and Measure's distances and angles, and the hole table: a step holds notes only, and they
+  // were drawn into the tour's pictures and video (leaving puts them back)
+  if (!prev) {
+    base.measured = app.measure ? app.measure.setAside() : null;
+    base.holesFor = app.holesFor;
+    if (app.holesFor && app.measure) showHoles(null);
+  }
   // the tour's orientation while it plays (leaving puts the visitor's back,
   // with the rest of their view)
   if (tour.orient && tour.orient !== app.cam.orient) {
@@ -1881,6 +1896,8 @@ function startTour(tour, url, only = null) {
   // the names it uses that this model lacks, once (a tour outlives a model update)
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) setStatus('ready', `${readyText()} · the tour names parts this model lacks: ${missing.join(', ')}`);
+  // made over the file read in another unit ("this file is in"): its cameras are at that size
+  else if ((tour.unit || 'mm') !== readUnit()) setStatus('ready', `${readyText()} · this tour was made with the file read in ${tour.unit || 'mm'}: set "this file is in" to ${tour.unit || 'mm'}`);
   showTourStep(0);
   return true;
 }
@@ -1912,15 +1929,19 @@ function endTour(restore = true) {
     recolour();
     restoreExplode(base.explode);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
+    if (app.measure) app.measure.putBack(base.measured);
+    if (base.holesFor && app.measure) showHoles(base.holesFor);
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
     if (!!app.walk !== base.walk) { app.walk = base.walk; $('walk').setAttribute('aria-pressed', String(base.walk)); }
     updateButtons();
     viewChanged();
   }
-  // the visitor's own style choice, however the tour ends (a new model ending it kept the last
-  // step's style pinned over the next model, and over its list entry's own style)
+  // the visitor's own style choice and Explode amount and direction, however the tour ends (a new
+  // model or a drawing ending it kept the last step's style pinned over the next model and its
+  // list entry's style, and its explode: the next Explode read "exploded 0 %")
   app.styleChoice = base.styleChoice;
+  if (!restore) { app.explode.t = base.explode.t; app.explode.mode = base.explode.mode; }
   announce('tour closed');
 }
 
@@ -2206,6 +2227,8 @@ function setStyle(id, remember) {
   app.styleChoice = id;
   if (remember) {
     setPref('cadv.style', id);
+    // (the visitor's own choice, made during a tour: kept when it ends, as it is remembered)
+    if (app.tour) { app.tour.base.styleChoice = id; if (app.tour.saved) app.tour.saved.style = id; }
   }
   $('style').value = id;
   syncStyleBg();
@@ -3060,10 +3083,13 @@ function applyListEntry() {
   // a listed model with a tour plays it as soon as the list names it: once
   // per model opened, never over a view link's view or ?tour='s own tour
   // (the visitor's ✕ ends it for this model)
-  if (app.header && app.autoTourFor !== app.header) {
-    if (app.pendingView || app.urlTourPending) app.autoTourFor = app.header;
+  // (keyed by the model's URL, not its data: a re-read in another unit is the same model opened,
+  // and replayed the tour the visitor had closed; a new open of it resets the key: loadUrl)
+  if (app.header && app.autoTourFor !== autoTourKey()) {
+    if (app.pendingView || app.urlTourPending) app.autoTourFor = autoTourKey();
     else if (e && e.tours && e.tours.length && !app.tour) {
-      const h = app.autoTourFor = app.header;
+      app.autoTourFor = autoTourKey();
+      const h = app.header;
       const t = e.tours[0];
       readTour(t.url).then((r) => { if (!r.error && app.header === h && !app.tour) startTour(r.tour, t.url); });
     }
@@ -3411,7 +3437,7 @@ function updateButtons() {
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has && !app.dxf;
-  // Explode: only where the renderer's vertex shaders can read the directions
+  // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
   $('explode').disabled = !has;
@@ -3455,7 +3481,7 @@ function updateButtons() {
   if (sel.length && !app.paintFaces) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
   $('paintbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
   const all = !sel.length;
-  $('partreset').disabled = all ? !app.overrides.size && !app.faceOverrides.size : !sel.some((id) => app.overrides.has(id - 1));
+  $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
   $('partreset').hidden = $('partreset').disabled; // shown only when there is something to reset
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
   $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
@@ -3551,16 +3577,18 @@ function setPartColour(hex) {
 // picked colour of this model; the parts take the scheme's colours again
 function resetPartColour() {
   let n = 0;
-  const own = ownOverrides();
+  const own = ownOverrides(), faces = ownFaces();
   if (app.selected.size) {
-    for (const id of app.selected) { if (app.overrides.delete(id - 1)) n++; own.delete(id - 1); }
+    for (const id of app.selected) { if (own.delete(id - 1)) n++; if (!app.tour) app.overrides.delete(id - 1); }
   } else {
-    n = own.size + app.faceOverrides.size;
-    app.overrides.clear();
+    n = own.size + faces.size;
     own.clear();
-    app.faceOverrides.clear(); // and the painted faces
+    faces.clear(); // and the painted faces
   }
   saveOverrides();
+  // in a tour, the visitor's colours are under the step's: the step is drawn again from them (its
+  // colours and dimming kept; clearing the shown map dropped the step's emphasis mid-tour)
+  if (app.tour) applyStepState(app.tour.tour.steps[app.tour.i]);
   updateButtons();
   if (n) recolour(`${n} part colour${n > 1 ? 's' : ''} reset`);
 }
@@ -3756,6 +3784,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // the models in the view: this one alone (Add model… appends)
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
+  syncUnitParam(); // (another model's ?unit= is not this one's)
   $('clearval').textContent = '';
   // a model from the device is not the ?model / ?index / ?src a list pick
   // left in the address: a reload would open that instead (review r16 L7)
@@ -4273,7 +4302,9 @@ async function loadMeshFile(buf, name, seq) {
   const extras = new Map();
   for (const f of drop) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
   if (stale(seq)) return;
-  return meshFromSource({ buf, name, format, extras }, 'mm', seq);
+  // (read in the unit the address gives for this file: a reload or a view link of a re-read one)
+  const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
+  return meshFromSource({ buf, name, format, extras }, addressUnit(url), seq);
 }
 
 // A mesh file's bytes as a model in `unit` (a file that stores none -- STL,
@@ -4291,8 +4322,33 @@ async function meshFromSource(src, unit, seq) {
   // (a model added to a scene keeps the scene's units: no choice there)
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
     app.meshSource = unitless ? { ...src, unit } : null;
+    syncUnitParam();
     showInfo();
   }
+}
+
+// The unit a unit-less mesh was read in is part of WHICH model is shown: the address carries it
+// (?unit=, beside ?src), so a reload and a view link open the file at that size -- a link's
+// camera, taken in inches, sat 25.4 times off a model opened in mm
+const readUnit = () => (app.meshSource ? app.meshSource.unit : 'mm');
+function syncUnitParam() {
+  const u = new URL(location.href);
+  const want = readUnit() !== 'mm' && app.sourceUrl ? readUnit() : null;
+  if ((u.searchParams.get('unit') || null) === want) return;
+  if (want) u.searchParams.set('unit', want); else u.searchParams.delete('unit');
+  history.replaceState(history.state, '', u);
+}
+// which model a list's tour auto-played for: the URL it was opened from (else its data)
+const autoTourKey = () => app.sourceUrl || app.header;
+// the unit the address asks a URL load to be read in: only for the model the address names
+function addressUnit(url) {
+  const q = new URLSearchParams(location.search);
+  const unit = q.get('unit');
+  if (!unit || !Object.hasOwn(MM_PER, unit) || !url) return 'mm';
+  try {
+    const named = modelUrlIn(q);
+    return named && new URL(named, location.href).href === new URL(url, location.href).href ? unit : 'mm';
+  } catch { return 'mm'; }
 }
 
 // the units row's "file is in": the same bytes read again in that unit
@@ -4404,10 +4460,7 @@ function show2D(drawing, name, url) {
   document.title = `${name} — ${SHORT_TITLE}`;
   cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} layers`);
   $('sharelink').disabled = !url;
-  $('savepic').disabled = false;
-  $('printbtn').disabled = false;
-  $('picmore').disabled = true;
-  setPicOpts(false);
+  // (Save picture, Print and the picture options: updateButtons above sets them from app.dxf)
   syncMenuButtons();
   showInfo();
   setStatus('ready', `ready · 2D drawing${drawing.units ? '' : ' (its unit is not stored)'}`);
@@ -4773,6 +4826,7 @@ async function fetchFailedText(url, name, e, lead = `could not download ${name}`
 async function loadUrl(url) {
   const seq = beginLoad();
   app.dropExtras = null; // (a URL brings no companions: an earlier drop's are not this file's)
+  app.autoTourFor = null; // (opened again: its list's tour plays again, once: applyListEntry)
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
@@ -6161,14 +6215,16 @@ function wireInput() {
   // the tour maker: File > Make a tour… (a tour playing is opened in it)
   app.recorder = createTourRecorder({
     capture: captureStep,
-    preview: (tour, from, play) => { endTour(); startTour(tour, null); if (from) showTourStep(from); setTourPlaying(play); },
+    preview: (tour, from, play) => { endTour(); if (!startTour(tour, null)) return; if (from) showTourStep(from); setTourPlaying(play); },
     stopPreview: () => endTour(),
     modelUrl: () => {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
     orient: () => app.cam.orient || null,
     // the model open now, by its content (the same file opened again is the same model)
-    model: () => (app.header ? { key: modelKeyOf(app.header), name: app.sourceName || 'another model' } : null),
+    // (and the unit it was read in: the same file read in inches is another size, which steps
+    // taken in mm do not fit)
+    model: () => (app.header ? { key: `${modelKeyOf(app.header)}@${readUnit()}`, unit: readUnit(), name: `${app.sourceName || 'another model'}${readUnit() !== 'mm' ? ` read in ${readUnit()}` : ''}` } : null),
     save: (text, name) => downloadText(text, name, 'application/json'),
     validate: (text) => parseTour(text, location.href),
     pictures: tourPictures,
@@ -6583,7 +6639,7 @@ async function main() {
       else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
     }
     // (the next model picked from the list plays its own tour)
-    if (app.header) { app.autoTourFor = app.header; app.urlTourPending = false; }
+    if (app.header) { app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
   }
 }
 

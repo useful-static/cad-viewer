@@ -118,9 +118,10 @@ export async function parseMesh(format, buf, name, files = new Map()) {
 const MAX_TEXT_BYTES = 500 * 2 ** 20;
 const mb = (n) => `${big(Math.round(n / 2 ** 20))} MB`;
 const TEXT_LIMIT_WORDS = `more than the ${mb(MAX_TEXT_BYTES)} of text this viewer reads`;
-const text = (buf, what = 'the file') => {
+// (buf: an ArrayBuffer or a byte view; encoding: an ASCII PLY body is latin1)
+const text = (buf, what = 'the file', encoding = 'utf-8') => {
   if (buf.byteLength > MAX_TEXT_BYTES) throw new Error(`${what} is ${mb(buf.byteLength)} of text, ${TEXT_LIMIT_WORDS}`);
-  return new TextDecoder().decode(buf);
+  return new TextDecoder(encoding).decode(buf);
 };
 
 // raw bodies [{ name, pos: number[], tri: number[], col?: [r,g,b] per
@@ -368,7 +369,10 @@ function parseOBJ(s, files, base) {
   const start = (from, to, str) => { if (cur && !cur.pos.length) bodies.pop(); cur = null; nameAt = from; nameEnd = to; nameStr = str; };
   const body = () => { if (!cur) { cur = { name: nameOf(), pos: [], tri: [], col: [], map: new Map() }; bodies.push(cur); } return cur; };
   // one pass over the lines (splitting 40 MB of "g" lines into 20 M strings first was 1.6 s)
-  const ws = (c) => c === 32 || c === 9 || c === 13 || c === 11 || c === 12;
+  // (the whitespace of the line split's \s, less the newline: a no-break space after "f" or "g"
+  // passed the line split but not this test, so its face escaped the count pass and its group
+  // reached a second, different "o"/"g" branch)
+  const ws = (c) => (c <= 32 ? c === 32 || c === 9 || c === 13 || c === 11 || c === 12 : c >= 160 && /\s/.test(String.fromCharCode(c)));
   const n = s.length;
   // the "v" lines and the faces' triangles counted against the caps first, by a pass that makes
   // no strings (a 20 MB face of alternating corners was 10 M triangles built, 4.2 s and 1.6 GB);
@@ -418,7 +422,6 @@ function parseOBJ(s, files, base) {
         vc.push(+sp[4], +sp[5], +sp[6]);
       } else if (vc) vc.push(NaN, NaN, NaN);
     }
-    else if (k === 'o' || k === 'g') start(-1, 0, sp.slice(1).join(' ') || base);
     else if (k === 'mtllib') {
       // the rest of the line as one name first (Blender writes "mtllib my model.mtl" unquoted),
       // else each word a name (the form "mtllib a.mtl b.mtl")
@@ -563,7 +566,9 @@ function parsePLY(buf, base) {
     return c;
   };
   if (fmt === 'ascii') {
-    const toks = new TextDecoder('latin1').decode(u8.subarray(bodyStart)).trim().split(/\s+/);
+    // (through text(): its limit and words, as every other text reader; a 540 MB body met the
+    // engine's "Cannot create a string longer than 0x1fffffe8 characters")
+    const toks = text(u8.subarray(bodyStart), who, 'latin1').trim().split(/\s+/);
     checkCounts(toks.length, (e) => e.props.length);
     let p = 0;
     for (const e of els) {
@@ -996,6 +1001,22 @@ function mulAffine(a, b) {
 // ---------- glTF / GLB ----------
 const COMP = { 5120: [Int8Array, 127], 5121: [Uint8Array, 255], 5122: [Int16Array, 32767], 5123: [Uint16Array, 65535], 5125: [Uint32Array, 0], 5126: [Float32Array, 0] };
 const NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+const COMP_NAME = { 5120: 'byte', 5121: 'unsigned byte', 5122: 'short', 5123: 'unsigned short', 5125: 'unsigned int', 5126: 'float' };
+// the accessor types (and component types) each use may have (glTF 2.0 3.7.2.1, with the
+// KHR_mesh_quantization and EXT_mesh_gpu_instancing tables). The caps count an accessor's
+// elements as what its use builds (a vertex, an index, an instance), so a use given another
+// type built count x components: a MAT4 index accessor counted 1.9 M triangles and built 16 times
+// that (825 bytes placed 3 times: 11.1 s and 3.68 GB; placed 5 times, out of memory).
+const ACC_USE = {
+  POSITION: [['VEC3'], [5126, 5120, 5121, 5122, 5123]],
+  NORMAL: [['VEC3'], [5126, 5120, 5122]],
+  COLOR_0: [['VEC3', 'VEC4'], [5126, 5121, 5123]],
+  indices: [['SCALAR'], [5121, 5123, 5125]],
+  TRANSLATION: [['VEC3'], [5126, 5120, 5122]],
+  ROTATION: [['VEC4'], [5126, 5120, 5122]],
+  SCALE: [['VEC3'], [5126, 5120, 5122]],
+};
+const orList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}` : xs[0]);
 // the primitive modes drawn: TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN (points and lines are not)
 const TRI_MODES = [4, 5, 6];
 // the extensions a file may require: KHR_mesh_quantization (integer and normalized attributes
@@ -1038,6 +1059,17 @@ async function parseGLTF(buf, format, base, files) {
   const list = (x, what) => { if (x === undefined) return []; if (!Array.isArray(x)) throw damaged(`${what} is not a list`); return x; };
   const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
   const nat = (x) => Number.isInteger(x) && x >= 0;
+  // accessor ai as use (an ACC_USE key) at where ("mesh 0 primitive 1"): refused in words when its
+  // type or component type is not one that use may have; a missing accessor is left to accOnce
+  const useType = (where, use, ai) => {
+    const a = at(accessors, ai);
+    if (!a) return null;
+    const [types, comps] = ACC_USE[use];
+    if (types.includes(a.type) && comps.includes(a.componentType)) return a;
+    const shown = (x) => (typeof x === 'string' ? x : JSON.stringify(x) ?? String(x)).slice(0, 40);
+    const ct = Object.hasOwn(COMP_NAME, a.componentType) ? COMP_NAME[a.componentType] : `component type ${shown(a.componentType)}`;
+    throw damaged(`${where}'s ${use} accessor ${ai} is ${shown(a.type)} of ${ct}; ${use} must be ${orList(types)} of ${orList(comps.map((c) => COMP_NAME[c]))}`);
+  };
   // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
   // must not load such an asset; ignored, an instanced part opened as one copy without a word).
   // Compression keeps its own words, since the fix is the same for each.
@@ -1149,7 +1181,13 @@ async function parseGLTF(buf, format, base, files) {
   const linearOf = async (mi) => {
     const mat = materials[mi];
     const pbr = (isObj(mat) && isObj(mat.pbrMetallicRoughness) && mat.pbrMetallicRoughness) || {};
-    const f = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor.slice(0, 3) : null;
+    // (glTF 2.0: 4 numbers. Any array was sliced to 3 and written to the .cadmesh, whose decode
+    // refused it in its own words, or opened [null, 0, 0, 1] black)
+    const bf = pbr.baseColorFactor;
+    if (bf !== undefined && !(Array.isArray(bf) && bf.length === 4 && bf.every((x) => typeof x === 'number' && Number.isFinite(x)))) {
+      throw damaged(`material ${mi}'s baseColorFactor is not 4 numbers`);
+    }
+    const f = bf === undefined ? null : bf.slice(0, 3);
     const tx = isObj(pbr.baseColorTexture) && Array.isArray(json.textures) ? json.textures[pbr.baseColorTexture.index] : undefined;
     const si = isObj(tx) && Number.isInteger(tx.source) ? tx.source : null;
     if (si === null) return f;
@@ -1167,8 +1205,8 @@ async function parseGLTF(buf, format, base, files) {
     let count = null;
     for (const [k, ty] of Object.entries(INSTANCE_ATTR)) {
       if (ex.attributes[k] === undefined) continue;
-      const a = at(accessors, ex.attributes[k]);
-      if (!a || a.type !== ty || !nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} is not a ${ty} accessor`);
+      const a = useType(`node ${ni}'s ${INSTANCING}`, k, ex.attributes[k]);
+      if (!a || !nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} is not a ${ty} accessor`);
       if (count !== null && a.count !== count) throw damaged(`node ${ni}'s ${INSTANCING} attributes count ${count} and ${a.count} instances`);
       count = a.count;
     }
@@ -1189,18 +1227,26 @@ async function parseGLTF(buf, format, base, files) {
   // 40 deep, was 2^40 visits)
   // a mesh's triangles (by its indices, else its positions) and the vertices each placement of
   // it copies (its POSITION count)
+  // (each accessor a primitive uses is held to its use's types here, before anything is read or
+  // counted: see ACC_USE)
   const meshCounts = (mi) => {
     const me = at(meshDefs, mi);
     let tris = 0, verts = 0;
-    for (const pr of (me && Array.isArray(me.primitives) ? me.primitives : [])) {
-      if (!isObj(pr) || !TRI_MODES.includes(pr.mode ?? 4)) continue;
+    (me && Array.isArray(me.primitives) ? me.primitives : []).forEach((pr, k) => {
+      if (!isObj(pr) || !TRI_MODES.includes(pr.mode ?? 4)) return;
       if (Number.isInteger(pr.material) && pr.material >= 0 && pr.material < materials.length) matsUsed.add(pr.material);
-      const p = isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
-      const a = pr.indices !== undefined ? at(accessors, pr.indices) : p;
+      const where = `mesh ${mi} primitive ${k + 1}`;
+      const attrs = isObj(pr.attributes) ? pr.attributes : {};
+      const p = attrs.POSITION !== undefined ? useType(where, 'POSITION', attrs.POSITION) : null;
+      for (const u of ['NORMAL', 'COLOR_0']) if (attrs[u] !== undefined) useType(where, u, attrs[u]);
+      const a = pr.indices !== undefined ? useType(where, 'indices', pr.indices) : p;
+      // counted as built: every value the accessor holds (count x components), a vertex per 3
+      // POSITION values and a corner per index value
+      const corners = !a || !nat(a.count) ? 0 : a === p ? a.count * NCOMP[a.type] / 3 : a.count * NCOMP[a.type];
       // a list: a triangle per 3 corners; a strip or fan: one per corner past the second
-      if (a && nat(a.count)) tris += (pr.mode ?? 4) === 4 ? Math.floor(a.count / 3) : Math.max(0, a.count - 2);
-      if (p && nat(p.count)) verts += p.count;
-    }
+      tris += (pr.mode ?? 4) === 4 ? Math.floor(corners / 3) : Math.max(0, corners - 2);
+      if (p && nat(p.count)) verts += p.count * NCOMP[p.type] / 3;
+    });
     return { tris, verts };
   };
   placements(roots, (ni) => {

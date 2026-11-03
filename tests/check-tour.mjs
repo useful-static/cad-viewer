@@ -11,7 +11,10 @@
 // resolves; 1: a name matches nothing (each listed), or the file is refused.
 
 import { readFile } from 'node:fs/promises';
-import { decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
+import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
+import { formatOfName, sniffFormat } from '../js/formats.js';
+import { meshFormatOf } from '../js/mesh-formats.js';
+import { readMeshFile } from '../js/read-file.js';
 import { resolve } from 'node:path';
 import { parseModelList, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
@@ -24,6 +27,8 @@ if (!args.length || args.includes('--help')) {
 }
 const li = args.indexOf('--labels');
 const labelsFile = li >= 0 ? args.splice(li, 2)[1] : null;
+// (--labels with no file after it was dropped, and the check passed without the labels asked for)
+if (li >= 0 && (!labelsFile || labelsFile.startsWith('--'))) { console.log('usage: --labels needs a model list file'); process.exit(2); }
 const [tourPath, modelArg] = args;
 
 // a URL as the page fetches it (a GitHub blob, a Dropbox ?dl=0: js/open-url.js fileUrl)
@@ -50,9 +55,24 @@ try {
 }
 const model = modelArg || (tour.model ? asPath(tour.model) : null);
 if (!model) { console.log(`FAIL ${tourPath}: give the model file it plays over`); process.exit(1); }
-let buf = await read(model);
-if (isGzip(buf.buffer)) buf = new Uint8Array(await gunzip(buf.buffer));
-const { header } = decodeCadmesh(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+// the model as the page reads it: a .cadmesh, or a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB) read
+// into one by the page's own reader, in the unit the tour was made in; a STEP / IGES / BREP needs
+// the converter (stp2mesh.mjs), refused in a FAIL line, as is a file this cannot read
+let header;
+try {
+  let buf = await read(model);
+  if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`over ${MAX_FILE_BYTES / 2 ** 30} GB`);
+  if (isGzip(buf.buffer)) buf = new Uint8Array(await gunzip(buf.buffer));
+  let raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  const name = model.split(/[/\\]/).pop().replace(/\.gz$/i, '');
+  const mesh = meshFormatOf(name, raw);
+  if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras: new Map(), unit: tour.unit || 'mm' })).raw;
+  else if (sniffFormat(raw)?.kind === 'cad' || formatOfName(name)?.kind === 'cad') throw new Error('a STEP / IGES / BREP: convert it first (stp2mesh.mjs) and check against the .cadmesh');
+  ({ header } = decodeCadmesh(raw));
+} catch (e) {
+  console.log(`FAIL ${model}: ${e.message}`);
+  process.exit(1);
+}
 let labels = null;
 if (labelsFile) {
   // read as the viewer reads a list (js/model-list.js parseModelList: every form, the files

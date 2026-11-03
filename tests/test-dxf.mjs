@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, bulgePts, mtextPlain, textCodes, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 
 import { test, done } from './harness.mjs';
 
@@ -317,6 +317,22 @@ test('an entity marked invisible (60 = 1) is not drawn, nor what belongs to it (
   assert.equal(d.paths.length, 1, 'only the visible LINE');
   assert.deepEqual([...d.paths[0].pts], [0, 0, 2, 0]);
   assert.equal(d.texts.length, 0);
+});
+test('an invisible ATTRIB is left out alone: the visible ATTRIBs after it are drawn (a dynamic block\'s title block)', () => {
+  const d = parseDXF(ents(
+    [[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [60, 1], [10, 1], [20, 1], [40, 1], [1, 'state A'], [2, 'VIS'], [70, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 1], [20, 2], [40, 1], [1, 'PN-1'], [2, 'PN'], [70, 0]],
+    [[0, 'ATTRIB'], [8, '0'], [10, 1], [20, 3], [40, 1], [1, 'REV B'], [2, 'REV'], [70, 0]],
+    [[0, 'SEQEND'], [8, '0']],
+  ));
+  assert.deepEqual(d.texts.map((t) => t.text), ['PN-1', 'REV B']);
+});
+test('TEXT, ATTRIB and MTEXT control codes: %%c %%d %%p %%u %%o %%k %%% %%nnn and \\U+nnnn', () => {
+  assert.equal(textCodes('%%c10 %%d %%p0.1 %%uUnder%%u %%oOver%%o %%kX%%k 50%%% %%065 45\\U+00B0 \\U+2300'), 'Ø10 ° ±0.1 Under Over X 50% A 45° ⌀');
+  const d = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, '%%UTITLE%%U 90\\U+00B0']],
+    [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 5], [40, 1], [1, '{\\fArial;45\\U+00B0}\\P%%c3']]));
+  assert.deepEqual(d.texts.map((t) => t.text), ['TITLE 90°', '45°\nØ3']);
 });
 test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
   const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));

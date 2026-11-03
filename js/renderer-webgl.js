@@ -833,6 +833,9 @@ export class WebGLRenderer {
   // The browser may hand back a smaller drawing buffer than asked for (memory
   // or size caps). Shrink the canvas to what was actually allocated, so the
   // viewport, the pick FBO and pick coordinates all describe the same pixels.
+  // the context is gone (main.js recovers on a new renderer)
+  isLost() { return this.gl.isContextLost(); }
+
   // main.js compares against `requested`, not the canvas size: after a shrink
   // the canvas never equals the request, which would re-allocate every frame.
   resize(w, h) {

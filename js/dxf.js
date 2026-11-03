@@ -481,7 +481,11 @@ function emit(recs, M, byBlock, depth, ctx) {
     // of each other (the records that belong to it -- a POLYLINE's VERTEXes, an INSERT's
     // ATTRIBs, to their SEQEND -- go with it)
     if (num(r, 60, 0) === 1) {
-      while (i + 1 < recs.length && ['VERTEX', 'ATTRIB', 'SEQEND'].includes(recs[i + 1].type)) if (recs[++i].type === 'SEQEND') break;
+      // (only an owner takes its records with it: an invisible ATTRIB is itself one of an
+      // INSERT's, and skipping on from it dropped the visible ones after it -- dynamic blocks)
+      if (r.type === 'POLYLINE' || r.type === 'INSERT') {
+        while (i + 1 < recs.length && ['VERTEX', 'ATTRIB', 'SEQEND'].includes(recs[i + 1].type)) if (recs[++i].type === 'SEQEND') break;
+      }
       continue;
     }
     let layer = get(r, 8, '0');
@@ -627,7 +631,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (the plain text, made once per entity: a block's text inserted many times is the same)
         if (r.plain === undefined) {
           const raw = r.type === 'MTEXT' ? r.g.filter((x) => x[0] === 3 || x[0] === 1).map((x) => x[1]).join('') : get(r, 1, '');
-          r.plain = r.type === 'MTEXT' ? mtextPlain(raw) : raw.replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
+          r.plain = r.type === 'MTEXT' ? mtextPlain(raw) : textCodes(raw);
         }
         const t = r.plain;
         if (!t.trim()) break;
@@ -847,9 +851,17 @@ function hatchLoops(r) {
 // each match at the next backslash: one pass, not a rescan to the end from every code; a stack
 // \S splits at its first separator, which its first part may not hold)
 export function mtextPlain(s) {
-  return s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;\\]*;/g, '').replace(/\\[LlOoKk]/g, '')
-    .replace(/\\S([^;^#/\\]*)[\^#/]([^;\\]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, '')
-    .replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
+  return textCodes(s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;\\]*;/g, '').replace(/\\[LlOoKk]/g, '')
+    .replace(/\\S([^;^#/\\]*)[\^#/]([^;\\]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, ''));
+}
+
+// The control codes a TEXT, ATTRIB or MTEXT value holds, in one pass: %%c Ø, %%d °, %%p ±,
+// %%u / %%o / %%k (underline, overline, strike: toggles, dropped), %%% a "%", %%nnn the character
+// of that code, and \U+nnnn the Unicode character (a raw "%%u" and "45\U+00B0" were drawn as written)
+const PCT = { c: 'Ø', d: '°', p: '±', u: '', o: '', k: '', '%': '%' };
+export function textCodes(s) {
+  return s.replace(/%%(\d{3})|%%([cdpuok%])|\\U\+([0-9A-Fa-f]{4})/gi, (m, n, k, u) => (
+    n ? String.fromCharCode(Number(n)) : k ? PCT[k.toLowerCase()] : String.fromCharCode(parseInt(u, 16))));
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 

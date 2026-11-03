@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeCadmesh } from '../js/cadmesh.js';
-import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX } from '../js/tour.js';
+import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
 import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
@@ -95,7 +95,61 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     writeFileSync(join(dir, 't.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.cadmesh', steps: [{ frame: ['plate'] }] }));
     const out = execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json')], { encoding: 'utf8' });
     assert.match(out, /^OK {2}.*1 steps, 1 part names, 0 not in the model/);
+    // a tour over an OBJ (the page plays one over any format it opens): read as the page reads it
+    writeFileSync(join(dir, 'm.obj'), 'o plate\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+    writeFileSync(join(dir, 'o.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.obj', steps: [{ frame: ['plate'] }] }));
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
+    // a STEP model: a FAIL line saying what to do, not a stack trace
+    writeFileSync(join(dir, 'm.stp'), 'ISO-10303-21;\nHEADER;\nENDSEC;\n');
+    writeFileSync(join(dir, 's.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.stp', steps: [{}] }));
+    let failed = '';
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 's.cadtour.json')], { encoding: 'utf8' }); } catch (e) { failed = e.stdout; }
+    assert.match(failed, /^FAIL .*m\.stp: a STEP \/ IGES \/ BREP: convert it first/);
+    // --labels with nothing after it: a usage error (exit 2), not a pass without the labels
+    let rc = 0;
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--labels'], { encoding: 'utf8' }); } catch (e) { rc = e.status; }
+    assert.equal(rc, 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a list\'s labels name the first model\'s bodies only: an added model\'s part of the same name keeps its own', () => {
+  // board (bodies 1, 2: PART_7, PART_8) + case (body 3: PART_7), labels { PART_7: "Fan" }
+  const header = { root: { name: 'scene', meshes: [], children: [
+    { name: 'board', meshes: [0, 1], children: [] }, { name: 'case', meshes: [2], children: [] }] },
+  meshes: [{ name: 'PART_7' }, { name: 'PART_8' }, { name: 'PART_7' }] };
+  const labels = { PART_7: 'Fan' };
+  const idx = partIndex(header, labels, 2);
+  assert.deepEqual(resolveParts(['Fan'], idx).ids, [1]);
+  assert.deepEqual(resolveParts(['PART_7'], idx).ids.sort(), [1, 3]);
+  // the maker names both PART_7s by their own name: "Fan" (which it wrote) names body 1 alone
+  assert.deepEqual(namesFor([1, 3], header, idx, labels), ['PART_7']);
+  assert.deepEqual(resolveParts(namesFor([1, 3], header, idx, labels), idx).ids.sort(), [1, 3]);
+  // one model (no limit): as before
+  assert.deepEqual(resolveParts(['Fan'], partIndex(header, labels)).ids.sort(), [1, 3]);
+});
+
+test('namesFor on a flat assembly of 40,000 bodies, half of them wanted: each name tested once, fast', () => {
+  const N = 40000;
+  // (each body its own name under one named root: the root is tested for every wanted body)
+  const header = { root: { name: 'asm', meshes: [...Array(N).keys()], children: [] }, meshes: Array.from({ length: N }, (_, i) => ({ name: `part ${i + 1}` })) };
+  const idx = partIndex(header);
+  const want = Array.from({ length: N / 2 }, (_, i) => 2 * i + 1); // every other body
+  const t0 = Date.now();
+  const names = namesFor(want, header, idx);
+  const ms = Date.now() - t0;
+  assert.equal(names.length, N / 2);
+  assert.equal(names[0], 'part 1');
+  assert.ok(ms < 1000, `${ms} ms (it was 4.9 s)`);
+});
+
+test('a tour made over a mesh read in inches says so ("unit"), and the parser takes only a known unit', () => {
+  const step = { view: { cam: { target: [0, 0, 0], dist: 10, q: [0, 0, 0, 1], ortho: false } }, title: '', text: '', dim: 'none', transition: 1.2, hold: 4 };
+  const t = draftToTour({ title: 't', mode: 'static', loop: false, orient: null, unit: 'in', steps: [step] });
+  assert.equal(t.unit, 'in');
+  assert.equal(parseTour(JSON.stringify(t)).unit, 'in');
+  assert.equal(draftToTour({ title: 't', mode: 'static', loop: false, orient: null, unit: 'mm', steps: [step] }).unit, undefined);
+  assert.equal(parseTour(JSON.stringify({ cadtour: 2, steps: [{}] })).unit, 'mm');
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, unit: 'furlong', steps: [{}] })), /"unit"/);
 });
 
 test('a new step carries the step before\'s dimming AND timing, ease included', () => {
@@ -183,6 +237,11 @@ test('the tour maker\'s menus offer exactly the values the parser takes (DIMS, M
   const values = (id) => [...new RegExp(`<select id="${id}"[\\s\\S]*?</select>`).exec(html)[0].matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(values('tes-dim'), DIMS);
   assert.deepEqual(values('temode'), MODES);
+  // the step fields' ranges are the parser's (RANGES), and the maker sets its inputs from them
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, steps: [{ orbit: RANGES.orbit[1] + 1 }] })), /orbit/);
+  assert.equal(parseTour(JSON.stringify({ cadtour: 2, steps: [{ orbit: RANGES.orbit[1] }] })).steps[0].orbit, RANGES.orbit[1]);
+  const rec = readFileSync(new URL('../js/tour-recorder.js', import.meta.url), 'utf8');
+  assert.match(rec, /input\.min = RANGES\[k\]\[0\]; input\.max = RANGES\[k\]\[1\]/);
   // and Explode's direction buttons offer exactly the modes links and tours take (EXPLODE_MODES)
   const seg = /<span class="seg" id="xpmode"[\s\S]*?<\/span>/.exec(html)[0];
   assert.deepEqual([...seg.matchAll(/data-mode="([^"]+)"/g)].map((m) => m[1]), EXPLODE_MODES);

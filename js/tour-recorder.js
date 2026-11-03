@@ -7,9 +7,10 @@
 //
 // The panel owns only the draft; main.js does what touches the viewer:
 //   capture(opts)          the view as a step (camera 'exact' | 'frame')
-//   preview(tour, i)       play the draft from step i (paused)
+//   preview(tour, from, play)  show the draft from step `from`, playing or paused
 //   stopPreview()          leave the preview
 //   modelUrl()             the model's URL, when it was opened from one
+//   model()                the model open now: { key, unit, name } (the draft is tied to one), or null
 //   orient()               the view's orientation ("+z-y"), written into a new tour
 //   save(text, name)       download the file
 //   validate(text)         the tour parser: throws naming what is wrong
@@ -17,7 +18,7 @@
 //   video(tour)            the tour played and recorded -> bytes, or why not
 //   announce(text)         the live region
 
-import { DEFAULTS, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VERSION } from './tour.js';
+import { DEFAULTS, RANGES, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VERSION } from './tour.js';
 
 // what a step keeps when the draft is written: the parser's own field list
 const STEP_KEYS = ['id', ...STEP_FIELDS];
@@ -30,6 +31,7 @@ export function draftToTour(draft, modelUrl = null) {
   if (draft.title.trim()) out.title = draft.title.trim();
   if (modelUrl) out.model = modelUrl;
   if (draft.orient) out.orient = draft.orient;
+  if (draft.unit && draft.unit !== 'mm') out.unit = draft.unit;
   out.mode = draft.mode;
   if (draft.loop) out.loop = true;
   // (each field as the file writes it: a section turned off is "off" in a file, { axis: 'off' }
@@ -76,7 +78,9 @@ export function createTourRecorder(api) {
   const model = () => (api.model ? api.model() : null);
   const sameModel = (what) => {
     const m = model();
-    if (!draft.steps.length || !draft.model || !m || draft.model.key === m.key) return true;
+    // (no model open -- a drawing shown, a load failed -- is not the steps' model either: a save
+    // named the drawing as the tour's model)
+    if (!draft.steps.length || !draft.model || (m && draft.model.key === m.key)) return true;
     note(`not ${what}: these steps were made on ${draft.model.name}; open it again to go on with them`);
     return false;
   };
@@ -160,7 +164,7 @@ export function createTourRecorder(api) {
     // (the step before's dimming and timing carry over: its words, id and orbit do not)
     const s = take(prev ? Object.fromEntries(CARRIED_FIELDS.map((k) => [k, prev[k]])) : {});
     if (!s) { note('select parts first to frame them, or choose "this exact view"'); return; }
-    if (!draft.steps.length) draft.model = model();
+    if (!draft.steps.length) { draft.model = model(); draft.unit = draft.model ? draft.model.unit : null; }
     draft.steps.splice(draft.sel + 1, 0, s);
     select(draft.sel + 1);
     note(`step ${draft.sel + 1} added: give it a title and a text`);
@@ -188,9 +192,11 @@ export function createTourRecorder(api) {
   const num = (lo, hi) => (v) => { const n = Number(v); return v === '' || !Number.isFinite(n) ? undefined : Math.min(hi, Math.max(lo, n)); };
   field(el.sTitle, 'title');
   field(el.sText, 'text');
-  field(el.sFly, 'transition', num(0, 30));
-  field(el.sHold, 'hold', num(0, 600));
-  field(el.sOrbit, 'orbit', (v) => { const n = num(-3600, 3600)(v); return n ? n : undefined; });
+  field(el.sFly, 'transition', num(...RANGES.transition));
+  field(el.sHold, 'hold', num(...RANGES.hold));
+  field(el.sOrbit, 'orbit', (v) => { const n = num(...RANGES.orbit)(v); return n ? n : undefined; });
+  // (the inputs' own limits, from the same table: the orbit field stopped at 360 while 3600 was taken)
+  for (const [input, k] of [[el.sFly, 'transition'], [el.sHold, 'hold'], [el.sOrbit, 'orbit']]) { input.min = RANGES[k][0]; input.max = RANGES[k][1]; }
   el.sDim.onchange = () => { const s = draft.steps[draft.sel]; if (s) s.dim = el.sDim.value; };
   el.sCam.onchange = () => note('"Update from the view" takes the camera this way');
   el.title.addEventListener('input', () => { draft.title = el.title.value; });
@@ -245,6 +251,7 @@ export function createTourRecorder(api) {
     draft.orient = tour.orient || null;
     draft.steps = tour.steps.map((s) => ({ ...s }));
     draft.model = model(); // (a tour read back is edited over the model open now)
+    draft.unit = tour.unit || 'mm';
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;
     el.mode.value = draft.mode;

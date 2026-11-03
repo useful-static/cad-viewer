@@ -16,6 +16,7 @@
 import { VIEW_PRESETS, parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
+import { DISPLAY_UNITS } from './units.js';
 import { EXPLODE_MODES, NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 
 export const PRESETS = Object.keys(VIEW_PRESETS);
@@ -32,7 +33,7 @@ export const TOUR_VERSION = 2;
 export const STEP_FIELDS = ['title', 'text', 'view', 'frame', 'from', 'margin', 'colour', 'dim', 'show', 'hide', 'isolate',
   'explode', 'explodeAlong', 'section', 'style', 'callouts', 'transition', 'ease', 'hold', 'orbit', 'ortho'];
 export const STEP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'mode', 'loop', 'defaults', 'steps'];
+const TOP_FIELDS =['cadtour', 'title', 'model', 'orient', 'unit', 'mode', 'loop', 'defaults', 'steps'];
 
 const isText = (v, max) => typeof v === 'string' && v.length <= max;
 const isNum = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
@@ -75,6 +76,10 @@ export function parseTour(text, base = undefined) {
   if (t.orient !== undefined) {
     try { orient = parseOrient(t.orient); } catch (e) { throw bad('"orient"', e.message); }
   }
+  // the unit a unit-less mesh (STL, OBJ, PLY, OFF) was read in when the tour was made ("this file
+  // is in"): its cameras are at that size. Left out: as the file reads, mm
+  if (t.unit !== undefined && !DISPLAY_UNITS.includes(t.unit)) throw bad('"unit"', `must be one of ${DISPLAY_UNITS.join(', ')}`);
+  const unit = t.unit || 'mm';
   const mode = t.mode === undefined ? MODES[0] : t.mode;
   if (!MODES.includes(mode)) throw bad('"mode"', `must be ${MODES.map((m) => `"${m}"`).join(' or ')}`);
   if (t.loop !== undefined && typeof t.loop !== 'boolean') throw bad('"loop"', 'must be true or false');
@@ -96,12 +101,14 @@ export function parseTour(text, base = undefined) {
     if (ids.has(s.id)) throw bad(`step ${i + 1} "id"`, `"${s.id}" is used by an earlier step`);
     ids.add(s.id);
   });
-  return { version: t.cadtour, title: t.title || '', model: model || null, orient, mode, loop: !!t.loop, defaults, steps };
+  return { version: t.cadtour, title: t.title || '', model: model || null, orient, unit, mode, loop: !!t.loop, defaults, steps };
 }
 
+// the numeric step fields' ranges: the parser's, the tour maker's and its inputs' min / max (one table)
+export const RANGES = { transition: [0, 30], hold: [0, 600], orbit: [-3600, 3600] };
 function checkTiming(where, k, v, bad) {
-  if (k === 'transition' && !isNum(v, 0, 30)) throw bad(where, 'must be seconds, 0 to 30');
-  if (k === 'hold' && !isNum(v, 0, 600)) throw bad(where, 'must be seconds, 0 to 600');
+  if (k === 'transition' && !isNum(v, ...RANGES.transition)) throw bad(where, `must be seconds, ${RANGES.transition.join(' to ')}`);
+  if (k === 'hold' && !isNum(v, ...RANGES.hold)) throw bad(where, `must be seconds, ${RANGES.hold.join(' to ')}`);
   if (k === 'ease' && !EASES.includes(v)) throw bad(where, `must be one of ${EASES.join(', ')}`);
   if (k === 'dim' && !DIMS.includes(v)) throw bad(where, `must be one of ${DIMS.join(', ')}`);
 }
@@ -199,7 +206,7 @@ function parseStep(s, where, defaults, bad, version) {
     checkTiming(at(k), k, s[k], bad);
     out[k] = s[k];
   }
-  if (s.orbit !== undefined) { if (!isNum(s.orbit, -3600, 3600)) throw bad(at('orbit'), 'must be degrees, -3600 to 3600'); out.orbit = s.orbit; }
+  if (s.orbit !== undefined) { if (!isNum(s.orbit, ...RANGES.orbit)) throw bad(at('orbit'), `must be degrees, ${RANGES.orbit.join(' to ')}`); out.orbit = s.orbit; }
   // a step with no camera of its own frames the whole model from where the
   // camera is (a caption-only step)
   return out;
@@ -213,7 +220,9 @@ function parseStep(s, where, defaults, bad, version) {
 // names, and its ids are gathered when it is first asked for (and kept). Gathering every name's
 // ids up front cost depth x bodies -- a 256-deep tree of many bodies, 10 s and 3 GB as a tour
 // opened -- where a tour asks for a handful.
-export function partIndex(header, labels = null) {
+// labelled: the bodies (1..labelled) a model list's labels describe -- in a scene, the first model's;
+// an added model's part of the same name is not labelled (the tree's rule: main.js ofFirstModel)
+export function partIndex(header, labels = null, labelled = Infinity) {
   const refs = new Map(); // key -> [a tree node, or { id }]
   const put = (name, ref) => {
     if (typeof name !== 'string') return;
@@ -229,11 +238,6 @@ export function partIndex(header, labels = null) {
     for (const c of n.children || []) stack.push(c);
   }
   header.meshes.forEach((m, i) => put(m.name, { id: i + 1 }));
-  if (labels) {
-    for (const [name, label] of Object.entries(labels)) {
-      for (const r of refs.get(name.trim().toLowerCase()) || []) put(label, r);
-    }
-  }
   const gathered = new Map();
   const gather = (n, out) => {
     const st = [n];
@@ -243,6 +247,19 @@ export function partIndex(header, labels = null) {
       for (const c of x.children || []) st.push(c);
     }
   };
+  if (labels) {
+    const covered = (r) => {
+      if (r.id) return r.id <= labelled;
+      if (labelled === Infinity) return true;
+      const ids = new Set();
+      gather(r, ids);
+      for (const id of ids) if (id > labelled) return false;
+      return true;
+    };
+    for (const [name, label] of Object.entries(labels)) {
+      for (const r of refs.get(name.trim().toLowerCase()) || []) if (covered(r)) put(label, r);
+    }
+  }
   return {
     bodies: header.meshes.length,
     get(k) {
@@ -283,17 +300,32 @@ export function namesFor(ids, header, idx, labels = null) {
   const covered = new Set();
   const names = [];
   const byLabel = labels ? Object.fromEntries(Object.entries(labels).map(([k, v]) => [k.trim().toLowerCase(), v])) : {};
+  // whether a name's bodies all lie in the wanted set, worked out once per name (asked per body,
+  // a name over half a flat assembly was walked again for every wanted body: 40k bodies, 4.9 s)
+  const within = new Map();
+  const allWanted = (key) => {
+    if (!within.has(key)) {
+      const hit = idx.get(key);
+      let ok = !!hit && hit.size <= want.size;
+      if (ok) for (const x of hit) if (!want.has(x)) { ok = false; break; }
+      within.set(key, ok);
+    }
+    return within.get(key);
+  };
   for (const id of [...want].sort((a, b) => a - b)) {
     if (covered.has(id)) continue;
     let pick = null;
     for (const name of chains[id - 1] || []) {
-      const hit = idx.get(name.trim().toLowerCase());
-      if (hit && [...hit].every((x) => want.has(x))) { pick = name; break; }
+      if (allWanted(name.trim().toLowerCase())) { pick = name; break; }
     }
     if (pick) {
       for (const x of idx.get(pick.trim().toLowerCase())) covered.add(x);
       const key = pick.trim().toLowerCase();
-      names.push((Object.hasOwn(byLabel, key) && byLabel[key]) || pick);
+      // its label, when the label names exactly these bodies (a label covers the first model's
+      // bodies only: an added model's part of the same name keeps its own name)
+      const lab = Object.hasOwn(byLabel, key) && byLabel[key];
+      const same = (a, b) => a && b && a.size === b.size && [...a].every((x) => b.has(x));
+      names.push(lab && same(idx.get(lab.trim().toLowerCase()), idx.get(key)) ? lab : pick);
     } else {
       covered.add(id);
       names.push(`#${id}`);

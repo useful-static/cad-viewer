@@ -583,6 +583,9 @@ export class WebGPURenderer {
     this._rebind();
   }
 
+  // the device is gone (main.js recovers on a new renderer)
+  isLost() { return this.lost; }
+
   resize(w, h) {
     this.requested = [w, h];
     this.canvas.width = w;

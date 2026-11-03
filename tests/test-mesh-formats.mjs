@@ -334,10 +334,11 @@ await test('a glTF accessor counting 2^30 elements: refused before it is allocat
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'VEC3', count: 2 ** 30 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
   /x\.gltf places 1,073,741,824 vertices once its shared parts are repeated, more than the 30,000,000 this viewer opens/);
-  // (the accessor's own cap, on values: a POSITION of 16 values per element under the vertex cap)
+  // (a POSITION of 16 values per element under the vertex cap: since round 9 refused by its type,
+  // before its 134,217,728 values meet the accessor's own cap)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
-  /x\.gltf: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
+  /x\.gltf is damaged: mesh 0 primitive 1's POSITION accessor 0 is MAT4 of float; POSITION must be VEC3/);
   // (under the cap, a count its buffer view cannot hold is refused before the 400 MB it asks for)
   await refusedFast(() => parseMesh('gltf', gltf({ ...prim, buffers: [{ uri: 'data:application/octet-stream;base64,AAAAAAAAAAAAAAAA', byteLength: 12 }],
     bufferViews: [{ buffer: 0, byteLength: 12 }], accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 2 ** 24 }] }), 'x.gltf'),
@@ -538,7 +539,7 @@ await test('r4-14 PLY and glTF refusals name the file with its extension, in the
   await refusedFast(() => parseMesh('gltf', gltf({ buffers: [{ byteLength: 4 }] }), 'x.gltf'), /x\.gltf is damaged: buffer 0 has no data/);
   await refusedFast(() => parseMesh('gltf', gltf({ scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     accessors: [{ componentType: 5126, type: 'MAT4', count: 2 ** 23 }, { componentType: 5125, type: 'SCALAR', count: 3 }] }), 'x.gltf'),
-  /x\.gltf: accessor 0 holds 134,217,728 values, more than the 90,000,000 this viewer reads/);
+  /x\.gltf is damaged: mesh 0 primitive 1's POSITION accessor 0 is MAT4 of float/);
 });
 
 // --- review round 5 ---
@@ -1060,6 +1061,68 @@ await test('r8-6 3MF material groups (basematerials, colorgroup) have a cap of t
   const head = '<model unit="millimeter"><resources>', t = '<basematerials/>';
   const z = await zipDeflated('3D/3dmodel.model', Buffer.concat([Buffer.from(head), Buffer.alloc(2_000_001 * t.length, t)]));
   await refusedFast(() => parseMesh('3mf', z, 'g.3mf'), /^g\.3mf holds more than the 2,000,000 material groups this viewer opens/, 5000);
+});
+await test('r9-4 glTF accessor types: a MAT4 index accessor (825 bytes, 5.6 M elements, placed 3 times) refused at once; VEC4 POSITION, VEC2 NORMAL, float indices refused naming the accessor and type', async () => {
+  // the reviewer's probe: a sparse MAT4 index accessor with no buffer view, 16 values an element
+  const pos = new Float32Array(TRI1), bin = new Uint8Array(36 + 4 + 64);
+  bin.set(new Uint8Array(pos.buffer), 0);
+  const placed = 3;
+  const probe = { buffers: [{ uri: b64uri(bin), byteLength: bin.length }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 4 }, { buffer: 0, byteOffset: 40, byteLength: 64 }],
+    accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 },
+      { componentType: 5125, type: 'MAT4', count: 5_600_000, sparse: { count: 1, indices: { bufferView: 1, componentType: 5125 }, values: { bufferView: 2 } } }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    nodes: Array.from({ length: placed }, (_, i) => ({ mesh: 0, translation: [i, 0, 0] })), scenes: [{ nodes: Array.from({ length: placed }, (_, i) => i) }] };
+  assert.ok(gltf(probe).byteLength < 1000, `${gltf(probe).byteLength} bytes`);
+  await refusedFast(() => parseMesh('gltf', gltf(probe), 'p.gltf'),
+    /^p\.gltf is damaged: mesh 0 primitive 1's indices accessor 1 is MAT4 of unsigned int; indices must be SCALAR of unsigned byte, unsigned short or unsigned int/, 1000);
+  // POSITION VEC4 (was the engine's "Invalid array length" or a shifted mesh)
+  const p4 = gltfOf({ positions: TRI1, extra: [{ values: [0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1], comp: 5126, nc: 4 }] });
+  p4.meshes[0].primitives[0].attributes.POSITION = 1;
+  await refusedFast(() => openJ(p4, 'v.gltf'), /^v\.gltf is damaged: mesh 0 primitive 1's POSITION accessor 1 is VEC4 of float; POSITION must be VEC3 of/);
+  // NORMAL VEC2
+  const n2 = gltfOf({ positions: TRI1, extra: [{ values: [0, 0, 0, 0, 0, 0], comp: 5126, nc: 2 }] });
+  n2.meshes[0].primitives[0].attributes.NORMAL = 1;
+  await refusedFast(() => openJ(n2, 'n.gltf'), /^n\.gltf is damaged: mesh 0 primitive 1's NORMAL accessor 1 is VEC2 of float; NORMAL must be VEC3 of/);
+  // float indices (SCALAR, but not an unsigned integer type)
+  const fi = gltfOf({ positions: TRI1, extra: [{ values: [0, 1, 2], comp: 5126, nc: 1 }] });
+  fi.meshes[0].primitives[0].indices = 1;
+  await refusedFast(() => openJ(fi, 'i.gltf'), /^i\.gltf is damaged: mesh 0 primitive 1's indices accessor 1 is SCALAR of float; indices must be SCALAR of unsigned byte/);
+  // the same with ushort indices, and a VEC3 NORMAL, still open
+  const ok = gltfOf({ positions: TRI1, extra: [{ values: [0, 1, 2], comp: 5123, nc: 1 }, { values: [0, 0, 1, 0, 0, 1, 0, 0, 1], comp: 5126, nc: 3 }] });
+  ok.meshes[0].primitives[0].indices = 1;
+  ok.meshes[0].primitives[0].attributes.NORMAL = 2;
+  assert.equal(triCount(await openJ(ok)), 1);
+});
+await test('r9-6 an ASCII PLY body past the text limit: refused in the words the other text readers use, before it is decoded', async () => {
+  const hdr = Buffer.from('ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nend_header\n');
+  const b = Buffer.alloc(hdr.length + 540 * 2 ** 20, 0x20);
+  hdr.copy(b, 0);
+  await refusedFast(() => parseMesh('ply', b.buffer.slice(b.byteOffset, b.byteOffset + b.length), 'p.ply'),
+    /^p\.ply is 540 MB of text, more than the 500 MB of text this viewer reads/, 1000);
+});
+await test('r9-7 a glTF baseColorFactor that is not 4 finite numbers: refused in the glTF\'s words (not the .cadmesh\'s, not opened black)', async () => {
+  for (const f of [[0.5], ['red', 0, 0, 1], [null, 0, 0, 1], 'grey', [0.5, 0.5, 0.5, 1, 1]]) {
+    const j = { ...gltfOf({ positions: TRI1 }), materials: [{ pbrMetallicRoughness: { baseColorFactor: f } }] };
+    j.meshes[0].primitives[0].material = 0;
+    await refusedFast(() => openJ(j, 'c.gltf'), /^c\.gltf is damaged: material 0's baseColorFactor is not 4 numbers/);
+  }
+  const j = { ...gltfOf({ positions: TRI1 }), materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5, 0.5, 1] } }] };
+  j.meshes[0].primitives[0].material = 0;
+  const m = await openJ(j);
+  assert.ok(near(m.meshes[0].color, [0.735, 0.735, 0.735]), String(m.meshes[0].color));
+  assert.equal(decodeCadmesh(encodeCadmesh(m)).header.meshes.length, 1);
+});
+await test('r9-8 OBJ whitespace: the o/g test and the line split agree (a no-break space), so a face after "f\\u00a0" is held to the triangle cap and "g\\u00a0name" names its body', async () => {
+  // "f" then a no-break space: one face of 10,000,003 corners alternating two vertices
+  const objFace = Buffer.concat([Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1'), Buffer.alloc(4 * 5_000_001, ' 2 3'), Buffer.from('\n')]);
+  await refusedFast(() => parseMesh('obj', objFace.buffer.slice(objFace.byteOffset, objFace.byteOffset + objFace.length), 'x.obj'),
+    /x\.obj holds more than the 10,000,000 triangles this viewer opens/, 1000);
+  const m = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\ng Part A\nf 1 2 3\no　Other\nf 1 3 2\n g\tLast\nf 1 2 3\n'), 'n.obj');
+  assert.deepEqual(m.meshes.map((b) => b.name), ['Part A', 'Other', 'Last']);
+  // ASCII spacing, bare "g", and an "o" naming a body, as before
+  const a = await parseMesh('obj', enc('v 0 0 0\nv 1 0 0\nv 0 1 0\no  one \nf 1 2 3\ng\nf 1 3 2\n'), 'a.obj');
+  assert.deepEqual(a.meshes.map((b) => b.name), ['one', 'a']);
 });
 
 done();

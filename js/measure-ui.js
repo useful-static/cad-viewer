@@ -736,6 +736,22 @@ export function createMeasure(deps) {
     geometry: (mi) => { model(); return geomOf(mi, Infinity); },
     get loupeShown() { return !!st.loupe; },
     setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    // the results that are not notes (distances, angles...), taken off the view and given back:
+    // a tour step holds notes only, so while one plays they are set aside (main.js startTour)
+    setAside() {
+      const kept = st.results.filter((r) => r.mode !== 'note');
+      st.results = st.results.filter((r) => r.mode === 'note');
+      st.pending = [];
+      syncRow();
+      deps.queueFrame();
+      return kept;
+    },
+    putBack(kept) {
+      if (!kept || !kept.length) return;
+      st.results.push(...kept);
+      syncRow();
+      deps.queueFrame();
+    },
     // a distance found elsewhere (the clearance check): drawn and listed as
     // Measure's own, replacing an earlier one of the same `sub`
     addDistance(pa, pb, sub) {
