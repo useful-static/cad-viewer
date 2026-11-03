@@ -21,7 +21,7 @@ import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft }
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
-import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies } from './view-link.js';
+import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, exportBasis } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
@@ -1142,13 +1142,16 @@ app.openUrl = (u) => loadUrl(u);
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
 // in their drawn colours, turned the way the model opens: Z up for STL and
 // 3MF (a printer's convention), Y up for GLB (glTF's)
+// A saved file's name from the model's: its .gz, then its extension, off ("board.stp.gz" ->
+// "board"). The one rule for exports and Save .cadmesh (which named it "board.stp.cadmesh")
+const saveBase = (name) => (name || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
 async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
   const ids = app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
   if (!ids.length) { flashHover('nothing shown to export'); return; }
   const model = { ...app.baseMesh, color: app.mesh.color };
   const names = ids.map((id) => meshLabel(id));
-  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const base = saveBase(app.sourceName);
   setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
   await new Promise((r) => setTimeout(r, 0)); // the status line paints first
   let bytes;
@@ -1192,7 +1195,7 @@ async function savePicture(print = false) {
   if (print) return printPng(png);
   const d = new Date();
   const two = (n) => String(n).padStart(2, '0');
-  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const base = saveBase(app.sourceName);
   const name = `${base}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
   const save = () => {
     const url = downloadBlob(png, name);
@@ -1425,7 +1428,7 @@ function saveDrawing() {
   const view = lookAt([0, 0, 0], camDir(c).map((v) => -v), camUp(c));
   const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]];
   const parts = ids.map((id) => ({ id: `body-${id}`, name: meshLabel(id), geom: app.measure.geometry(id - 1) }));
-  const base = (app.sourceName || 'model').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '') || 'model';
+  const base = saveBase(app.sourceName);
   const label = $('model').querySelector('.mname')?.textContent || base;
   const d = drawingSVG(parts, right, up, { a: app.header.angularDeflection ?? 0.5,
     title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${app.selected.size ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
@@ -2027,7 +2030,7 @@ function captureStep({ camera = 'exact' } = {}) {
   // (and, with a tour shown, the shown step's own callouts, as it names them: they are on the
   // view, as the tour's notes, so the visitor-only filter above left them out)
   const shownStep = app.tour && app.tour.tour.steps[app.tour.i];
-  const callouts = [...(shownStep && shownStep.callouts ? shownStep.callouts : []), ...notes.map((nt) => ({ text: nt.text, at: nt.p.map((v) => r(v, 3)) }))];
+  const callouts = [...(shownStep && shownStep.callouts ? shownStep.callouts : []), ...notes.map((nt) => ({ text: nt.text, at: roundNotePoint(nt.p) }))];
   if (callouts.length) s.callouts = callouts;
   return s;
 }
@@ -6389,7 +6392,7 @@ function wireInput() {
       setStatus(app.status, `could not save ${name}: ${e.message || e}`);
       return;
     }
-    downloadBlob(new Blob([bytes]), `${name.replace(/\.[^.]+$/, '')}.cadmesh`);
+    downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);

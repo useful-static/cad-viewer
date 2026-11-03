@@ -1446,22 +1446,20 @@ const deg = (r) => (r * 180) / Math.PI;
 const hex = (h) => h.toString(16).toUpperCase();
 
 const MULTILINE_ATTRIB = 'ATTRIB (multi-line)';
-const BLOCK_REFS = new Set(['INSERT', 'DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE']);
 
 // A DWG drawn as the page draws it: its pairs through parseDXF, with what the adapter itself could
 // not pass on counted as not drawn too -- an R2018 multi-line attribute (131 in the drawings at hand
 // were dropped where only the adapter's stats knew, and the page, dwg-check and the validation
 // called those drawings complete), an entity whose decode failed. Counted as parseDXF counts: each
-// once, where the drawing reaches it (model or paper space, a layout, a block something inserts;
-// counted per object, a block never inserted listed what is never drawn). The one way for the
-// page and the CLIs
+// once, where the drawing walks it -- model or paper space, a layout, a block parseDXF itself
+// walked (opts.walked: a block named by an invisible insert, or reached only from a block nothing
+// inserts, is not walked, and was counted when any reference to it was). The one way for the page
+// and the CLIs
 export function drawDWG(dwg, P = dwgToPairs(dwg)) {
-  const dr = parseDXF(P);
-  const reached = new Set();
-  let type = null;
-  for (const [c, v] of P) { if (c === 0) type = v; else if (c === 2 && BLOCK_REFS.has(type)) reached.add(v); }
+  const walked = new Set();
+  const dr = parseDXF(P, { walked });
   for (const { kind, block } of P.stats.notPassed) {
-    if (block === null || reached.has(block) || /^\*Paper_Space\d+$/i.test(block)) dr.notDrawn[kind] = (dr.notDrawn[kind] || 0) + 1;
+    if (block === null || walked.has(block) || /^\*Paper_Space\d+$/i.test(block)) dr.notDrawn[kind] = (dr.notDrawn[kind] || 0) + 1;
   }
   // and the format checks it failed, which the page shows (dwg-check reported a file bad that the
   // page showed as healthy)
@@ -1469,8 +1467,9 @@ export function drawDWG(dwg, P = dwgToPairs(dwg)) {
   return dr;
 }
 
-// The drawing as DXF group-code pairs [[code, 'value'], ...]: HEADER ($INSUNITS,
-// $LTSCALE, $EXTMIN/MAX), TABLES (LTYPE, LAYER), BLOCKS, ENTITIES
+// The drawing as DXF group-code pairs [[code, 'value'], ...]: HEADER ($ACADVER, $INSUNITS,
+// $LTSCALE, $DWGCODEPAGE, $EXTMIN/MAX), TABLES (LTYPE, LAYER, BLOCK_RECORD), BLOCKS, ENTITIES,
+// OBJECTS (the layouts)
 export function dwgToPairs(dwg) {
   const { objects, header } = dwg;
   const P = [];
@@ -1792,12 +1791,24 @@ export function dwgToPairs(dwg) {
     put(0, 'ENDSEC');
   }
   put(0, 'EOF');
-  // an entity whose decode failed, where it lay (its block's name, null for model or paper space)
+  // an entity whose decode failed, where it lay: its block's name, null for model or paper space
+  // (or an owner not found) -- a VERTEX's or an ATTRIB's through the entity that owns it (taken as
+  // model space, one in a block nothing draws was counted)
+  const blockOf = (o) => {
+    let x = o;
+    for (let k = 0; k < 8 && x && x.e; k++) {
+      if (x.e.entmode === 2 || x.e.entmode === 1) return null;
+      const up = objects.get(x.e.owner);
+      if (!up) return null;
+      if (up.name === 'BLOCK_RECORD') return up === model || up === paper ? null : bname(up.handle) ?? null;
+      x = up;
+    }
+    return null;
+  };
   for (const o of objects.values()) {
     // (a vertex too: one that failed took a corner from its polyline without a word)
     if (!o.entity || !o.error || (STRUCTURE.has(o.name) && o.name !== 'VERTEX')) continue;
-    const own = o.e && o.e.owner !== undefined && !(model && o.e.owner === model.handle) && !(paper && o.e.owner === paper.handle) ? bname(o.e.owner) ?? null : null;
-    stats.notPassed.push({ kind: `${o.name} (could not be read)`, block: own });
+    stats.notPassed.push({ kind: `${o.name} (could not be read)`, block: blockOf(o) });
   }
   P.stats = stats;
   return P;

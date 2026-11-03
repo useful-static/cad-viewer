@@ -8,6 +8,7 @@
 //     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?,
 //               widthFactor?, oblique?, wrap?, clip? }],
 //     layouts: [{ name, paths, texts, extents }], notDrawn: { KIND: count } }
+//   (a DWG's, through js/dwg.js drawDWG, adds checkFailures: the format checks it failed)
 //   (a path's dash: its line type's pattern in drawing units, or null; weight: its line weight in
 //   mm, or null; ltype: the line type's name; width: a polyline's, in drawing units -- a tapering
 //   one, or one through a stretch, is its line plus filled outlines (outline: true, not a shape of
@@ -209,7 +210,13 @@ function headerValue(u8, name, re) {
 // s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
 // or ASCII read from the bytes)
 // (or the group-code pairs themselves, [[code, 'value'], ...]: js/dwg.js dwgToPairs)
-export function parseDXF(s) {
+// (opts.walked: a Set given the name of each block the drawing walks -- inserted where it is
+// drawn: what drawDWG counts its own drops against, one reach for both)
+export function parseDXF(s, opts = {}) {
+  const walked = opts.walked || null;
+  // (a Uint8Array or a Node Buffer read as its bytes: it failed with the engine's "text.split is not
+  // a function")
+  if (s instanceof Uint8Array) s = s.buffer.slice(s.byteOffset, s.byteOffset + s.byteLength);
   let ps;
   if (Array.isArray(s)) ps = s;
   else if (s instanceof ArrayBuffer) {
@@ -305,7 +312,7 @@ export function parseDXF(s) {
   const notDrawn = {};
   const counted = new WeakSet();
   const countOnce = (r, k) => { if (counted.has(r)) return; counted.add(r); notDrawn[k] = (notDrawn[k] || 0) + 1; };
-  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce,
+  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked,
     add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
     addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -327,7 +334,9 @@ export function parseDXF(s) {
       const g = k < 0 ? r.g : r.g.slice(k);
       const val = (c) => { const x = g.find((y) => y[0] === c); return x ? String(x[1]).trim() : undefined; };
       const bn = recName.get((val(330) || '').toUpperCase());
-      if (bn && val(1) !== undefined) sheetOf.set(bn, { name: val(1), tab: Number(val(71)) });
+      // (its name with its \U+ / \M+ characters decoded, as a block's or a layer's are: a pre-R2007
+      // file's "布局1" read "\U+5E03\U+5C401")
+      if (bn && val(1) !== undefined) sheetOf.set(bn, { name: unescapeDxf(val(1)), tab: Number(val(71)) });
     }
   }
   const sets = [];
@@ -951,6 +960,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const dc = num(q, 44), dr = num(q, 45);
         const ix = isDim ? 0 : num(q, 10), iy = isDim ? 0 : num(q, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
+        if (ctx.walked) ctx.walked.add(get(q, 2, ''));
         for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
           const c = Math.cos(rot), s = Math.sin(rot);
           // insertion point, then rotation and scale, the array cell, the block base
@@ -1331,7 +1341,8 @@ export function attribTextGroups(g) {
 // a drawing path that is one of its lines and shapes: not a wide polyline's outline (its
 // polyline's), not a viewport's frame. The one rule for the info panel and dwg-check
 export const isShape = (p) => !p.outline && !p.frame;
-export const sheetDraws = (s) => s.paths.length > 0 || s.texts.length > 0; // (model space, or a layout)
+// (a viewport's frame alone is not a drawing: a sheet of frames passed as one)
+export const sheetDraws = (s) => s.paths.some(isShape) || s.texts.length > 0; // (model space, or a layout)
 export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws);
 
 // Lines wrapped at a width, at spaces (a word longer than the width stands alone): width(line)

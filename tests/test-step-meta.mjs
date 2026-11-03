@@ -49,6 +49,8 @@ test('a STEP name written as raw UTF-8, \\S\\ or \\X4\\ decodes as the converter
   assert.equal(decodeStepString('\\X4\\0001F600\\X0\\ ok'), '\u{1F600} ok');
   assert.equal(decodeStepString('caf\\X\\E9'), 'café');
   assert.equal(decodeStepString('\\X2\\00E900E8\\X0\\'), 'éè');
+  // an escaped backslash is taken first, in one pass: 'A\\S\\B' is "A\S\B", not "A\ÜB"
+  assert.equal(decodeStepString('A\\\\S\\\\B'), 'A\\S\\B');
   // bytes that are not UTF-8 stay as read
   assert.equal(decodeStepString('na\xefve'), 'na\xefve');
 });

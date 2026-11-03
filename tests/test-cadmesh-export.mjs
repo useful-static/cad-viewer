@@ -64,6 +64,12 @@ await test('a bad option is refused with exit 2', () => {
   assert.equal(run(inp, '--model-up', 'x').status, 2);
   assert.equal(run(inp, '--to', 'obj').status, 2);
   assert.equal(run().status, 2);
+  // a damaged input is a refusal: exit 1, its error said, not the usage
+  const bad = join(dir, 'bad.cadmesh');
+  writeFileSync(bad, Buffer.from('not a cadmesh at all'));
+  const rb = run(bad);
+  assert.equal(rb.status, 1, rb.stderr);
+  assert.match(rb.stderr, /bad\.cadmesh: cadmesh:/);
 });
 
 done();

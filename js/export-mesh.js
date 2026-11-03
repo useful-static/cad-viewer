@@ -117,7 +117,16 @@ const xmlEsc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': 
 const hex2 = (v) => v.toString(16).padStart(2, '0').toUpperCase();
 const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/, '').replace(/\.$/, ''));
 
-export async function to3MF(model, ids, basis, names = []) {
+// The bodies an export writes: those with a triangle (an empty one became a glTF accessor of count
+// 0 with min / max [null, null, null], invalid glTF 2.0, and a 3MF object with an empty mesh),
+// each with its name
+function withTriangles(model, ids, names) {
+  const keep = ids.map((id, j) => [id, names[j]]).filter(([id]) => model.header.meshes[id - 1].idxCount > 0);
+  return [keep.map((x) => x[0]), keep.map((x) => x[1])];
+}
+
+export async function to3MF(model, ids0, basis, names0 = []) {
+  const [ids, names] = withTriangles(model, ids0, names0);
   // one base material per distinct colour (each triangle takes its first
   // vertex's), so a body's per-face colours survive
   const colours = new Map();
@@ -149,7 +158,8 @@ export async function to3MF(model, ids, basis, names = []) {
 }
 
 // ---- GLB ----
-export function toGLB(model, ids, basis, names = []) {
+export function toGLB(model, ids0, basis, names0 = []) {
+  const [ids, names] = withTriangles(model, ids0, names0);
   const chunks = [];
   let binLen = 0;
   const views = [], accessors = [], meshes = [], nodes = [];

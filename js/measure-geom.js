@@ -21,6 +21,7 @@
 
 const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
+const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
@@ -71,9 +72,14 @@ export function circleOf(pts, angularDeflection) {
   const r2 = cx * cx + cy * cy - F;
   if (!(r2 > 0)) return null;
   const r = Math.sqrt(r2);
+  // (each no finer than the positions are stored, as planeOf's: a rim of radius 0.2 mm 5 m out was
+  // "not a circle")
+  let far = 0;
+  for (const p of pts) far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
+  const stored = 8 * 2 ** -23 * far;
   for (const [x, y, z] of xy) {
-    if (Math.abs(z) > EPS_PLANAR * r) return null;
-    if (Math.abs(Math.hypot(x - cx, y - cy) - r) > RADIUS_TOL * r) return null;
+    if (Math.abs(z) > Math.max(EPS_PLANAR * r, stored)) return null;
+    if (Math.abs(Math.hypot(x - cx, y - cy) - r) > Math.max(RADIUS_TOL * r, stored)) return null;
   }
   const centre = [0, 1, 2].map((k) => c[k] + ux[k] * cx + uy[k] * cy);
   return { centre, normal: nz, radius: r };
@@ -106,9 +112,11 @@ function planeOf(P, I, t0, nt) {
       far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
     }
   }
-  // (and no finer than the positions are stored: float32 rounds a coordinate to 2^-23 of itself,
-  // so a flat tilted face 1 m from the origin read "not flat")
-  if (hi - lo > Math.max(1e-6 * ext, 8 * 2 ** -23 * far, 1e-9)) return null;
+  // (a tolerance the files meet: 1e-5 of the face's size, at least a micrometre, and no finer than
+  // the positions are stored -- float32 rounds a coordinate to 2^-23 of itself. At 1e-6 a flat
+  // tilted face 1 m out read "not flat", and a board's bottom whose 4 vertices of 1,873 sit 0.3 um
+  // off lost its 38 holes' depths)
+  if (hi - lo > Math.max(1e-5 * ext, PLANE_FLOOR_MM, 8 * 2 ** -23 * far)) return null;
   return { normal: n, d: dot(n, p0) };
 }
 
@@ -315,8 +323,8 @@ export function holesOf(geom) {
     if (!f.plane) continue;
     for (const c of f.circles) if (c.inner) rims.push(c);
   }
-  // A through-hole's two rims: the nearest rim on its axis, of its radius, whose face looks the
-  // other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
+  // A through-hole's two rims: the nearest rim on its axis, of its radius, behind its face, whose
+  // face looks the other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
   const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
   const out = [];
@@ -335,6 +343,9 @@ export function holesOf(geom) {
       const along = dot(d, r.normal);
       const off = len(sub(d, r.normal.map((v) => v * along)));
       if (off > 0.01 * r.radius + 1e-6) continue;
+      // (and behind its face, into the material: the nearest either way crossed an air gap thinner
+      // than an arm -- a fork's arms 10 thick and 1 apart read as holes 1 and 21 deep)
+      if (dot(d, faceN(r)) >= 0) continue;
       if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); best = j; }
     }
     used.add(i);

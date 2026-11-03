@@ -455,4 +455,11 @@ if (existsSync(occtJs) && stepFixture && existsSync(stepFixture)) {
   skip('stp2mesh conversion', 'needs fetch-deps.sh + CADV_STEP_FIXTURE=<file.stp>');
 }
 
+await test('a .cadmesh with a coordinate past 10^15 is refused as the mesh readers refuse it (it decoded at 1e20)', () => {
+  const q = quad('far', 0);
+  q.positions[0] = 1e20;
+  assert.throws(() => decodeCadmesh(encodeCadmesh({ units: 'millimeter', meshes: [q] })), /too large to show \(a coordinate past 10\^15\)/);
+  assert.ok(decodeCadmesh(encodeCadmesh({ units: 'millimeter', meshes: [quad('near', 1e6)] })));
+});
+
 done();

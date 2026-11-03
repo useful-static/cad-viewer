@@ -109,4 +109,15 @@ await test('EXPORTS: each row writes its own format through the one call shape',
   assert.deepEqual(Object.keys(EXPORTS).sort(), Object.keys(magic).sort());
 });
 
+await test('an empty body is left out of the GLB and the 3MF (it made a count-0 accessor with null bounds)', async () => {
+  const m3 = { ...model, header: { meshes: [...model.header.meshes, { name: 'empty', vtxStart: 7, vtxCount: 0, idxStart: 9, idxCount: 0 }] } };
+  const g = toGLB(m3, [1, 2, 3], YUP, ['plate', 'tri', 'empty']);
+  const jl = new DataView(g.buffer).getUint32(12, true);
+  const j = JSON.parse(new TextDecoder().decode(g.slice(20, 20 + jl)));
+  assert.equal(j.nodes.length, 2);
+  assert.ok(j.accessors.every((a) => a.count > 0 && (!a.min || a.min.every((x) => x !== null))));
+  const z = await to3MF(m3, [1, 2, 3], IDENT, ['plate', 'tri', 'empty']);
+  assert.ok(z.length > 0);
+});
+
 done();

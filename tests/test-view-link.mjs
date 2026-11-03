@@ -53,6 +53,10 @@ test('defaults stay out of the link', () => {
   assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z,').section, undefined);
   assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z, ,f').section, undefined);
   assert.deepEqual(decodeView('c:0,0,0,1,0,0,0,1;x:z,0').section, { axis: 'z', t: 0, flip: false });
+  // and an empty explode or camera value (they read 0: an explode at 0, a target at the origin)
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;e: ,x').explode, undefined);
+  assert.deepEqual(decodeView('c:0,0,0,1,0,0,0,1;e:0,x').explode, { t: 0, mode: 'x' });
+  assert.equal(decodeView('c:,,,100,0,0,0,1').cam, undefined);
 });
 test('any orientation round-trips; old u:z / u:y links still read; a bad one is the default', () => {
   const cam = { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1] };
@@ -109,7 +113,11 @@ test('a changed model: the selection by name, the hidden ids dropped (ids alone 
 test('notes round-trip through the hash, text with , ; ~ : and non-ASCII; at most MAX_NOTES', () => {
   const notes = [{ p: [80.5, 3.5, 1.2], text: 'Mount, M2.5; ~ok: 板' }, { p: [-1e-3, 0, 1234.5678], text: 'b' }];
   const d = decodeView(decodeURIComponent(encodeView({ ...view, notes })));
-  assert.deepEqual(d.notes, [{ p: [80.5, 3.5, 1.2], text: 'Mount, M2.5; ~ok: 板' }, { p: [-0.001, 0, 1234.57], text: 'b' }]);
+  // (to the micrometre, as a tour keeps a note: six significant figures moved one at 123456.789)
+  assert.deepEqual(d.notes, [{ p: [80.5, 3.5, 1.2], text: 'Mount, M2.5; ~ok: 板' }, { p: [-0.001, 0, 1234.568], text: 'b' }]);
+  assert.deepEqual(decodeView(encodeView({ ...view, notes: [{ p: [123456.789, 4567.891, 1.6], text: 'x' }] })).notes[0].p, [123456.789, 4567.891, 1.6]);
+  // a note with an empty coordinate is none
+  assert.deepEqual(decodeView('a:,,,QQ').notes || [], []);
   const many = Array.from({ length: MAX_NOTES + 5 }, (_, i) => ({ p: [i, 0, 0], text: `n${i}` }));
   assert.equal(decodeView(encodeView({ ...view, notes: many })).notes.length, MAX_NOTES);
   assert.deepEqual(decodeView('a:1,2,x,QQ~1,2,3,@@~1,2,3,QQ').notes, [{ p: [1, 2, 3], text: 'A' }]);

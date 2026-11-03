@@ -423,6 +423,19 @@ t('round 17: a missing block, a multi-line ATTRIB, a viewport and the active lay
   }
 });
 
+t('a LAYOUT record decodes past its plot settings to its name, tab order and block record (R2000, R2004)', () => {
+  const bd0 = '10', bs0 = '10', bl = (n) => `01${b8(n)}`;
+  for (const v of [15, 18]) {
+    const plot = [tv('setup'), tv('printer'), bs0, ...Array(6).fill(bd0), tv('A4'), bd0, bd0, bs0, bs0, bs0, bd0, bd0, bd0, bd0,
+      ...(v <= 15 ? [tv('view')] : []), bd0, bd0, tv('style'), bs0, bd0, bd0, bd0, ...(v >= 18 ? [bs0, bs0, bs0] : [])];
+    const r = new _internal.Bits(bits(`${plot.join(' ')} ${tv('Sheet 2')} ${bl(3)}`), v, 0);
+    const got = [];
+    const self = { objectHandles() {} };
+    const o = { handle: 9, h: { H: () => got.push('H'), Ha: () => 0x5a } };
+    _internal.DECODE.LAYOUT.call(self, o, r, v);
+    assert.deepEqual([o.d.name, o.d.tab, o.d.block, got.length], ['Sheet 2', 3, 0x5a, v >= 18 ? 1 : 0], `R${v}`);
+  }
+});
 t('round 18: drops counted only where the drawing reaches them; a missing block\'s attribute drawn; sheets in LAYOUT tab order', () => {
   const E = (owner) => ({ entmode: 0, owner, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 });
   const att = (h, owner, multi) => [h, { handle: h, name: 'ATTRIB', decoded: true, e: E(owner), d: multi ? { multi: true } : { p: [0, 0], elev: 0, h: 1, text: 'No. 42', tag: 'T', flags: 0, wf: 1, a: [0, 0] } }];
@@ -450,6 +463,22 @@ t('round 18: drops counted only where the drawing reaches them; a missing block\
   assert.deepEqual(dr.texts.map((t) => t.text), ['No. 42'], 'the missing block\'s attribute drawn');
   assert.deepEqual(dr.layouts.map((l) => l.name), ['First', 'Second']);
   assert.deepEqual(dr.layouts.map((l) => l.paths[0].pts[2]), [1, 2]);
+  // a block B reached only by an invisible insert: its multi-line ATTRIB is not counted (any
+  // reference to B counted it); one B a visible insert reaches is
+  const two = (visible) => {
+    const o2 = new Map([
+      [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [10] } }],
+      [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, flags: 0 } }],
+      [3, { handle: 3, name: 'BLOCK_RECORD', decoded: true, d: { name: 'B', base: [0, 0, 0], entities: [12, 14] } }],
+      [10, { handle: 10, name: 'INSERT', decoded: true, e: { ...E(1), invisible: visible ? 0 : 1 }, d: { block: 3, p: [0, 0, 0], s: [1, 1, 1], rot: 0 } }],
+      [12, { handle: 12, name: 'INSERT', decoded: true, e: E(3), d: { block: 99, p: [0, 0, 0], s: [1, 1, 1], rot: 0, atts: true } }],
+      att(13, 12, true),
+      [14, { handle: 14, name: 'LINE', decoded: true, e: E(3), d: { p0: [0, 0, 0], p1: [1, 0, 0] } }],
+    ]);
+    return drawDWG({ objects: o2, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 }).notDrawn;
+  };
+  assert.deepEqual(two(false), {});
+  assert.deepEqual(two(true), { INSERT: 1, 'ATTRIB (multi-line)': 1 });
 });
 
 // --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:

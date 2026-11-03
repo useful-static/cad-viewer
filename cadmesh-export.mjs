@@ -57,6 +57,7 @@ async function main() {
   const inp = a.find((x, i) => !x.startsWith('--') && !(i > 0 && a[i - 1].startsWith('--')));
   if (!inp) usage('no input file');
   const to = (opt('--to') || 'stl,3mf,glb').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" (stl, 3mf, glb)`);
   const modelUp = opt('--model-up') || 'z';
   if (!MODEL_UP[modelUp]) usage(`--model-up must be y or z, not "${modelUp}"`);
   let orient = MODEL_UP[modelUp];
@@ -66,7 +67,12 @@ async function main() {
   let files;
   try {
     files = await exportCadmesh(readFileSync(inp), { to, orient, skip: skipSrc ? new RegExp(skipSrc) : null, base: base.split('/').pop() });
-  } catch (e) { usage(e.message); }
+  } catch (e) {
+    // (a damaged or unreadable input is a refusal, exit 1 -- not a usage error, exit 2, which is for
+    // the options)
+    console.error(`${inp}: ${e.message}`);
+    process.exit(1);
+  }
   for (const f of files) {
     const path = `${base}.${f.kind}`;
     writeFileSync(path, f.bytes);

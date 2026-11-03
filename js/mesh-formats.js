@@ -15,7 +15,7 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { DEFAULT_GREY, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
+import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
 import { FORMATS, SNIFF_BYTES, extOf, sniffFormat } from './formats.js';
 import { LENGTH_MM } from './units.js';
 
@@ -128,15 +128,12 @@ const text = (buf, what = 'the file', encoding = 'utf-8') => {
 // triangle or null, color }] -> the encodeCadmesh model, one tree node
 // a face pointing past the vertices, or a coordinate that is not a number, is a damaged file:
 // said so here, not met later as NaN geometry ("facts are not one closed / area / volume")
-// The largest coordinate a model may hold, in its file's units: the view squares distances in
-// float32 (its matrices, the depth range), so past float32's range is not the bound -- a model at
-// 1e38 loaded and showed blank, every vertex NaN. 1e15 squared stays well inside it
-export const MAX_COORD = 1e15;
+// (MAX_COORD: js/cadmesh.js, the one bound)
 function checkBodies(rootName, bodies) {
   for (const b of bodies) {
     const n = b.pos.length / 3;
     for (const x of b.pos) if (!Number.isFinite(x)) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
-    for (const x of b.pos) if (Math.abs(x) > MAX_COORD) throw new Error(`${rootName} is too large to show (a coordinate past 10^15)`);
+    for (const x of b.pos) if (Math.abs(x) > MAX_COORD) throw new Error(`${rootName} is too large to show (a coordinate past ${MAX_COORD_WORDS})`);
     for (const t of b.tri) if (!Number.isInteger(t) || t < 0 || t >= n) throw new Error(`${rootName} is damaged: a face refers to vertex ${t + 1} of ${n}`);
   }
 }

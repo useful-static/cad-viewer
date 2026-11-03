@@ -153,6 +153,9 @@ export function createTourRecorder(api) {
 
   function remove(i) {
     draft.steps.splice(i, 1);
+    // (a step deleted above the one being edited moves it up one: the editor kept its index and
+    // held the next step)
+    if (i < draft.sel) draft.sel--;
     if (draft.sel >= draft.steps.length) draft.sel = draft.steps.length - 1;
     renderList();
     fillEditor();

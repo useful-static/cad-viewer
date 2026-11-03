@@ -27,6 +27,13 @@ import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull } from './orient.js';
 import { STYLE_IDS } from './styles.js';
 
 const num = (v) => Number(v.toPrecision(6));
+// A note's point as a link or a tour keeps it: to the micrometre (mm, 3 decimals), whatever its
+// size -- six significant figures moved a note at 123456.789 by 0.2 mm, while the tour kept it
+// exact. The one rule for both (js/main.js tour steps)
+export const roundNotePoint = (p) => p.map((v) => Math.round(v * 1000) / 1000);
+// A number in a link: an empty or blank value is none (Number('') is 0: a target, a section, an
+// explode or a note at 0)
+const linkNumber = (s) => (s === undefined || s.trim() === '' ? NaN : Number(s));
 // The target to a step a millionth of the distance: its error must be small
 // beside what the view spans, not beside its own size (6 significant digits
 // of 100000 mm is 1 mm, 5% of a 20 mm wide view there)
@@ -151,7 +158,7 @@ export function encodeView(v) {
   if (v.selected && v.selected.length) f.push(`k:${runs(v.selected)}`);
   // notes pinned to points (Measure's Note): x,y,z,text(base64url), "~" between
   if (v.notes && v.notes.length) {
-    f.push(`a:${v.notes.slice(0, MAX_NOTES).map((n) => [...n.p.map(num), b64u(n.text)].join(',')).join('~')}`);
+    f.push(`a:${v.notes.slice(0, MAX_NOTES).map((n) => [...roundNotePoint(n.p), b64u(n.text)].join(',')).join('~')}`);
   }
   // v.keys: the model's body keys (bodyKeys), when the caller has them
   if (v.keys && v.keys.length) {
@@ -172,7 +179,7 @@ export function decodeView(s) {
     const k = field.slice(0, i);
     const val = field.slice(i + 1);
     if (k === 'c') {
-      const n = val.split(',').map(Number);
+      const n = val.split(',').map(linkNumber);
       const qlen = Math.hypot(n[4], n[5], n[6], n[7]);
       if (n.length === 8 && n.every(Number.isFinite) && n[3] > 0 && qlen > 0) {
         out.cam = { target: n.slice(0, 3), dist: n[3], q: n.slice(4).map((x) => x / qlen) };
@@ -183,11 +190,11 @@ export function decodeView(s) {
     else if (k === 's' && STYLE_IDS.includes(val)) out.style = val;
     else if (k === 'x') {
       const [axis, t, f] = val.split(',');
-      const tn = t === undefined || t.trim() === '' ? NaN : Number(t); // (an empty value is none, as e:'s: Number('') is 0)
+      const tn = linkNumber(t);
       if (['x', 'y', 'z'].includes(axis) && tn >= 0 && tn <= 1) out.section = { axis, t: tn, flip: f === 'f' };
     } else if (k === 'e') {
       const [t, mode] = val.split(',');
-      const tn = t === '' ? NaN : Number(t);
+      const tn = linkNumber(t);
       if (tn >= 0 && tn <= 1 && EXPLODE_MODES.includes(mode)) out.explode = { t: tn, mode };
     // (the first "h:" and "k:" only, and one id budget for both: a link repeating "h:1-999999"
     // was a million ids a field -- 11 KB of link, 14 s)
@@ -197,7 +204,7 @@ export function decodeView(s) {
     else if (k === 'a') {
       out.notes = val.split('~').slice(0, MAX_NOTES).flatMap((s) => {
         const q = s.split(',');
-        const p = q.slice(0, 3).map(Number);
+        const p = q.slice(0, 3).map(linkNumber);
         if (q.length !== 4 || !p.every(Number.isFinite) || !/^[A-Za-z0-9_-]+$/.test(q[3])) return [];
         try { return [{ p, text: cutText(unb64u(q[3]), NOTE_TEXT_MAX) }]; } catch { return []; }
       });

@@ -38,8 +38,8 @@ function scan(text, out) {
 // a STEP string's escapes undone (a \X2\ run built a code unit at a time: spread into one call,
 // 300k of them overflowed the stack)
 // The scan reads the file as latin1, so a name written as raw UTF-8 bytes is decoded as UTF-8 here
-// when it is valid UTF-8; then the escapes ISO 10303-21 gives: \S\c (c in the upper half), \X\hh,
-// \X2\ (UTF-16) and \X4\ (code points) runs. (Raw UTF-8, \S\ and \X4\ came out other than the
+// when it is valid UTF-8; then, in one pass, the escapes ISO 10303-21 gives: \\ (a backslash),
+// \S\c (c in the upper half), \X\hh, \X2\ (UTF-16) and \X4\ (code points) runs. (Raw UTF-8, \S\ and \X4\ came out other than the
 // converter's names, and the part's number and description silently did not show)
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 export function decodeStepString(s) {
@@ -51,10 +51,10 @@ export function decodeStepString(s) {
     for (let k = 0; k < h.length; k += width) { const cp = parseInt(h.slice(k, k + width), 16); t += cp <= 0x10ffff ? String.fromCodePoint(cp) : '�'; }
     return t;
   };
+  // (one pass, left to right, an escaped backslash taken first: undone one kind at a time,
+  // 'A\\S\\B' -- "A\S\B" -- read as "A\ÜB")
+  const one = (m, x2, x4, x1, s1) => (m === '\\\\' ? '\\' : x2 ? run(4)(m, x2) : x4 ? run(8)(m, x4)
+    : x1 ? String.fromCharCode(parseInt(x1, 16)) : String.fromCharCode(s1.charCodeAt(0) + 0x80));
   return s.replace(/''/g, "'")
-    .replace(/\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gi, run(4))
-    .replace(/\\X4\\((?:[0-9A-F]{8})+)\\X0\\/gi, run(8))
-    .replace(/\\X\\([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/\\S\\(.)/g, (_, c) => String.fromCharCode(c.charCodeAt(0) + 0x80))
-    .replace(/\\\\/g, '\\');
+    .replace(/\\\\|\\X2\\((?:[0-9A-Fa-f]{4})+)\\X0\\|\\X4\\((?:[0-9A-Fa-f]{8})+)\\X0\\|\\X\\([0-9A-Fa-f]{2})|\\S\\(.)/g, one);
 }

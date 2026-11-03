@@ -108,6 +108,22 @@ test('a clevis: two flanges on one axis are two holes of their own depth, not on
   const holes = holesOf(bodyGeometry(model([{ name: 'clevis', faces }]), 0));
   assert.equal(holes.length, 2, JSON.stringify(holes));
   assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2), JSON.stringify(holes));
+  // a fork: arms 10 thick and 1 apart (the gap thinner than an arm): two holes 10 deep, either
+  // face order (the nearest rim either way paired across the gap: 1 and 21 deep)
+  for (const order of [0, 1]) {
+    const arms = [washer(2, 6, 10, 40, 0, 0), washer(2, 6, 10, 40, 0, 0, 11)];
+    const fh = holesOf(bodyGeometry(model([{ name: 'fork', faces: (order ? arms.reverse() : arms).flat() }]), 0));
+    assert.deepEqual(fh.map((h) => [Math.round(h.depth * 1e4) / 1e4, h.rims]), [[10, 2], [10, 2]], JSON.stringify(fh));
+  }
+});
+test('a board face 57 mm across with a vertex 0.3 um off is flat (to a micrometre): its holes keep both rims', () => {
+  const faces = washer(1.375, 28.5, 1.6, 40, 0, 0);
+  const m = model([{ name: 'board', faces }]);
+  // one bottom vertex (z 0) moved 0.3 um, as a board at hand stores 4 of 1,873
+  const P = m.position;
+  for (let i = 0; i < P.length; i += 3) if (P[i + 2] === 0 && Math.hypot(P[i], P[i + 1]) > 20) { P[i + 2] = 3e-4; break; }
+  const h = holesOf(bodyGeometry(m, 0));
+  assert.deepEqual(h.map((x) => x.rims), [2], JSON.stringify(h));
 });
 test('a flat tilted face 1 m from the origin is flat (no finer than float32 stores it)', () => {
   const faces = washer(1.375, 3, 1.6, 40, 0, 0);

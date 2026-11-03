@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, drawsNothing, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed } from '../js/dxf-view.js';
@@ -659,6 +659,21 @@ test('round 18: a viewport\'s view target; a non-plan or unknown view counted; e
     [0, 'SECTION'], [2, 'OBJECTS'], [0, 'LAYOUT'], [5, 'B1'], [330, 'C0'], [100, 'AcDbPlotSettings'], [1, 'setup'], [100, 'AcDbLayout'], [1, 'Front'], [71, 2], [330, 'A1'],
     [0, 'LAYOUT'], [5, 'B2'], [330, 'C0'], [100, 'AcDbLayout'], [1, 'Cover'], [71, 1], [330, 'A2'], [0, 'ENDSEC'], [0, 'EOF']]));
   assert.deepEqual(lay.layouts.map((l) => l.name), ['Cover', 'Front']);
+  // a name written outside the code page (\U+XXXX, before R2007) is read decoded
+  const esc = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'BLOCK_RECORD'], [0, 'BLOCK_RECORD'], [5, 'A1'], [2, '*Paper_Space'], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [67, 1], [10, 0], [20, 0], [11, 2], [21, 2], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'OBJECTS'], [0, 'LAYOUT'], [5, 'B1'], [100, 'AcDbLayout'], [1, '\\U+5E03\\U+5C401'], [71, 1], [330, 'A1'], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(esc.layouts.map((l) => l.name), ['布局1']);
+});
+test('round 19: a sheet of viewport frames alone draws nothing; a Uint8Array or Buffer is read as bytes', () => {
+  const frames = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 20], [41, 20], [69, 2], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.equal(frames.layouts[0].paths.length, 1);
+  assert.equal(drawsNothing(frames), true);
+  const text = dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDSEC'], [0, 'EOF']]);
+  assert.equal(parseDXF(new TextEncoder().encode(text)).paths.length, 1);
+  assert.equal(parseDXF(Buffer.from(text)).paths.length, 1);
 });
 test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {
   const texts = [], vps = [];

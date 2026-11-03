@@ -252,6 +252,12 @@ const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThr
 // browser hands out. A few MB of gzip can inflate to many GB; past this it
 // stops and says why, instead of the tab being killed with no message.
 export const MAX_FILE_BYTES = 2 * 2 ** 30;
+// The largest coordinate a model may hold, in mm (the mesh readers check it in the file's numbers
+// and in mm after a unit's scale; decodeCadmesh checks it as stored): the view squares distances in
+// float32 (its matrices, the depth range), so float32's range is not the bound -- a model at 1e38
+// loaded and showed blank, every vertex NaN. 1e15 squared stays well inside it
+export const MAX_COORD = 1e15;
+export const MAX_COORD_WORDS = '10^15';
 
 // gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz),
 // counted as they come, at most `max`
@@ -381,6 +387,13 @@ export function decodeCadmesh(buf) {
     for (let i = m.idxStart; i < m.idxStart + m.idxCount; i++) {
       if (idx[i] < lo || idx[i] >= hi) throw new Error(`cadmesh: mesh ${mi} index ${i} names vertex ${idx[i]}, outside its own ${lo}..${hi - 1}`);
     }
+  }
+  // the coordinates the view can hold (MAX_COORD, the mesh readers' bound): every model reaches the
+  // view through here -- a .cadmesh opened, a STEP file's conversion -- and one at 1e20 decoded
+  // while the same triangle as an STL was refused
+  const pos = out.position;
+  for (let i = 0; i < pos.length; i++) {
+    if (!(Math.abs(pos[i]) <= MAX_COORD)) throw new Error(`cadmesh: too large to show (a coordinate past ${MAX_COORD_WORDS})`);
   }
   for (const s of ['edges', 'silhouettes']) {
     const e = out[s];
