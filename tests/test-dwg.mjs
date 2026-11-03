@@ -410,8 +410,8 @@ t('round 17: a missing block, a multi-line ATTRIB, a viewport and the active lay
     [13, { handle: 13, name: 'LINE', decoded: true, e: E(3), d: { p0: [0, 0, 0], p1: [10, 0, 0] } }],
     // each layout: its paper view (first), then a viewport onto model (0..10) at 1:1
     ...[[4, 20, 21], [5, 22, 23]].flatMap(([own, a, b]) => [
-      [a, { handle: a, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [148, 105, 0], w: 297, h: 210, vh: 210, vc: [148, 105], target: [0, 0, 0], twist: 0 } }],
-      [b, { handle: b, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [50, 50, 0], w: 20, h: 20, vh: 20, vc: [5, 0], target: [0, 0, 0], twist: 0 } }]]),
+      [a, { handle: a, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [148, 105, 0], w: 297, h: 210, vh: 210, vc: [148, 105], target: [0, 0, 0], dir: [0, 0, 1], twist: 0 } }],
+      [b, { handle: b, name: 'VIEWPORT', decoded: true, e: E(own), d: { c: [50, 50, 0], w: 20, h: 20, vh: 20, vc: [5, 0], target: [0, 0, 0], dir: [0, 0, 1], twist: 0 } }]]),
   ]);
   const dwg = { objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 };
   const dr = drawDWG(dwg);
@@ -421,6 +421,35 @@ t('round 17: a missing block, a multi-line ATTRIB, a viewport and the active lay
     assert.equal(l.paths.filter((p) => p.frame).length, 1, 'one viewport frame (the paper view is not one)');
     assert.ok(l.paths.some((p) => !p.frame && p.pts[0] >= 40 && p.pts[0] <= 60), 'model space seen through it');
   }
+});
+
+t('round 18: drops counted only where the drawing reaches them; a missing block\'s attribute drawn; sheets in LAYOUT tab order', () => {
+  const E = (owner) => ({ entmode: 0, owner, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 });
+  const att = (h, owner, multi) => [h, { handle: h, name: 'ATTRIB', decoded: true, e: E(owner), d: multi ? { multi: true } : { p: [0, 0], elev: 0, h: 1, text: 'No. 42', tag: 'T', flags: 0, wf: 1, a: [0, 0] } }];
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [10] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, flags: 0 } }],
+    // a block nothing inserts, holding an INSERT whose multi-line ATTRIB is never drawn: not counted
+    [3, { handle: 3, name: 'BLOCK_RECORD', decoded: true, d: { name: 'UNUSED', base: [0, 0, 0], entities: [12] } }],
+    [4, { handle: 4, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Paper_Space', base: [0, 0, 0], entities: [] } }],
+    [5, { handle: 5, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Paper_Space', base: [0, 0, 0], entities: [20] } }],
+    [6, { handle: 6, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Paper_Space', base: [0, 0, 0], entities: [21] } }],
+    [7, { handle: 7, name: 'BLOCK_CONTROL', decoded: true, d: { n: 1, model: 1, paper: 4 } }],
+    // the tabs: 6 before 5
+    [8, { handle: 8, name: 'LAYOUT', decoded: true, d: { name: 'Second', tab: 2, block: 5 } }],
+    [9, { handle: 9, name: 'LAYOUT', decoded: true, d: { name: 'First', tab: 1, block: 6 } }],
+    [10, { handle: 10, name: 'INSERT', decoded: true, e: E(1), d: { block: 99, p: [0, 0, 0], s: [1, 1, 1], rot: 0, atts: true } }],
+    att(11, 10, false),
+    [12, { handle: 12, name: 'INSERT', decoded: true, e: E(3), d: { block: 99, p: [0, 0, 0], s: [1, 1, 1], rot: 0, atts: true } }],
+    att(13, 12, true),
+    [20, { handle: 20, name: 'LINE', decoded: true, e: E(5), d: { p0: [0, 0, 0], p1: [2, 0, 0] } }],
+    [21, { handle: 21, name: 'LINE', decoded: true, e: E(6), d: { p0: [0, 0, 0], p1: [1, 0, 0] } }],
+  ]);
+  const dr = drawDWG({ objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 });
+  assert.deepEqual(dr.notDrawn, { INSERT: 1 }, 'the unused block\'s multi-line ATTRIB not counted');
+  assert.deepEqual(dr.texts.map((t) => t.text), ['No. 42'], 'the missing block\'s attribute drawn');
+  assert.deepEqual(dr.layouts.map((l) => l.name), ['First', 'Second']);
+  assert.deepEqual(dr.layouts.map((l) => l.paths[0].pts[2]), [1, 2]);
 });
 
 // --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:

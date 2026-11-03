@@ -298,8 +298,14 @@ export function parseDXF(s) {
   const budget = { items: 0, pts: 0 };
   // (a path or text with a coordinate that is not a number is left out: one LINE with "10 abc"
   // made the whole drawing's extents NaN and Fit useless)
-  const notDrawn = {}; // kind -> how many met while drawing (model space and the layouts)
-  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn,
+  // kind -> how many entities of it the drawing reaches and does not draw (model space and the
+  // layouts): each entity once, however many times its block is inserted -- the rule drawDWG's
+  // counts (js/dwg.js) follow too (counted per insert here and per object there, one table mixed
+  // the two)
+  const notDrawn = {};
+  const counted = new WeakSet();
+  const countOnce = (r, k) => { if (counted.has(r)) return; counted.add(r); notDrawn[k] = (notDrawn[k] || 0) + 1; };
+  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce,
     add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
     addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -308,13 +314,32 @@ export function parseDXF(s) {
   // through each VIEWPORT (but the sheet's own, id 1), model space: a model
   // point m lands at C + R(twist) (h / viewHeight) (m - viewCentre),
   // clipped to the viewport's frame, which is drawn too (frame: true)
+  // Each sheet's name and place among the tabs, from its LAYOUT (OBJECTS), whose block-record
+  // handle (the 330 of its AcDbLayout part; the first 330 is its owner) names the paper space block
+  // through the BLOCK_RECORD table. A drawing without them keeps the file's order, "Layout N"
+  const recName = new Map();
+  if (sec.TABLES) for (const r of records(ps, ...sec.TABLES)) if (r.type === 'BLOCK_RECORD') recName.set(get(r, 5, '').toUpperCase(), get(r, 2, '').toUpperCase());
+  const sheetOf = new Map(); // paper space block name (upper case) -> { name, tab }
+  if (sec.OBJECTS) {
+    for (const r of records(ps, ...sec.OBJECTS)) {
+      if (r.type !== 'LAYOUT') continue;
+      const k = r.g.findIndex((x) => x[0] === 100 && String(x[1]).trim() === 'AcDbLayout');
+      const g = k < 0 ? r.g : r.g.slice(k);
+      const val = (c) => { const x = g.find((y) => y[0] === c); return x ? String(x[1]).trim() : undefined; };
+      const bn = recName.get((val(330) || '').toUpperCase());
+      if (bn && val(1) !== undefined) sheetOf.set(bn, { name: val(1), tab: Number(val(71)) });
+    }
+  }
   const sets = [];
   const active = every.filter(inPaper);
-  if (active.length) sets.push(active);
-  for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push(b.recs);
+  if (active.length) sets.push({ recs: active, sheet: sheetOf.get('*PAPER_SPACE') });
+  for (const [name, b] of blocks) if (/^\*Paper_Space\d+$/i.test(name) && b.recs.length) sets.push({ recs: b.recs, sheet: sheetOf.get(name.toUpperCase()) });
+  // (in tab order where the drawing gives one: 13 sheets came in an order of their own)
+  const tabOf = (s) => (s.sheet && Number.isFinite(s.sheet.tab) ? s.sheet.tab : Infinity);
+  sets.sort((a, b) => tabOf(a) - tabOf(b));
   // each model path's box [x0, y0, x1, y1], once, for the viewports' cull
   const pathBoxes = sets.length ? out.paths.map(boxOf) : [];
-  const layouts = sets.map((recs, li) => {
+  const layouts = sets.map(({ recs, sheet }, li) => {
     const lo = { paths: [], texts: [] };
     emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
     // a viewport's frame, on its layer
@@ -329,9 +354,15 @@ export function parseDXF(s) {
       if (!(w > 0 && h > 0)) continue;
       const rect = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
       // (one whose view is not known -- an R13-R14 DWG's, kept in a table not read -- is its frame)
-      if (!(vh > 0)) { frame(v, rect); continue; }
+      // and one looking other than straight down (a view direction not along z: an isometric) is not
+      // drawn as a plan view of model space: its frame alone, counted
+      const vd = [num(v, 16, 0), num(v, 26, 0), num(v, 36, 1)];
+      const plan = Math.hypot(vd[0], vd[1]) <= 1e-9 * Math.abs(vd[2]) && vd[2] > 0;
+      if (!(vh > 0) || !plan) { frame(v, rect); countOnce(v, !(vh > 0) ? 'VIEWPORT (its view not read)' : 'VIEWPORT (not a plan view)'); continue; }
       const s = h / vh, tw = (num(v, 51) * Math.PI) / 180;
-      const c = Math.cos(tw) * s, si = Math.sin(tw) * s, mx = num(v, 12), my = num(v, 22);
+      // (its view centre, 12 / 22, is relative to its view target, 17 / 27: taken as a model point,
+      // 12 viewports of the dozens showed empty or the wrong part of the model)
+      const c = Math.cos(tw) * s, si = Math.sin(tw) * s, mx = num(v, 12) + num(v, 17, 0), my = num(v, 22) + num(v, 27, 0);
       const M = [c, si, -si, c, cx - (c * mx - si * my), cy - (si * mx + c * my)];
       // (what a viewport draws of model space counts against the drawing's budget too: many
       // viewports multiply it)
@@ -373,12 +404,14 @@ export function parseDXF(s) {
         const c = textCorners(seen);
         const bx = [Math.min(...c.map((q) => q[0])), Math.max(...c.map((q) => q[0]))], by = [Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[1]))];
         if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
-        const inside = bx[0] >= rect[0] && bx[1] <= rect[2] && by[0] >= rect[1] && by[1] <= rect[3];
-        addItem(budget, lo.texts, inside ? seen : sameLines(t, { ...seen, clip: rect.slice() }), 2);
+        // (always clipped: whether it crosses the frame is the font's to say, not the estimate's --
+        // "WWWWWWWW" boxed inside by 0.6 a character ran 30 units past the frame in the font)
+        seen.clip = rect.slice();
+        addItem(budget, lo.texts, seen, 2);
       }
       frame(v, rect);
     }
-    return { name: li === 0 && active.length ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
+    return { name: sheet && sheet.name ? sheet.name : recs === active ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
   });
   // (a layer no table names, in model space or a layout, is a layer too -- one only texts use as
   // well: its texts could not be hidden, and the layer count was short)
@@ -741,7 +774,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const flags = num(r, 70);
         // a 3D mesh or a polyface: not drawn in 2D, and counted so (467 at hand were left out without
         // a word, while a 3D solid was counted)
-        if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.notDrawn[k] = (ctx.notDrawn[k] || 0) + 1; break; }
+        if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.count(r, k); break; }
         const closed = (flags & 1) === 1;
         if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
         else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, ...widthsOf(xs, ys, bul, w0, w1, closed) });
@@ -902,7 +935,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const q = blockRef(r);
         const b = ctx.blocks.get(get(q, 2, ''));
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone)
-        if (!b) { ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1; break; }
+        if (!b) { ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -934,13 +967,13 @@ function emit(recs, M, byBlock, depth, ctx) {
           const pts = [];
           for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0));
           if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: false, fill: false });
-        } else ctx.notDrawn.LEADER = (ctx.notDrawn.LEADER || 0) + 1; // (one without its vertices: a DWG's, whose are not decoded)
+        } else ctx.count(r, 'LEADER'); // (one without its vertices: a DWG's, whose are not decoded)
         break;
       }
       default:
         // any other kind is one the drawing does not draw, counted by name so the page can say so
         // (a closed list of names missed custom kinds: AutoCAD Mechanical's, an AEC wall)
-        if (!STRUCTURE.has(r.type)) ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1;
+        if (!STRUCTURE.has(r.type)) ctx.count(r, r.type);
     }
   }
 }
@@ -1295,6 +1328,9 @@ export function attribTextGroups(g) {
 
 // A drawing with nothing to show: no path or text in model space or any layout. The one rule for
 // the page (it refuses the file) and dwg-check.mjs (it reports it)
+// a drawing path that is one of its lines and shapes: not a wide polyline's outline (its
+// polyline's), not a viewport's frame. The one rule for the info panel and dwg-check
+export const isShape = (p) => !p.outline && !p.frame;
 export const sheetDraws = (s) => s.paths.length > 0 || s.texts.length > 0; // (model space, or a layout)
 export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws);
 

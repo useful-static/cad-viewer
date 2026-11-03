@@ -6,7 +6,7 @@ import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
-import { drawsNothing, onPaper, sheetDraws } from './dxf.js';
+import { drawsNothing, isShape, onPaper, sheetDraws } from './dxf.js';
 import { createDxfView } from './dxf-view.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
@@ -465,9 +465,21 @@ function explodeDirs(mode) {
   const h = app.header;
   const n = h.meshes.length;
   const raw = new Float64Array(n * 3);
+  // each node's box, bottom up, once: collected per node, every body was walked again at each level
+  // of the tree (a million bodies under 256 levels: 12.9 s on the page's thread)
+  const boxes = new Map();
+  const boxOfNode = (node) => {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    const grow = (b) => { if (b) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); } };
+    for (const mi of node.meshes) grow(h.meshes[mi].bbox);
+    for (const ch of node.children) grow(boxOfNode(ch));
+    const b = min[0] === Infinity ? null : { min, max };
+    boxes.set(node, b);
+    return b;
+  };
+  boxOfNode(h.root);
   const walk = (node, parentC, acc) => {
-    const ids = collect(node);
-    const b = ids.length ? bboxOf(ids) : null;
+    const b = boxes.get(node);
     const c = b ? cen(b) : parentC;
     const a = [0, 1, 2].map((k) => acc[k] + c[k] - parentC[k]);
     for (const mi of node.meshes) {
@@ -4579,8 +4591,6 @@ function syncLayerRows() {
   for (const li of $('tree').children) li.querySelector('.row').classList.toggle('sel', !!app.dxf && li.dataset.layer === app.dxf.view.selected);
 }
 
-// a drawing path that is one of its lines and shapes: not a wide polyline's outline, not a frame
-const isShape = (p) => !p.outline && !p.frame;
 // the info panel in 2D mode: the drawing's size, unit, layers and contents
 function fillInfo2D(el) {
   // (the sheet shown: model space, or a layout)
@@ -4603,6 +4613,8 @@ function fillInfo2D(el) {
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));
+  // (a DWG whose format checks failed: what is drawn may be wrong, said as dwg-check says it)
+  if (full.checkFailures && full.checkFailures.length) row('checks failed', full.checkFailures.join('; '));
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {

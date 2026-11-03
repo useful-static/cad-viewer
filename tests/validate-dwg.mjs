@@ -19,6 +19,7 @@
 // layers. Exit status 0 only when every file passes 1-4.
 import { readFileSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { dxfPairs, byHandle, compare, hexHandle } from './dwg-compare.mjs';
@@ -32,7 +33,8 @@ const summary = (dr) => JSON.stringify({ ...sheet(dr), layers: dr.layers.length,
 export function validate(std, path) {
   const res = { std, path, ok: true, notes: [] };
   let d;
-  try { d = readDWG(readFileSync(path)); } catch (err) { res.ok = false; res.error = String(err.message || err); return res; }
+  // (a .dwg.gz unpacked, as dwg-check and the page open one)
+  try { let b = readFileSync(path); if (b[0] === 0x1f && b[1] === 0x8b) b = gunzipSync(b); d = readDWG(b); } catch (err) { res.ok = false; res.error = String(err.message || err); return res; }
   res.version = d.version; res.objects = d.objects.size; res.writer = d.writer || '';
   res.checks = Object.fromEntries(Object.entries(d.checks).map(([k, c]) => [k, [c.pass, c.pass + c.fail]]));
   res.checkFailures = d.failures;

@@ -183,7 +183,7 @@ export function decodeView(s) {
     else if (k === 's' && STYLE_IDS.includes(val)) out.style = val;
     else if (k === 'x') {
       const [axis, t, f] = val.split(',');
-      const tn = Number(t);
+      const tn = t === undefined || t.trim() === '' ? NaN : Number(t); // (an empty value is none, as e:'s: Number('') is 0)
       if (['x', 'y', 'z'].includes(axis) && tn >= 0 && tn <= 1) out.section = { axis, t: tn, flip: f === 'f' };
     } else if (k === 'e') {
       const [t, mode] = val.split(',');

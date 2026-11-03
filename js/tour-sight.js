@@ -39,16 +39,40 @@ const inside = (p, b) => p.every((v, k) => v >= b.min[k] && v <= b.max[k]);
 // The share (0-1) of the part's sample rays toward direction d (toward the
 // eye) that another body's box blocks. A box holding the sample point is
 // not counted (the part's own surroundings: a board under a socket's pins).
+// (obstacles: the boxes, or their tree from boxTree -- clearestDirection builds it once: each of a
+// step's 72 x 27 rays tested every box, 3.7 s for 100,000 bodies on the page's thread)
 export function blockedShare(box, d, obstacles) {
+  const tree = Array.isArray(obstacles) ? null : obstacles;
   let blocked = 0, n = 0;
   for (const fx of FRACS) for (const fy of FRACS) for (const fz of FRACS) {
     const p = [fx, fy, fz].map((f, k) => box.min[k] + f * (box.max[k] - box.min[k]));
     n++;
-    for (const o of obstacles) {
-      if (!inside(p, o) && rayHitsBox(p, d, o)) { blocked++; break; }
-    }
+    if (tree ? treeBlocks(tree, p, d) : obstacles.some((o) => !inside(p, o) && rayHitsBox(p, d, o))) blocked++;
   }
   return blocked / n;
+}
+
+// A tree of boxes (median splits along the longest axis, 8 to a leaf) for the ray tests
+export function boxTree(boxes) {
+  const build = (items) => {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const b of items) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); }
+    const node = { box: { min, max } };
+    if (items.length <= 8) { node.items = items; return node; }
+    let ax = 0;
+    for (let k = 1; k < 3; k++) if (max[k] - min[k] > max[ax] - min[ax]) ax = k;
+    const c = (b) => b.min[ax] + b.max[ax];
+    const sorted = items.slice().sort((a, b) => c(a) - c(b));
+    const h = sorted.length >> 1;
+    node.kids = [build(sorted.slice(0, h)), build(sorted.slice(h))];
+    return node;
+  };
+  return build(boxes);
+}
+function treeBlocks(node, p, d) {
+  if (!rayHitsBox(p, d, node.box) && !inside(p, node.box)) return false;
+  if (node.items) return node.items.some((o) => !inside(p, o) && rayHitsBox(p, d, o));
+  return treeBlocks(node.kids[0], p, d) || treeBlocks(node.kids[1], p, d);
 }
 
 // The obstacles for a part's box, from the other bodies' boxes. A body whose
@@ -124,8 +148,9 @@ export function clearestDirection(box, up, centre, obstacles) {
   h = norm(h);
   const prefer = h.map((v, k) => v * Math.cos(RISES[0]) + up[k] * Math.sin(RISES[0]));
   let best = null;
+  const tree = obstacles.length > 64 ? boxTree(obstacles) : obstacles;
   for (const d of candidates(up, h)) {
-    const blocked = blockedShare(box, d, obstacles);
+    const blocked = blockedShare(box, d, tree);
     const off = Math.acos(Math.max(-1, Math.min(1, dot(d, prefer)))) / Math.PI;
     const score = blocked + PREFER_WEIGHT * off;
     if (!best || score < best.score - 1e-12) best = { dir: d, blocked, score };

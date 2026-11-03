@@ -49,6 +49,10 @@ test('defaults stay out of the link', () => {
   assert.equal(d.cam.ortho, false);
   assert.equal(d.cam.orient, '+y+z');
   assert.equal(d.section, undefined);
+  // an empty section value is none (it read 0: the cut at the model's minimum), as e:'s is
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z,').section, undefined);
+  assert.equal(decodeView('c:0,0,0,1,0,0,0,1;x:z, ,f').section, undefined);
+  assert.deepEqual(decodeView('c:0,0,0,1,0,0,0,1;x:z,0').section, { axis: 'z', t: 0, flip: false });
 });
 test('any orientation round-trips; old u:z / u:y links still read; a bad one is the default', () => {
   const cam = { target: [0, 0, 0], dist: 1, q: [0, 0, 0, 1] };

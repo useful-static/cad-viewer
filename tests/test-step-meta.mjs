@@ -41,5 +41,16 @@ test('a \\X2\\ run of 300,000 code units decodes (no spread onto the stack)', ()
   assert.equal(s.length, 300000);
   assert.equal(s[0], 'A');
 });
+test('a STEP name written as raw UTF-8, \\S\\ or \\X4\\ decodes as the converter names it', () => {
+  // the scan reads latin1: "Müller" as UTF-8 bytes arrives as "MÃ¼ller"
+  const raw = String.fromCharCode(...new TextEncoder().encode('Müller ø'));
+  assert.equal(decodeStepString(raw), 'Müller ø');
+  assert.equal(decodeStepString('M\\S\\|ller'), 'Müller'); // ü is 0xFC = '|' + 0x80
+  assert.equal(decodeStepString('\\X4\\0001F600\\X0\\ ok'), '\u{1F600} ok');
+  assert.equal(decodeStepString('caf\\X\\E9'), 'café');
+  assert.equal(decodeStepString('\\X2\\00E900E8\\X0\\'), 'éè');
+  // bytes that are not UTF-8 stay as read
+  assert.equal(decodeStepString('na\xefve'), 'na\xefve');
+});
 
 done();

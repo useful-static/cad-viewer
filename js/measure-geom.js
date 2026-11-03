@@ -95,7 +95,7 @@ function planeOf(P, I, t0, nt) {
   }
   if (!n) return null;
   // every vertex on that plane, to a millionth of the face's size
-  let lo = Infinity, hi = -Infinity, ext = 0;
+  let lo = Infinity, hi = -Infinity, ext = 0, far = 0;
   for (let t = t0; t < t0 + nt; t++) {
     for (let j = 0; j < 3; j++) {
       const v = I[3 * t + j] * 3;
@@ -103,9 +103,12 @@ function planeOf(P, I, t0, nt) {
       const h = dot(sub(p, p0), n);
       lo = Math.min(lo, h); hi = Math.max(hi, h);
       ext = Math.max(ext, len(sub(p, p0)));
+      far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
     }
   }
-  if (hi - lo > Math.max(1e-6 * ext, 1e-9)) return null;
+  // (and no finer than the positions are stored: float32 rounds a coordinate to 2^-23 of itself,
+  // so a flat tilted face 1 m from the origin read "not flat")
+  if (hi - lo > Math.max(1e-6 * ext, 8 * 2 ** -23 * far, 1e-9)) return null;
   return { normal: n, d: dot(n, p0) };
 }
 
@@ -312,28 +315,31 @@ export function holesOf(geom) {
     if (!f.plane) continue;
     for (const c of f.circles) if (c.inner) rims.push(c);
   }
+  // A through-hole's two rims: the nearest rim on its axis, of its radius, whose face looks the
+  // other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
+  // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
+  const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
   const out = [];
   const used = new Set();
   for (let i = 0; i < rims.length; i++) {
     if (used.has(i)) continue;
     const r = rims[i];
-    let depth = 0;
-    let rimCount = 1;
-    for (let j = i + 1; j < rims.length; j++) {
-      if (used.has(j)) continue;
+    let best = -1, bestAlong = Infinity;
+    for (let j = 0; j < rims.length; j++) {
+      if (j === i || used.has(j)) continue;
       const s = rims[j];
       if (Math.abs(s.radius - r.radius) > RADIUS_TOL * r.radius) continue;
       if (Math.abs(Math.abs(dot(s.normal, r.normal)) - 1) > 1e-3) continue;
+      if (dot(faceN(s), faceN(r)) > -0.999) continue; // (the other end looks the other way)
       const d = sub(s.centre, r.centre);
       const along = dot(d, r.normal);
       const off = len(sub(d, r.normal.map((v) => v * along)));
       if (off > 0.01 * r.radius + 1e-6) continue;
-      used.add(j);
-      rimCount++;
-      depth = Math.max(depth, Math.abs(along));
+      if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); best = j; }
     }
     used.add(i);
-    out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth, rims: rimCount });
+    if (best >= 0) used.add(best);
+    out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
   }
   return out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
 }

@@ -41,9 +41,9 @@ const f32 = (v) => Math.fround(v);
 const P = (x, y, z) => [f32(x), f32(y), f32(z)];
 
 // a washer: inner radius ri, outer ro, z from 0 to h, n segments; four faces
-function washer(ri, ro, h, n, cx = 0, cy = 0) {
+function washer(ri, ro, h, n, cx = 0, cy = 0, z0 = 0) {
   const ring = (r, z) => Array.from({ length: n }, (_, i) => P(cx + r * Math.cos((2 * Math.PI * i) / n), cy + r * Math.sin((2 * Math.PI * i) / n), z));
-  const it = ring(ri, h), ot = ring(ro, h), ib = ring(ri, 0), ob = ring(ro, 0);
+  const it = ring(ri, z0 + h), ot = ring(ro, z0 + h), ib = ring(ri, z0), ob = ring(ro, z0);
   const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
   return [band(it, ot), band(ob, ib), band(ib, it), band(ot, ob)];
 }
@@ -98,7 +98,25 @@ test('a board with four mounting holes: four holes, their spacing', () => {
   const holes = holesOf(g);
   assert.equal(holes.length, 4);
   assert.ok(holes.every((h) => Math.abs(h.diameter - 2.75) < 1e-4));
-  assert.ok(Math.abs(holes[1].centre[0] - holes[0].centre[0] - 0) < 1e-4 || Math.abs(Math.abs(holes[1].centre[0] - holes[0].centre[0]) - 58) < 1e-4);
+  // (their centres exactly: the old check compared two holes that always shared an x)
+  const at = holes.map((h) => [Math.round(h.centre[0] * 1e4) / 1e4, Math.round(h.centre[1] * 1e4) / 1e4]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  assert.deepEqual(at, [[3.5, 3.5], [3.5, 52.5], [61.5, 3.5], [61.5, 52.5]]);
+  assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2));
+});
+test('a clevis: two flanges on one axis are two holes of their own depth, not one through the gap', () => {
+  const faces = [...washer(2, 6, 1.6, 40, 0, 0), ...washer(2, 6, 1.6, 40, 0, 0, 11.6)];
+  const holes = holesOf(bodyGeometry(model([{ name: 'clevis', faces }]), 0));
+  assert.equal(holes.length, 2, JSON.stringify(holes));
+  assert.ok(holes.every((h) => Math.abs(h.depth - 1.6) < 1e-6 && h.rims === 2), JSON.stringify(holes));
+});
+test('a flat tilted face 1 m from the origin is flat (no finer than float32 stores it)', () => {
+  const faces = washer(1.375, 3, 1.6, 40, 0, 0);
+  const m = model([{ name: 'far', faces }]);
+  // turned 30° about x and moved 1000 mm, stored as float32 as a .cadmesh is
+  const c = Math.cos(Math.PI / 6), s = Math.sin(Math.PI / 6), P = m.position;
+  for (let i = 0; i < P.length; i += 3) { const y = P[i + 1], z = P[i + 2]; P[i] += 1000; P[i + 1] = y * c - z * s + 1000; P[i + 2] = y * s + z * c + 1000; }
+  m.position = Float32Array.from(P);
+  assert.equal(holesOf(bodyGeometry(m, 0)).length, 1);
 });
 test('results: distance and deltas, the angle at a corner, face to face', () => {
   const d = distance([0, 0, 0], [3, 4, 12]);

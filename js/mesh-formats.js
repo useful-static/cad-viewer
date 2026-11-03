@@ -128,12 +128,15 @@ const text = (buf, what = 'the file', encoding = 'utf-8') => {
 // triangle or null, color }] -> the encodeCadmesh model, one tree node
 // a face pointing past the vertices, or a coordinate that is not a number, is a damaged file:
 // said so here, not met later as NaN geometry ("facts are not one closed / area / volume")
+// The largest coordinate a model may hold, in its file's units: the view squares distances in
+// float32 (its matrices, the depth range), so past float32's range is not the bound -- a model at
+// 1e38 loaded and showed blank, every vertex NaN. 1e15 squared stays well inside it
+export const MAX_COORD = 1e15;
 function checkBodies(rootName, bodies) {
   for (const b of bodies) {
     const n = b.pos.length / 3;
-    // (past float32's range a coordinate is stored as Infinity: 1e39 passed here, and the view's fit
-    // came out NaN, the view blank)
-    for (const x of b.pos) if (!Number.isFinite(x) || Math.abs(x) > 3.4e38) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
+    for (const x of b.pos) if (!Number.isFinite(x)) throw new Error(`${rootName} is damaged: a vertex coordinate is not a number`);
+    for (const x of b.pos) if (Math.abs(x) > MAX_COORD) throw new Error(`${rootName} is too large to show (a coordinate past 10^15)`);
     for (const t of b.tri) if (!Number.isInteger(t) || t < 0 || t >= n) throw new Error(`${rootName} is damaged: a face refers to vertex ${t + 1} of ${n}`);
   }
 }

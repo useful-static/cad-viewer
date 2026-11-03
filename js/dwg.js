@@ -6,7 +6,8 @@
 // hands them on as DXF group-code pairs, so parseDXF draws a DWG as it draws a
 // DXF -- but for the kinds not decoded (leaders, multileaders, R2010+ tables,
 // solids, custom kinds), which are passed on by name and counted as not drawn
-// (drawDWG), and R13-R14 viewports, whose view is not read (their frame alone).
+// (parseDXF counts them; drawDWG adds what the adapter could not pass on), and
+// R13-R14 viewports, whose view is not read (their frame alone, counted).
 //
 // Every check the format carries is made and counted, never skipped:
 // CRC-16 of each object, of the header, classes and object map (2.14.1), the
@@ -957,7 +958,7 @@ class ObjectReader {
       if (ENTITY_NAMES.has(o.name)) { this.entity(o); fn.call(this, o, o.r, this.v); } else { this.object(o); fn.call(this, o, o.r, this.v); }
       o.decoded = true;
       // the data must not run into the handles, and the handles must stay inside the object
-      this.chk.ok('object data ends before its handles', o.r.p <= o.hBit + (this.v >= 21 ? 0 : 0) || this.v >= 21, true);
+      this.chk.ok('object data ends before its handles', o.r.p <= o.hBit || this.v >= 21, true);
       this.chk.ok('object handles end inside the object', !o.h || o.h.p <= o.endBit);
     } catch (err) {
       o.error = String(err.message || err);
@@ -1161,7 +1162,7 @@ const DECODE = {
     }
     d.z = r.BD(); d.ext = r.BD3(); d.name = r.TV(); d.solid = r.B(); d.assoc = r.B();
     const np = r.BL();
-    let any4 = false, nBound = 0;
+    let any4 = false;
     for (let p = 0; p < np; p++) {
       const flag = r.BL();
       if (flag & 4) any4 = true;
@@ -1191,7 +1192,7 @@ const DECODE = {
         loop.pts = []; loop.bulges = [];
         for (let k = 0; k < n; k++) { loop.pts.push(r.RD2()); loop.bulges.push(hasB ? r.BD() : 0); }
       }
-      nBound += r.BL();
+      r.BL(); // its boundary objects' count (their handles, after the common ones, are not read)
       d.loops.push(loop);
     }
     r.BS(); r.BS();
@@ -1204,7 +1205,6 @@ const DECODE = {
     const ns = r.BL();
     for (let k = 0; k < ns; k++) r.RD2();
     this.entityHandles(o);
-    void nBound;
   },
   BLOCK_RECORD(o, r, v) {
     const d = (o.d = { name: r.TV() });
@@ -1225,6 +1225,21 @@ const DECODE = {
     d.endBlk = h.Ha(o.handle);
     for (let k = 0; k < inserts; k++) h.H();
     if (v >= 15) d.layout = h.Ha(o.handle);
+  },
+  // 20.4.84: a layout -- its plot settings passed over, its name and tab order, and the paper
+  // space block record it draws (what orders and names a drawing's sheets, as a DXF's LAYOUT does)
+  LAYOUT(o, r, v) {
+    r.TV(); r.TV(); r.BS(); for (let k = 0; k < 6; k++) r.BD(); r.TV();
+    r.BD(); r.BD(); r.BS(); r.BS(); r.BS(); r.BD(); r.BD(); r.BD(); r.BD();
+    if (v <= 15) r.TV();
+    r.BD(); r.BD(); r.TV(); r.BS(); r.BD(); r.BD(); r.BD();
+    if (v >= 18) { r.BS(); r.BS(); r.BS(); }
+    const d = (o.d = { name: r.TV(), tab: r.BL() });
+    this.objectHandles(o);
+    const h = o.h;
+    if (v >= 18) h.H(); // plot view
+    if (v >= 21) h.H(); // visual style
+    d.block = h.Ha(o.handle);
   },
   // 20.4.51: the block table: its entries, then *MODEL_SPACE and *PAPER_SPACE -- which of the
   // block records named *Paper_Space is the active layout (from R2000 every layout's is so named)
@@ -1430,22 +1445,32 @@ function cp1252Bytes(s) {
 const deg = (r) => (r * 180) / Math.PI;
 const hex = (h) => h.toString(16).toUpperCase();
 
-// The drawing as DXF group-code pairs [[code, 'value'], ...]: HEADER ($INSUNITS,
-// $LTSCALE, $EXTMIN/MAX), TABLES (LTYPE, LAYER), BLOCKS, ENTITIES
+const MULTILINE_ATTRIB = 'ATTRIB (multi-line)';
+const BLOCK_REFS = new Set(['INSERT', 'DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE']);
+
 // A DWG drawn as the page draws it: its pairs through parseDXF, with what the adapter itself could
-// not pass on counted as not drawn too (an R2018 multi-line attribute: 131 in the drawings at hand
+// not pass on counted as not drawn too -- an R2018 multi-line attribute (131 in the drawings at hand
 // were dropped where only the adapter's stats knew, and the page, dwg-check and the validation
-// called those drawings complete). The one way for the page and the CLIs
+// called those drawings complete), an entity whose decode failed. Counted as parseDXF counts: each
+// once, where the drawing reaches it (model or paper space, a layout, a block something inserts;
+// counted per object, a block never inserted listed what is never drawn). The one way for the
+// page and the CLIs
 export function drawDWG(dwg, P = dwgToPairs(dwg)) {
   const dr = parseDXF(P);
-  const add = (k, n) => { if (n) dr.notDrawn[k] = (dr.notDrawn[k] || 0) + n; };
-  add('ATTRIB (multi-line)', P.stats.dropped['ATTRIB, multi-line (not drawn)']);
-  // and an entity whose decode failed (a counted check failure): the page drew the rest and said
-  // nothing was missing
-  for (const o of dwg.objects.values()) if (o.entity && o.error && !STRUCTURE.has(o.name)) add(`${o.name} (could not be read)`, 1);
+  const reached = new Set();
+  let type = null;
+  for (const [c, v] of P) { if (c === 0) type = v; else if (c === 2 && BLOCK_REFS.has(type)) reached.add(v); }
+  for (const { kind, block } of P.stats.notPassed) {
+    if (block === null || reached.has(block) || /^\*Paper_Space\d+$/i.test(block)) dr.notDrawn[kind] = (dr.notDrawn[kind] || 0) + 1;
+  }
+  // and the format checks it failed, which the page shows (dwg-check reported a file bad that the
+  // page showed as healthy)
+  dr.checkFailures = (dwg.failures || []).slice();
   return dr;
 }
 
+// The drawing as DXF group-code pairs [[code, 'value'], ...]: HEADER ($INSUNITS,
+// $LTSCALE, $EXTMIN/MAX), TABLES (LTYPE, LAYER), BLOCKS, ENTITIES
 export function dwgToPairs(dwg) {
   const { objects, header } = dwg;
   const P = [];
@@ -1472,9 +1497,16 @@ export function dwgToPairs(dwg) {
   // as one name, a drawing of seven layouts showed one, holding the viewports of four)
   const ctl = [...objects.values()].find((x) => x.decoded && x.name === 'BLOCK_CONTROL');
   const activePaper = ctl ? ctl.d.paper : undefined;
-  for (const o of [...objects.values()].filter((x) => x.decoded && x.name === 'BLOCK_RECORD').sort((a, b) => hcmp(a.handle, b.handle))) {
+  // (the layouts: their records' tab order, so the sheets come in the drawing's order)
+  const layoutObjs = [...objects.values()].filter((x) => x.decoded && x.name === 'LAYOUT' && x.d.block !== undefined);
+  const tabOf = new Map(layoutObjs.map((x) => [x.d.block, x.d.tab]));
+  const recs = [...objects.values()].filter((x) => x.decoded && x.name === 'BLOCK_RECORD').sort((a, b) => hcmp(a.handle, b.handle));
+  const others = recs.filter((o) => /^\*paper_space$/i.test(o.d.name) && activePaper !== undefined && o.handle !== activePaper)
+    .sort((a, b) => (tabOf.get(a.handle) ?? Infinity) - (tabOf.get(b.handle) ?? Infinity) || hcmp(a.handle, b.handle));
+  const sheetName = new Map(others.map((o) => [o.handle, `*Paper_Space${sheet++}`]));
+  for (const o of recs) {
     const n = o.d.name;
-    blockName.set(o.handle, /^\*[A-Za-z]$/.test(n) ? `${n}${anon++}` : /^\*paper_space$/i.test(n) && activePaper !== undefined && o.handle !== activePaper ? `*Paper_Space${sheet++}` : n);
+    blockName.set(o.handle, /^\*[A-Za-z]$/.test(n) ? `${n}${anon++}` : sheetName.get(o.handle) || n);
   }
   const bname = (h) => blockName.get(h);
   put(0, 'SECTION'); put(2, 'HEADER');
@@ -1559,7 +1591,7 @@ export function dwgToPairs(dwg) {
         const id = (vpIds.get(key) || 0) + 1;
         vpIds.set(key, id);
         common('VIEWPORT'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.w); put(41, d.h); put(69, id);
-        if (d.vh !== undefined) { put(12, d.vc[0]); put(22, d.vc[1]); put(17, d.target[0]); put(27, d.target[1]); put(37, d.target[2]); put(45, d.vh); if (d.twist) put(51, deg(d.twist)); }
+        if (d.vh !== undefined) { put(12, d.vc[0]); put(22, d.vc[1]); put(16, d.dir[0]); put(26, d.dir[1]); put(36, d.dir[2]); put(17, d.target[0]); put(27, d.target[1]); put(37, d.target[2]); put(45, d.vh); if (d.twist) put(51, deg(d.twist)); }
         break;
       }
       case 'ELLIPSE': common('ELLIPSE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(11, d.major[0]); put(21, d.major[1]); put(31, d.major[2]); ext(d.ext); put(40, d.ratio); put(41, d.t0); put(42, d.t1); break;
@@ -1644,9 +1676,9 @@ export function dwgToPairs(dwg) {
       case 'INSERT': case 'MINSERT': case 'ACAD_TABLE': {
         const bn = bname(d.block);
         // (a reference to a block not in the file: passed on without its name, as a DIMENSION's
-        // is, so the page counts it as not drawn -- dropped here, only the adapter's stats knew)
-        if (!bn) { common(o.name === 'ACAD_TABLE' ? 'ACAD_TABLE' : 'INSERT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]); break; }
-        common('INSERT'); put(2, bn); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]);
+        // is, so the page counts it as not drawn, and with its attributes, which a DXF draws --
+        // dropped here, only the adapter's stats knew)
+        common(!bn && o.name === 'ACAD_TABLE' ? 'ACAD_TABLE' : 'INSERT'); if (bn) put(2, bn); put(10, d.p[0]); put(20, d.p[1]); put(30, d.p[2]);
         if (d.s[0] !== 1) put(41, d.s[0]);
         if (d.s[1] !== 1) put(42, d.s[1]);
         if (d.s[2] !== 1) put(43, d.s[2]);
@@ -1660,7 +1692,7 @@ export function dwgToPairs(dwg) {
         if (!atts.length) break;
         for (const a of atts) {
           const ad = a.d;
-          if (!ad || ad.multi) { const why = 'ATTRIB, multi-line (not drawn)'; stats.dropped[why] = (stats.dropped[why] || 0) + 1; continue; }
+          if (!ad || ad.multi) { const why = 'ATTRIB, multi-line (not drawn)'; stats.dropped[why] = (stats.dropped[why] || 0) + 1; stats.notPassed.push({ kind: MULTILINE_ATTRIB, block: curBlock }); continue; }
           stats.attribs = (stats.attribs || 0) + 1;
           put(0, 'ATTRIB'); put(5, hex(a.handle));
           if (inPaper) put(67, 1);
@@ -1724,7 +1756,11 @@ export function dwgToPairs(dwg) {
   };
   // what the adapter did with every decoded entity a block record owns: emitted, or not and why
   // (a type it does not draw, a reference whose block is not in the file): P.stats
-  const stats = { owned: 0, emitted: 0, dropped: {} };
+  // (notPassed: what the page must count as not drawn that it never sees -- { kind, block }, block
+  // the name of the block it lies in, null in model or paper space: drawDWG counts those the
+  // drawing reaches)
+  const stats = { owned: 0, emitted: 0, dropped: {}, notPassed: [] };
+  let curBlock = null;
   const emit = (o, inPaper) => {
     stats.owned++;
     const n = P.length;
@@ -1737,16 +1773,32 @@ export function dwgToPairs(dwg) {
     if (rec === model || rec === paper) continue;
     const nm = bname(rec.handle);
     put(0, 'BLOCK'); put(5, hex(rec.handle)); put(8, '0'); put(2, nm); put(70, (rec.d.anonymous ? 1 : 0) | (rec.d.xref ? 4 : 0)); put(10, rec.d.base[0]); put(20, rec.d.base[1]); put(30, rec.d.base[2]); put(3, nm);
+    curBlock = nm;
     for (const o of ordered(rec)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, false);
     put(0, 'ENDBLK'); put(8, '0');
   }
+  curBlock = null;
   put(0, 'ENDSEC');
   put(0, 'SECTION'); put(2, 'ENTITIES');
   // (a layout's own BLOCK / ENDBLK markers are structure, not drawn: left out, as in a block)
   if (model) for (const o of ordered(model)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, false);
   if (paper) for (const o of ordered(paper)) if (!['BLOCK', 'ENDBLK'].includes(o.name)) emit(o, true);
   put(0, 'ENDSEC');
+  // the layouts, as a DXF's OBJECTS holds them: a sheet's name and place among the tabs, by its
+  // paper space block record
+  if (layoutObjs.length) {
+    put(0, 'SECTION'); put(2, 'OBJECTS');
+    for (const x of layoutObjs) { put(0, 'LAYOUT'); put(5, hex(x.handle)); put(100, 'AcDbLayout'); put(1, x.d.name); put(71, x.d.tab); put(330, hex(x.d.block)); }
+    put(0, 'ENDSEC');
+  }
   put(0, 'EOF');
+  // an entity whose decode failed, where it lay (its block's name, null for model or paper space)
+  for (const o of objects.values()) {
+    // (a vertex too: one that failed took a corner from its polyline without a word)
+    if (!o.entity || !o.error || (STRUCTURE.has(o.name) && o.name !== 'VERTEX')) continue;
+    const own = o.e && o.e.owner !== undefined && !(model && o.e.owner === model.handle) && !(paper && o.e.owner === paper.handle) ? bname(o.e.owner) ?? null : null;
+    stats.notPassed.push({ kind: `${o.name} (could not be read)`, block: own });
+  }
   P.stats = stats;
   return P;
 }

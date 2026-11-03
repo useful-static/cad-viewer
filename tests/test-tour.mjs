@@ -18,7 +18,7 @@ import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
 import { CARRIED_FIELDS, draftToTour, stepFromView } from '../js/tour-recorder.js';
-import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
+import { blockedShare, boxTree, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 import { test, done } from './harness.mjs';
 
@@ -516,6 +516,20 @@ test('ease', () => {
     for (let i = 1; i <= 10; i++) assert.ok(e(i / 10) >= e((i - 1) / 10)); // never back
   }
   assert.ok(EASE.inOut(0.1) < 0.1 && EASE.inOut(0.9) > 0.9); // slow at both ends
+});
+
+test('the outside view\'s box tree blocks as the list does, and 100,000 bodies take a fraction of a second', () => {
+  // seeded boxes round a part at the origin
+  let s = 7;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const boxes = Array.from({ length: 3000 }, () => { const c = [rnd() * 200 - 100, rnd() * 200 - 100, rnd() * 200 - 100]; return { min: c.map((v) => v - 2), max: c.map((v) => v + 2) }; });
+  const part = { min: [-1, -1, -1], max: [1, 1, 1] };
+  const tree = boxTree(boxes);
+  for (const d of [[1, 0, 0], [0, 0, 1], [0.6, 0.48, 0.64], [-0.36, 0.48, 0.8]]) assert.equal(blockedShare(part, d, tree), blockedShare(part, d, boxes), `direction ${d}`);
+  const many = Array.from({ length: 100000 }, () => { const c = [rnd() * 2000 - 1000, rnd() * 2000 - 1000, rnd() * 2000 - 1000]; return { min: c.map((v) => v - 1), max: c.map((v) => v + 1) }; });
+  const t0 = Date.now();
+  clearestDirection(part, [0, 0, 1], [0, 0, 0], many);
+  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
 });
 
 done();

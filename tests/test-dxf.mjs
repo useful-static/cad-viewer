@@ -633,6 +633,33 @@ test('round 17: a mesh polyline counted; a hatch\'s even-odd id unique across sh
     [[0, 'LINE'], [8, '0'], [67, 1], [10, 0], [20, 5], [11, 5], [21, 5]], [[0, 'POLYLINE'], [8, '0'], [67, 1], [66, 1], [70, 0]], [[0, 'VERTEX'], [8, '0'], [67, 1], [10, 0], [20, 9]], [[0, 'VERTEX'], [8, '0'], [67, 1], [10, 9], [20, 9]], [[0, 'SEQEND'], [8, '0'], [67, 1]]));
   assert.ok(pp.layouts[0].paths.some((p) => p.pts[1] === 5), 'the LINE after it is drawn');
 });
+test('round 18: a viewport\'s view target; a non-plan or unknown view counted; each record counted once; viewport text clipped; sheets by tab order and name', () => {
+  const vp = (extra) => [[0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 20], [41, 20], [69, 2], [12, 0], [22, 0], [45, 20], ...extra];
+  const sheet = (...ents) => [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 100], [20, 100], [11, 101], [21, 100],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210], ...ents.flat(), [0, 'ENDSEC'], [0, 'EOF']];
+  // the view centre is relative to the target: centre 0,0 + target 100,100 shows the line at 100,100
+  const tg = parseDXF(dxf(sheet(vp([[17, 100], [27, 100]])))).layouts[0];
+  assert.ok(tg.paths.some((p) => !p.frame), 'the model line seen through the viewport');
+  // an isometric view and one with no view height: the frame alone, counted
+  const iso = parseDXF(dxf(sheet(vp([[16, 1], [26, -1], [36, 1]]))));
+  assert.deepEqual([iso.layouts[0].paths.filter((p) => !p.frame).length, iso.notDrawn['VIEWPORT (not a plan view)']], [0, 1]);
+  const nov = parseDXF(dxf(sheet([[0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 20], [41, 20], [69, 2]])));
+  assert.deepEqual([nov.layouts[0].paths.filter((p) => p.frame).length, nov.notDrawn['VIEWPORT (its view not read)']], [1, 1]);
+  // a block holding a WIPEOUT, inserted 3 times: one WIPEOUT not drawn, not 3
+  const three = parseDXF(dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], [0, 'WIPEOUT'], [8, '0'], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], ...[0, 1, 2].flatMap((k) => [[0, 'INSERT'], [8, '0'], [2, 'B'], [10, k], [20, 0]]), [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(three.notDrawn, { WIPEOUT: 1 });
+  // a text through a viewport is clipped to its frame whatever its estimated box
+  const tx = parseDXF(dxf(sheet([[0, 'TEXT'], [8, '0'], [10, 100], [20, 100], [40, 1], [1, 'W']], vp([[17, 100], [27, 100]])))).layouts[0];
+  assert.ok(tx.texts.length && tx.texts.every((t) => t.clip), 'clipped');
+  // sheets ordered by their LAYOUT's tab order, named by it (via the block record table)
+  const lay = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'BLOCK_RECORD'], [0, 'BLOCK_RECORD'], [5, 'A1'], [2, '*Paper_Space'], [0, 'BLOCK_RECORD'], [5, 'A2'], [2, '*Paper_Space0'], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, '*Paper_Space0'], [70, 0], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 1], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [67, 1], [10, 0], [20, 0], [11, 2], [21, 2], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'OBJECTS'], [0, 'LAYOUT'], [5, 'B1'], [330, 'C0'], [100, 'AcDbPlotSettings'], [1, 'setup'], [100, 'AcDbLayout'], [1, 'Front'], [71, 2], [330, 'A1'],
+    [0, 'LAYOUT'], [5, 'B2'], [330, 'C0'], [100, 'AcDbLayout'], [1, 'Cover'], [71, 1], [330, 'A2'], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(lay.layouts.map((l) => l.name), ['Cover', 'Front']);
+});
 test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {
   const texts = [], vps = [];
   for (let k = 0; k < 300; k++) texts.push([0, 'MTEXT'], [8, '0'], [10, k], [20, 0], [40, 1], [41, 30], [71, 1], [1, `t${k} ${'word '.repeat(400).trim()}`]);
