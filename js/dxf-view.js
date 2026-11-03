@@ -1,14 +1,15 @@
 // A 2D DXF drawing (js/dxf.js parseDXF) on its own canvas over the stage
-// (plan feature 23): the paper background of the 3D line styles, every line
-// 1 px at any zoom, native text; wheel zooms toward the pointer, a drag pans,
-// two fingers pinch, a double click fits. A click selects the LAYER of the
-// nearest line (the selected layer in the 3D paper selection colour and 1 px
-// wider, the others faded); hovering shows a layer un-faded and wider.
+// (plan feature 23): the paper background of the 3D line styles, lines 1 px
+// at any zoom (a wide polyline at its width in drawing units, ends flat),
+// native text; wheel zooms toward the pointer, a drag pans, two fingers pinch,
+// a double click fits. A click selects the LAYER of the nearest line, else of
+// the text under it (the selected layer in the 3D paper selection colour and
+// 1 px wider, the others faded); hovering shows a layer un-faded and wider.
 //
-// One Path2D per (layer, colour, fill), built relative to the drawing's
-// extents centre (Canvas paths are float32: a drawing at 10^6 units would
-// jitter when zoomed in), stroked under the view transform with lineWidth =
-// 1 / scale. Uses the DOM (a canvas); no 3D renderer.
+// One Path2D per (layer, colour, fill, dash, weight, width, even-odd hatch),
+// built relative to the drawing's extents centre (Canvas paths are float32: a
+// drawing at 10^6 units would jitter when zoomed in), stroked under the view
+// transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
 import { onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
@@ -18,6 +19,7 @@ import { unitWord } from './units.js';
 const SELECTED = PAPER_EDGES.selected[0];
 const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
+const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
 
 export function createDxfView(canvas, drawing, cb = {}) {
   const ctx = canvas.getContext('2d');
@@ -30,6 +32,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // circle (its points all within 1 % of one distance from their mean)
   const snaps = [];
   for (const p of drawing.paths) {
+    if (p.outline) continue; // (a wide polyline's outline: its corners are not its ends)
     const n = p.pts.length / 2;
     for (let i = 0; i < n; i++) {
       snaps.push([p.pts[i * 2] - o[0], p.pts[i * 2 + 1] - o[1], 'end', p.layer]);
@@ -53,17 +56,32 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
-    const key = `${p.layer}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}`;
+    const key = `${p.layer}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
     let g = groups.get(key);
     // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
     // drawing units (it scales with the zoom, as on paper)
-    if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, path: new Path2D(), points: [] }; groups.set(key, g); }
+    if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, path: new Path2D(), points: [] }; groups.set(key, g); }
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
     g.path.moveTo(p.pts[0] - o[0], p.pts[1] - o[1]);
     for (let k = 2; k < p.pts.length; k += 2) g.path.lineTo(p.pts[k] - o[0], p.pts[k + 1] - o[1]);
     if (p.closed) g.path.closePath();
   }
   const css = () => [canvas.clientWidth || 1, canvas.clientHeight || 1];
+
+  // a text's lines as drawn: an MTEXT with a reference width wrapped at it by the font's measure
+  // (js/dxf.js wrapLines), once per text -- what is drawn and what a click finds
+  const wrapped = new WeakMap();
+  const linesOf = (t) => {
+    if (!(t.mtext && t.wrap > 0)) return t.text.split('\n');
+    let w = wrapped.get(t);
+    if (!w) {
+      ctx.save(); ctx.font = `${t.h}px sans-serif`;
+      w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.widthFactor || 1), t.wrap);
+      ctx.restore();
+      wrapped.set(t, w);
+    }
+    return w;
+  };
 
   function fit() {
     const [w, h] = css();
@@ -95,9 +113,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (st.off.has(g.layer)) continue;
       const hot = g.layer === sel || g.layer === st.hover;
       const col = g.layer === sel ? SELECTED : sel && g.layer !== st.hover ? FADED : g.colour;
-      if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path); ctx.globalAlpha = 1; }
+      if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col;
       ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
+      // a wide polyline ends flat and meets mitred, as on paper (rounded, it reached half its width
+      // past each end); a hairline stays round
+      const wide = g.width > (g.px + (hot ? 1 : 0)) / st.s;
+      ctx.lineCap = wide ? 'butt' : 'round';
+      ctx.lineJoin = wide ? 'miter' : 'round';
       // a line type's dashes are drawing units (under the transform): they
       // scale with the zoom, as on paper; too fine to see, drawn solid
       ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
@@ -113,7 +136,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     for (const t of drawing.texts) {
       if (st.off.has(t.layer)) continue;
       const px = t.h * st.s;
-      if (px < 3) continue; // too small to read: left out
+      if (px < MIN_TEXT_PX) continue; // too small to read: left out
       ctx.save();
       // (a text seen through a layout viewport, clipped to its frame: js/dxf.js)
       if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
@@ -124,9 +147,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
       ctx.font = `${t.h}px sans-serif`;
       ctx.textAlign = t.align;
       // (an MTEXT with a reference width wraps at it, measured in the font -- js/dxf.js wrapLines;
-      // made once per text, as the font's width does not change with the zoom)
-      if (t.mtext && t.wrap > 0 && !t.wrapped) t.wrapped = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.widthFactor || 1), t.wrap);
-      const lines = t.wrapped || t.text.split('\n');
+      // made once per text, as the font's width does not change with the zoom; kept here, not in
+      // the drawing)
+      const lines = linesOf(t);
       const lh = t.h * 1.4;
       // aligned / fit (js/dxf.js): the text fitted to its baseline's length -- aligned in both
       // directions, fit in width only
@@ -244,9 +267,12 @@ export function createDxfView(canvas, drawing, cb = {}) {
     if (best !== null) return best;
     // else a text under the point (inside its box, as the extents take it): a layer only texts
     // use could not be picked
+    // (the box drawn: the text's measured lines, cut to its viewport's frame, and only when it is
+    // drawn at all -- the estimate's box, uncut, picked a layer from empty sheet past a frame)
     for (const t of drawing.texts) {
-      if (st.off.has(t.layer)) continue;
-      const c = textCorners(t).map(([x, y]) => [x - o[0], y - o[1]]);
+      if (st.off.has(t.layer) || t.h * st.s < MIN_TEXT_PX) continue;
+      if (t.clip && !(ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3])) continue;
+      const c = textCorners(t, linesOf(t)).map(([x, y]) => [x - o[0], y - o[1]]);
       // the corners are bottom-left, bottom-right, top-left, top-right: inside when on one side of
       // each edge of the quad taken in order
       const q = [c[0], c[1], c[3], c[2]];

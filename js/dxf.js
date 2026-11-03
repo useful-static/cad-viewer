@@ -1,13 +1,17 @@
 // 2D DXF drawings (plan feature 23; feature review item 23): a group-code
 // parser, ASCII or binary, model space only (paper-space entities are
 // counted, not drawn), flattened to what a 2D canvas strokes:
-//   { units, sourceUnits, layers: [{ name, colour, on }], extents, paperSpace,
-//     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, width? }],
+//   { units, insunits, layers: [{ name, colour, on }], extents, paperSpace,
+//     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, dash, weight, ltype, width?,
+//               point?, outline?, evenodd?, frame? }],
 //     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?,
 //               widthFactor?, oblique?, wrap?, clip? }],
 //     layouts: [{ name, paths, texts, extents }], notDrawn: { KIND: count } }
-//   (a path's width: a polyline's, in drawing units -- a tapering one is its line plus filled
-//   outlines; mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text,
+//   (a path's dash: its line type's pattern in drawing units, or null; weight: its line weight in
+//   mm, or null; ltype: the line type's name; width: a polyline's, in drawing units -- a tapering
+//   one, or one through a stretch, is its line plus filled outlines (outline: true, not a shape of
+//   its own); point: a POINT; evenodd: one hatch's loops, filled together even-odd; frame: a layout
+//   viewport's frame. mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text,
 //   or one in a mirroring block; widthFactor: its width x that, its 41 and its block's stretch
 //   along it; oblique: its slant in radians; wrap: an MTEXT's reference width; clip: a layout
 //   viewport's frame [x0, y0, x1, y1] it is cut to. h, fit and wrap are lengths: TEXT_LENGTHS)
@@ -365,7 +369,7 @@ export function parseDXF(s) {
   untabled(out.texts);
   for (const l of layouts) { untabled(l.paths); untabled(l.texts); }
   const u = UNITS[insunits];
-  return { units: u ? u[0] : null, mmPerUnit: u ? u[1] : null, insunits,
+  return { units: u ? u[0] : null, insunits,
     layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts, notDrawn };
 }
 
@@ -609,17 +613,31 @@ function emit(recs, M, byBlock, depth, ctx) {
     const sty = { dash: pat ? pat.map((x) => x * k) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
     const O = mul(M, ocs(r));
     // (width: a polyline's width in its own units, scaled by the transform into drawing units)
-    const path = (pts, closed = false, fill = false, width = 0) => {
+    // (extra: outline -- a wide polyline's filled outline, not a shape of its own: not counted as
+    // one, not snapped to; evenodd -- one hatch's loops, filled together even-odd)
+    const path = (pts, closed = false, fill = false, width = 0, extra = null) => {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
       const w = width > 0 ? width * Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) : 0;
-      ctx.add({ layer, colour, ...sty, pts: f, closed, fill, ...(w > 0 ? { width: w } : {}) });
+      ctx.add({ layer, colour, ...sty, pts: f, closed, fill, ...(w > 0 ? { width: w } : {}), ...extra });
     };
     // a polyline with its widths (widthsOf): one width, stroked at it; else its line (1 px: what a
     // click and a snap find) and each wide segment's outline, filled
+    // (one width through a transform that is not a turn and a uniform scale -- a block stretched
+    // 4 x 1 -- is no longer one width: drawn as its outlines, through the transform exactly, as a
+    // tapering one is; stroked at sqrt|det| it was 4 wide where it is 8)
+    // (its axes the same length and square to each other)
+    const ax2 = O[0] * O[0] + O[1] * O[1], ay2 = O[2] * O[2] + O[3] * O[3];
+    const conformal = Math.abs(ax2 - ay2) <= 1e-9 * (ax2 + ay2) && Math.abs(O[0] * O[2] + O[1] * O[3]) <= 1e-9 * (ax2 + ay2);
     const drawWide = (sh) => {
-      path(sh.pts, sh.closed, false, sh.width || 0);
-      if (sh.outlines) for (const o of sh.outlines) if (o.every(Number.isFinite)) path(o, true, true);
+      let outlines = sh.outlines, width = sh.width || 0;
+      if (width && !conformal && sh.src) {
+        const { xs, ys, bul, closed } = sh.src, w = new Array(xs.length).fill(width);
+        outlines = taperOutlines(xs, ys, bul, w, w, closed);
+        width = 0;
+      }
+      path(sh.pts, sh.closed, false, width);
+      if (outlines) for (const o of outlines) if (o.every(Number.isFinite)) path(o, true, true, 0, { outline: true });
     };
     switch (r.type) {
       case 'LINE': {
@@ -726,7 +744,13 @@ function emit(recs, M, byBlock, depth, ctx) {
         const solid = num(r, 70) === 1;
         // (its loops made once per entity, as a polyline's points are)
         if (!r.loops) r.loops = hatchLoops(r);
-        for (const loop of r.loops) path(loop, true, solid);
+        // A solid fill of several loops is filled as one, even-odd: its islands left empty (filled
+        // with the drawing's other fills, non-zero, an island wound as its outer loop was filled --
+        // 82 of 901 at hand). Style "ignore islands" (75 = 2) fills every loop, with the others
+        if (solid && r.loops.length > 1 && num(r, 75, 0) !== 2) {
+          const id = (ctx.hatches = (ctx.hatches || 0) + 1);
+          for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id });
+        } else for (const loop of r.loops) path(loop, true, solid);
         break;
       }
       case '3DFACE': {
@@ -831,7 +855,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         // it (sy, the area scale over sx): taken along the block's axes, a text turned 90° in a
         // block stretched in x was widened instead of made taller
         {
-          const det = P[0] * P[3] - P[1] * P[2];
+          // (mirrored by its extrusion too: an MTEXT's points are in world coordinates, but it lies
+          // in its OCS plane -- one seen from -Z, as MIRROR with MIRRTEXT writes it, drew unmirrored)
+          const det = O[0] * O[3] - O[1] * O[2];
           const dl = Math.hypot(dv[0], dv[1]) || 1;
           const sx = Math.hypot(F[0] * dv[0] + F[2] * dv[1], F[1] * dv[0] + F[3] * dv[1]) / dl;
           const sy = sx > 0 ? Math.abs(F[0] * F[3] - F[1] * F[2]) / sx : Math.hypot(F[2], F[3]);
@@ -851,7 +877,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         // were counted "not drawn", while the same drawing's DWG drew them)
         const q = blockRef(r);
         const b = ctx.blocks.get(get(q, 2, ''));
-        if (!b) { if (r.type === 'ACAD_TABLE') ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1; break; }
+        // (a reference to a block not in the file draws nothing: counted, as a table's was alone)
+        if (!b) { ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1; break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -887,15 +914,15 @@ function emit(recs, M, byBlock, depth, ctx) {
         break;
       }
       default:
-        // a kind the drawing does not draw, counted by name so the page can say so (MULTILEADER,
-        // WIPEOUT, MLINE, TOLERANCE... were left out without a word)
-        if (NOT_DRAWN.has(r.type)) ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1;
+        // any other kind is one the drawing does not draw, counted by name so the page can say so
+        // (a closed list of names missed custom kinds: AutoCAD Mechanical's, an AEC wall)
+        if (!STRUCTURE.has(r.type)) ctx.notDrawn[r.type] = (ctx.notDrawn[r.type] || 0) + 1;
     }
   }
 }
-// entity kinds a drawing holds that this does not draw (structure -- VERTEX, SEQEND, ATTDEF,
-// VIEWPORT -- is not counted). The one list: js/dwg.js names a DWG's of these kinds from it
-export const NOT_DRAWN = new Set(['MULTILEADER', 'MLEADER', 'WIPEOUT', 'MLINE', 'TOLERANCE', 'IMAGE', 'OLE2FRAME', 'OLEFRAME', '3DSOLID', 'BODY', 'REGION', 'SURFACE', 'MESH', 'RAY', 'XLINE', 'SHAPE', 'ACAD_PROXY_ENTITY', 'HELIX', 'UNDERLAY', 'PDFUNDERLAY', 'PDFREFERENCE', 'DWFUNDERLAY', 'DGNUNDERLAY']);
+// entity records that are structure, not something drawn (never counted as "not drawn"). The one
+// list: js/dwg.js passes on every other entity kind it does not decode, by name
+export const STRUCTURE = new Set(['VERTEX', 'SEQEND', 'ATTDEF', 'VIEWPORT', 'BLOCK', 'ENDBLK']);
 
 // an arc as points: radius r about (cx, cy) from a0 to a1 (radians, CCW)
 function arcPts(cx, cy, r, a0, a1) {
@@ -914,7 +941,7 @@ function widthsOf(xs, ys, bul, w0, w1, closed) {
   const segs = closed ? xs.length : xs.length - 1;
   let one = segs > 0 ? w0[0] : 0, same = true;
   for (let i = 0; i < segs && same; i++) same = w0[i] === one && w1[i] === one;
-  if (same) return Number.isFinite(one) && one > 0 ? { width: one } : {};
+  if (same) return Number.isFinite(one) && one > 0 ? { width: one, src: { xs, ys, bul, closed } } : {};
   return { outlines: taperOutlines(xs, ys, bul, w0, w1, closed) };
 }
 
@@ -1131,7 +1158,7 @@ export function mtextPlain(s, codepage = 'windows-1252') {
     const k = s[i + 1];
     if (k === '\\' || k === '{' || k === '}') { out += k; i++; continue; }
     if (k === 'P') { out += '\n'; i++; continue; }
-    if (k === '~') { out += ' '; i++; continue; }
+    if (k === '~') { out += ' '; i++; continue; } // (non-breaking: the wrap does not break there)
     if ('LlOoKk'.includes(k)) { i++; continue; }
     if ('ACcFfHhQTWp'.includes(k)) {
       const e = endOf(i + 2);
@@ -1253,7 +1280,18 @@ export const drawsNothing = (d) => !sheetDraws(d) && !d.layouts.some(sheetDraws)
 // growing line at every word was quadratic, and one 600 kB paragraph froze the page for minutes
 // A line breaks at a space, or between two CJK characters (written without spaces: a Chinese or
 // Japanese paragraph never wrapped); the spaces at a break are dropped
-const WRAP_TOKEN = /[⺀-鿿가-힯豈-﫿＀-￯]|[^ ⺀-鿿가-힯豈-﫿＀-￯]+| +/g;
+// (the ideographic space U+3000 is a space; a closing mark -- 、。，」） and the like -- never starts a
+// line: it stays with the character before it)
+const WRAP_TOKEN = /[⺀-⿿、-鿿가-힯豈-﫿＀-￯]|[^ 　⺀-⿿、-鿿가-힯豈-﫿＀-￯]+|[ 　]+/g;
+const NO_LINE_START = /^[、。，．：；？！）」』】〕〉》ー々ゝゞ・…‥〜％，．：；？！）］｝]$/u;
+const wrapTokens = (line) => {
+  const out = [];
+  for (const tok of line.match(WRAP_TOKEN) || []) {
+    const prev = out.length ? out[out.length - 1] : null;
+    if (prev !== null && NO_LINE_START.test(tok) && !/^[ 　]/.test(prev)) out[out.length - 1] = prev + tok; else out.push(tok);
+  }
+  return out;
+};
 export function wrapLines(lines, width, max) {
   const out = [];
   const seen = new Map();
@@ -1261,8 +1299,8 @@ export function wrapLines(lines, width, max) {
   for (const line of lines) {
     if (width(line) <= max) { out.push(line); continue; }
     let cur = '', cw = 0, pend = '', pw = 0; // pend: spaces after cur, kept only if a token follows
-    for (const tok of line.match(WRAP_TOKEN) || []) {
-      if (tok[0] === ' ') { if (cur) { pend += tok; pw += w(tok); } continue; }
+    for (const tok of wrapTokens(line)) {
+      if (tok[0] === ' ' || tok[0] === '　') { if (cur) { pend += tok; pw += w(tok); } continue; }
       const tw = w(tok);
       if (cur && cw + pw + tw > max) { out.push(cur); cur = tok; cw = tw; } else { cur += pend + tok; cw += pw + tw; }
       pend = ''; pw = 0;
@@ -1276,10 +1314,26 @@ export function wrapLines(lines, width, max) {
 // fit, else 0.6 of a height per character of the longest line), shifted by its alignment and
 // vertical alignment, turned by its rotation. The extents took every text as left-aligned on its
 // baseline, one line high: a 20-line MTEXT drawn below its point was cut off by Fit
-export function textCorners(t) {
+// An MTEXT's lines wrapped by the estimate (a character 0.6 of a height): at most `chars`
+// characters a line. The ratio is the same at any scale, so a text seen through many viewports is
+// wrapped once (each wrapped it again: 1,400 viewports of one long MTEXT reached the worker's 60 s)
+const WRAP_CACHE = new Map();
+function estimatedWrap(text, chars) {
+  const key = `${chars}\u0000${text}`;
+  let w = WRAP_CACHE.get(key);
+  if (!w) {
+    w = wrapLines(text.split('\n'), (l) => l.length, chars);
+    if (WRAP_CACHE.size >= 256) WRAP_CACHE.delete(WRAP_CACHE.keys().next().value);
+    WRAP_CACHE.set(key, w);
+  }
+  return w;
+}
+
+// (drawn: its lines as the view drew them, when it has; else estimated)
+export function textCorners(t, drawn = null) {
   const per = t.h * 0.6 * (t.widthFactor || 1); // (a character's width, estimated)
   // an MTEXT with a reference width wraps at it (as the view does, by measure): its lines estimated
-  const lines = t.mtext && t.wrap > 0 ? wrapLines(t.text.split('\n'), (l) => l.length * per, t.wrap) : t.text.split('\n');
+  const lines = drawn || (t.mtext && t.wrap > 0 ? estimatedWrap(t.text, t.wrap / per) : t.text.split('\n'));
   const lh = t.h * 1.4;
   // (the longest line by a loop: spread into Math.max, 300k lines overflowed the stack)
   let longest = 0;

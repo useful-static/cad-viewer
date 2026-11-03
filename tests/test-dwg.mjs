@@ -356,6 +356,28 @@ t('a class list numbered with a gap (a record misread) is a failed check, not a 
   assert.ok(short.f.some((x) => x.startsWith('classes reach the stated last class number')), short.f.join('; '));
 });
 
+t('a class record\'s R2004+ tail is five BLs: a version over 255 does not throw the next record off', () => {
+  // BL 0 (10), then a 32-bit BL (00 + 4 bytes) of 0x1234 as the version, BL 0 x 3, then the marker 1
+  const bl32 = (n) => `00${[0, 1, 2, 3].map((k) => b8((n >>> (8 * k)) & 255)).join('')}`;
+  for (const v of [18, 21, 24, 32]) {
+    const r = new _internal.Bits(bits(`10 ${bl32(0x1234)} 10 10 10 1`), v, 0);
+    _internal.classTail(r, v);
+    assert.equal(r.B(), 1, `R${v}: the bit after the tail`);
+  }
+});
+t('an entity kind not decoded passes through the adapter by name and layer, and is counted as not drawn', () => {
+  // the objects readDWG gives: model space, a layer, and one head-only entity of a custom class
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [3] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: 'WALLS', colour: { aci: 7 }, flags: 0 } }],
+    [3, { handle: 3, name: 'AEC_WALL', headOnly: true, e: { entmode: 2, owner: 1, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 } }],
+  ]);
+  const P = dwgToPairs({ objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 });
+  const k = P.findIndex(([c, v]) => c === 0 && v === 'AEC_WALL');
+  assert.ok(k >= 0, 'named');
+  assert.deepEqual(parseDXF(P).notDrawn, { AEC_WALL: 1 });
+});
+
 // --- an entity kind not decoded reaches the page as "not drawn", by its common part (DWG_LEADER_FILE:
 // an R14 / R2000 drawing holding leaders; their count and the page's "not drawn" must agree) ---
 {

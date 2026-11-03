@@ -88,7 +88,7 @@ test('the hatch is filled; the ellipse spans 20 x 10; the spline is a line', () 
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   assert.deepEqual(d.texts.map((t) => t.text), ['Hello Ø5', 'Line1\nLine2']);
-  assert.equal(mtextPlain('\\A1;{\\H2.5x;big}\\~x'), 'big x');
+  assert.equal(mtextPlain('\\A1;{\\H2.5x;big}\\~x'), 'big x');
   // (the spline's end is evaluated a hair inside its last knot)
   assert.ok(Math.abs(d.extents.min[0] + 11) < 1e-6 && Math.abs(d.extents.max[1] - 210) < 1e-6, JSON.stringify(d.extents));
 });
@@ -307,13 +307,18 @@ test('a clockwise hatch ELLIPSE edge, 0° to 90° stored, is the quarter from 36
 test('MTEXT\'s point and direction are WORLD coordinates (extrusion 0,0,-1 drew it mirrored); TEXT\'s are its own', () => {
   const mt = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 50], [20, 0], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'A']])).texts[0];
   assert.deepEqual([mt.x, mt.y], [50, 0]);
-  // (with no 11, its 50 is an angle in the OCS, as ezdxf maps it: OCS x runs along world -x here)
-  assert.ok(Math.abs(Math.abs(mt.rot) - Math.PI) < 1e-9, `rot ${mt.rot}`);
+  // (with no 11, its 50 is an angle in the OCS, as ezdxf maps it: OCS x runs along world -x here;
+  // seen from -Z it is mirrored: read backward, as the TEXT below -- it was drawn turned 180°)
+  assert.ok(mt.mirrorX && Math.abs(Math.sin(mt.rot)) < 1e-9 && Math.cos(mt.rot) > 0, `rot ${mt.rot}, mirrorX ${mt.mirrorX}`);
+  // with a direction (1, 0): mirrored, upside down along +x (mirrorX with a half turn)
+  const mh = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 50], [20, 0], [11, 1], [21, 0], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'H']])).texts[0];
+  assert.ok(mh.mirrorX && Math.abs(Math.cos(mh.rot) + 1) < 1e-9, `rot ${mh.rot}, mirrorX ${mh.mirrorX}`);
   const md = parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 50], [20, 0], [11, 0], [21, 1], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'B']])).texts[0];
-  assert.ok(Math.abs(md.rot - Math.PI / 2) < 1e-9, `direction rot ${md.rot}`);
+  assert.ok(md.mirrorX && Math.abs(md.rot + Math.PI / 2) < 1e-9, `direction rot ${md.rot}`);
   // a TEXT with the same extrusion: its point is in the OCS, whose x runs along world -x
   const tx = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 50], [20, 0], [40, 2], [210, 0], [220, 0], [230, -1], [1, 'C']])).texts[0];
   assert.deepEqual([tx.x, tx.y], [-50, 0]);
+  assert.deepEqual([tx.mirrorX, Math.round(Math.cos(tx.rot))], [mt.mirrorX, Math.round(Math.cos(mt.rot))], 'the MTEXT and the TEXT alike');
 });
 test('an INSERT\'s ATTRIBs are drawn as text (a title block\'s values), an invisible one is not; 3DFACE draws its visible edges', () => {
   const d = parseDXF(ents(
@@ -571,6 +576,43 @@ test('round 15: a block stretch taken along the text; a viewport scales width an
   assert.equal(T.paths.length, 2, 'the table and the arc dimension each draw their block');
   assert.deepEqual([...T.paths[0].pts], [5, 5, 6, 5]);
   assert.deepEqual(T.notDrawn, {});
+});
+test('round 16: one width through a stretch; outlines apart; hatch islands even-odd; a missing block counted; wrap tokens', () => {
+  const blk = (ent) => [[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], ...ent, [0, 'ENDBLK'], [0, 'ENDSEC']];
+  const ins = (ent, g) => parseDXF(dxf([...blk(ent), [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], ...g, [0, 'ENDSEC'], [0, 'EOF']]));
+  // a vertical polyline 2 wide in a block stretched 4 x 1: 8 wide across (in x), as a taper is
+  const vert = (w0, w1) => [[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [10, 0], [20, 0], [40, w0], [41, w1], [10, 0], [20, 10], [40, w0], [41, w1]];
+  const span = (d) => { const o = d.paths.find((p) => p.outline); const xs = [...o.pts].filter((_, k) => k % 2 === 0); return Math.max(...xs) - Math.min(...xs); };
+  assert.ok(Math.abs(span(ins(vert(2, 2), [[41, 4]])) - 8) < 1e-9, 'one width');
+  assert.ok(Math.abs(span(ins(vert(2, 2.0001), [[41, 4]])) - 8.0004) < 1e-6, 'a taper');
+  // a uniform scale keeps one width a stroke, scaled
+  const u = ins(vert(2, 2), [[41, 3], [42, 3]]);
+  assert.ok(!u.paths.some((p) => p.outline) && Math.abs(u.paths[0].width - 6) < 1e-9);
+  // a solid hatch with an island: its loops share one even-odd id; one loop: none
+  const H = (loops) => [[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [75, 0], [91, loops.length], ...loops.flatMap((L) => [[92, 2], [72, 0], [73, 1], [93, L.length / 2], ...L.flatMap((v, k) => [[k % 2 ? 20 : 10, v]])])];
+  const sq = (a, b) => [a, a, b, a, b, b, a, b];
+  const h = parseDXF(ents(H([sq(0, 10), sq(3, 7)])));
+  assert.equal(h.paths.length, 2);
+  assert.ok(h.paths[0].evenodd && h.paths[0].evenodd === h.paths[1].evenodd);
+  assert.ok(!parseDXF(ents(H([sq(0, 10)]))).paths[0].evenodd);
+  // an INSERT of a block not in the file is counted, as a table's is
+  assert.deepEqual(parseDXF(ents([[0, 'INSERT'], [8, '0'], [2, 'GONE'], [10, 0], [20, 0]])).notDrawn, { INSERT: 1 });
+  // a custom kind is counted by its name
+  assert.deepEqual(parseDXF(ents([[0, 'AEC_WALL'], [8, '0']])).notDrawn, { AEC_WALL: 1 });
+  // the ideographic space is a space; a closing mark stays with the character before it
+  assert.deepEqual(wrapLines(['平面図　配置図'], (l) => l.length, 3), ['平面図', '配置図']);
+  assert.deepEqual(wrapLines(['あいう。えお'], (l) => l.length, 3), ['あい', 'う。え', 'お']);
+  // a non-breaking space does not break
+  assert.deepEqual(wrapLines(['Ø 12 x'], (l) => l.length, 4), ['Ø 12', 'x']);
+});
+test('a long MTEXT through 1,000 layout viewports is wrapped once, not once a viewport', () => {
+  const vps = [];
+  for (let k = 0; k < 1000; k++) vps.push([0, 'VIEWPORT'], [8, '0'], [67, 1], [10, k * 20], [20, 5], [40, 10], [41, 10], [69, k + 2], [12, 0], [22, 0], [45, 10]);
+  const G = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [41, 30], [71, 1], [1, 'word '.repeat(40000).trim()],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210], ...vps, [0, 'ENDSEC'], [0, 'EOF']];
+  const t0 = Date.now();
+  parseDXF(dxf(G));
+  assert.ok(Date.now() - t0 < 8000, `${Date.now() - t0} ms`);
 });
 test('round 15: an escaped stack, a byte-order mark under a named code page, a linear wrap, an oblique box', () => {
   assert.equal(mtextPlain('5\\S+0.1\\U+00B0^-0.1\\U+00B0;'), '5 +0.1° -0.1°');

@@ -479,7 +479,6 @@ function validateHeader(h) {
       faceEnd = m.faceStart + m.faceCount;
     }
   }
-  const seen = new Set();
   // each body is named by at most one tree node, once (the encoder writes each once): a tree
   // naming one body a million times is 3 KB gzipped and built a million rows on the page's thread
   const named = new Uint8Array(n);
@@ -494,9 +493,7 @@ function validateHeader(h) {
       if (named[i]) bad(`assembly tree names mesh ${i} more than once`);
       named[i] = 1;
     }
-    if (seen.has(node)) bad('assembly tree node repeated');
-    seen.add(node);
-    for (const c of node.children) walk(c, depth + 1);
+    for (const c of node.children) walk(c, depth + 1); // (a header from JSON.parse shares no node)
   };
   walk(h.root, 0);
 }

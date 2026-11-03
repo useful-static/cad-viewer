@@ -13,7 +13,7 @@
 //
 // No other reader's code was consulted: the clean-room rule of the project.
 
-import { caret, valueKind, aciColour, NOT_DRAWN } from './dxf.js';
+import { caret, valueKind, aciColour, STRUCTURE } from './dxf.js';
 import { crc32 } from './crc32.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
 
@@ -607,6 +607,11 @@ function container21(b, chk) {
 // example) has none
 const sizeHigh = (v, maint) => (v >= 24 && maint > 3) || v >= 27;
 
+// a class record's R2004+ tail: instance count, version, maintenance release, two unknowns
+function classTail(r, v) {
+  if (v >= 18) { r.BL(); r.BL(); r.BL(); r.BL(); r.BL(); }
+}
+
 function readClasses(s, v, maint, chk) {
   const b = s.b, at = s.at;
   chk.ok('classes sentinel', isSN(b, at, SN.classes));
@@ -636,7 +641,7 @@ function readClasses(s, v, maint, chk) {
     // disagree: read as BS, a class whose version needs more than 8 bits threw every later record
     // off -- an R2004, an R2010, an R2013 and an R2018 drawing at hand lost 10 to 34 classes, and
     // their objects their names. BS and BL agree on a value under 256, so no file needs BS)
-    if (v >= 18) { r.BL(); r.BL(); r.BL(); r.BL(); r.BL(); }
+    classTail(r, v);
     classes.set(num, { num, flags, app, cpp, dxf, zombie, item });
     if (num >= maxClass || classes.size > 10000) break;
   }
@@ -802,7 +807,7 @@ const FIXED = { 1: 'TEXT', 2: 'ATTRIB', 3: 'ATTDEF', 4: 'BLOCK', 5: 'ENDBLK', 6:
   27: 'POINT', 28: '3DFACE', 29: 'POLYLINE', 30: 'POLYLINE', 31: 'SOLID', 32: 'TRACE', 33: 'SHAPE', 34: 'VIEWPORT', 35: 'ELLIPSE', 36: 'SPLINE', 37: 'REGION', 38: '3DSOLID', 39: 'BODY', 40: 'RAY', 41: 'XLINE',
   42: 'DICTIONARY', 44: 'MTEXT', 45: 'LEADER', 46: 'TOLERANCE', 47: 'MLINE', 48: 'BLOCK_CONTROL', 49: 'BLOCK_RECORD', 50: 'LAYER_CONTROL', 51: 'LAYER', 52: 'STYLE_CONTROL', 53: 'STYLE',
   56: 'LTYPE_CONTROL', 57: 'LTYPE', 60: 'VIEW_CONTROL', 61: 'VIEW', 62: 'UCS_CONTROL', 63: 'UCS', 64: 'VPORT_CONTROL', 65: 'VPORT', 66: 'APPID_CONTROL', 67: 'APPID', 68: 'DIMSTYLE_CONTROL', 69: 'DIMSTYLE',
-  70: 'VPENTHDR_CONTROL', 71: 'VPENTHDR', 72: 'GROUP', 73: 'MLINESTYLE', 74: 'OLE2FRAME', 76: 'LONG_TRANSACTION', 77: 'LWPOLYLINE', 78: 'HATCH', 79: 'XRECORD', 80: 'ACDBPLACEHOLDER', 81: 'VBA_PROJECT', 82: 'LAYOUT' };
+  70: 'VPENTHDR_CONTROL', 71: 'VPENTHDR', 72: 'GROUP', 73: 'MLINESTYLE', 74: 'OLE2FRAME', 76: 'LONG_TRANSACTION', 77: 'LWPOLYLINE', 78: 'HATCH', 79: 'XRECORD', 80: 'ACDBPLACEHOLDER', 81: 'VBA_PROJECT', 82: 'LAYOUT', 498: 'ACAD_PROXY_ENTITY', 499: 'ACAD_PROXY_OBJECT' };
 const LW = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
 const lineweight = (i) => (i === 29 ? -1 : i === 30 ? -2 : i === 31 ? -3 : LW[i] ?? -3);
 
@@ -921,6 +926,11 @@ class ObjectReader {
     if (o.xdic) h.H();
   }
 
+  isEntityType(type) {
+    if (type >= 500) return (this.classes.get(type) || {}).item === 0x1f2;
+    return ENT.has(type) || type === 74 || type === 498; // (74: OLE2FRAME, an entity outside ENT's run)
+  }
+
   read(loc) {
     const o = this.open(loc);
     if (!o) return null;
@@ -930,9 +940,12 @@ class ObjectReader {
       // common data and handles (its owner and layer), so the adapter can name it and the page
       // count it as not drawn -- a DWG's leaders and solids vanished without a word, where the
       // same drawing's DXF listed them. Only what every entity shares is read: its own data is
-      // passed over
-      if (HEAD_ONLY.has(o.name)) {
-        try { this.entity(o); this.entityHandles(o); o.headOnly = true; } catch { delete o.e; }
+      // passed over. An entity is a fixed type the spec lists as one, the proxy entity, or a class
+      // whose item id says it makes entities (0x1F2): a custom kind (AutoCAD Mechanical's, an
+      // AEC wall) and an R2010+ table vanished without a count, while their DXF counted them
+      if (this.isEntityType(o.type) && !STRUCTURE.has(o.name)) {
+        // (a common part that does not read is an error the checks count, not a silent loss)
+        try { this.entity(o); this.entityHandles(o); o.headOnly = true; } catch (err) { delete o.e; o.error = `common entity part: ${String(err.message || err)}`; this.chk.ok(`decode ${o.name}`, false); }
       }
       return o;
     }
@@ -949,10 +962,6 @@ class ObjectReader {
     return o;
   }
 }
-// entity kinds not decoded whose common entity part is read (DWG.read): the kinds js/dxf.js
-// counts as not drawn (its NOT_DRAWN, the one list: kept apart here, the two already differed),
-// and LEADER, which it draws from a DXF (its vertices are not decoded here)
-const HEAD_ONLY = new Set([...NOT_DRAWN, 'LEADER']);
 const ENTITY_NAMES = new Set(['TEXT', 'ATTRIB', 'ATTDEF', 'BLOCK', 'ENDBLK', 'SEQEND', 'INSERT', 'MINSERT', 'VERTEX', 'POLYLINE', 'ARC', 'CIRCLE', 'LINE', 'DIMENSION', 'POINT', 'SOLID', 'TRACE',
   'ELLIPSE', 'SPLINE', 'MTEXT', 'LWPOLYLINE', 'HATCH', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', '3DFACE']);
 
@@ -1547,7 +1556,9 @@ export function dwgToPairs(dwg) {
           if (!vx || vx.name !== 'VERTEX' || !vx.d) continue;
           const pt = vx.d.pt || [0, 0, 0]; // a PFACE face record has no point (DXF writes 0,0,0)
           put(0, 'VERTEX'); put(5, hex(vh)); put(8, name(vx.e.layer) || '0'); put(10, pt[0]); put(20, pt[1]); put(30, pt[2]);
-          if (vx.d.sw || vx.d.ew) { put(40, vx.d.sw || 0); put(41, vx.d.ew || 0); }
+          // (written whenever either it or its polyline has a width: a vertex's 0 left out took the
+          // polyline's default when read, and 36 paths of a drawing at hand drew 1.5 wide)
+          if (vx.d.sw || vx.d.ew || d.sw || d.ew) { put(40, vx.d.sw || 0); put(41, vx.d.ew || 0); }
           if (vx.d.bulge) put(42, vx.d.bulge);
           put(70, vx.d.flags);
           if (vx.d.idx) vx.d.idx.forEach((x, k) => { if (x) put(71 + k, x); });
@@ -1673,7 +1684,7 @@ export function dwgToPairs(dwg) {
 }
 
 // for the tests: the pieces, so each layer can be checked on its own
-export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, readHeader, deRS, checksum04, checksum21, magic };
+export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, classTail, readHeader, deRS, checksum04, checksum21, magic };
 
 // The pairs as DXF text; a string's control characters and carets in DXF's caret notation (a
 // text may hold U+0003; written raw, a line feed would split the pair)

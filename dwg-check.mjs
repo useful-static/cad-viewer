@@ -47,7 +47,8 @@ for (const f of files) {
     // refuses, or that draws nothing, is not "all checks pass"
     try {
       const dr = parseDXF(P);
-      rep.drawn = { paths: dr.paths.length, texts: dr.texts.length, layouts: dr.layouts.length };
+      // (and what it holds that is not drawn, by kind, as the page's info panel says it)
+      rep.drawn = { paths: dr.paths.length, texts: dr.texts.length, layouts: dr.layouts.length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
     if (d.failures.length || rep.drawError) bad++;
@@ -57,7 +58,7 @@ for (const f of files) {
   }
   reports.push(rep);
   if (!json) {
-    console.log(`${f}: ${rep.release || '?'} ${rep.error ? 'ERROR ' + rep.error.split('\n')[0] : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts`}`}`);
+    console.log(`${f}: ${rep.release || '?'} ${rep.error ? 'ERROR ' + rep.error.split('\n')[0] : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
   }
 }
 if (json) console.log(JSON.stringify(reports, null, 1));

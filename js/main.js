@@ -4541,7 +4541,7 @@ function buildLayerList() {
   // (the sheet shown: a layout lists the layers it draws)
   const d = app.dxf.shown || app.dxf.drawing;
   const count = new Map();
-  for (const p of d.paths) count.set(p.layer, (count.get(p.layer) || 0) + 1);
+  for (const p of d.paths) if (!p.outline) count.set(p.layer, (count.get(p.layer) || 0) + 1); // (an outline is its polyline's)
   for (const t of d.texts) count.set(t.layer, (count.get(t.layer) || 0) + 1);
   for (const l of d.layers) {
     if (!count.get(l.name)) continue; // an empty layer: nothing to show or hide
@@ -4595,7 +4595,7 @@ function fillInfo2D(el) {
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
-  row('contents', `${fmtInt(d.paths.length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  row('contents', `${fmtInt(d.paths.filter((p) => !p.outline).length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));
@@ -4607,7 +4607,7 @@ function fillInfo2D(el) {
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
     // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines")
-    const np = d.paths.filter((p) => p.layer === l).length, nt = d.texts.filter((t) => t.layer === l).length;
+    const np = d.paths.filter((p) => p.layer === l && !p.outline).length, nt = d.texts.filter((t) => t.layer === l).length;
     row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
   }
 }
