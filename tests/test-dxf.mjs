@@ -334,6 +334,20 @@ test('TEXT, ATTRIB and MTEXT control codes: %%c %%d %%p %%u %%o %%k %%% %%nnn an
     [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 5], [40, 1], [1, '{\\fArial;45\\U+00B0}\\P%%c3']]));
   assert.deepEqual(d.texts.map((t) => t.text), ['TITLE 90°', '45°\nØ3']);
 });
+test('MTEXT escapes are read in one pass: an escaped backslash or brace is text, not the start of a code', () => {
+  assert.equal(mtextPlain('C:\\\\Projects\\\\A1.dwg'), 'C:\\Projects\\A1.dwg');
+  assert.equal(mtextPlain('C:\\\\Lib\\\\Std'), 'C:\\Lib\\Std');
+  assert.equal(mtextPlain('\\{3\\} holes'), '{3} holes');
+  assert.equal(mtextPlain('typed \\\\U+00B0'), 'typed \\U+00B0', 'an escaped backslash before U+ is not a Unicode escape');
+  assert.equal(mtextPlain('45\\U+00B0 {\\fArial;x}\\Pnext'), '45° x\nnext');
+});
+test('an invisible INSERT of a block that exists draws nothing of the block', () => {
+  const s = dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [8, '0'], [2, 'B'], [70, 0], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [60, 1], [2, 'B'], [10, 0], [20, 0], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 10], [0, 'ENDSEC'], [0, 'EOF']]);
+  const d = parseDXF(s);
+  assert.equal(d.paths.length, 1, 'the visible insert only');
+  assert.deepEqual([...d.paths[0].pts], [0, 10, 5, 10]);
+});
 test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
   const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));
   assert.equal(d.paths.length, 1);

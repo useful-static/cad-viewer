@@ -18,7 +18,7 @@
 //   video(tour)            the tour played and recorded -> bytes, or why not
 //   announce(text)         the live region
 
-import { DEFAULTS, RANGES, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VERSION } from './tour.js';
+import { DEFAULTS, MAX_STEPS, RANGES, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VERSION } from './tour.js';
 
 // what a step keeps when the draft is written: the parser's own field list
 const STEP_KEYS = ['id', ...STEP_FIELDS];
@@ -158,13 +158,21 @@ export function createTourRecorder(api) {
     return s ? stepFromView(s, keep) : null;
   }
 
+  // A step the parser refuses (too many part names, notes) is refused when it is taken, in the
+  // parser's words, not at Save after the work is done
+  function stepOk(s, what) {
+    try { api.validate(JSON.stringify(draftToTour({ ...draft, steps: [s] }))); return true; } catch (e) { note(`${what}: ${e.message.replace(/^.*?step 1 /, 'the step ')}`); return false; }
+  }
+
   el.add.onclick = () => {
     if (!sameModel('added')) return;
+    if (draft.steps.length >= MAX_STEPS) { note(`not added: a tour holds at most ${MAX_STEPS} steps`); return; }
     const prev = draft.steps[draft.sel];
     // (the step before's dimming and timing carry over: its words, id and orbit do not)
     const s = take(prev ? Object.fromEntries(CARRIED_FIELDS.map((k) => [k, prev[k]])) : {});
     if (!s) { note('select parts first to frame them, or choose "this exact view"'); return; }
     if (!draft.steps.length) { draft.model = model(); draft.unit = draft.model ? draft.model.unit : null; }
+    if (!stepOk(s, 'not added')) return;
     draft.steps.splice(draft.sel + 1, 0, s);
     select(draft.sel + 1);
     note(`step ${draft.sel + 1} added: give it a title and a text`);
@@ -176,6 +184,7 @@ export function createTourRecorder(api) {
     if (!old) return;
     const s = take(old);
     if (!s) { note('select parts first to frame them, or choose "this exact view"'); return; }
+    if (!stepOk(s, 'not updated')) return;
     draft.steps[draft.sel] = s;
     renderList();
     note(`step ${draft.sel + 1} now shows the view as it is`);
@@ -250,8 +259,14 @@ export function createTourRecorder(api) {
     draft.loop = tour.loop;
     draft.orient = tour.orient || null;
     draft.steps = tour.steps.map((s) => ({ ...s }));
-    draft.model = model(); // (a tour read back is edited over the model open now)
+    // (a tour read back is edited over the model open now, at the size it was made in: read in
+    // another unit, its steps are not added to or saved until "this file is in" matches -- an
+    // inch tour took mm steps, 25.4 times off one another)
+    const m = model();
     draft.unit = tour.unit || 'mm';
+    draft.model = m && m.unit !== draft.unit
+      ? { key: `${m.key.replace(/@[^@]*$/, '')}@${draft.unit}`, unit: draft.unit, name: `this model read in ${draft.unit} (set "this file is in" to ${draft.unit})` }
+      : m;
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;
     el.mode.value = draft.mode;

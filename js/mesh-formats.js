@@ -1002,20 +1002,30 @@ function mulAffine(a, b) {
 const COMP = { 5120: [Int8Array, 127], 5121: [Uint8Array, 255], 5122: [Int16Array, 32767], 5123: [Uint16Array, 65535], 5125: [Uint32Array, 0], 5126: [Float32Array, 0] };
 const NCOMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 const COMP_NAME = { 5120: 'byte', 5121: 'unsigned byte', 5122: 'short', 5123: 'unsigned short', 5125: 'unsigned int', 5126: 'float' };
-// the accessor types (and component types) each use may have (glTF 2.0 3.7.2.1, with the
-// KHR_mesh_quantization and EXT_mesh_gpu_instancing tables). The caps count an accessor's
-// elements as what its use builds (a vertex, an index, an instance), so a use given another
-// type built count x components: a MAT4 index accessor counted 1.9 M triangles and built 16 times
-// that (825 bytes placed 3 times: 11.1 s and 3.68 GB; placed 5 times, out of memory).
+// The one home of the accessor-type rule: the accessor types and [component type, normalized]
+// pairs each use may have, exactly as the tables list them -- glTF 2.0 3.7.2.1 (POSITION, NORMAL
+// float32; COLOR_n VEC3/VEC4 float32, unorm8, unorm16; indices uint8, uint16, uint32), with the
+// extra types of KHR_mesh_quantization's "Extending Mesh Attributes" table (POSITION every
+// (u)byte/(u)short, normalized or not; NORMAL byte or short normalized) and the
+// EXT_mesh_gpu_instancing attribute table (TRANSLATION and SCALE float only; ROTATION float, byte
+// normalized, short normalized). Normalized: true (must be), false (must not be: a float, glTF
+// 2.0 3.6.2.1, or an integer the table lists plain), null (either). (A byte ROTATION without
+// "normalized" was read as a raw quaternion: a part 16,200 times its size, sheared.)
+// The caps count an accessor's elements as what its use builds (a vertex, an index, an
+// instance), so a use given another type built count x components: a MAT4 index accessor counted
+// 1.9 M triangles and built 16 times that (825 bytes placed 3 times: 11.1 s and 3.68 GB).
+const FLOAT = [5126, false];
 const ACC_USE = {
-  POSITION: [['VEC3'], [5126, 5120, 5121, 5122, 5123]],
-  NORMAL: [['VEC3'], [5126, 5120, 5122]],
-  COLOR_0: [['VEC3', 'VEC4'], [5126, 5121, 5123]],
-  indices: [['SCALAR'], [5121, 5123, 5125]],
-  TRANSLATION: [['VEC3'], [5126, 5120, 5122]],
-  ROTATION: [['VEC4'], [5126, 5120, 5122]],
-  SCALE: [['VEC3'], [5126, 5120, 5122]],
+  POSITION: [['VEC3'], [FLOAT, [5120, null], [5121, null], [5122, null], [5123, null]]],
+  NORMAL: [['VEC3'], [FLOAT, [5120, true], [5122, true]]],
+  COLOR_0: [['VEC3', 'VEC4'], [FLOAT, [5121, true], [5123, true]]],
+  indices: [['SCALAR'], [[5121, false], [5123, false], [5125, false]]],
+  TRANSLATION: [['VEC3'], [FLOAT]],
+  ROTATION: [['VEC4'], [FLOAT, [5120, true], [5122, true]]],
+  SCALE: [['VEC3'], [FLOAT]],
 };
+// an accessor's "normalized", one reading for the type check and the read alike
+const isNorm = (a) => a.normalized === true;
 const orList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}` : xs[0]);
 // the primitive modes drawn: TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN (points and lines are not)
 const TRI_MODES = [4, 5, 6];
@@ -1025,7 +1035,7 @@ const TRI_MODES = [4, 5, 6];
 const GLTF_EXTENSIONS_READ = ['KHR_mesh_quantization', 'EXT_mesh_gpu_instancing'];
 const GLTF_COMPRESSION = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
 const INSTANCING = 'EXT_mesh_gpu_instancing';
-const INSTANCE_ATTR = { TRANSLATION: 'VEC3', ROTATION: 'VEC4', SCALE: 'VEC3' };
+const INSTANCE_USES = ['TRANSLATION', 'ROTATION', 'SCALE'];
 
 // a glTF's JSON, or a plain "damaged" in place of the engine's parse error
 function parseJSON(s, what) {
@@ -1059,16 +1069,18 @@ async function parseGLTF(buf, format, base, files) {
   const list = (x, what) => { if (x === undefined) return []; if (!Array.isArray(x)) throw damaged(`${what} is not a list`); return x; };
   const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
   const nat = (x) => Number.isInteger(x) && x >= 0;
-  // accessor ai as use (an ACC_USE key) at where ("mesh 0 primitive 1"): refused in words when its
-  // type or component type is not one that use may have; a missing accessor is left to accOnce
+  // accessor ai as use (an ACC_USE key) at where ("mesh 0 primitive 1"): refused in words when it
+  // is not there, or its type, component type or normalized is not one that use may have
+  const shown = (x) => (typeof x === 'string' ? x : JSON.stringify(x) ?? String(x)).slice(0, 40);
   const useType = (where, use, ai) => {
     const a = at(accessors, ai);
-    if (!a) return null;
+    if (!a) throw damaged(`${where}'s ${use} accessor ${shown(ai)} is not there`);
     const [types, comps] = ACC_USE[use];
-    if (types.includes(a.type) && comps.includes(a.componentType)) return a;
-    const shown = (x) => (typeof x === 'string' ? x : JSON.stringify(x) ?? String(x)).slice(0, 40);
+    const nz = isNorm(a);
+    if (types.includes(a.type) && comps.some(([c, n]) => c === a.componentType && (n === null || n === nz))) return a;
     const ct = Object.hasOwn(COMP_NAME, a.componentType) ? COMP_NAME[a.componentType] : `component type ${shown(a.componentType)}`;
-    throw damaged(`${where}'s ${use} accessor ${ai} is ${shown(a.type)} of ${ct}; ${use} must be ${orList(types)} of ${orList(comps.map((c) => COMP_NAME[c]))}`);
+    const may = comps.map(([c, n]) => `${n ? 'normalized ' : ''}${COMP_NAME[c]}`);
+    throw damaged(`${where}'s ${use} accessor ${ai} is ${shown(a.type)} of ${nz ? 'normalized ' : ''}${ct}; ${use} must be ${orList(types)} of ${orList(may)}`);
   };
   // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
   // must not load such an asset; ignored, an instanced part opened as one copy without a word).
@@ -1117,7 +1129,7 @@ async function parseGLTF(buf, format, base, files) {
     // vertices was allocated and walked, 9.3 s and 1 GB, to reach "has no triangles")
     if (a.bufferView === undefined && a.sparse === undefined) return null;
     const out = a.bufferView === undefined ? new Float64Array(a.count * nc)
-      : readView(a.bufferView, a.byteOffset, Ctor, nc, a.count, true, `accessor ${i}`, a.normalized && max);
+      : readView(a.bufferView, a.byteOffset, Ctor, nc, a.count, true, `accessor ${i}`, isNorm(a) && max);
     // a sparse accessor: its listed elements replaced by its values, over the view or zeros
     // (glTF 2.0 3.6.2.3; ignored, a valid sparse triangle opened as nothing without a word)
     if (a.sparse !== undefined) {
@@ -1127,7 +1139,7 @@ async function parseGLTF(buf, format, base, files) {
       const IDX = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array }[sp.indices.componentType];
       if (!IDX) throw damaged(`accessor ${i}'s sparse indices have component type ${sp.indices.componentType}, which is not an unsigned integer type`);
       const ix = readView(sp.indices.bufferView, sp.indices.byteOffset, IDX, 1, sp.count, false, `accessor ${i}'s sparse indices`, 0);
-      const vals = readView(sp.values.bufferView, sp.values.byteOffset, Ctor, nc, sp.count, false, `accessor ${i}'s sparse values`, a.normalized && max);
+      const vals = readView(sp.values.bufferView, sp.values.byteOffset, Ctor, nc, sp.count, false, `accessor ${i}'s sparse values`, isNorm(a) && max);
       for (let s = 0; s < sp.count; s++) {
         const e = ix[s];
         if (e >= a.count) throw damaged(`accessor ${i}'s sparse index ${e} is past its ${a.count} elements`);
@@ -1203,10 +1215,10 @@ async function parseGLTF(buf, format, base, files) {
     if (ex === undefined || nd.mesh === undefined) return null;
     if (!isObj(ex) || !isObj(ex.attributes)) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
     let count = null;
-    for (const [k, ty] of Object.entries(INSTANCE_ATTR)) {
+    for (const k of INSTANCE_USES) {
       if (ex.attributes[k] === undefined) continue;
       const a = useType(`node ${ni}'s ${INSTANCING}`, k, ex.attributes[k]);
-      if (!a || !nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} is not a ${ty} accessor`);
+      if (!nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} accessor ${ex.attributes[k]} has no count`);
       if (count !== null && a.count !== count) throw damaged(`node ${ni}'s ${INSTANCING} attributes count ${count} and ${a.count} instances`);
       count = a.count;
     }
@@ -1320,17 +1332,16 @@ async function parseGLTF(buf, format, base, files) {
         // COLOR_0 (linear; VEC3 or VEC4, float or normalized ubyte / ushort): each triangle the
         // mean of its corners, times the material's colour, made sRGB
         if (pr.attributes.COLOR_0 !== undefined) {
-          const ca = at(accessors, pr.attributes.COLOR_0);
-          const cn = ca && NCOMP[ca.type];
-          if (cn !== 3 && cn !== 4) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 is not a VEC3 or VEC4 accessor`);
+          // (its type held to ACC_USE.COLOR_0 by meshCounts, which every drawn primitive passed)
+          const ca = accessors[pr.attributes.COLOR_0];
+          const cn = NCOMP[ca.type];
           // (one per vertex, as glTF 2.0 3.7.2.1 requires of every attribute: a longer list was
           // accepted, and its surplus walked for every placement)
           if (ca.count !== nv) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 holds ${ca.count} colours for its ${nv} vertices (it should hold one per vertex)`);
           const CV = acc(pr.attributes.COLOR_0); // (null: no buffer view, every colour 0)
-          // (an integer colour the file forgot to mark normalized is still read as a fraction)
-          const top = !ca.normalized && Object.hasOwn(COMP, ca.componentType) ? COMP[ca.componentType][1] : 0;
+          // (an integer colour is normalized, ACC_USE.COLOR_0: read as a fraction by acc)
           const f = lin || [1, 1, 1];
-          const ch = (v, q) => (CV ? (top ? CV[v * cn + q] / top : CV[v * cn + q]) : 0);
+          const ch = (v, q) => (CV ? CV[v * cn + q] : 0);
           const col = new Array(idx.length / 3);
           let same = true;
           for (let t = 0; t < col.length; t++) {
@@ -1427,7 +1438,12 @@ function localMatrix(nd, bad) {
   };
   if (nd.matrix !== undefined) return v('matrix', 16);
   const [tx, ty, tz] = v('translation', 3, [0, 0, 0]);
-  const [qx, qy, qz, qw] = v('rotation', 4, [0, 0, 0, 1]);
+  // the quaternion made unit length before use: a quantized one (normalized bytes [0, 0, 90, 90]
+  // are 1.0022 long) scaled the part by its squared length, 1000 mm to 1004 mm. (Zero length,
+  // or not numbers: left as it is.)
+  const q = v('rotation', 4, [0, 0, 0, 1]);
+  const ql = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+  const [qx, qy, qz, qw] = q.map((x) => x / ql);
   const [sx, sy, sz] = v('scale', 3, [1, 1, 1]);
   const xx = qx * qx, yy = qy * qy, zz = qz * qz, xy = qx * qy, xz = qx * qz, yz = qy * qz, wx = qw * qx, wy = qw * qy, wz = qw * qz;
   return [(1 - 2 * (yy + zz)) * sx, 2 * (xy + wz) * sx, 2 * (xz - wy) * sx, 0,

@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflateCadmesh,
+  bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflate, inflateCadmesh,
   isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader,
 } from '../js/cadmesh.js';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
 import { test, skip, done } from './harness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -389,7 +389,7 @@ await test('a gzip that unpacks past the limit stops and says why (review r14)',
   assert.equal((await gunzip(gz)).byteLength, 1 << 20);
 });
 
-await test('gunzip sizes ONE buffer from the gzip trailer (no chunk list + copy); a lying trailer costs a regrow, never the bytes', async () => {
+await test('gunzip sizes ONE buffer from the gzip trailer (no chunk list + copy); a lying trailer is refused as corrupt, never wrong bytes (the regrow itself: the arm after)', async () => {
   const data = Buffer.alloc(3 << 20, 7);
   const gz = new Uint8Array(gzipSync(data));
   assert.equal(firstSize(gz.buffer, 'gzip', 2 ** 31), 3 << 20, 'an honest trailer sizes the output exactly');
@@ -397,15 +397,24 @@ await test('gunzip sizes ONE buffer from the gzip trailer (no chunk list + copy)
   for (const lie of [1, 100, 0xffffffff]) {
     const g = gz.slice();
     new DataView(g.buffer).setUint32(g.length - 4, lie, true);
-    // (the decompressor checks ISIZE at the end: a lie is refused as corrupt, or -- where it is not
-    // checked -- the true bytes come back; never a wrong answer)
-    let got = null;
-    try { got = Buffer.from(await gunzip(g.buffer)); } catch (e) { assert.match(e.message, /corrupt or truncated/); }
-    if (got) assert.ok(got.equals(data), `trailer ${lie}: wrong bytes`);
+    // (the decompressor checks ISIZE at the end: Node's refuses every lie as corrupt -- where a
+    // browser's did not, the true bytes would come back; never a wrong answer)
+    await assert.rejects(gunzip(g.buffer), /corrupt or truncated/, `trailer ${lie}`);
   }
   // a 20-byte file claiming 4 GB allocates what deflate could make of 20 bytes, not 2 GB
   const tiny = new Uint8Array(20); tiny.set([0x1f, 0x8b]); new DataView(tiny.buffer).setUint32(16, 0xffffffff, true);
   assert.ok(firstSize(tiny.buffer, 'gzip', 2 ** 31) < 64 * 1024);
+});
+
+await test('inflate regrows its one buffer when the data runs past its first size, and returns the bytes', async () => {
+  // a zip entry's deflate-raw data carries no size: the buffer starts at 4x the input, and
+  // 3 MB of a repeating pattern deflates to a few KB, so it doubles many times on the way
+  const data = Buffer.alloc(3 << 20);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 7 + (i >> 12)) & 0xff;
+  const raw = new Uint8Array(deflateRawSync(data));
+  assert.ok(4 * raw.length < data.length, 'the first size is too small: a regrow is forced');
+  const out = Buffer.from(await inflate(raw.buffer, 'deflate-raw'));
+  assert.ok(out.equals(data), 'the bytes after the regrows');
 });
 
 await test('a truncated gzip file is refused with a cadmesh error, not decoded', async () => {

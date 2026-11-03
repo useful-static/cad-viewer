@@ -1125,4 +1125,69 @@ await test('r9-8 OBJ whitespace: the o/g test and the line split agree (a no-bre
   assert.deepEqual(a.meshes.map((b) => b.name), ['one', 'a']);
 });
 
+// --- review round 10: accessor types as the specs list them ---
+// one instanced triangle: the extra accessors (1, 2, ...) are the node's instancing attributes attrs
+const instJ = (attrs, extra) => gltfOf({ positions: TRI1, node: { extensions: { EXT_mesh_gpu_instancing: { attributes: attrs } } }, extra,
+  more: { extensionsUsed: ['EXT_mesh_gpu_instancing'], extensionsRequired: ['EXT_mesh_gpu_instancing'] } });
+await test('r10-4 glTF accessor types by the spec tables (EXT_mesh_gpu_instancing, KHR_mesh_quantization, core): normalized checked where the table ties it, others refused naming the accessor', async () => {
+  const W = "node 0's EXT_mesh_gpu_instancing's";
+  // EXT_mesh_gpu_instancing: ROTATION float, normalized byte, normalized short
+  const R90 = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+  await refusedFast(() => openJ(instJ({ ROTATION: 1 }, [{ values: [0, 0, 90, 90], comp: 5120, nc: 4 }]), 'r.gltf'),
+    new RegExp(`^r\\.gltf is damaged: ${W} ROTATION accessor 1 is VEC4 of byte; ROTATION must be VEC4 of float, normalized byte or normalized short$`));
+  await refusedFast(() => openJ(instJ({ ROTATION: 1 }, [{ values: [0, 0, 23170, 23170], comp: 5122, nc: 4 }]), 'r.gltf'),
+    new RegExp(`^r\\.gltf is damaged: ${W} ROTATION accessor 1 is VEC4 of short;`));
+  await refusedFast(() => openJ(instJ({ ROTATION: 1 }, [{ values: [0, 0, 1], comp: 5126, nc: 3 }]), 'r.gltf'),
+    new RegExp(`^r\\.gltf is damaged: ${W} ROTATION accessor 1 is VEC3 of float;`));
+  for (const [comp, v] of [[5126, R90], [5122, [0, 0, 23170, 23170]], [5120, [0, 0, 90, 90]]]) {
+    assert.deepEqual(boxOf(await openJ(instJ({ ROTATION: 1 }, [{ values: v, comp, nc: 4, normalized: comp !== 5126 }]))), [-1000, 0, 0, 0, 1000, 0], `ROTATION ${comp}`);
+  }
+  // TRANSLATION and SCALE: float only (a short TRANSLATION of 5 opened 5 m away)
+  for (const k of ['TRANSLATION', 'SCALE']) {
+    for (const [comp, nz, shown] of [[5122, false, 'short'], [5120, true, 'normalized byte'], [5123, false, 'unsigned short']]) {
+      await refusedFast(() => openJ(instJ({ [k]: 1 }, [{ values: [1, 1, 1], comp, nc: 3, normalized: nz }]), 't.gltf'),
+        new RegExp(`^t\\.gltf is damaged: ${W} ${k} accessor 1 is VEC3 of ${shown}; ${k} must be VEC3 of float$`));
+    }
+  }
+  const ts = await openJ(instJ({ TRANSLATION: 1, SCALE: 2 }, [{ values: [5, 0, 0], comp: 5126, nc: 3 }, { values: [2, 1, 1], comp: 5126, nc: 3 }]));
+  assert.deepEqual(boxOf(ts), [5000, 0, 0, 7000, 1000, 0]);
+  // KHR_mesh_quantization NORMAL: float, normalized byte, normalized short
+  const withNormal = (x) => { const j = gltfOf({ positions: TRI1, extra: [x] }); j.meshes[0].primitives[0].attributes.NORMAL = 1; return j; };
+  await refusedFast(() => openJ(withNormal({ values: [0, 0, 1, 0, 0, 1, 0, 0, 1], comp: 5120, nc: 3 }), 'n.gltf'),
+    /^n\.gltf is damaged: mesh 0 primitive 1's NORMAL accessor 1 is VEC3 of byte; NORMAL must be VEC3 of float, normalized byte or normalized short$/);
+  for (const comp of [5120, 5122]) assert.equal(triCount(await openJ(withNormal({ values: [0, 0, 1, 0, 0, 1, 0, 0, 1], comp, nc: 3, normalized: true }))), 1, `NORMAL ${comp}`);
+  // core COLOR_0: an integer colour must be normalized; float must not be
+  await refusedFast(() => openJ(gltfOf({ positions: TRI1, colour: { values: [255, 0, 0, 255, 0, 0, 255, 0, 0], comp: 5121, nc: 3 } }), 'c.gltf'),
+    /^c\.gltf is damaged: mesh 0 primitive 1's COLOR_0 accessor 1 is VEC3 of unsigned byte; COLOR_0 must be VEC3 or VEC4 of float, normalized unsigned byte or normalized unsigned short$/);
+  // core: normalized MUST NOT be true for float (3.6.2.1); indices are uint8 / uint16 / uint32 (not unorm)
+  await refusedFast(() => openJ(gltfOf({ positions: TRI1, normalized: true }), 'p.gltf'),
+    /^p\.gltf is damaged: mesh 0 primitive 1's POSITION accessor 0 is VEC3 of normalized float; POSITION must be VEC3 of float, byte, unsigned byte, short or unsigned short$/);
+  const ni = gltfOf({ positions: TRI1, extra: [{ values: [0, 1, 2], comp: 5121, nc: 1, normalized: true }] });
+  ni.meshes[0].primitives[0].indices = 1;
+  await refusedFast(() => openJ(ni, 'i.gltf'), /^i\.gltf is damaged: mesh 0 primitive 1's indices accessor 1 is SCALAR of normalized unsigned byte; indices must be SCALAR of unsigned byte, unsigned short or unsigned int$/);
+  // KHR_mesh_quantization POSITION: every integer type, normalized or not
+  for (const comp of [5120, 5121, 5122, 5123]) for (const nz of [false, true]) {
+    assert.equal(triCount(await openJ(gltfOf({ positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], comp, normalized: nz }))), 1, `POSITION ${comp} ${nz}`);
+  }
+});
+await test('r10-5 glTF accessor type rule in one place: a missing instancing or COLOR_0 accessor is reported as not there, not as the wrong type', async () => {
+  await refusedFast(() => openJ(instJ({ TRANSLATION: 7 }, []), 'm.gltf'),
+    /^m\.gltf is damaged: node 0's EXT_mesh_gpu_instancing's TRANSLATION accessor 7 is not there$/);
+  const j = gltfOf({ positions: TRI1 });
+  j.meshes[0].primitives[0].attributes.COLOR_0 = 9;
+  await refusedFast(() => openJ(j, 'c.gltf'), /^c\.gltf is damaged: mesh 0 primitive 1's COLOR_0 accessor 9 is not there$/);
+});
+await test('r10-9 a quantized instance ROTATION is renormalised: normalized bytes [0, 0, 90, 90] (length 1.0022) keep a 1000 mm part 1000 mm', async () => {
+  const m = await openJ(instJ({ ROTATION: 1 }, [{ values: [0, 0, 90, 90], comp: 5120, nc: 4, normalized: true }]));
+  const [lx, ly, , hx, hy] = m.meshes[0].positions.length ? boxOf(m) : [];
+  assert.ok(Math.abs(hy - ly - 1000) < 1e-6 && Math.abs(hx - lx - 1000) < 1e-6, `box ${JSON.stringify(boxOf(m))}`);
+  // the edge from (0,0,0) to (1 m, 0, 0) is 1000 mm long after the turn
+  const p = m.meshes[0].positions;
+  const len = (a, b) => Math.hypot(p[a * 3] - p[b * 3], p[a * 3 + 1] - p[b * 3 + 1], p[a * 3 + 2] - p[b * 3 + 2]);
+  for (let a = 0; a < p.length / 3; a++) for (let b = a + 1; b < p.length / 3; b++) {
+    const d = len(a, b);
+    assert.ok(Math.abs(d - 1000) < 1e-6 || Math.abs(d - 1000 * Math.SQRT2) < 1e-6, `edge ${a}-${b}: ${d} mm`);
+  }
+});
+
 done();

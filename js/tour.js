@@ -57,8 +57,23 @@ const NAMES_RULE = `at most ${PART_NAMES_MAX} part names of at most ${PART_NAME_
 // the largest tour read (200 steps of the longest texts and views fit many times over); it is
 // read on the page's own thread, so the bound is the page's
 export const MAX_TOUR_BYTES = 4 * 2 ** 20;
+// a string's length in UTF-8 bytes, without encoding it (stops counting past the tour limit)
+function utf8Length(s) {
+  if (s.length > MAX_TOUR_BYTES) return s.length; // (every character is at least a byte)
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++; } // a surrogate pair
+    else n += 3;
+  }
+  return n;
+}
 export function parseTour(text, base = undefined) {
-  if (typeof text === 'string' && text.length > MAX_TOUR_BYTES) throw new Error(`over ${MAX_TOUR_BYTES / 2 ** 20} MB: not a tour this viewer reads`);
+  // (counted in BYTES, as the page's read counts them (readCapped): a CJK tour of 1.8 M characters
+  // is 5 MB, which the maker saved and check-tour passed, and the page refused)
+  if (typeof text === 'string' && utf8Length(text) > MAX_TOUR_BYTES) throw new Error(`over ${MAX_TOUR_BYTES / 2 ** 20} MB: not a tour this viewer reads`);
   let t;
   try { t = JSON.parse(text); } catch (e) { throw new Error(`not JSON: ${e.message}`); }
   if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('a tour is a JSON object');
@@ -248,13 +263,21 @@ export function partIndex(header, labels = null, labelled = Infinity) {
     }
   };
   if (labels) {
+    // (whether a node's bodies all lie in the labelled ones, worked out once per node: a list's
+    // labels differing only in case each walked the same assembly again -- 1000 over 100,000
+    // bodies, 8.4 s on the page's thread)
+    const nodeCovered = new Map();
     const covered = (r) => {
       if (r.id) return r.id <= labelled;
       if (labelled === Infinity) return true;
-      const ids = new Set();
-      gather(r, ids);
-      for (const id of ids) if (id > labelled) return false;
-      return true;
+      if (!nodeCovered.has(r)) {
+        const ids = new Set();
+        gather(r, ids);
+        let ok = true;
+        for (const id of ids) if (id > labelled) { ok = false; break; }
+        nodeCovered.set(r, ok);
+      }
+      return nodeCovered.get(r);
     };
     for (const [name, label] of Object.entries(labels)) {
       for (const r of refs.get(name.trim().toLowerCase()) || []) if (covered(r)) put(label, r);
@@ -314,18 +337,21 @@ export function namesFor(ids, header, idx, labels = null) {
   };
   for (const id of [...want].sort((a, b) => a - b)) {
     if (covered.has(id)) continue;
+    // a name of this body's (its node, its own, an assembly's), by its label when the label names
+    // only wanted bodies and this one (a label covers the first model's bodies only: in a scene the
+    // label of a name shared with an added model is the narrower name, and the body was "#1"),
+    // else by the name itself when it names only wanted bodies
     let pick = null;
     for (const name of chains[id - 1] || []) {
-      if (allWanted(name.trim().toLowerCase())) { pick = name; break; }
+      const key = name.trim().toLowerCase();
+      const lab = Object.hasOwn(byLabel, key) && byLabel[key];
+      const lk = lab && lab.trim().toLowerCase();
+      if (lk && allWanted(lk) && idx.get(lk).has(id)) { pick = lab; break; }
+      if (allWanted(key)) { pick = name; break; }
     }
     if (pick) {
       for (const x of idx.get(pick.trim().toLowerCase())) covered.add(x);
-      const key = pick.trim().toLowerCase();
-      // its label, when the label names exactly these bodies (a label covers the first model's
-      // bodies only: an added model's part of the same name keeps its own name)
-      const lab = Object.hasOwn(byLabel, key) && byLabel[key];
-      const same = (a, b) => a && b && a.size === b.size && [...a].every((x) => b.has(x));
-      names.push(lab && same(idx.get(lab.trim().toLowerCase()), idx.get(key)) ? lab : pick);
+      names.push(pick);
     } else {
       covered.add(id);
       names.push(`#${id}`);

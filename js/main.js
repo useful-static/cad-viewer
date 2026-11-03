@@ -1123,6 +1123,7 @@ app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
 // (for tests/ui-checks.py tour-leaves-no-state: a tour from an object, the tour maker's capture,
 // a load from a URL without leaving the page)
 app.playTour = (t) => startTour(parseTour(JSON.stringify(t), location.href), null);
+app.playTourIn = (t) => startTourIn(parseTour(JSON.stringify(t), location.href), null);
 app.captureStep = (o) => captureStep(o);
 app.openUrl = (u) => loadUrl(u);
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
@@ -1368,10 +1369,11 @@ app.faceOverrides = new Map();
 function setPaint(on) {
   // (one click mode at a time; Paint picks the faces where they are, so not
   // while exploded)
+  // (not while a tour plays: no step holds face colours, and they are set aside meanwhile -- refused
+  // first, before it turns Measure or the step's Explode off for nothing)
+  if (on && app.tour) { flashHover('Paint is off while a tour plays: a tour step holds no face colours'); on = false; }
   if (on && app.measure && app.measure.on) app.measure.setOn(false);
   if (on && app.explode.on) setExplode(false);
-  // (not while a tour plays: no step holds face colours, and they are set aside meanwhile)
-  if (on && app.tour) { flashHover('Paint is off while a tour plays: a tour step holds no face colours'); on = false; }
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) flashHover('this model has no b-rep faces to paint');
@@ -3076,7 +3078,7 @@ function applyListEntry() {
       closeMenus();
       const r = await readTour(t.url);
       if (r.error) { flashHover(`the tour ${r.error}`, 4000); return; }
-      startTour(r.tour, t.url);
+      startTourIn(r.tour, t.url);
     };
     tl.append(b);
   }
@@ -3091,7 +3093,7 @@ function applyListEntry() {
       app.autoTourFor = autoTourKey();
       const h = app.header;
       const t = e.tours[0];
-      readTour(t.url).then((r) => { if (!r.error && app.header === h && !app.tour) startTour(r.tour, t.url); });
+      readTour(t.url).then((r) => { if (!r.error && app.header === h && !app.tour) startTourIn(r.tour, t.url); });
     }
   }
   syncMenuButtons();
@@ -3104,8 +3106,10 @@ function applyListEntry() {
   }
   // its hidden parts (a heatsink over the chips), once per model opened and
   // not over a view link's view; ahead of its tour, which starts from them
-  if (app.header && e && e.hide && app.listHideFor !== app.header && !app.pendingView) {
-    app.listHideFor = app.header;
+  // (keyed as the auto tour is, by the model's URL: a re-read in another unit is not a new open,
+  // and laid the list's hide over the visitor's own hide / show)
+  if (app.header && e && e.hide && app.listHideFor !== autoTourKey() && !app.pendingView) {
+    app.listHideFor = autoTourKey();
     const ids = tourParts(e.hide).ids;
     if (ids.length) {
       for (const id of ids) app.hidden.add(id);
@@ -3786,14 +3790,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   syncUnitParam(); // (another model's ?unit= is not this one's)
   $('clearval').textContent = '';
-  // a model from the device is not the ?model / ?index / ?src a list pick
-  // left in the address: a reload would open that instead (review r16 L7)
-  const q = new URLSearchParams(location.search);
-  if (!app.sourceUrl && MODEL_PARAMS.some((k) => q.has(k))) {
-    const u = new URL(location.href);
-    for (const k of MODEL_PARAMS) u.searchParams.delete(k);
-    history.replaceState(null, '', u);
-  }
+  forgetAddressModel();
   app.lastStepBuffer = stepBuf;
   app.unmeshedFaces = unmeshedFaces;
   $('export').disabled = !stepBuf;
@@ -3934,6 +3931,7 @@ async function showScene(models, { newTree = false } = {}) {
   // "this file is in" re-reads the first model alone, which would drop the others: a scene has
   // none (a mesh opened alone gets it again)
   if (models.length > 1) app.meshSource = null;
+  syncUnitParam(); // (the first model's unit stays in the address: readUnit)
   app.mesh = mesh;
   app.baseMesh = merged;
   app.header = mesh.header;
@@ -4303,8 +4301,10 @@ async function loadMeshFile(buf, name, seq) {
   for (const f of drop) extras.set(f.name.toLowerCase(), await f.arrayBuffer());
   if (stale(seq)) return;
   // (read in the unit the address gives for this file: a reload or a view link of a re-read one)
+  // (a mesh added to a scene is read in the first model's unit: the scene's size)
   const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
-  return meshFromSource({ buf, name, format, extras }, addressUnit(url), seq);
+  const adding = app.adding && app.adding.seq === seq;
+  return meshFromSource({ buf, name, format, extras }, adding ? readUnit() : addressUnit(url), seq);
 }
 
 // A mesh file's bytes as a model in `unit` (a file that stores none -- STL,
@@ -4322,6 +4322,7 @@ async function meshFromSource(src, unit, seq) {
   // (a model added to a scene keeps the scene's units: no choice there)
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
     app.meshSource = unitless ? { ...src, unit } : null;
+    app.scene[0].unit = unitless ? unit : undefined;
     syncUnitParam();
     showInfo();
   }
@@ -4330,7 +4331,9 @@ async function meshFromSource(src, unit, seq) {
 // The unit a unit-less mesh was read in is part of WHICH model is shown: the address carries it
 // (?unit=, beside ?src), so a reload and a view link open the file at that size -- a link's
 // camera, taken in inches, sat 25.4 times off a model opened in mm
-const readUnit = () => (app.meshSource ? app.meshSource.unit : 'mm');
+// (kept on the scene's first model: a scene drops meshSource -- no re-read there -- and the address,
+// a view link and the tour maker still name the first model at its size)
+const readUnit = () => (app.scene && app.scene[0] && app.scene[0].unit) || 'mm';
 function syncUnitParam() {
   const u = new URL(location.href);
   const want = readUnit() !== 'mm' && app.sourceUrl ? readUnit() : null;
@@ -4354,16 +4357,34 @@ function addressUnit(url) {
 // the units row's "file is in": the same bytes read again in that unit
 function setMeshUnit(u) {
   const src = app.meshSource;
-  if (!src || u === src.unit || !MM_PER[u]) return;
+  if (!src || u === src.unit || !MM_PER[u]) return Promise.resolve();
   // (the same file, read again: it keeps the URL it came from -- the address, the view link, the
   // list entry and a saved tour all name it by that; a new seq dropped it)
   const url = app.sourceUrl;
-  startLoad(() => {
+  return startLoad(() => {
     const seq = beginLoad();
     if (url) app.urlOfLoad = { seq, url };
     setStatus('loading', `reading ${src.name} in ${u}`);
-    return meshFromSource(src, u, seq).then(() => announce(`${src.name} read in ${u}`));
+    // (the same bodies, at another size: the visitor's hidden parts stay hidden)
+    const hidden = new Set(app.hidden);
+    return meshFromSource(src, u, seq).then(() => {
+      if (stale(seq)) return;
+      if (hidden.size) { app.hidden = hidden; syncTreeChecks(); pushState(); updateButtons(); viewChanged(); }
+      announce(`${src.name} read in ${u}`);
+    });
   });
+}
+
+// A tour opened by the page (?tour=, a list's tour, its File item) over a unit-less mesh read in
+// another unit than the tour was made in: the file is read again in the tour's unit first, as the
+// page chose the reading, not the visitor (it played 25.4 times off, with a note)
+async function startTourIn(tour, url, only = null) {
+  const h = app.header;
+  if ((tour.unit || 'mm') !== readUnit() && app.meshSource) {
+    await setMeshUnit(tour.unit || 'mm');
+    if (!app.header || app.header === h) return false; // (superseded, or not read again)
+  }
+  return startTour(tour, url, only);
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
@@ -4435,6 +4456,17 @@ function setSheet(i) {
   if (old) { buildLayerList(); showInfo(); announce(L ? `${L.name}: paper space` : 'model space'); }
 }
 
+// A model or drawing from the device is not the ?model / ?index / ?src (and ?unit) a list
+// pick or a link left in the address: a reload would open that instead (review r16 L7; a drawing
+// opened from the device kept them -- the one rule for both, loadBuffer and show2D)
+function forgetAddressModel() {
+  const q = new URLSearchParams(location.search);
+  if (app.sourceUrl || ![...MODEL_PARAMS, 'unit'].some((k) => q.has(k))) return;
+  const u = new URL(location.href);
+  for (const k of [...MODEL_PARAMS, 'unit']) u.searchParams.delete(k);
+  history.replaceState(null, '', u);
+}
+
 function show2D(drawing, name, url) {
   leave2D();
   clearModel();
@@ -4444,6 +4476,7 @@ function show2D(drawing, name, url) {
   app.dxf = { drawing, name, url, sheet: -1 };
   app.sourceName = name;
   app.sourceUrl = url;
+  forgetAddressModel();
   // the sheets: model space, then each layout that draws anything; a
   // drawing with nothing in model space opens on its first layout
   const sheets = drawing.layouts.map((l, i) => ({ l, i })).filter(({ l }) => l.paths.length || l.texts.length);
@@ -4827,6 +4860,7 @@ async function loadUrl(url) {
   const seq = beginLoad();
   app.dropExtras = null; // (a URL brings no companions: an earlier drop's are not this file's)
   app.autoTourFor = null; // (opened again: its list's tour plays again, once: applyListEntry)
+  app.listHideFor = null; // (and its list's hide is applied again)
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
@@ -6635,7 +6669,7 @@ async function main() {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
-      if (app.header) startTour(r.tour, tourUrl, params.get('step'));
+      if (app.header) await startTourIn(r.tour, tourUrl, params.get('step'));
       else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
     }
     // (the next model picked from the list plays its own tour)

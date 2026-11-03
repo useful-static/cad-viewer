@@ -57,6 +57,10 @@ test('parse-example', () => {
 await test('a tour over MAX_TOUR_BYTES is refused before it is parsed, in words; checkTour stops reading at the cap', async () => {
   const big = '{"cadtour":1,"steps":[{"title":"' + 'x'.repeat(MAX_TOUR_BYTES) + '"}]}';
   assert.throws(() => parseTour(big), /over 4 MB/);
+  // counted in bytes, as the page's read counts them: 1.8 M CJK characters are 5 MB
+  const cjk = '{"cadtour":1,"steps":[{"title":"' + '漢'.repeat(1.8e6) + '"}]}';
+  assert.ok(cjk.length < MAX_TOUR_BYTES);
+  assert.throws(() => parseTour(cjk), /over 4 MB/);
   // a streamed body: the reader is cancelled at the cap, not read whole
   let pulled = 0, cancelled = false;
   const chunk = new Uint8Array(2 ** 20).fill(32);
@@ -121,11 +125,26 @@ test('a list\'s labels name the first model\'s bodies only: an added model\'s pa
   const idx = partIndex(header, labels, 2);
   assert.deepEqual(resolveParts(['Fan'], idx).ids, [1]);
   assert.deepEqual(resolveParts(['PART_7'], idx).ids.sort(), [1, 3]);
-  // the maker names both PART_7s by their own name: "Fan" (which it wrote) names body 1 alone
-  assert.deepEqual(namesFor([1, 3], header, idx, labels), ['PART_7']);
+  // the maker names body 1 by its label (round 10: it was "#1"), and both PART_7s by names that
+  // resolve to exactly them ("Fan" alone names body 1 only)
+  assert.deepEqual(namesFor([1], header, idx, labels), ['Fan']);
   assert.deepEqual(resolveParts(namesFor([1, 3], header, idx, labels), idx).ids.sort(), [1, 3]);
+  assert.deepEqual(resolveParts(namesFor([3], header, idx, labels), idx).ids, [3]);
   // one model (no limit): as before
   assert.deepEqual(resolveParts(['Fan'], partIndex(header, labels)).ids.sort(), [1, 3]);
+});
+
+test('partIndex in a scene: 1000 labels naming one assembly of 100,000 bodies, each node tested once', () => {
+  const N = 100000;
+  const top = { name: 'Top', meshes: [...Array(N - 1).keys()], children: [] };
+  const header = { root: { name: 'scene', meshes: [N - 1], children: [top] }, meshes: Array.from({ length: N }, (_, i) => ({ name: `b${i}` })) };
+  // 1000 keys that all fold to "top": its letters' cases, then trailing spaces
+  const keys = [];
+  for (let s = 0; keys.length < 1000; s++) for (let m = 0; m < 8 && keys.length < 1000; m++) keys.push('top'.split('').map((c, k) => (m >> k & 1 ? c.toUpperCase() : c)).join('') + ' '.repeat(s));
+  const labels = Object.fromEntries(keys.map((k, i) => [k, `label ${i}`]));
+  const t0 = Date.now();
+  partIndex(header, labels, N - 1);
+  assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0} ms (it was 8.4 s)`);
 });
 
 test('namesFor on a flat assembly of 40,000 bodies, half of them wanted: each name tested once, fast', () => {

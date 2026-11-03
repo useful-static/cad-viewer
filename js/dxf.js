@@ -850,18 +850,58 @@ function hatchLoops(r) {
 // (a code's value ends at its ";" and holds no backslash, so a run of codes with no ";" fails
 // each match at the next backslash: one pass, not a rescan to the end from every code; a stack
 // \S splits at its first separator, which its first part may not hold)
+// One pass, left to right, so an escape is read before what it escapes: \\ a backslash, \{ \} a
+// brace (bare braces group and are dropped), \P a new line, \~ a space, \L \O \K and their ends
+// dropped, a code up to its ";" dropped, \Sa^b; a/b, \U+nnnn its character; a code with no ";"
+// before the next backslash stays as written. (Run as replaces one after another, a typed path
+// "C:\Projects" lost its "P" to a new line, "\\" then "{3}" read wrong, and a typed "\\U+00B0"
+// turned into a degree sign.) Then the % codes.
 export function mtextPlain(s) {
-  return textCodes(s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;\\]*;/g, '').replace(/\\[LlOoKk]/g, '')
-    .replace(/\\S([^;^#/\\]*)[\^#/]([^;\\]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, ''));
+  let out = '';
+  const n = s.length;
+  // the ";" ending a code from j on, or -1 when a backslash (or the end) comes first
+  const endOf = (j) => { for (; j < n; j++) { if (s[j] === ';') return j; if (s[j] === '\\') return -1; } return -1; };
+  for (let i = 0; i < n; i++) {
+    const c = s[i];
+    if (c === '{' || c === '}') continue;
+    if (c !== '\\' || i + 1 >= n) { out += c; continue; }
+    const k = s[i + 1];
+    if (k === '\\' || k === '{' || k === '}') { out += k; i++; continue; }
+    if (k === 'P') { out += '\n'; i++; continue; }
+    if (k === '~') { out += ' '; i++; continue; }
+    if ('LlOoKk'.includes(k)) { i++; continue; }
+    if ('ACcFfHhQTWp'.includes(k)) {
+      const e = endOf(i + 2);
+      if (e >= 0) { i = e; continue; }
+      out += c;
+      continue;
+    }
+    if (k === 'S') {
+      let j = i + 2;
+      while (j < n && !'^#/;\\'.includes(s[j])) j++;
+      const e = j < n && '^#/'.includes(s[j]) ? endOf(j + 1) : -1;
+      if (e >= 0) { out += `${s.slice(i + 2, j)}/${s.slice(j + 1, e)}`; i = e; continue; }
+      out += c;
+      continue;
+    }
+    if (k === 'U' && s[i + 2] === '+' && /^[0-9A-Fa-f]{4}$/.test(s.slice(i + 3, i + 7))) {
+      out += String.fromCharCode(parseInt(s.slice(i + 3, i + 7), 16));
+      i += 6;
+      continue;
+    }
+    out += c;
+  }
+  return percentCodes(out);
 }
 
-// The control codes a TEXT, ATTRIB or MTEXT value holds, in one pass: %%c Ø, %%d °, %%p ±,
-// %%u / %%o / %%k (underline, overline, strike: toggles, dropped), %%% a "%", %%nnn the character
-// of that code, and \U+nnnn the Unicode character (a raw "%%u" and "45\U+00B0" were drawn as written)
+// The % codes a TEXT, ATTRIB or MTEXT value holds, in one pass: %%c Ø, %%d °, %%p ±, %%u / %%o /
+// %%k (underline, overline, strike: toggles, dropped), %%% a "%", %%nnn the character of that code
 const PCT = { c: 'Ø', d: '°', p: '±', u: '', o: '', k: '', '%': '%' };
+const percentCodes = (s) => s.replace(/%%(\d{3})|%%([cdpuok%])/gi, (m, n, k) => (n ? String.fromCharCode(Number(n)) : PCT[k.toLowerCase()]));
+// ...and a single-line TEXT's or ATTRIB's: those and \U+nnnn, its Unicode character (a raw "%%u"
+// and "45\U+00B0" were drawn as written)
 export function textCodes(s) {
-  return s.replace(/%%(\d{3})|%%([cdpuok%])|\\U\+([0-9A-Fa-f]{4})/gi, (m, n, k, u) => (
-    n ? String.fromCharCode(Number(n)) : k ? PCT[k.toLowerCase()] : String.fromCharCode(parseInt(u, 16))));
+  return percentCodes(s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (m, u) => String.fromCharCode(parseInt(u, 16))));
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 
