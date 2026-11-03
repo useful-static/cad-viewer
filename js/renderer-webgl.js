@@ -944,7 +944,6 @@ export class WebGLRenderer {
     if (this.bodyTexOk) return this.bodyTex && this.bodiesFor === this.drawn ? frame.explode : 0;
     return this.faceBodiesFor === this.drawn && this.drawn ? frame.explode : 0;
   }
-  get canExplode() { return true; }
 
   // Every face pass is biased (POLYGON_OFFSET_FILL on): the solids, then the
   // sheets with less bias, so a sheet lying on a solid's face shows.

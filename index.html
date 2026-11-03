@@ -565,7 +565,7 @@
       </div><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <span class="mhead" aria-hidden="true">Save</span>
       <button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
-      <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program: STL (no colour), 3MF (colours, mm) or GLB (colours, metres); turned the way the model opens">Export as <button data-fmt="stl" disabled title="STL: triangles, no colour">STL</button><button data-fmt="3mf" disabled title="3MF: colours, in mm">3MF</button><button data-fmt="glb" disabled title="GLB: colours, in metres">GLB</button></span>
+      <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program, turned the way the model opens">Export as <!-- one button per format: main.js builds them from js/export-mesh.js EXPORTS --></span>
     </div></div>
   <span class="sep"></span>
   <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the model, or a layout" title="Model space, or a layout (paper space with what its viewports show)"></select>
@@ -585,7 +585,7 @@
            when the whole View group folds they are its panel's grid again -->
       <div class="menu" id="presetmenu"><button class="menu-btn" aria-expanded="false" aria-controls="presetpanel" title="View presets: Iso, Front, Back, Left, Right, Top, Bottom">Views</button>
         <div class="menu-panel" id="presetpanel" aria-label="Views">
-      <span class="presets"><button data-view="iso" title="Iso view (0)" aria-keyshortcuts="0">Iso<kbd>0</kbd></button><button data-view="front" title="Front view (1)" aria-keyshortcuts="1">Front<kbd>1</kbd></button><button data-view="back">Back</button><button data-view="left">Left</button><button data-view="right" title="Right view (3)" aria-keyshortcuts="3">Right<kbd>3</kbd></button><button data-view="top" title="Top view (7)" aria-keyshortcuts="7">Top<kbd>7</kbd></button><button data-view="bottom">Bottom</button></span>
+      <span class="presets"><!-- the named views: main.js builds them from js/orient.js VIEWS --></span>
       <span class="kbdnote"><kbd>9</kbd> the opposite view</span>
         </div></div>
       <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
@@ -770,7 +770,7 @@
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>
     <h2>Open a CAD file</h2>
-    <p class="drop-hint">Drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, PLY, OFF, 3MF, glTF) or a 2D DXF here, or</p>
+    <p class="drop-hint">Drop <span id="dropwhat">a model file</span> here, or</p>
     <p class="drop-now">Drop to open</p>
     <button id="emptyopen" class="primary">Choose a file…</button>
     <p class="note">Your file is opened on this device and never uploaded.</p>

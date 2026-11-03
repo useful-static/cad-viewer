@@ -568,10 +568,9 @@ export class WebGPURenderer {
     });
   }
 
-  // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`.
-  // the body table is a storage buffer the vertex stage always reads, so
-  // Explode works on every WebGPU device (renderer-webgl.js needs a texture)
-  get canExplode() { return true; }
+  // The body table (js/edges.js bodyTable: 8 floats per body id) for `mesh`:
+  // a storage buffer the vertex stage always reads, so Explode works on every
+  // WebGPU device (renderer-webgl.js on every WebGL one, by texture or attributes)
 
   setBodies(mesh, table) {
     if (this.lost) return;

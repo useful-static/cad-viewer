@@ -21,26 +21,16 @@
 //
 // A file that is not ISO-10303-21 text (IGES, BREP) gets bytes only.
 
+import { forEachStepSlice } from './step-text.js';
+
 export function stepFeatures(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   const f = { bytes: u8.byteLength, entities: 0, faces: 0, bounds: 0, bounds15: 0, bounds2: 0, bsplines: 0, step: false };
   const head = new TextDecoder('latin1').decode(u8.subarray(0, 64));
   if (!/ISO-10303-21/.test(head)) return f;
   f.step = true;
-  // decoded in slices, so a large file never needs one string of its full size
-  // at once; a record split at a slice end is completed by carrying the tail
-  const dec = new TextDecoder('latin1');
-  const SLICE = 4 << 20;
-  let carry = '';
-  for (let at = 0; at < u8.byteLength; at += SLICE) {
-    const last = at + SLICE >= u8.byteLength;
-    let text = carry + dec.decode(u8.subarray(at, Math.min(u8.byteLength, at + SLICE)));
-    // keep everything after the last ';' (an unfinished record) for the next slice
-    const cut = last ? text.length : text.lastIndexOf(';') + 1;
-    carry = text.slice(cut);
-    text = text.slice(0, cut);
-    count(text, f);
-  }
+  // decoded in slices cut at a record's end (js/step-text.js)
+  forEachStepSlice(u8, (text) => count(text, f));
   return f;
 }
 

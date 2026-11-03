@@ -12,6 +12,7 @@
 
 import { onPaper } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
+import { unitWord } from './units.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
 const SELECTED = PAPER_EDGES.selected[0];
@@ -47,7 +48,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (r > 0 && ds.every((x) => Math.abs(x - r) < 0.01 * r)) snaps.push([cx - o[0], cy - o[1], 'centre', p.layer, r]);
     }
   }
-  const units = drawing.units || '';
+  // the drawing's unit as written for a reader ("µm"), as the info panel writes it
+  const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {

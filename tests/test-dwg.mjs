@@ -86,6 +86,52 @@ t('an R2000 file header listing 0xffffffff sections is refused at once, in words
   assert.ok(Date.now() - t0 < 1000);
 });
 
+// A crafted R2000 file (review round 3): an object map listing E entries at one POINT whose reactor
+// count is 0x7fffffff, then P zero bytes. Its reads used to stop only at the file's end, once per
+// map entry: 20,000 entries over 1 MB took 107 s.
+function crafted(E, P) {
+  class BW { constructor() { this.bits = []; } put(v, n) { for (let k = n - 1; k >= 0; k--) this.bits.push((v >> k) & 1); } rc(x) { this.put(x & 255, 8); }
+    rl(x) { for (let k = 0; k < 4; k++) this.rc((x >>> (8 * k)) & 255); }
+    bytes() { const out = new Uint8Array(Math.ceil(this.bits.length / 8)); this.bits.forEach((b, i) => { if (b) out[i >> 3] |= 0x80 >> (i & 7); }); return out; } }
+  const mcs = (v) => { const out = []; while (v >= 0x40) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128); } out.push(v & 0x3f); return out; };
+  const handlesAt = 0x300;
+  const chunks = [];
+  for (let left = E; left > 0; left -= 2000) chunks.push(Math.min(2000, left));
+  const objAt = handlesAt + chunks.reduce((s, n) => s + 2 + 2 * n + 8 + 2, 0) + 4 + 64;
+  const handleBytes = [];
+  for (const n of chunks) {
+    const body = [0x01, ...mcs(objAt)];
+    for (let k = 1; k < n; k++) body.push(0x01, 0x00);
+    const size = body.length + 2;
+    handleBytes.push((size >> 8) & 255, size & 255, ...body, 0, 0);
+  }
+  handleBytes.push(0, 2);
+  const w = new BW();
+  w.put(0b01, 2); w.rc(27); w.rl(256); w.rc(0x01); w.rc(0x10); w.put(0b10, 2); w.put(0, 1); w.put(0b00, 2);
+  w.put(0b00, 2); w.rl(0x7fffffff); // reactors
+  w.put(1, 1); w.put(0b10, 2); w.put(0b01, 2); w.put(0, 2); w.put(0, 2); w.put(0b10, 2); w.rc(0);
+  w.put(0b10, 2); w.put(0b10, 2); w.put(0b10, 2); w.put(1, 1); w.put(1, 1); w.put(0b10, 2);
+  const b = new Uint8Array(objAt + 2 + 64 + 2 + P);
+  b.set(new TextEncoder().encode('AC1015'), 0);
+  b[0x13] = 30;
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0x15, 3, true);
+  const rec = (k, num, at, size) => { b[0x19 + 9 * k] = num; dv.setUint32(0x19 + 9 * k + 1, at, true); dv.setUint32(0x19 + 9 * k + 5, size, true); };
+  rec(0, 0, 0x100, 0x40); rec(1, 1, 0x200, 0x40); rec(2, 2, handlesAt, handleBytes.length);
+  b.set(handleBytes, handlesAt);
+  dv.setUint16(objAt, 64, true);
+  b.set(w.bytes(), objAt + 2);
+  return b;
+}
+t('an object\'s count past its own end stops at the object, and a map naming it 20,000 times reads it once', () => {
+  const t0 = Date.now();
+  const d = readDWG(crafted(20000, 1000000));
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+  const o = [...d.objects.values()][0];
+  assert.match(o.error || '', /past the end of the object/);
+  assert.ok(d.failures.some((x) => x.startsWith('object handle matches the map')), JSON.stringify(d.failures));
+});
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };

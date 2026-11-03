@@ -7,29 +7,20 @@
 //
 // Pure ES module, no DOM.
 
+import { forEachStepSlice } from './step-text.js';
+
 // file: the STEP file's bytes (Uint8Array or ArrayBuffer), or its text (latin1 is fine: the
 // encodings are ASCII). Bytes are read in slices cut at a record's end, as js/source-units.js
 // reads them: a whole file of over ~512 MB as one string is more than a browser makes, and the
 // load failed there before the converter saw the file.
 // Returns Map(name -> { id, description }) of the products whose id or
 // description says more than the name does.
-const SLICE = 4 << 20;
 export function stepProducts(file) {
   const out = new Map();
   if (typeof file === 'string') { scan(file, out); return out; }
-  const u8 = file instanceof Uint8Array ? file : new Uint8Array(file);
-  const dec = new TextDecoder('latin1');
-  let carry = '';
-  for (let at = 0; at < u8.byteLength; at += SLICE) {
-    const last = at + SLICE >= u8.byteLength;
-    const text = carry + dec.decode(u8.subarray(at, Math.min(u8.byteLength, at + SLICE)));
-    // (a record cut by the slice waits for the next; a string holding ';' may be cut there,
-    // and a product named so is missed, which costs only its metadata)
-    const cut = last ? text.length : text.lastIndexOf(';') + 1;
-    scan(text.slice(0, cut), out);
-    carry = text.slice(cut);
-    if (carry.length > SLICE) carry = ''; // no ';' in a whole slice: not records
-  }
+  // (a string holding ';' may be cut at a slice's end, and a product named so is missed,
+  // which costs only its metadata)
+  forEachStepSlice(file instanceof Uint8Array ? file : new Uint8Array(file), (text) => scan(text, out));
   return out;
 }
 function scan(text, out) {

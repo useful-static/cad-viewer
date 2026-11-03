@@ -11,7 +11,7 @@
 //   body      a different colour for every body
 //   mono      one neutral colour for everything (shape reads by shading alone)
 
-import { PALETTE, hashName } from './cadmesh.js';
+import { DEFAULT_GREY, PALETTE, partColours } from './cadmesh.js';
 
 export const PALETTES = [
   { id: 'file', label: 'File colours' },
@@ -20,7 +20,7 @@ export const PALETTES = [
   { id: 'body', label: 'By body' },
   { id: 'mono', label: 'One colour' },
 ];
-export const MONO = [0.72, 0.74, 0.78];
+export const MONO = DEFAULT_GREY;
 
 // The n-th of a run of distinct muted colours: hues a golden angle apart, so
 // neighbours in the run differ and a long run never repeats.
@@ -41,17 +41,8 @@ export function bodyColours(header, id) {
   if (id === 'file') return null;
   if (id === 'mono') return Array.from({ length: n }, () => MONO);
   if (id === 'body') return Array.from({ length: n }, (_, i) => distinct(i));
-  if (id === 'part') {
-    // the nearest named node above each body names its part
-    const owner = new Array(n).fill('');
-    const walk = (node, name) => {
-      const nm = node.name || name;
-      for (const i of node.meshes) owner[i] = nm;
-      for (const c of node.children) walk(c, nm);
-    };
-    walk(header.root, '');
-    return header.meshes.map((m, i) => PALETTE[hashName(owner[i] || m.name || String(i)) % PALETTE.length]);
-  }
+  // (the converter's own rule for a colourless file: js/cadmesh.js partColours)
+  if (id === 'part') return partColours(header.meshes, header.root);
   if (id === 'assembly') {
     // below any chain of single-child wrappers, each child of the first node
     // that branches is one assembly; bodies directly on that node get one

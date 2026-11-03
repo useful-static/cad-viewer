@@ -13,8 +13,8 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { MAX_FILE_BYTES, MM, inflate } from './cadmesh.js';
-import { FORMATS } from './formats.js';
+import { DEFAULT_GREY, MAX_FILE_BYTES, MM, inflate } from './cadmesh.js';
+import { FORMATS, extOf, sniffFormat } from './formats.js';
 import { LENGTH_MM } from './units.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
@@ -23,17 +23,21 @@ const CREASE_DEG = 30;
 // A 3MF or glTF names a part once and places it many times; the placements are counted
 // before any is built (a part shared two ways down 40 levels is 2^40 placements from a few
 // hundred bytes). Real assemblies of several million placed triangles stay under these.
+// Vertices are counted as well as triangles: each placement copies its part's vertices, so one
+// triangle indexing a 30 M-vertex list, placed 4 times, was 29.6 s and 2.9 GB from 451 bytes
+// (the vertex cap is an unindexed mesh at the triangle cap: 3 corners each).
 const MAX_PLACED_TRIANGLES = 10_000_000;
+const MAX_PLACED_VERTICES = 3 * MAX_PLACED_TRIANGLES;
 const MAX_PLACED_PARTS = 2_000_000;
 // a glTF accessor's values, refused past this before it is allocated (3 coordinates of
 // 3 corners of the triangle cap; a 200-byte file asked for 2^30 vertices)
 const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
 const big = (n) => n.toLocaleString('en-US');
 // the placement counts of a part tree, from its counts per part (memoised: a shared part is
-// walked once). kids(id) -> child ids, own(id) -> its own triangles, refuse(why) -> an Error;
-// a cycle, a missing part or a tree deeper than maxDepth is refused in words.
+// walked once). kids(id) -> child ids, own(id) -> { tris, verts } of its own, refuse(why) ->
+// an Error; a cycle, a missing part or a tree deeper than maxDepth is refused in words.
 function placements(roots, kids, own, maxDepth, refuse, who) {
-  const memo = new Map(); // id -> { parts, tris, height }
+  const memo = new Map(); // id -> { parts, tris, verts, height }
   const onPath = new Set();
   const count = (id, depth, from) => {
     const seen = memo.get(id);
@@ -42,33 +46,34 @@ function placements(roots, kids, own, maxDepth, refuse, who) {
     if (depth > maxDepth) throw refuse('deep');
     const ks = kids(id, from);
     onPath.add(id);
-    const r = { parts: 1, tris: own(id), height: 0 };
+    const o = own(id);
+    const r = { parts: 1, tris: o.tris, verts: o.verts, height: 0 };
     for (const k of ks) {
       const c = count(k, depth + 1, id);
-      r.parts += c.parts; r.tris += c.tris; r.height = Math.max(r.height, c.height + 1);
+      r.parts += c.parts; r.tris += c.tris; r.verts += c.verts; r.height = Math.max(r.height, c.height + 1);
     }
     onPath.delete(id);
     memo.set(id, r);
     return r;
   };
-  let parts = 0, tris = 0;
-  for (const id of roots) { const c = count(id, 0, null); parts += c.parts; tris += c.tris; }
-  if (parts > MAX_PLACED_PARTS) throw new Error(`${who} places ${big(parts)} parts once its shared parts are repeated, more than the ${big(MAX_PLACED_PARTS)} this viewer opens`);
-  if (tris > MAX_PLACED_TRIANGLES) throw new Error(`${who} places ${big(tris)} triangles once its shared parts are repeated, more than the ${big(MAX_PLACED_TRIANGLES)} this viewer opens`);
+  let parts = 0, tris = 0, verts = 0;
+  for (const id of roots) { const c = count(id, 0, null); parts += c.parts; tris += c.tris; verts += c.verts; }
+  const over = (n, what, cap) => new Error(`${who} places ${big(n)} ${what} once its shared parts are repeated, more than the ${big(cap)} this viewer opens`);
+  if (parts > MAX_PLACED_PARTS) throw over(parts, 'parts', MAX_PLACED_PARTS);
+  if (tris > MAX_PLACED_TRIANGLES) throw over(tris, 'triangles', MAX_PLACED_TRIANGLES);
+  if (verts > MAX_PLACED_VERTICES) throw over(verts, 'vertices', MAX_PLACED_VERTICES);
 }
 
-// The mesh format a file is, by its name and first bytes, or null
+// The mesh format a file is (the reader parseMesh runs), or null: by js/formats.js's sniff
+// where the first bytes are conclusive (a PLY header, a GLB's "glTF": these win over the name,
+// as check.html judges them), else by the name
 export function meshFormatOf(name, buf) {
-  const ext = (/\.([a-z0-9]+)$/i.exec(name || '') || [])[1]?.toLowerCase();
-  const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, 64));
-  const head = new TextDecoder('latin1').decode(u8);
-  if (head.startsWith('glTF')) return 'glb';
-  if (head.startsWith('PK\x03\x04') && ext === '3mf') return '3mf';
-  if (/^ply\r?\n/.test(head)) return 'ply';
-  if (/^\s*[CN]?OFF\b/.test(head) && ext === 'off') return 'off';
-  if (ext === 'stl') return 'stl';
-  if (ext && MESH_EXTS.includes(ext)) return ext;
-  return null;
+  const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, 400));
+  if (u8.length >= 4 && u8[0] === 0x67 && u8[1] === 0x6c && u8[2] === 0x54 && u8[3] === 0x46) return 'glb';
+  const s = sniffFormat(u8);
+  if (s && s.magic && s.kind === 'mesh') return s.ext[0];
+  const ext = extOf(name);
+  return MESH_EXTS.includes(ext) ? ext : null;
 }
 
 // A model from a mesh file. files: other dropped files by lower-case name
@@ -77,16 +82,25 @@ export async function parseMesh(format, buf, name, files = new Map()) {
   const base = (name || 'model').replace(/\.[^.]+$/, '');
   switch (format) {
     case 'stl': return finish(base, parseSTL(buf, base), null);
-    case 'obj': return finish(base, parseOBJ(text(buf), files, base), null);
+    case 'obj': return finish(base, parseOBJ(text(buf, name), files, base), null);
     case 'ply': return finish(base, parsePLY(buf, base), null);
-    case 'off': return finish(base, parseOFF(text(buf), base), null);
+    case 'off': return finish(base, parseOFF(text(buf, name), base), null);
     case '3mf': return parse3MF(buf, base);
     case 'glb': case 'gltf': return parseGLTF(buf, format, base, files);
     default: throw new Error(`${name}: not a mesh format this viewer reads`);
   }
 }
 
-const text = (buf) => new TextDecoder().decode(buf);
+// A text file or zip part becomes one string, and an engine string holds at most ~512 M
+// characters: a larger one is refused in words before it is decoded (a 3MF part inflating to
+// 600 MB met the engine's "Cannot create a string longer than 0x1fffffe8 characters")
+const MAX_TEXT_BYTES = 500 * 2 ** 20;
+const mb = (n) => `${big(Math.round(n / 2 ** 20))} MB`;
+const TEXT_LIMIT_WORDS = `more than the ${mb(MAX_TEXT_BYTES)} of text this viewer reads`;
+const text = (buf, what = 'the file') => {
+  if (buf.byteLength > MAX_TEXT_BYTES) throw new Error(`${what} is ${mb(buf.byteLength)} of text, ${TEXT_LIMIT_WORDS}`);
+  return new TextDecoder().decode(buf);
+};
 
 // raw bodies [{ name, pos: number[], tri: number[], col?: [r,g,b] per
 // triangle or null, color }] -> the encodeCadmesh model, one tree node
@@ -100,12 +114,18 @@ function checkBodies(rootName, bodies) {
   }
 }
 
-function finish(rootName, bodies, sourceUnits, root = null) {
-  checkBodies(rootName, bodies);
-  const welded = bodies.filter((b) => b.tri.length).map(weld);
+// welded bodies with no triangle left (none, or every one collapsed by the weld): refused in
+// the same words by every reader (3MF and glTF opened a model of empty meshes)
+function needTriangles(rootName, welded) {
   if (!welded.some((m) => m.indices.length)) {
     throw new Error(`${rootName} has no triangles to show${welded.length ? ' (every triangle has no area)' : ''}`);
   }
+}
+
+function finish(rootName, bodies, sourceUnits, root = null) {
+  checkBodies(rootName, bodies);
+  const welded = bodies.filter((b) => b.tri.length).map(weld);
+  needTriangles(rootName, welded);
   // (a tree given by the file names its meshes by number: they are kept as they are)
   const meshes = root ? welded : welded.filter((m) => m.indices.length);
   const model = { units: MM, meshes, root: root || { name: rootName, meshes: meshes.map((_, i) => i), children: [] } };
@@ -199,7 +219,7 @@ function parseSTL(buf, base) {
       return [{ name: base, pos, tri }];
     }
   }
-  const s = text(buf);
+  const s = text(buf, `${base}.stl`);
   if (!/^\s*solid/.test(s)) throw new Error(`${base}.stl is neither a binary STL (its size does not match its triangle count) nor an ASCII one`);
   const bodies = [];
   let cur = null;
@@ -211,7 +231,13 @@ function parseSTL(buf, base) {
   const body = () => { if (!cur) { cur = { name: base, pos: [], tri: [] }; bodies.push(cur); } return cur; };
   while ((m = re.exec(s))) {
     if (m[1] === 'solid') { cur = { name: m[2].trim() || base, pos: [], tri: [] }; bodies.push(cur); }
-    else if (m[1] === 'vertex') { body(); fv.push(...m[2].trim().split(/\s+/).slice(0, 3).map(Number)); }
+    else if (m[1] === 'vertex') {
+      // three numbers, or the file is damaged (a short line shifted every later coordinate)
+      body();
+      const xyz = m[2].trim().split(/\s+/).slice(0, 3).map(Number);
+      if (xyz.length < 3 || !xyz.every(Number.isFinite)) throw new Error(`${base}.stl is damaged: "${m[0].trim().slice(0, 80)}" is not three numbers`);
+      fv.push(xyz[0], xyz[1], xyz[2]);
+    }
     else if (m[1] === 'endfacet') {
       // a facet of more than 3 vertices: a fan (appended by a loop: spread into push, a
       // 300 k-vertex facet overflowed the stack)
@@ -243,7 +269,7 @@ function parseOBJ(s, files, base) {
     else if (k === 'mtllib') {
       for (const f of sp.slice(1)) {
         const t = files.get(f.toLowerCase());
-        if (t) readMTL(text(t), mtl);
+        if (t) readMTL(text(t, f), mtl);
       }
     } else if (k === 'usemtl') mat = sp.slice(1).join(' ');
     else if (k === 'f') {
@@ -268,7 +294,7 @@ function parseOBJ(s, files, base) {
     // one colour for the body when its faces agree, else per triangle
     const cs = new Set(b.col.map((c) => (c ? c.join(',') : '')));
     if (cs.size === 1) { b.color = b.col[0]; b.col = null; }
-    else b.col = b.col.map((c) => c || [0.72, 0.74, 0.78]);
+    else b.col = b.col.map((c) => c || DEFAULT_GREY);
     delete b.map;
   }
   return bodies;
@@ -449,14 +475,24 @@ export async function unzip(buf) {
   return {
     names: [...out.values()].map((f) => f.name),
     has: (p) => out.has(p.replace(/^\//, '').toLowerCase()),
-    async get(p) {
+    // (max, too: a smaller limit for this entry, and too(size words) -> the Error past it, met
+    // before inflating when the directory says so, else when the inflate passes it)
+    async get(p, max = MAX_FILE_BYTES, too = null) {
       const f = out.get(p.replace(/^\//, '').toLowerCase());
       if (!f) return null;
-      if (f.method === 0) return f.data.slice().buffer;
+      if (too && f.usize > max) throw too(mb(f.usize));
+      if (f.method === 0) {
+        if (too && f.data.length > max) throw too(mb(f.data.length));
+        return f.data.slice().buffer;
+      }
       if (f.method !== 8) throw new Error(`zip entry ${p} uses compression method ${f.method}`);
       // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
       if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
-      return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES);
+      if (!too) return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES);
+      try { return await inflate(f.data, 'deflate-raw', max); } catch (e) {
+        if (/too big/.test(e.message)) throw too(`over ${mb(max)}`);
+        throw e;
+      }
     },
   };
 }
@@ -481,15 +517,17 @@ const UNIT_NAME = { micron: 'um', millimeter: 'mm', centimeter: 'cm', inch: 'in'
 
 async function parse3MF(buf, base) {
   const zip = await unzip(buf);
+  // an XML part is read as one string: refused past the text limit before it is inflated
+  const xmlPart = (p, what) => zip.get(p, MAX_TEXT_BYTES, (size) => new Error(`${base}.3mf: its ${what} ${p} unpacks to ${size}, ${TEXT_LIMIT_WORDS}`));
   let path = '3D/3dmodel.model';
-  const rels = await zip.get('_rels/.rels');
+  const rels = await xmlPart('_rels/.rels', 'relationships part');
   if (rels) {
-    const t = xmlTags(text(rels)).find((x) => x.tag === 'Relationship' && /3dmodel$/.test(x.attrs.Type || ''));
+    const t = xmlTags(text(rels, `${base}.3mf's relationships part`)).find((x) => x.tag === 'Relationship' && /3dmodel$/.test(x.attrs.Type || ''));
     if (t && t.attrs.Target) path = t.attrs.Target;
   }
-  const xml = await zip.get(path);
+  const xml = await xmlPart(path, 'model part');
   if (!xml) throw new Error(`${base}.3mf has no model part (${path})`);
-  const tags = xmlTags(text(xml));
+  const tags = xmlTags(text(xml, `${base}.3mf's model part`));
   const modelTag = tags.find((x) => x.tag === 'model');
   const unit = (modelTag && modelTag.attrs.unit) || 'millimeter';
   const k = LENGTH_MM[UNIT_NAME[unit]] ?? 1;
@@ -522,7 +560,7 @@ async function parse3MF(buf, base) {
     const o = objects.get(id);
     if (!o) throw new Error(`${who} is damaged: ${from === null ? 'its build' : `object ${from}`} names object ${id}, which is not there`);
     return o.comps.map((c) => c.id);
-  }, (id) => objects.get(id).tris.length / 3, 32,
+  }, (id) => { const o = objects.get(id); return { tris: o.tris.length / 3, verts: o.tris.length ? o.verts.length / 3 : 0 }; }, 32,
   (why, id) => new Error(why === 'cycle' ? `${who} is damaged: object ${id} is its own ancestor` : `${who} is damaged: its component tree is more than 32 deep`), who);
   const bodies = [];
   const node = (id, m, depth) => {
@@ -540,7 +578,7 @@ async function parse3MF(buf, base) {
       const cs = new Set(o.tcol.map((c) => (c ? c.join(',') : '')));
       const one = cs.size === 1;
       n.meshes.push(bodies.length);
-      bodies.push({ name: o.name, pos, tri: o.tris, color: one ? o.tcol[0] : null, col: one ? null : o.tcol.map((c) => c || [0.72, 0.74, 0.78]) });
+      bodies.push({ name: o.name, pos, tri: o.tris, color: one ? o.tcol[0] : null, col: one ? null : o.tcol.map((c) => c || DEFAULT_GREY) });
     }
     for (const c of o.comps) { const ch = node(c.id, mulAffine(c.m, m), depth + 1); if (ch) n.children.push(ch); }
     return n;
@@ -550,7 +588,7 @@ async function parse3MF(buf, base) {
   // (bodies are welded in order, so node mesh indices stay right)
   checkBodies(`${base}.3mf`, bodies);
   const meshes = bodies.map(weld);
-  if (!meshes.length) throw new Error(`${base}.3mf has no triangles to show`);
+  needTriangles(`${base}.3mf`, meshes);
   return { units: MM, meshes, root, sourceUnits: UNIT_NAME[unit] || undefined };
 }
 function hexColour(h) {
@@ -591,11 +629,11 @@ async function parseGLTF(buf, format, base, files) {
     while (o + 8 <= buf.byteLength) {
       const len = dv.getUint32(o, true), type = dv.getUint32(o + 4, true);
       if (o + 8 + len > buf.byteLength) throw new Error(`${base}.glb is damaged: a chunk runs past the end of the file`);
-      if (type === 0x4e4f534a) json = parseJSON(new TextDecoder().decode(new Uint8Array(buf, o + 8, len)), `${base}.glb`);
+      if (type === 0x4e4f534a) json = parseJSON(text(new Uint8Array(buf, o + 8, len), `${base}.glb's JSON`), `${base}.glb`);
       else if (type === 0x004e4942) bin = buf.slice(o + 8, o + 8 + len);
       o += 8 + len;
     }
-  } else json = parseJSON(text(buf), `${base}.gltf`);
+  } else json = parseJSON(text(buf, `${base}.gltf`), `${base}.gltf`);
   if (!json) throw new Error(`${base}: no glTF JSON`);
   const damaged = (what) => new Error(`${base} is damaged: ${what}`);
   // the JSON's shapes are checked where they are used: a list that is not one, or an index to
@@ -627,26 +665,48 @@ async function parseGLTF(buf, format, base, files) {
     // the count is bounded before anything is allocated: by a cap, then by its buffer view
     // (2^30 vertices with no buffer view ran the tab out of memory from a 200-byte file)
     if (a.count * nc > MAX_ACCESSOR_VALUES) throw new Error(`${base}: accessor ${i} holds ${big(a.count * nc)} values, more than the ${big(MAX_ACCESSOR_VALUES)} this viewer reads`);
-    if (a.bufferView === undefined) return new Float64Array(a.count * nc);
-    const bv = at(views, a.bufferView);
+    const out = a.bufferView === undefined ? new Float64Array(a.count * nc)
+      : readView(a.bufferView, a.byteOffset, Ctor, nc, a.count, true, `accessor ${i}`, a.normalized && max);
+    // a sparse accessor: its listed elements replaced by its values, over the view or zeros
+    // (glTF 2.0 3.6.2.3; ignored, a valid sparse triangle opened as nothing without a word)
+    if (a.sparse !== undefined) {
+      const sp = a.sparse;
+      if (!isObj(sp) || !isObj(sp.indices) || !isObj(sp.values)) throw damaged(`accessor ${i}'s "sparse" is malformed`);
+      if (!Number.isInteger(sp.count) || sp.count < 1 || sp.count > a.count) throw damaged(`accessor ${i}'s sparse count ${sp.count} is not 1 to its ${a.count} elements`);
+      const IDX = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array }[sp.indices.componentType];
+      if (!IDX) throw damaged(`accessor ${i}'s sparse indices have component type ${sp.indices.componentType}, which is not an unsigned integer type`);
+      const ix = readView(sp.indices.bufferView, sp.indices.byteOffset, IDX, 1, sp.count, false, `accessor ${i}'s sparse indices`, 0);
+      const vals = readView(sp.values.bufferView, sp.values.byteOffset, Ctor, nc, sp.count, false, `accessor ${i}'s sparse values`, a.normalized && max);
+      for (let s = 0; s < sp.count; s++) {
+        const e = ix[s];
+        if (e >= a.count) throw damaged(`accessor ${i}'s sparse index ${e} is past its ${a.count} elements`);
+        for (let c = 0; c < nc; c++) out[e * nc + c] = vals[s * nc + c];
+      }
+    }
+    return out;
+  };
+  // count elements of nc components of Ctor from buffer view vi at byte offset off (strided only
+  // where the view may be: a sparse view is packed), normalised by max when it is not 0; every
+  // read is checked inside the view once, not met as a DataView RangeError
+  const readView = (vi, offset, Ctor, nc, count, strided, what, max) => {
+    const bv = at(views, vi);
     const data = bv && Number.isInteger(bv.buffer) ? buffers[bv.buffer] : undefined;
-    if (!(data instanceof ArrayBuffer)) throw damaged(`accessor ${i} names a buffer view that is not there`);
-    const bvOff = bv.byteOffset ?? 0, aOff = a.byteOffset ?? 0;
+    if (!(data instanceof ArrayBuffer)) throw damaged(`${what} names a buffer view that is not there`);
+    const bvOff = bv.byteOffset ?? 0, aOff = offset ?? 0;
     const bvLen = bv.byteLength ?? data.byteLength - bvOff;
-    if (!nat(bvOff) || !nat(bvLen) || bvOff + bvLen > data.byteLength) throw damaged(`buffer view ${a.bufferView} runs past the end of its buffer`);
+    if (!nat(bvOff) || !nat(bvLen) || bvOff + bvLen > data.byteLength) throw damaged(`buffer view ${vi} runs past the end of its buffer`);
     const size = Ctor.BYTES_PER_ELEMENT;
-    const stride = bv.byteStride || size * nc;
-    if (!Number.isInteger(stride) || stride < 1) throw damaged(`buffer view ${a.bufferView} has a byteStride of ${bv.byteStride}`);
-    // every read inside the view (checked once, not met as a DataView RangeError)
-    if (!nat(aOff) || aOff + (a.count ? (a.count - 1) * stride + nc * size : 0) > bvLen) throw damaged(`accessor ${i} reads past the end of its buffer`);
-    const out = new Float64Array(a.count * nc);
+    const stride = (strided && bv.byteStride) || size * nc;
+    if (!Number.isInteger(stride) || stride < 1) throw damaged(`buffer view ${vi} has a byteStride of ${bv.byteStride}`);
+    if (!nat(aOff) || aOff + (count ? (count - 1) * stride + nc * size : 0) > bvLen) throw damaged(`${what} reads past the end of its buffer`);
+    const out = new Float64Array(count * nc);
     const bytes = new DataView(data, bvOff + aOff);
     const get = { 1: (o) => (Ctor === Int8Array ? bytes.getInt8(o) : bytes.getUint8(o)), 2: (o) => (Ctor === Int16Array ? bytes.getInt16(o, true) : bytes.getUint16(o, true)),
       4: (o) => (Ctor === Float32Array ? bytes.getFloat32(o, true) : bytes.getUint32(o, true)) }[size];
-    for (let e = 0; e < a.count; e++) {
+    for (let e = 0; e < count; e++) {
       for (let c = 0; c < nc; c++) {
         let v = get(e * stride + c * size);
-        if (a.normalized && max) v = Math.max(v / max, -1);
+        if (max) v = Math.max(v / max, -1);
         out[e * nc + c] = v;
       }
     }
@@ -662,28 +722,36 @@ async function parseGLTF(buf, format, base, files) {
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
   }));
   const si = json.scene ?? 0;
-  const scene = json.scenes !== undefined ? at(list(json.scenes, '"scenes"'), si) : { nodes: nodes.map((_, i) => i) };
+  // with no scenes the roots are the nodes no node names as a child (every node as a root drew
+  // each child twice: under its parent and again at the origin)
+  const named = new Set();
+  if (json.scenes === undefined) for (const nd of nodes) if (isObj(nd) && Array.isArray(nd.children)) for (const c of nd.children) named.add(c);
+  const scene = json.scenes !== undefined ? at(list(json.scenes, '"scenes"'), si) : { nodes: nodes.map((_, i) => i).filter((i) => !named.has(i)) };
   if (!scene) throw damaged(`its scene ${si} is not there`);
   const roots = list(scene.nodes, `scene ${si}'s "nodes"`);
   // the node tree counted before it is built: a node among its own ancestors (a cycle), a
   // missing node, or a tree deeper than 64 is a damaged file (a self-child overflowed the
   // stack), and a node shared past the caps is refused (each node holding the next twice,
   // 40 deep, was 2^40 visits)
-  const meshTris = (mi) => {
+  // a mesh's triangles (by its indices, else its positions) and the vertices each placement of
+  // it copies (its POSITION count)
+  const meshCounts = (mi) => {
     const me = at(meshDefs, mi);
-    let n = 0;
+    let tris = 0, verts = 0;
     for (const pr of (me && Array.isArray(me.primitives) ? me.primitives : [])) {
       if (!isObj(pr) || (pr.mode ?? 4) !== 4) continue;
-      const a = pr.indices !== undefined ? at(accessors, pr.indices) : isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
-      if (a && nat(a.count)) n += Math.floor(a.count / 3);
+      const p = isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
+      const a = pr.indices !== undefined ? at(accessors, pr.indices) : p;
+      if (a && nat(a.count)) tris += Math.floor(a.count / 3);
+      if (p && nat(p.count)) verts += p.count;
     }
-    return n;
+    return { tris, verts };
   };
   placements(roots, (ni) => {
     const nd = at(nodes, ni);
     if (!nd) throw damaged(`node ${ni} is not there`);
     return list(nd.children, `node ${ni}'s "children"`);
-  }, (ni) => (nodes[ni].mesh !== undefined ? meshTris(nodes[ni].mesh) : 0), 64,
+  }, (ni) => (nodes[ni].mesh !== undefined ? meshCounts(nodes[ni].mesh) : { tris: 0, verts: 0 }), 64,
   (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), base);
   const bodies = [];
   const nodeOf = (ni, parent) => {
@@ -722,7 +790,7 @@ async function parseGLTF(buf, format, base, files) {
   const root = { name: base, meshes: [], children: roots.map((ni) => nodeOf(ni, IDENT)) };
   checkBodies(base, bodies);
   const meshes = bodies.map(weld);
-  if (!meshes.length) throw new Error(`${base} has no triangles to show`);
+  needTriangles(base, meshes);
   return { units: MM, meshes, root, sourceUnits: 'm' };
 }
 // A texture's average colour (sRGB, 0..1), or null where the image cannot be

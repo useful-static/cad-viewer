@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { parseTour, partIndex, resolveParts, tourNames, namesFor, DEFAULTS } from '../js/tour.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
-import { draftToTour } from '../js/tour-recorder.js';
+import { draftToTour, stepFromView } from '../js/tour-recorder.js';
 import { blockedShare, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 let passed = 0;
@@ -79,6 +79,30 @@ test('recorder-round-trip: an opened tour saved again keeps its step ids, its or
   assert.equal(back.loop, true);
   assert.deepEqual(back.steps.map((s) => s.id), ['microsd', undefined]);
   assert.deepEqual(back.steps, t.steps);
+});
+
+test('recorder-update-view: re-taking a step\'s view keeps its id, words, dimming, timing, ease and orbit', () => {
+  const old = { id: 'uart', title: 'UART', text: 'pins', dim: 'ghost', transition: 2, hold: 7, ease: 'linear', orbit: 90, view: 'top' };
+  const s = stepFromView({ view: 'front', show: ['a'] }, old);
+  assert.deepEqual(s, { view: 'front', show: ['a'], id: 'uart', title: 'UART', text: 'pins', dim: 'ghost', transition: 2, hold: 7, ease: 'linear', orbit: 90 });
+  // a new step: the defaults, and no id copied from the step before it
+  const n = stepFromView({ view: 'iso' }, { dim: 'grey', transition: 3, hold: 5 });
+  assert.equal(n.id, undefined);
+  assert.deepEqual([n.title, n.dim, n.transition, n.hold], ['', 'grey', 3, 5]);
+  // and the result is a step the parser takes
+  parseTour(JSON.stringify({ cadtour: 2, steps: [s, n] }));
+});
+
+test('a callout whose part is not text, or only spaces, takes its point; one with neither is refused in words', () => {
+  const t = parseTour(JSON.stringify({ cadtour: 2, steps: [{ callouts: [{ text: 'a', part: 5, at: [1, 2, 3] }, { text: 'b', part: '  ', at: [4, 5, 6] }, { text: 'c', part: ' X ' }] }] }));
+  assert.deepEqual(t.steps[0].callouts, [{ text: 'a', at: [1, 2, 3] }, { text: 'b', at: [4, 5, 6] }, { text: 'c', part: 'X' }]);
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 2, steps: [{ callouts: [{ text: 'a', part: 5 }] }] })), /callouts/);
+});
+test('partIndex: 300,000 bodies under one node (no spread onto the stack)', () => {
+  const n = 300000;
+  const header = { meshes: Array.from({ length: n }, (_, i) => ({ name: `b${i}` })), root: { name: '', meshes: [], children: [{ name: 'all', meshes: Array.from({ length: n }, (_, i) => i), children: [] }] } };
+  const idx = partIndex(header);
+  assert.equal(idx.get('all').size, n);
 });
 
 // an app serving the viewer and its files from its own scheme (lc://app/)

@@ -4,17 +4,18 @@
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
 import { meshFormatOf, parseMesh, unzip } from './mesh-formats.js';
-import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensText } from './formats.js';
+import { extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
 import { onPaper, parseDXF } from './dxf.js';
 import { readDWG, dwgToPairs } from './dwg.js';
 import { createDxfView } from './dxf-view.js';
 import { directUrl } from './open-url.js';
+import { samePlace } from './same-place.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { entryByName, fetchModelLists } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, PORTRAIT, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientBasis, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
@@ -170,7 +171,7 @@ function setStatus(s, msg) {
 }
 
 // (every kind of file the page opens, as its empty card says)
-const IDLE_MSG = 'open or drop a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, 3MF, glTF…) or a 2D DXF or DWG';
+const IDLE_MSG = `open or drop ${opensShort()}`;
 const mb = (n) => (n / 1e6).toFixed(1);
 
 // The empty-state card: shown while there is no model and no load running (and,
@@ -537,7 +538,7 @@ function setExplodeMode(mode) {
 
 function setExplode(on, focus = false) {
   const x = app.explode;
-  if (on && (!app.header || !app.renderer?.canExplode)) return;
+  if (on && (!app.header || !app.renderer)) return;
   if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
@@ -574,7 +575,7 @@ function syncExplodeRow() {
   const x = app.explode;
   $('xpopt').hidden = !x.on;
   $('explode').setAttribute('aria-pressed', String(x.on));
-  $('explode').hidden = !(app.renderer && app.renderer.canExplode);
+  $('explode').hidden = !app.renderer;
   $('explode').disabled = !app.header;
   for (const b of $('xpmode').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === x.mode));
   $('xpmode').querySelector('[data-mode="assembly"]').textContent = x.flat ? 'Radial (flat file)' : 'Assembly';
@@ -921,9 +922,34 @@ const VIEWS = VIEW_PRESETS; // (js/orient.js: the one table of named views)
 
 // Number-key views (Blender's numpad layout): 1 front, 3 right, 7 top,
 // 0 iso, 5 Ortho on/off, 9 the opposite of the preset nearest the view.
-const VIEW_KEYS = { 1: 'front', 3: 'right', 7: 'top', 0: 'iso', 5: 'ortho', 9: 'opposite' };
-const OPPOSITE = { front: 'back', back: 'front', left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
-const VIEW_NAMES = { iso: 'Iso', front: 'Front', back: 'Back', left: 'Left', right: 'Right', top: 'Top', bottom: 'Bottom' };
+// (from the one table of views, js/orient.js VIEWS)
+const VIEW_KEYS = { ...Object.fromEntries(VIEW_ROWS.filter((v) => v.key).map((v) => [v.key, v.id])), 5: 'ortho', 9: 'opposite' };
+const OPPOSITE = Object.fromEntries(VIEW_ROWS.filter((v) => v.opposite).map((v) => [v.id, v.opposite]));
+const VIEW_NAMES = Object.fromEntries(VIEW_ROWS.map((v) => [v.id, v.name]));
+
+// The View presets and the Export as buttons, built from their tables (js/orient.js VIEWS,
+// js/export-mesh.js EXPORTS) into index.html's empty groups, before anything wires them
+for (const v of VIEW_ROWS) {
+  const b = document.createElement('button');
+  b.dataset.view = v.id;
+  b.textContent = v.name;
+  if (v.key) {
+    b.title = `${v.name} view (${v.key})`;
+    b.setAttribute('aria-keyshortcuts', v.key);
+    const k = document.createElement('kbd');
+    k.textContent = v.key;
+    b.append(k);
+  }
+  document.querySelector('.presets').append(b);
+}
+for (const [fmt, x] of Object.entries(EXPORTS)) {
+  const b = document.createElement('button');
+  b.dataset.fmt = fmt;
+  b.disabled = true;
+  b.title = `${x.label}: ${x.about}`;
+  b.textContent = x.label;
+  $('exportmesh').append(b);
+}
 
 // the axis preset whose view direction is nearest the camera's (after a
 // free orbit too)
@@ -1028,7 +1054,7 @@ function applyView(v, link = false) {
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   // Explode as the link has it (a whole link without it: off), how far
   // first, then on, then how
-  if (v.explode && app.renderer?.canExplode) {
+  if (v.explode && app.renderer) {
     app.explode.t = v.explode.t;
     setExplode(true);
     if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
@@ -1460,8 +1486,9 @@ function viewLink() {
     }
   }
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
-  // (a drawing: its URL alone; the 3D view's camera does not apply to it)
-  if (app.dxf) { if (app.dxf.url) u.searchParams.set('src', app.dxf.url); return u.toString(); }
+  // (a drawing: its URL alone, named once above as any model is (show2D sets app.sourceUrl);
+  // the 3D view's camera does not apply to it)
+  if (app.dxf) return u.toString();
   u.hash = `view=${encodeView(currentView())}`;
   return u.toString();
 }
@@ -1656,7 +1683,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   cancelFlight();
   const x = app.explode;
   const ex0 = x.on && x.for === app.header ? x.t : 0;
-  const ex1 = app.renderer?.canExplode ? explodeTo : 0;
+  const ex1 = app.renderer ? explodeTo : 0;
   if (ex1 > 0 && !x.on) { x.t = 0; setExplode(true); }
   const explodeAt = (e) => {
     if (!x.on || ex0 === ex1) return;
@@ -1772,7 +1799,7 @@ function showTourStep(i) {
   // a frame where the parts will be: framed at the step's explode, flown
   // there from the explode they are at now
   const x = app.explode;
-  const ex1 = app.renderer?.canExplode ? s.explode ?? 0 : 0;
+  const ex1 = app.renderer ? s.explode ?? 0 : 0;
   if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; setExplode(true); }
   const exNow = x.t;
   if (x.on) x.t = ex1;
@@ -2946,16 +2973,17 @@ function applyListEntry() {
   // page's own (a ?src=data:… one is never handed back as a link)
   let own = null;
   try { own = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; } catch { /* no URL */ }
-  // (origin alone is not enough: under file:// it is "null", as a data: URL's is)
-  if (own && !(/^https?:$/.test(own.protocol) || (own.protocol === location.protocol && own.origin === location.origin))) own = null;
-  const src = e && e.step ? e.step
-    : own && /\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i.test(own.pathname) ? own.href : null;
+  // (by the readers' one rule, js/same-place.js: not URL.origin, which is "null" for a file:
+  // or data: URL and for every app scheme)
+  if (own && !samePlace(own.href, location.href)) own = null;
+  // (a CAD source by the one table, its name read as the loader reads it: "get?file=a.stp" too)
+  const cadOf = (url) => { const f = formatOfName(fileNameOfUrl(url)); return f && f.kind === 'cad' ? f : null; };
+  const src = e && e.step ? e.step : own && cadOf(own.href) ? own.href : null;
   const a = $('download');
   a.hidden = !src;
   if (src) {
     a.href = src;
-    const ext = (new URL(src).pathname.match(/\.(stp|step|igs|iges|brep|brp)(\.gz)?$/i) || [])[1] || 'stp';
-    a.textContent = `Download ${{ stp: 'STEP', step: 'STEP', igs: 'IGES', iges: 'IGES', brep: 'BREP', brp: 'BREP' }[ext.toLowerCase()]}`;
+    a.textContent = `Download ${(cadOf(src) || { label: 'STEP' }).label}`;
     a.title = `The source CAD file this model was made from: ${src}`;
   }
   // its tours: one File item each, under Open
@@ -3329,7 +3357,7 @@ function updateButtons() {
   $('measure').disabled = !has && !app.dxf;
   // Explode: only where the renderer's vertex shaders can read the directions
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
-  $('explode').hidden = !(app.renderer && app.renderer.canExplode);
+  $('explode').hidden = !app.renderer;
   $('explode').disabled = !has;
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
@@ -4707,7 +4735,7 @@ function droppedFile(e) {
   const dt = e.dataTransfer;
   const files = dt ? dt.files : [];
   const f = files[0];
-  if (!f) { announce('Nothing to open: drop a model file (STEP, IGES, BREP, a mesh, a DXF or DWG)'); return null; }
+  if (!f) { announce(`Nothing to open: drop ${opensShort()}`); return null; }
   const item = dt.items && dt.items[0];
   if (item && item.webkitGetAsEntry && item.webkitGetAsEntry()?.isDirectory) {
     announce(`${f.name} is a folder: drop the model file in it`);
@@ -5432,6 +5460,7 @@ function wireInput() {
   // the pickers offer what the loader opens (js/formats.js): Open… every format, Add model… the
   // 3D ones (a drawing is refused there)
   $('open').accept = acceptList();
+  $('dropwhat').textContent = opensShort();
   $('addmodel').accept = acceptList(['cad', 'cadmesh', 'mesh', 'zip']);
   // Measure (js/measure-ui.js): this input feeds it while it is on
   app.measure = createMeasure({
@@ -5980,8 +6009,9 @@ function wireInput() {
     preview: (tour, from, play) => { endTour(); startTour(tour, null); if (from) showTourStep(from); setTourPlaying(play); },
     stopPreview: () => endTour(),
     modelUrl: () => {
-      try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
+      try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
+    orient: () => app.cam.orient || null,
     save: (text, name) => downloadText(text, name, 'application/json'),
     validate: (text) => parseTour(text, location.href),
     pictures: tourPictures,

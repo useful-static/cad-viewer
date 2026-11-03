@@ -57,14 +57,20 @@ export const VERSION_NAMES = { AC1012: 'R13', AC1013: 'R14 (AC1013)', AC1014: 'R
 
 class Bits {
   // b: the bytes; p: the bit position; v: the version number (13 .. 32)
-  constructor(b, v, byteOff = 0, dec = null) { this.b = b; this.p = byteOff * 8; this.v = v; this.str = null; this.dec = dec; }
-  B() { const v = (this.b[this.p >>> 3] >> (7 - (this.p & 7))) & 1; this.p++; return v; }
+  // end: the bit no read may pass (an object's readers end at the object's end: a count past it
+  // stops there, not after reading to the end of the file, once per map entry)
+  constructor(b, v, byteOff = 0, dec = null) { this.b = b; this.p = byteOff * 8; this.v = v; this.str = null; this.dec = dec; this.end = Infinity; }
+  B() {
+    if (this.p >= this.end) throw new Error('read past the end of the object');
+    const v = (this.b[this.p >>> 3] >> (7 - (this.p & 7))) & 1; this.p++; return v;
+  }
   BB() { return (this.B() << 1) | this.B(); }
   B3() { let v = 0; for (let k = 0; k < 3; k++) { const x = this.B(); v = (v << 1) | x; if (!x) break; } return v; }
   RC() {
     const o = this.p >>> 3, s = this.p & 7;
     this.p += 8;
     if (o >= this.b.length) throw new Error('read past the end');
+    if (this.p > this.end) throw new Error('read past the end of the object');
     return s ? ((this.b[o] << s) | (this.b[o + 1] >> (8 - s))) & 0xff : this.b[o];
   }
   RS() { const lo = this.RC(); return ((this.RC() << 8) | lo) << 16 >> 16; }
@@ -769,6 +775,7 @@ class ObjectReader {
     const dataBit = r.p;
     const crcAt = (dataBit >>> 3) + size;
     if (crcAt + 2 > b.length) return null;
+    r.end = dataBit + size * 8;
     const crcOk = crc16(0xc0c1, b, at, crcAt) === (b[crcAt] | (b[crcAt + 1] << 8));
     this.chk.ok('object CRC', crcOk);
     const type = r.OT();
@@ -790,6 +797,7 @@ class ObjectReader {
     if (v >= 21) r.str = stringStream(r.b, v, o.hBit, o.dataBit);
     o.h = new Bits(r.b, v, 0, this.dec);
     o.h.p = o.hBit;
+    o.h.end = o.endBit;
   }
 
   // 20.4.1: common entity data
@@ -1226,9 +1234,17 @@ export function readDWG(buf) {
   const rd = new ObjectReader(cont.objects, v, classes, chk, dec);
   const objects = new Map();
   const types = {};
+  // (each location read once: a map naming one object many times reads it once, and the
+  // other entries then fail the handle check)
+  const atLoc = new Map();
   for (const [h, loc] of map) {
     let o;
-    try { o = rd.read(loc); } catch (err) { chk.ok('object start readable', false); continue; }
+    if (atLoc.has(loc)) {
+      chk.ok('object handle matches the map', false);
+      continue;
+    }
+    try { o = rd.read(loc); } catch (err) { atLoc.set(loc, null); chk.ok('object start readable', false); continue; }
+    atLoc.set(loc, o);
     if (!o) { chk.ok('object start readable', false); continue; }
     chk.ok('object handle matches the map', o.handle === h);
     types[o.name] = (types[o.name] || 0) + 1;

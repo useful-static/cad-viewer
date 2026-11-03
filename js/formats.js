@@ -109,6 +109,13 @@ export function opensText() {
   return `open a ${cad.slice(0, -1).join(', ')}, ${cad[cad.length - 1]} or .cadmesh file, a mesh (${mesh.join(', ')}), a 2D ${twoD.join(' or ')}, or a zip of one`;
 }
 
+// The same in short, by kind, for a hint ("a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ,
+// ...), a 2D DXF or DWG, or a zip of one"): the idle line, the drop card, the empty-drop note
+export function opensShort() {
+  const of = (kind) => FORMATS.filter((f) => f.kind === kind).map((f) => f.label);
+  return `a CAD file (${of('cad').join(', ')}), a mesh (${of('mesh').join(', ')}), a 2D ${of('2d').join(' or ')}, or a zip of one`;
+}
+
 // An <input type=file> accept list: the formats of these kinds, gzipped too, and the companions
 export function acceptList(kinds = ['cad', 'cadmesh', 'mesh', '2d', 'zip']) {
   const exts = FORMATS.filter((x) => kinds.includes(x.kind)).flatMap((x) => x.ext);

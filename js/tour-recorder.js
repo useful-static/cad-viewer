@@ -10,13 +10,14 @@
 //   preview(tour, i)       play the draft from step i (paused)
 //   stopPreview()          leave the preview
 //   modelUrl()             the model's URL, when it was opened from one
+//   orient()               the view's orientation ("+z-y"), written into a new tour
 //   save(text, name)       download the file
 //   validate(text)         the tour parser: throws naming what is wrong
 //   pictures(tour)         each step as a picture, zipped -> how many
 //   video(tour)            the tour played and recorded -> bytes, or why not
 //   announce(text)         the live region
 
-import { STEP_FIELDS, TOUR_VERSION } from './tour.js';
+import { DEFAULTS, STEP_FIELDS, TOUR_VERSION } from './tour.js';
 
 // what a step keeps when the draft is written: the parser's own field list
 const STEP_KEYS = ['id', ...STEP_FIELDS];
@@ -35,6 +36,16 @@ export function draftToTour(draft, modelUrl = null) {
   return out;
 }
 
+// A step from the view as captured and the fields the editor owns, kept from `keep` (the step
+// it replaces, or the one before a new step): its id, words, dimming, timing and orbit. The
+// view's own fields come from the capture. Pure: tests/test-tour.mjs.
+const EDITOR_FIELDS = ['id', 'title', 'text', 'dim', 'transition', 'hold', 'ease', 'orbit'];
+export function stepFromView(captured, keep = {}) {
+  const s = { ...captured, title: '', text: '', dim: DEFAULTS.dim, transition: DEFAULTS.transition, hold: DEFAULTS.hold };
+  for (const k of EDITOR_FIELDS) if (keep[k] !== undefined && keep[k] !== '') s[k] = keep[k];
+  return s;
+}
+
 export function createTourRecorder(api) {
   const $ = (id) => document.getElementById(id);
   // orient: an opened tour's orientation, written back as it was (a new tour has none)
@@ -50,7 +61,9 @@ export function createTourRecorder(api) {
 
   const note = (t) => { el.note.textContent = t; if (t) api.announce(t); };
 
-  const toJSON = () => draftToTour(draft, api.modelUrl());
+  // (a new tour is written with the orientation its steps were taken in: its presets and
+  // orbits mean that up on any page, whatever the page's own orientation)
+  const toJSON = () => draftToTour({ ...draft, orient: draft.orient || (api.orient ? api.orient() : null) }, api.modelUrl());
   const text = () => JSON.stringify(toJSON(), null, 1);
 
   function renderList() {
@@ -118,9 +131,7 @@ export function createTourRecorder(api) {
   function take(keep = {}) {
     const cam = el.sCam.value === 'frame' ? 'frame' : 'exact';
     const s = api.capture({ camera: cam });
-    if (!s) return null;
-    return { ...s, title: keep.title ?? '', text: keep.text ?? '', dim: keep.dim ?? 'none',
-      transition: keep.transition ?? 1.2, hold: keep.hold ?? 4, ...(keep.orbit ? { orbit: keep.orbit } : {}) };
+    return s ? stepFromView(s, keep) : null;
   }
 
   el.add.onclick = () => {

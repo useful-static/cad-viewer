@@ -19,12 +19,12 @@
 // frame carries.
 
 export const STYLES = [
-  { id: 'shaded', label: 'Shaded', faces: 'shade', edges: false, outline: false, paper: false, hidden: false, seesHidden: false },
-  { id: 'edges', label: 'Shaded + edges', faces: 'shade', edges: true, outline: false, paper: false, hidden: false, seesHidden: false },
-  { id: 'hidden', label: 'Hidden line', faces: 'depth', edges: true, outline: true, paper: true, hidden: false, seesHidden: false },
-  { id: 'hiddengrey', label: 'Hidden grey', faces: 'depth', edges: true, outline: true, paper: true, hidden: true, seesHidden: true },
-  { id: 'wire', label: 'Wire', faces: 'none', edges: true, outline: true, paper: true, hidden: false, seesHidden: true },
-  { id: 'xray', label: 'X-ray', faces: 'xray', edges: true, outline: true, paper: false, hidden: false, seesHidden: true },
+  { id: 'shaded', label: 'Shaded', faces: 'shade', edges: false, outline: false, paper: false, seesHidden: false },
+  { id: 'edges', label: 'Shaded + edges', faces: 'shade', edges: true, outline: false, paper: false, seesHidden: false },
+  { id: 'hidden', label: 'Hidden line', faces: 'depth', edges: true, outline: true, paper: true, seesHidden: false },
+  { id: 'hiddengrey', label: 'Hidden grey', faces: 'depth', edges: true, outline: true, paper: true, seesHidden: true },
+  { id: 'wire', label: 'Wire', faces: 'none', edges: true, outline: true, paper: true, seesHidden: true },
+  { id: 'xray', label: 'X-ray', faces: 'xray', edges: true, outline: true, paper: false, seesHidden: true },
 ];
 
 export const styleById = (id) => STYLES.find((s) => s.id === id) || null;

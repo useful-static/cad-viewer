@@ -17,6 +17,7 @@
 // (parameter 15) when the flag is 3. BREP stores no unit.
 
 import { LENGTH_MM } from './units.js';
+import { forEachStepSlice } from './step-text.js';
 
 // mm per unit -> name
 const BY_FACTOR = Object.entries(LENGTH_MM).map(([name, f]) => [f, name]);
@@ -48,15 +49,9 @@ export function stepUnits(u8) {
   const used = new Set(); // context ids a shape representation names
   // only records naming a unit or a shape representation are kept
   const re = /#(\d+)\s*=\s*([^;]*?(?:UNIT|SHAPE_REPRESENTATION)[^;]*);/g;
-  const dec = new TextDecoder('latin1');
-  const SLICE = 4 << 20;
-  let carry = '';
-  for (let at = 0; at < u8.byteLength; at += SLICE) {
-    const last = at + SLICE >= u8.byteLength;
-    let text = carry + dec.decode(u8.subarray(at, Math.min(u8.byteLength, at + SLICE)));
-    const cut = last ? text.length : text.lastIndexOf(';') + 1;
-    carry = text.slice(cut);
-    text = flat(text.slice(0, cut));
+  // (in slices cut at a record's end: js/step-text.js)
+  forEachStepSlice(u8, (slice) => {
+    const text = flat(slice);
     for (let m; (m = re.exec(text));) {
       const body = m[2];
       // REPRESENTATION(name, items, context): the context is the last argument.
@@ -69,7 +64,7 @@ export function stepUnits(u8) {
       }
       if (/UNIT/.test(body)) units.set(Number(m[1]), body);
     }
-  }
+  });
   const lengthMm = (id, depth = 0) => {
     const s = units.get(id);
     if (!s || depth > 8 || !/LENGTH_UNIT/.test(s) && depth === 0) return null;

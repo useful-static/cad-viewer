@@ -41,6 +41,14 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('{"a": ', L), /not JSON/);
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
+await test('on an app\'s own scheme an entry\'s picture, STEP and tours are its own files too; a page must be http(s)', () => {
+  const A = 'lc://app/data/cad/list.json';
+  const e = parseModelList(JSON.stringify({ 'b/model.cadmesh.gz': { name: 'B', image: 'b/pic.webp', step: 'b/b.stp.gz', tours: [{ name: 'T', url: 'b/t.cadtour.json' }] } }), A);
+  assert.equal(e[0].image, 'lc://app/data/cad/b/pic.webp');
+  assert.equal(e[0].tours[0].url, 'lc://app/data/cad/b/t.cadtour.json');
+  assert.throws(() => parseModelList(JSON.stringify({ 'b.cadmesh': { name: 'B', image: 'lc://other/p.webp' } }), A), /nor on the list's own scheme and host/);
+  assert.throws(() => parseModelList(JSON.stringify({ 'b.cadmesh': { name: 'B', page: 'b/page.html' } }), A), /is not an http\(s\) URL/);
+});
 await test('a list on an app\'s own scheme names its own files; any other non-http place is refused', () => {
   const A = 'lc://app/data/cad/list.json';
   const e = parseModelList('{"/data/cad/le-potato/model.cadmesh.gz": {"name": "Le Potato", "labels": {"X_1": "microSD card slot"}}}', A);

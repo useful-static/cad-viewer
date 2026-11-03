@@ -117,8 +117,11 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       bits.push('its gzip could not be read here');
       level = 'warn';
     } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
-      bits.push(`named ${want}, but it starts as ${got}`);
-      level = sure(want) || sure(got) ? 'bad' : 'warn';
+      // two meshes: the viewer opens a mesh by its bytes where they are conclusive
+      // (js/mesh-formats.js meshFormatOf), so a .stl holding a PLY opens, as a PLY
+      const opens = sure(got) && BY_LABEL.get(got)?.kind === 'mesh' && BY_LABEL.get(want)?.kind === 'mesh';
+      bits.push(opens ? `named ${want}, but it is a ${got} (opens as one)` : `named ${want}, but it starts as ${got}`);
+      level = opens ? 'warn' : sure(want) || sure(got) ? 'bad' : 'warn';
     } else if (!got && want && sure(want)) {
       bits.push(`named ${want}, but its start is no ${want} file`);
       level = 'bad';

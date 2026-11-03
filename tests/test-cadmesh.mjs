@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, gunzip, idToBytes, inflateCadmesh,
-  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf,
+  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader,
 } from '../js/cadmesh.js';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
@@ -126,6 +126,16 @@ test('decode rejects a tree that names a mesh out of range (review r5)', () => {
   assert.throws(() => decodeCadmesh(buf), /names mesh 5 of 3/);
 });
 
+test('decode rejects mesh ranges that overlap (3000 meshes on one range cost meshes x indices), fast', () => {
+  const { header, data } = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2)] }));
+  const m1 = header.meshes[1];
+  header.meshes = Array.from({ length: 3000 }, (_, i) => ({ ...(i ? m1 : header.meshes[0]), idxStart: 0, vtxStart: 0, idxCount: 6, vtxCount: 4 }));
+  header.root = { name: 'm', meshes: [], children: [] };
+  delete header.facts; // (per-mesh facts would not match 3000 meshes)
+  const t0 = Date.now();
+  assert.throws(() => withHeader(header, data), /mesh 1 range overlaps the mesh before it/);
+  assert.ok(Date.now() - t0 < 500);
+});
 test('decode rejects a mesh range outside the vertex data (review r5)', () => {
   const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
   // rewrite the JSON header in place with a widened vtxCount

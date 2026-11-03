@@ -59,6 +59,11 @@ export const VERSION = 1;
 // (OpenCascade's linearUnit word), and what the viewer's unit display needs
 // to convert lengths (main.js geomMm)
 export const MM = 'millimeter';
+// a body's colour when nothing gives it one (the readers, the One colour scheme)
+export const DEFAULT_GREY = [0.72, 0.74, 0.78];
+// 0..1 -> a byte, rounded (every writer of colour bytes: the grey's 0.74 * 255 = 188.7 is 189,
+// where a truncating Uint8Array store made it 188)
+export const toByte = (x) => Math.round(Math.min(1, Math.max(0, x)) * 255);
 
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
 // name -> element type; written only when the model carries them
@@ -115,7 +120,7 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
       ? m.normals : computeNormals(m.positions, m.indices);
     const mMin = [Infinity, Infinity, Infinity];
     const mMax = [-Infinity, -Infinity, -Infinity];
-    const base = m.color || [0.72, 0.74, 0.78];
+    const base = m.color || DEFAULT_GREY;
     const idb = idToBytes(mi + 1);
     for (let v = 0; v < nv; v++) {
       for (let k = 0; k < 3; k++) {
@@ -131,9 +136,9 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
         color[o + 2] = m.colors[v * 4 + 2];
         color[o + 3] = 255;
       } else {
-        color[o] = Math.round(base[0] * 255);
-        color[o + 1] = Math.round(base[1] * 255);
-        color[o + 2] = Math.round(base[2] * 255);
+        color[o] = toByte(base[0]);
+        color[o + 1] = toByte(base[1]);
+        color[o + 2] = toByte(base[2]);
         color[o + 3] = 255;
       }
       id[o] = idb[0]; id[o + 1] = idb[1]; id[o + 2] = idb[2]; id[o + 3] = idb[3];
@@ -426,11 +431,17 @@ function validateHeader(h) {
   }
   if (!Array.isArray(h.meshes)) bad('header has no mesh list');
   const n = h.meshes.length;
+  // the meshes' ranges follow one another, as encodeCadmesh writes them: overlapping ranges made
+  // the per-mesh index check cost meshes x indices (3000 meshes on the same 3M indices: 20 s)
+  let idxEnd = 0, vtxEnd = 0, faceEnd = 0;
   for (const [i, m] of h.meshes.entries()) {
     if (!m || !ok(m.vtxStart) || !ok(m.vtxCount) || !ok(m.idxStart) || !ok(m.idxCount)
       || m.vtxStart + m.vtxCount > h.vertexCount || m.idxStart + m.idxCount > h.indexCount) {
       bad(`mesh ${i} range is outside the vertex/index data`);
     }
+    if (m.idxStart < idxEnd || m.vtxStart < vtxEnd) bad(`mesh ${i} range overlaps the mesh before it`);
+    idxEnd = m.idxStart + m.idxCount;
+    vtxEnd = m.vtxStart + m.vtxCount;
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
     if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
     // the UI maps a body's colour to #rrggbb: anything else threw there
@@ -440,6 +451,10 @@ function validateHeader(h) {
     }
     if (fsec && (!ok(m.faceStart) || !ok(m.faceCount) || m.faceStart + m.faceCount > faceTotal)) {
       bad(`mesh ${i} face range is outside the faces section`);
+    }
+    if (fsec) {
+      if (m.faceStart < faceEnd) bad(`mesh ${i} face range overlaps the mesh before it`);
+      faceEnd = m.faceStart + m.faceCount;
     }
   }
   const seen = new Set();
@@ -510,17 +525,17 @@ export function occtResultToModel(result, units = MM) {
     let colors = null;
     const faces = m.brep_faces || [];
     if (faces.some((f) => f.color)) {
-      const base = m.color || [0.72, 0.74, 0.78];
+      const base = m.color || DEFAULT_GREY;
       colors = new Uint8Array((positions.length / 3) * 4);
       for (let v = 0; v < positions.length / 3; v++) {
-        colors[v * 4] = base[0] * 255; colors[v * 4 + 1] = base[1] * 255; colors[v * 4 + 2] = base[2] * 255;
+        colors[v * 4] = toByte(base[0]); colors[v * 4 + 1] = toByte(base[1]); colors[v * 4 + 2] = toByte(base[2]);
       }
       for (const f of faces) {
         if (!f.color) continue;
         for (let t = f.first; t <= f.last; t++) {
           for (let k = 0; k < 3; k++) {
             const v = indices[t * 3 + k];
-            colors[v * 4] = f.color[0] * 255; colors[v * 4 + 1] = f.color[1] * 255; colors[v * 4 + 2] = f.color[2] * 255;
+            colors[v * 4] = toByte(f.color[0]); colors[v * 4 + 1] = toByte(f.color[1]); colors[v * 4 + 2] = toByte(f.color[2]);
           }
         }
       }
@@ -567,7 +582,10 @@ export function hashName(s) {
   return h >>> 0;
 }
 
-function paletteByPart(meshes, root) {
+// One colour per part: the nearest named node above each body names its part, and the part's
+// name picks its palette colour. The converter colours a colourless file so, and the "By part
+// name" scheme (js/palettes.js) is the same rule, so the two always agree.
+export function partColours(meshes, root) {
   const owner = new Array(meshes.length).fill('');
   const walk = (n, name) => {
     const nm = n.name || name;
@@ -575,9 +593,10 @@ function paletteByPart(meshes, root) {
     for (const c of n.children) walk(c, nm);
   };
   walk(root, '');
-  meshes.forEach((m, i) => {
-    m.color = PALETTE[hashName(owner[i] || m.name || String(i)) % PALETTE.length];
-  });
+  return meshes.map((m, i) => PALETTE[hashName(owner[i] || m.name || String(i)) % PALETTE.length]);
+}
+function paletteByPart(meshes, root) {
+  partColours(meshes, root).forEach((c, i) => { meshes[i].color = c; });
 }
 
 export const DEFAULT_TESSELLATION = Object.freeze({

@@ -43,6 +43,7 @@ const FILES = {
   [`${B}get?file=board.stl`]: 'solid b\n facet normal 0 0 1\n',
   [`${B}ply-named-obj.obj`]: 'ply\nformat ascii 1.0\n',
   [`${B}case.3mf`]: Buffer.from('PK\x03\x04rest'),
+  [`${B}ply-named-stl.stl`]: 'ply\nformat ascii 1.0\n',
 };
 async function fakeFetch(url, opts = {}) {
   const u = String(url);
@@ -106,14 +107,19 @@ await test('file-missing-refused-mislabelled', async () => {
   assert.match(liar.detail, /named cadmesh, but it starts as STEP/);
 });
 
-await test('name-only formats: a start that only hints is no fault; a magic one that disagrees is', async () => {
+await test('name-only formats: a start that only hints is no fault; a mesh holding another mesh warns; a magic mismatch is bad', async () => {
   for (const f of ['normals-first.obj', 'sorted.gltf', 'case.3mf']) {
     const r = await checkFile(`${B}${f}`, { fetchFn: fakeFetch, sniff: true });
     assert.equal(r.level, 'ok', `${f}: ${r.detail}`);
   }
   const ply = await checkFile(`${B}ply-named-obj.obj`, { fetchFn: fakeFetch, sniff: true });
-  assert.equal(ply.level, 'bad', ply.detail);
-  assert.match(ply.detail, /named OBJ, but it starts as PLY/);
+  assert.match(ply.detail, /named OBJ, but it is a PLY \(opens as one\)/);
+  assert.equal(ply.level, 'warn', 'a mesh holding another mesh opens: a warning, not bad');
+  const stl = await checkFile(`${B}ply-named-stl.stl`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(stl.level, 'warn', stl.detail);
+  // must fire: a model named one thing that is not a mesh the viewer can open is bad
+  const liar = await checkFile(`${B}liar.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(liar.level, 'bad');
 });
 await test('a model named in the query: named as the viewer names it', async () => {
   assert.equal(namedFormat(`${B}get?file=board.stl`), 'STL');

@@ -162,7 +162,10 @@ function parseStep(s, where, defaults, bad, version) {
     if (!Array.isArray(s.callouts) || s.callouts.length > 50 || !s.callouts.every(ok)) {
       throw bad(at('callouts'), 'must be a list (at most 50) of { "text": "…", and "part": "<name>" or "at": [x, y, z] }');
     }
-    out.callouts = s.callouts.map((c) => ({ text: c.text.trim(), ...(c.part ? { part: c.part.trim() } : { at: c.at.slice() }) }));
+    // (the part when it names one -- text with more than spaces -- else the point: the same
+    // choice the check above made, so a part of 5 or of "  " beside a valid "at" takes the at)
+    const named = (c) => typeof c.part === 'string' && c.part.trim();
+    out.callouts = s.callouts.map((c) => ({ text: c.text.trim(), ...(named(c) ? { part: c.part.trim() } : { at: c.at.slice() }) }));
   }
   for (const k of ['transition', 'hold', 'ease', 'dim']) {
     if (s[k] === undefined) { out[k] = defaults[k]; continue; }
@@ -191,7 +194,8 @@ export function partIndex(header, labels = null) {
   const walk = (n) => {
     const ids = [];
     for (const i of n.meshes || []) ids.push(i + 1);
-    for (const c of n.children || []) ids.push(...walk(c));
+    // (appended, not spread: 300,000 bodies under one node overflowed the call stack)
+    for (const c of n.children || []) for (const id of walk(c)) ids.push(id);
     add(n.name, ids);
     return ids;
   };

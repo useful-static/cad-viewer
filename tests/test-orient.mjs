@@ -3,7 +3,8 @@
 //   node tests/test-orient.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { DEFAULT_ORIENT, ISO, PORTRAIT, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
+import { readFileSync } from 'node:fs';
+import { DEFAULT_ORIENT, ISO, PORTRAIT, VIEWS as VIEW_ROWS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
 import { camDir, camUp, qMul, quatFromView } from '../js/camera.js';
 
 let passed = 0;
@@ -27,7 +28,8 @@ test('two roles in any order, "right" too, canonical up+front', () => {
 });
 test('refused: one role, three, a role twice, parallel axes, junk', () => {
   for (const bad of ['up:+z', 'up:+z,front:-y,right:+x', 'up:+z,up:-z', 'up:+z,front:-z', 'up:+z,front:+q', 'up:+z,back:+y', '', '+z+z']) {
-    assert.throws(() => parseOrient(bad), undefined, bad);
+    // (in the reader's own words: an engine TypeError would fail this arm)
+    assert.throws(() => parseOrient(bad), /an orientation names two|role:axis|name exactly two|named twice|different axes/, bad);
     assert.equal(orientOrNull(bad), null, bad);
   }
   assert.equal(orientOrNull(undefined), null);
@@ -92,6 +94,17 @@ test('on a tall view a board long left to right is seen from its left end, steep
   const q = qMul(orientQuat(Z_UP_ORIENT), quatFromView(-Math.PI / 2, 1.0, 'y'));
   const d = camDir({ q });
   assert.ok(Math.abs(d[0]) > Math.abs(d[1]) && d[0] < 0, `eye toward ${d.map((v) => v.toFixed(2))}: from the -x end`);
+});
+
+test('the views table: unique ids and keys, opposites that point back, and the page builds the buttons', () => {
+  const ids = VIEW_ROWS.map((v) => v.id);
+  assert.equal(new Set(ids).size, ids.length);
+  const keys = VIEW_ROWS.filter((v) => v.key).map((v) => v.key);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const k of keys) assert.ok(!['5', '9'].includes(k), `key ${k} is Ortho's or Opposite's`);
+  for (const v of VIEW_ROWS.filter((x) => x.opposite)) assert.equal(VIEW_ROWS.find((x) => x.id === v.opposite).opposite, v.id, v.id);
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(!/data-view=|data-fmt=/.test(html), 'index.html carries no view or export button of its own');
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);

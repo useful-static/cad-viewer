@@ -9,7 +9,7 @@ import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
-import { BODY_KINDS, conversionModel, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, DEFAULT_TESSELLATION } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { FORMATS as CAD_FORMATS, sniffFormat } from './js/formats.js';
 
@@ -207,7 +207,7 @@ async function main() {
     + `${args.raw ? '' : ` gzipped (${mb(buf.byteLength)} MB raw)`}, tessellation ${((t1 - t0) / 1000).toFixed(1)} s`
     + `, declared unit ${declared || 'not recorded'}\n`);
   // the edge list and body facts encodeCadmesh built
-  const h = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, new DataView(buf).getUint32(8, true))));
+  const h = decodeCadmesh(buf).header;
   const sec = (s) => (h.sections[s] ? h.sections[s].byteLength / 8 : 0);
   if (h.facts) {
     process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`

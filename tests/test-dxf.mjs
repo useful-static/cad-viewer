@@ -361,5 +361,40 @@ test('MTEXT stacking on 60,000 separators with no ";" is linear', () => {
   assert.equal(mtextPlain('\\Sa^b;'), 'a/b');
 });
 
+// --- review round 3 ---
+test('a 300-point SPLINE of degree 299 is drawn as its control polygon, fast', () => {
+  const n = 300, deg = n - 1;
+  const g = ['0', 'SPLINE', '8', '0', '71', String(deg)];
+  for (let k = 0; k < n + deg + 1; k++) g.push('40', String(k < n ? 0 : 1));
+  for (let k = 0; k < n; k++) g.push('10', String(k), '20', String(k % 2));
+  let d;
+  fast(() => { d = parseDXF(text([], g)); }, 1000);
+  assert.equal(d.paths[0].pts.length, 2 * n);
+});
+test('a block\'s SPLINE inserted 2,000 times is evaluated once', () => {
+  const sp = ['0', 'SPLINE', '8', '0', '71', '3'];
+  const n = 200;
+  for (let k = 0; k < n + 4; k++) sp.push('40', String(Math.max(0, Math.min(n - 3, k - 3))));
+  for (let k = 0; k < n; k++) sp.push('10', String(k), '20', String(k % 3));
+  const ins = [];
+  for (let k = 0; k < 2000; k++) ins.push('0', 'INSERT', '2', 'S', '10', String(k), '20', '0');
+  let d;
+  fast(() => { d = parseDXF(text(['0', 'BLOCK', '2', 'S', '10', '0', '20', '0', ...sp, '0', 'ENDBLK'], ins)); }, 3000);
+  assert.equal(d.paths.length, 2000);
+});
+test('MTEXT codes with no ";" (\\A, \\S) are one pass, and real codes still strip', () => {
+  fast(() => mtextPlain('\\A'.repeat(60000)), 500);
+  fast(() => mtextPlain('\\Sa/'.repeat(60000)), 500);
+  assert.equal(mtextPlain('\\A1;\\fArial|b1;Bold\\H2.5x;x'), 'Boldx');
+  assert.equal(mtextPlain('\\S1#2;'), '1/2');
+});
+test('20,000 viewports onto 200,000 lines: refused in words within a few seconds', () => {
+  const e = [];
+  for (let k = 0; k < 200000; k++) e.push('0', 'LINE', '8', '0', '10', String(k % 100), '20', '0', '11', String(k % 100), '21', '1');
+  for (let k = 0; k < 20000; k++) e.push('0', 'VIEWPORT', '67', '1', '8', '0', '10', '0', '20', '0', '40', '10', '41', '10', '45', '10', '12', '1e9', '22', '1e9', '69', String(k + 2));
+  const err = fast(() => parseDXF(['0', 'SECTION', '2', 'ENTITIES', ...e, '0', 'ENDSEC', '0', 'EOF'].join('\n')), 8000);
+  assert.ok(err && /viewports look at the model/.test(err.message), String(err && err.message));
+});
+
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

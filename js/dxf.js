@@ -246,6 +246,7 @@ export function parseDXF(s) {
       // with one box test; each one clipped is walked (many viewports onto a big model
       // multiply it)
       const seen = viewInModel(M, rect);
+      cull(budget, out.paths.length + out.texts.length);
       for (let k = 0; k < out.paths.length; k++) {
         const bb = pathBoxes[k];
         if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
@@ -429,6 +430,16 @@ function walkSize(ctx, name, depth = 0, open = new Set()) {
   open.delete(name);
   memo.set(name, n);
   return n;
+}
+
+// The viewports' box tests: each viewport tests every model path and text once. A real
+// drawing has a few viewports; 20,000 onto 400,000 lines was 8e9 tests (38 s, nothing drawn).
+export const MAX_CULLED = 2e8;
+function cull(budget, n) {
+  budget.culled = (budget.culled || 0) + n;
+  if (budget.culled > MAX_CULLED) {
+    throw new Error(`the drawing is too large to draw here (its viewports look at the model over ${MAX_CULLED / 1e6} million times)`);
+  }
 }
 
 function emit(recs, M, byBlock, depth, ctx) {
@@ -633,7 +644,14 @@ export function bulgePts(xs, ys, bul, closed) {
 
 // a SPLINE as points: its control points through de Boor (weights as given),
 // or its fit points when it has no control points
+// AutoCAD writes splines of degree 1 to 11; past this a spline is drawn as its control polygon
+export const MAX_SPLINE_DEGREE = 25;
 function splinePts(r) {
+  // evaluated once per entity: a block's spline inserted many times is the same curve, moved
+  if (!r.splinePts) r.splinePts = evalSpline(r);
+  return r.splinePts;
+}
+function evalSpline(r) {
   const deg = num(r, 71, 3);
   const knots = all(r, 40);
   const cx = all(r, 10), cy = all(r, 20);
@@ -643,9 +661,10 @@ function splinePts(r) {
     return fx.flatMap((x, k) => [x, fy[k]]);
   }
   const n = cx.length;
-  // a degree that is not a whole number from 1 to n - 1, or knots that do not fit it: the
-  // control polygon (de Boor would read slots that do not exist)
-  if (!Number.isInteger(deg) || deg < 1 || deg >= n || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k]]);
+  // a degree that is not a whole number from 1 to n - 1 (de Boor would read slots that do not
+  // exist), or over MAX_SPLINE_DEGREE (evaluation costs points x degree^2: a 300-point spline of
+  // degree 299 took 12 s), or knots that do not fit it: the control polygon
+  if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);
   const t0 = knots[deg], t1 = knots[n];
   const steps = Math.max(16, n * 8);
@@ -736,11 +755,12 @@ function hatchLoops(r) {
 }
 
 // MTEXT without its formatting codes; \P is a new line
-// (a stack \S splits at its first separator, which the first group may not hold: one pass, no
-// backtracking on a run of separators with no ";")
+// (a code's value ends at its ";" and holds no backslash, so a run of codes with no ";" fails
+// each match at the next backslash: one pass, not a rescan to the end from every code; a stack
+// \S splits at its first separator, which its first part may not hold)
 export function mtextPlain(s) {
-  return s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;]*;/g, '').replace(/\\[LlOoKk]/g, '')
-    .replace(/\\S([^;^#/]*)[\^#/]([^;]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, '')
+  return s.replace(/\\P/g, '\n').replace(/\\[ACcFfHhQTWp][^;\\]*;/g, '').replace(/\\[LlOoKk]/g, '')
+    .replace(/\\S([^;^#/\\]*)[\^#/]([^;\\]*);/g, '$1/$2').replace(/\\~/g, ' ').replace(/\\\\/g, '\\').replace(/[{}]/g, '')
     .replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±');
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';

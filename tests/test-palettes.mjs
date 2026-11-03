@@ -3,7 +3,7 @@
 //   node tests/test-palettes.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { PALETTE } from '../js/cadmesh.js';
+import { DEFAULT_GREY, PALETTE, occtResultToModel } from '../js/cadmesh.js';
 import { MONO, PALETTES, bodyColours, distinct, hexToRgb, rgbToHex, schemeColours } from '../js/palettes.js';
 
 let passed = 0;
@@ -33,6 +33,12 @@ const header = {
 const color = new Uint8Array(10 * 4).map((_, i) => (i % 4 === 3 ? 255 : 17 + i));
 const mesh = { header, color };
 
+test('"By part name" is the converter\'s own rule for a colourless file (one function)', () => {
+  const model = occtResultToModel({ success: true, meshes: header.meshes.map((m) => ({ name: m.name, attributes: { position: { array: [0, 0, 0, 1, 0, 0, 0, 1, 0] } }, index: { array: [0, 1, 2] } })),
+    root: header.root });
+  assert.deepEqual(model.meshes.map((m) => key(m.color)), bodyColours(header, 'part').map(key));
+  assert.equal(MONO, DEFAULT_GREY);
+});
 test('every scheme has an id and a label, file first', () => {
   assert.equal(PALETTES[0].id, 'file');
   assert.ok(PALETTES.every((p) => p.id && p.label));

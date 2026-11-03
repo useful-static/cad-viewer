@@ -30,6 +30,7 @@
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
+import { STEP_ID } from './tour.js';
 
 export const MAX_LIST_ENTRIES = 10000;
 export const MAX_LIST_BYTES = 4 * 2 ** 20;
@@ -89,9 +90,9 @@ export function parseModelList(text, listUrl) {
 
 // A model's fixed names: "id", the one a link names it by (?model=<id>),
 // and "aliases", ids it was known by before, which links made then still
-// use. The same form as a tour step's id (js/tour.js STEP_ID): a-z, 0-9 and
-// "-", starting with a letter or digit, at most 64.
-export const MODEL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// use. The same form as a tour step's id, and the same pattern (js/tour.js
+// STEP_ID): a-z, 0-9 and "-", starting with a letter or digit, at most 64.
+export const MODEL_ID = STEP_ID;
 function names(file, v) {
   const out = {};
   if (v.id !== undefined) {
@@ -146,12 +147,17 @@ export function entryByName(entries, name) {
 function extras(file, v, listUrl) {
   const out = {};
   const bad = (field, why) => new Error(`"${file}": its ${field} ${why}`);
+  // Two kinds of URL: a FILE the viewer fetches (its step, image, tours) is allowed as the
+  // model file is -- http(s), or the list's own scheme and host (js/same-place.js samePlace);
+  // a PAGE a visitor opens in a tab (page, links) must be http(s)
+  const fetched = (u, field, raw) => { if (!samePlace(u.href, listUrl)) throw bad(field, `"${raw}" is not an http(s) URL, nor on the list's own scheme and host`); };
+  const page = (u, field, raw) => { if (!/^https?:$/.test(u.protocol)) throw bad(field, `"${raw}" is not an http(s) URL`); };
   for (const field of ['step', 'page', 'image']) {
     if (v[field] === undefined) continue;
     if (typeof v[field] !== 'string' || !v[field].trim()) throw bad(field, 'must be a URL');
     let u;
     try { u = new URL(v[field], listUrl); } catch { throw bad(field, `"${v[field]}" is not a URL`); }
-    if (!/^https?:$/.test(u.protocol)) throw bad(field, `"${v[field]}" is not an http(s) URL`);
+    (field === 'page' ? page : fetched)(u, field, v[field]);
     out[field] = u.href;
   }
   for (const field of ['author', 'license']) {
@@ -178,7 +184,7 @@ function extras(file, v, listUrl) {
     out.tours = t.map((x) => {
       let u;
       try { u = new URL(x.url, listUrl); } catch { throw bad('tours', `"${x.url}" is not a URL`); }
-      if (!/^https?:$/.test(u.protocol)) throw bad('tours', `"${x.url}" is not an http(s) URL`);
+      fetched(u, 'tours', x.url);
       return { name: (x.name || '').trim() || 'Tour', url: u.href };
     });
   }
@@ -190,7 +196,7 @@ function extras(file, v, listUrl) {
     out.links = k.map((x) => {
       let u;
       try { u = new URL(x.url, listUrl); } catch { throw bad('links', `"${x.url}" is not a URL`); }
-      if (!/^https?:$/.test(u.protocol)) throw bad('links', `"${x.url}" is not an http(s) URL`);
+      page(u, 'links', x.url);
       return { name: x.name.trim(), url: u.href };
     });
   }
