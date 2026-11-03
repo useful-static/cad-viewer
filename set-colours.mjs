@@ -43,8 +43,21 @@ export function setColours(raw, colours, by, { again = false } = {}) {
     data[o + 2] = colours[v * per + 2];
     data[o + 3] = 255;
   }
+  // each body's header colour follows its new vertex colours (the colour picker reads it first,
+  // and opened at the old colour): theirs when all alike, else none (the vertices say)
+  const meshes = h.meshes.map((m) => {
+    if (!m.vtxCount) return m;
+    const at = (v) => sec.offset + v * 4;
+    const f = at(m.vtxStart);
+    let same = true;
+    for (let v = m.vtxStart + 1; v < m.vtxStart + m.vtxCount && same; v++) {
+      const o = at(v);
+      same = data[o] === data[f] && data[o + 1] === data[f + 1] && data[o + 2] === data[f + 2];
+    }
+    return { ...m, color: same ? [data[f] / 255, data[f + 1] / 255, data[f + 2] / 255] : null };
+  });
   // the header as it was, plus who wrote the colours
-  return new Uint8Array(withHeader({ ...h, recolour: by.trim() }, data));
+  return new Uint8Array(withHeader({ ...h, meshes, recolour: by.trim() }, data));
 }
 
 function main() {

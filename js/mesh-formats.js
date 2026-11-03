@@ -35,6 +35,10 @@ const MAX_PLACED_PARTS = 2_000_000;
 // a glTF accessor's values, refused past this before it is allocated (3 coordinates of
 // 3 corners of the triangle cap; a 200-byte file asked for 2^30 vertices)
 const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
+// a glTF's materials: each one a drawn primitive uses may name a texture whose image is decoded
+// (one at a time, each image once), so the list bounds the decodes (100,000 materials naming one
+// image were 100,000 decodes in flight at once)
+const MAX_MATERIALS = 65_536;
 const big = (n) => n.toLocaleString('en-US');
 // the placement counts of a part tree, from its counts per part (memoised: a shared part is
 // walked once). kids(id) -> child ids, own(id) -> { tris, verts } of its own, refuse(why) ->
@@ -768,8 +772,28 @@ function xmlWalk(s, want, onTag) {
   // natively: 200 MB of "<a/>" in 0.5 s, against 1.2 s for a loop over each '<'), then each read
   // whole by TAG_RE where it starts. A name is matched to its end, one prefix run at most per '<'.
   const find = new RegExp(`<\\/?(?:[A-Za-z_][\\w:.-]*:)?(?:${want.join('|')})(?![\\w:.-])`, 'g');
+  // a comment, CDATA section or processing instruction holds no tags: a match inside one is
+  // passed over to its end (a commented-out build item was read, and refused as missing). Each
+  // span is found once, ahead of the walk, so the walk stays linear; one never closed runs to the
+  // end of the text.
+  const SPECIAL = /<!--|<!\[CDATA\[|<\?/g;
+  const CLOSE = { '<!--': '-->', '<![CDATA[': ']]>', '<?': '?>' };
+  const spanFrom = (from) => {
+    SPECIAL.lastIndex = from;
+    const m = SPECIAL.exec(s);
+    if (!m) return { start: Infinity, end: Infinity };
+    const e = s.indexOf(CLOSE[m[0]], m.index + m[0].length);
+    return { start: m.index, end: e < 0 ? Infinity : e + CLOSE[m[0]].length };
+  };
+  let span = spanFrom(0);
   let f;
   while ((f = find.exec(s))) {
+    while (span.end <= f.index) span = spanFrom(span.end);
+    if (span.start < f.index) {
+      if (span.end === Infinity) return;
+      find.lastIndex = span.end;
+      continue;
+    }
     TAG_RE.lastIndex = f.index;
     const m = TAG_RE.exec(s);
     if (!m) continue;
@@ -825,7 +849,7 @@ async function parse3MF(buf, base) {
   // what the model parts hold is counted as it is read, and refused past the viewer's caps
   // before it is kept (each vertex, triangle, placement, material and object costs memory)
   const caps = { vertices: MAX_PLACED_VERTICES, triangles: MAX_PLACED_TRIANGLES, 'parts and placements': MAX_PLACED_PARTS,
-    'base materials': MAX_PLACED_PARTS, objects: MAX_PLACED_PARTS };
+    'base materials': MAX_PLACED_PARTS, 'material groups': MAX_PLACED_PARTS, objects: MAX_PLACED_PARTS };
   const held = Object.fromEntries(Object.keys(caps).map((c) => [c, 0]));
   const hold = (what) => { if (++held[what] > caps[what]) throw tooMany(who, what, caps[what]); };
   let unit = null;
@@ -867,9 +891,9 @@ async function parse3MF(buf, base) {
           k = LENGTH_MM[UNIT_NAME[u]] ?? 1;
           if (isRoot) unit = u;
         } break;
-        case 'basematerials': hold('objects'); matGroup = []; mats.set(key(t.attrs.id), matGroup); break;
+        case 'basematerials': hold('material groups'); matGroup = []; mats.set(key(t.attrs.id), matGroup); break;
         case 'base': if (matGroup && !matGroup.perCorner) { hold('base materials'); matGroup.push(hexColour(t.attrs.displaycolor)); } break;
-        case 'colorgroup': hold('objects'); matGroup = []; matGroup.perCorner = true; mats.set(key(t.attrs.id), matGroup); break;
+        case 'colorgroup': hold('material groups'); matGroup = []; matGroup.perCorner = true; mats.set(key(t.attrs.id), matGroup); break;
         case 'color': if (matGroup && matGroup.perCorner) { hold('base materials'); matGroup.push(hexColour(t.attrs.color)); } break;
         case 'object': hold('objects'); obj = { name: t.attrs.name || `object ${t.attrs.id}`, verts: [], tris: [], tcol: [], comps: [], pid: t.attrs.pid, pindex: +(t.attrs.pindex || 0) }; objects.set(key(t.attrs.id), obj); break;
         case 'vertex': if (obj) { hold('vertices'); obj.verts.push(+t.attrs.x * k, +t.attrs.y * k, +t.attrs.z * k); } break;
@@ -1041,7 +1065,14 @@ async function parseGLTF(buf, format, base, files) {
     if (!f) throw new Error(`${file} needs ${b.uri}: drop it together with the .${format}`);
     return f;
   }));
+  // each accessor read once, however many placements (instances, nodes) use it: a mesh placed
+  // 40 times walked its 22 M-colour COLOR_0 40 times. (Its values are not written by a reader.)
+  const accRead = new Map();
   const acc = (i) => {
+    if (!accRead.has(i)) accRead.set(i, accOnce(i));
+    return accRead.get(i);
+  };
+  const accOnce = (i) => {
     const a = at(accessors, i);
     if (!a || !Object.hasOwn(COMP, a.componentType) || !Object.hasOwn(NCOMP, a.type) || !nat(a.count)) throw damaged(`accessor ${i} is missing or malformed`);
     const [Ctor, max] = COMP[a.componentType];
@@ -1084,8 +1115,13 @@ async function parseGLTF(buf, format, base, files) {
     const bvLen = bv.byteLength ?? data.byteLength - bvOff;
     if (!nat(bvOff) || !nat(bvLen) || bvOff + bvLen > data.byteLength) throw damaged(`buffer view ${vi} runs past the end of its buffer`);
     const size = Ctor.BYTES_PER_ELEMENT;
-    const stride = (strided && bv.byteStride) || size * nc;
-    if (!Number.isInteger(stride) || stride < 1) throw damaged(`buffer view ${vi} has a byteStride of ${bv.byteStride}`);
+    // (glTF 2.0 3.6.2.4: a byteStride is 4 to 252 and a multiple of 4; a stride of 1 let a
+    // 21 MB file hold a 22 M-element colour list)
+    const st = bv.byteStride;
+    if (st !== undefined && !(Number.isInteger(st) && st >= 4 && st <= 252 && st % 4 === 0)) {
+      throw damaged(`buffer view ${vi} has a byteStride of ${typeof st === 'number' ? st : JSON.stringify(st)?.slice(0, 40)}, not a multiple of 4 from 4 to 252`);
+    }
+    const stride = (strided && st) || size * nc;
     if (!nat(aOff) || aOff + (count ? (count - 1) * stride + nc * size : 0) > bvLen) throw damaged(`${what} reads past the end of its buffer`);
     const out = new Float64Array(count * nc);
     const bytes = new DataView(data, bvOff + aOff);
@@ -1103,13 +1139,25 @@ async function parseGLTF(buf, format, base, files) {
   // each material's LINEAR colour: baseColorFactor (linear), times its base texture's linear
   // average when it has one and the image can be decoded here. Products are taken in linear
   // space and made sRGB (the viewer's colours) last: srgb(factor x texture x COLOR_0).
-  const matLinear = await Promise.all(list(json.materials, '"materials"').map(async (mat) => {
+  // Worked out (below, once the node tree is counted) only for the materials a drawn primitive
+  // names, one after another, each image decoded once however many materials name it.
+  const materials = list(json.materials, '"materials"');
+  if (materials.length > MAX_MATERIALS) throw tooMany(file, 'materials', MAX_MATERIALS);
+  const matsUsed = new Set(); // material indices a drawn primitive names
+  const matLinear = new Map(); // material index -> linear colour, or null
+  const imageAvg = new Map(); // image index -> linear average, or null
+  const linearOf = async (mi) => {
+    const mat = materials[mi];
     const pbr = (isObj(mat) && isObj(mat.pbrMetallicRoughness) && mat.pbrMetallicRoughness) || {};
     const f = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor.slice(0, 3) : null;
-    const tex = isObj(pbr.baseColorTexture) ? await textureAverage(json, buffers, pbr.baseColorTexture.index, files) : null;
+    const tx = isObj(pbr.baseColorTexture) && Array.isArray(json.textures) ? json.textures[pbr.baseColorTexture.index] : undefined;
+    const si = isObj(tx) && Number.isInteger(tx.source) ? tx.source : null;
+    if (si === null) return f;
+    if (!imageAvg.has(si)) imageAvg.set(si, await imageAverage(json, buffers, si, files));
+    const tex = imageAvg.get(si);
     if (!tex) return f;
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
-  }));
+  };
   // a node's EXT_mesh_gpu_instancing: null (none, or no mesh to place), else { count, attrs }
   const instancing = (ni) => {
     const nd = nodes[ni];
@@ -1146,6 +1194,7 @@ async function parseGLTF(buf, format, base, files) {
     let tris = 0, verts = 0;
     for (const pr of (me && Array.isArray(me.primitives) ? me.primitives : [])) {
       if (!isObj(pr) || !TRI_MODES.includes(pr.mode ?? 4)) continue;
+      if (Number.isInteger(pr.material) && pr.material >= 0 && pr.material < materials.length) matsUsed.add(pr.material);
       const p = isObj(pr.attributes) ? at(accessors, pr.attributes.POSITION) : null;
       const a = pr.indices !== undefined ? at(accessors, pr.indices) : p;
       // a list: a triangle per 3 corners; a strip or fan: one per corner past the second
@@ -1165,6 +1214,8 @@ async function parseGLTF(buf, format, base, files) {
     return ins ? { tris: c.tris * ins.count, verts: c.verts * ins.count, parts: ins.count } : c;
   }, 64,
   (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), file);
+  // (in sequence: one image decoded at a time, not every material's at once)
+  for (const mi of matsUsed) matLinear.set(mi, await linearOf(mi));
   const bodies = [];
   // a name is taken only when it is text, else the default (glTF 2.0 makes "name" a string; one
   // of 42 was written into the .cadmesh and refused there as "cadmesh: mesh 0 name is not text")
@@ -1218,7 +1269,7 @@ async function parseGLTF(buf, format, base, files) {
         }
         // a mirroring transform flips the winding back
         if (det3(m) < 0) for (let t = 0; t < idx.length; t += 3) [idx[t + 1], idx[t + 2]] = [idx[t + 2], idx[t + 1]];
-        const lin = (Number.isInteger(pr.material) && matLinear[pr.material]) || null;
+        const lin = matLinear.get(pr.material) || null;
         const body = { name, pos, tri: idx, color: lin ? linearToSrgb(lin) : null };
         // COLOR_0 (linear; VEC3 or VEC4, float or normalized ubyte / ushort): each triangle the
         // mean of its corners, times the material's colour, made sRGB
@@ -1226,7 +1277,9 @@ async function parseGLTF(buf, format, base, files) {
           const ca = at(accessors, pr.attributes.COLOR_0);
           const cn = ca && NCOMP[ca.type];
           if (cn !== 3 && cn !== 4) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 is not a VEC3 or VEC4 accessor`);
-          if (!nat(ca.count) || ca.count < nv) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 holds ${ca.count} colours for its ${nv} vertices`);
+          // (one per vertex, as glTF 2.0 3.7.2.1 requires of every attribute: a longer list was
+          // accepted, and its surplus walked for every placement)
+          if (ca.count !== nv) throw damaged(`mesh ${nd.mesh} primitive ${k + 1}'s COLOR_0 holds ${ca.count} colours for its ${nv} vertices (it should hold one per vertex)`);
           const CV = acc(pr.attributes.COLOR_0); // (null: no buffer view, every colour 0)
           // (an integer colour the file forgot to mark normalized is still read as a fraction)
           const top = !ca.normalized && Object.hasOwn(COMP, ca.componentType) ? COMP[ca.componentType][1] : 0;
@@ -1279,15 +1332,15 @@ async function parseGLTF(buf, format, base, files) {
   needTriangles(file, meshes);
   return { units: MM, meshes, root, sourceUnits: 'm' };
 }
-// A texture's average colour (LINEAR, 0..1), or null where the image cannot be
+// An image's average colour (LINEAR, 0..1), or null where the image cannot be
 // decoded here (no createImageBitmap / OffscreenCanvas: Node, an old browser)
 // or is not found. The image is drawn at 32 x 32 and its pixels (sRGB, as glTF
 // base colour textures are) averaged in linear light, weighted by alpha.
 const SRGB_TO_LINEAR = Array.from({ length: 256 }, (_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
-async function textureAverage(json, buffers, ti, files) {
+async function imageAverage(json, buffers, si, files) {
   try {
     if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return null;
-    const img = json.images && json.textures && json.textures[ti] && json.images[json.textures[ti].source];
+    const img = Array.isArray(json.images) ? json.images[si] : null;
     if (!img) return null;
     let blob;
     if (img.bufferView !== undefined) {

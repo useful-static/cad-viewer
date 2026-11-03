@@ -305,6 +305,19 @@ test('an INSERT\'s ATTRIBs are drawn as text (a title block\'s values), an invis
   assert.ok(d.paths[0].closed);
   assert.deepEqual(d.paths.slice(1).map((p) => [...p.pts]), [[4, 0, 4, 3], [0, 3, 0, 0]]);
 });
+test('an entity marked invisible (60 = 1) is not drawn, nor what belongs to it (a dynamic block\'s hidden states)', () => {
+  const d = parseDXF(ents(
+    [[0, 'LINE'], [8, '0'], [60, 1], [10, 0], [20, 0], [11, 1], [21, 1]],
+    [[0, '3DFACE'], [8, '0'], [60, 1], [10, 0], [20, 0], [11, 4], [21, 0], [12, 4], [22, 3], [13, 0], [23, 3]],
+    [[0, 'TEXT'], [8, '0'], [60, 1], [10, 0], [20, 0], [40, 1], [1, 'hidden']],
+    [[0, 'POLYLINE'], [8, '0'], [60, 1], [66, 1], [70, 0]], [[0, 'VERTEX'], [8, '0'], [10, 0], [20, 0]], [[0, 'VERTEX'], [8, '0'], [10, 5], [20, 5]], [[0, 'SEQEND'], [8, '0']],
+    [[0, 'INSERT'], [8, '0'], [60, 1], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]], [[0, 'ATTRIB'], [8, '0'], [10, 1], [20, 1], [40, 1], [1, 'att'], [2, 'T'], [70, 0]], [[0, 'SEQEND'], [8, '0']],
+    [[0, 'LINE'], [8, '0'], [60, 0], [10, 0], [20, 0], [11, 2], [21, 0]],
+  ));
+  assert.equal(d.paths.length, 1, 'only the visible LINE');
+  assert.deepEqual([...d.paths[0].pts], [0, 0, 2, 0]);
+  assert.equal(d.texts.length, 0);
+});
 test('a coordinate that is not a number leaves that line out, not the drawing\'s extents NaN', () => {
   const d = parseDXF(ents([[0, 'LINE'], [8, '0'], [10, 'abc'], [20, 0], [11, 1], [21, 1]], [[0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5]]));
   assert.equal(d.paths.length, 1);

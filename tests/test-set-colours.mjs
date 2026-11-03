@@ -30,9 +30,23 @@ test('replaces the colours, keeps every other byte', () => {
     assert.deepEqual([...after.color.subarray(v * 4, v * 4 + 4)], [rgba[v * 4], rgba[v * 4 + 1], rgba[v * 4 + 2], 255]);
   }
   for (const s of ['position', 'normal', 'id', 'index', 'faces', 'edges']) assert.deepEqual(bytes(after, s), bytes(before, s), s);
-  const { recolour, ...rest } = after.header;
+  const { recolour, meshes, ...rest } = after.header;
   assert.equal(recolour, 'the test palette');
-  assert.deepEqual(rest, before.header);
+  const { meshes: meshesBefore, ...restBefore } = before.header;
+  assert.deepEqual(rest, restBefore);
+  // each body's header colour follows its vertices: these vary within a body, so none (it was
+  // [0.5, 0.5, 0.5], which the colour picker then showed for a part drawn in other colours)
+  assert.deepEqual(meshes.map((m) => m.color), [null, null]);
+  assert.deepEqual(meshes.map(({ color, ...m }) => m), meshesBefore.map(({ color, ...m }) => m));
+});
+
+test('a body recoloured in one colour has that colour in the header', () => {
+  const raw = file();
+  const n = decodeCadmesh(raw.slice().buffer).header.vertexCount;
+  const rgb = new Uint8Array(n * 3);
+  for (let v = 0; v < n; v++) rgb.set(v < n / 2 ? [255, 0, 0] : [0, 0, 255], v * 3);
+  const after = decodeCadmesh(setColours(raw, rgb, 'two bodies').buffer);
+  assert.deepEqual(after.header.meshes.map((m) => m.color), [[1, 0, 0], [0, 0, 1]]);
 });
 
 test('takes RGB too', () => {

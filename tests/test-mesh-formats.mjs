@@ -974,5 +974,92 @@ await test('r7-12 a textured glTF material: factor x texture average multiplied 
     [globalThis.createImageBitmap, globalThis.OffscreenCanvas] = saved;
   }
 });
+const col8 = (n) => ({ values: Array.from({ length: n * 4 }, () => 200), comp: 5121, nc: 4, normalized: true });
+await test('r8-2a glTF COLOR_0 counting other than POSITION refused (more and fewer)', async () => {
+  // (glTF 2.0 3.7.2.1: every attribute of a primitive has the same count; 22 M colours on one
+  // triangle were walked whole for every placement)
+  await refusedFast(() => openJ(gltfOf({ positions: TRI1, colour: col8(4) }), 'c.gltf'),
+    /^c\.gltf is damaged: mesh 0 primitive 1's COLOR_0 holds 4 colours for its 3 vertices/);
+  await refusedFast(() => openJ(gltfOf({ positions: TRI1, colour: col8(2) }), 'c.gltf'),
+    /^c\.gltf is damaged: mesh 0 primitive 1's COLOR_0 holds 2 colours for its 3 vertices/);
+});
+await test('r8-2b glTF byteStride outside 4..252 or not a multiple of 4 refused', async () => {
+  // (glTF 2.0 3.6.2.4: byteStride 4..252, a multiple of 4)
+  for (const st of [1, 2, 6, 256]) {
+    await refusedFast(() => openJ(gltfOf({ positions: TRI1, colour: { ...col8(3), stride: st } }), 's.gltf'),
+      new RegExp(`^s\\.gltf is damaged: buffer view 1 has a byteStride of ${st}`));
+  }
+});
+await test('r8-2c glTF: each accessor read once however often its mesh is placed (instances, nodes)', async () => {
+  const col = col8;
+  // the colours (normalized ubyte: the only byte reads) read once for 1 placement, 10 instances,
+  // and 2 nodes naming the mesh
+  const orig = DataView.prototype.getUint8;
+  let reads = 0;
+  DataView.prototype.getUint8 = function getUint8(o) { reads++; return orig.call(this, o); };
+  try {
+    const instanced = (k) => gltfOf({ positions: TRI1, colour: col(3),
+      node: { extensions: { EXT_mesh_gpu_instancing: { attributes: { TRANSLATION: 2 } } } },
+      extra: [{ values: Array.from({ length: k * 3 }, (_, i) => (i % 3 ? 0 : i * 2)), comp: 5126, nc: 3 }],
+      more: { extensionsUsed: ['EXT_mesh_gpu_instancing'] } });
+    const readsFor = async (j, bodies) => { reads = 0; assert.equal((await openJ(j)).meshes.length, bodies); return reads; };
+    const one = await readsFor(instanced(1), 1);
+    assert.equal(one, 12, 'one placement reads its 3 x 4 colour bytes');
+    assert.equal(await readsFor(instanced(10), 10), one, 'ten instances');
+    const twoNodes = gltfOf({ positions: TRI1, colour: col(3), more: { scenes: [{ nodes: [0, 1] }] } });
+    twoNodes.nodes.push({ mesh: 0, translation: [5, 0, 0] });
+    assert.equal(await readsFor(twoNodes, 2), one, 'two nodes');
+  } finally {
+    DataView.prototype.getUint8 = orig;
+  }
+});
+await test('r8-3 glTF textures: each image decoded once, only for materials a drawn primitive uses, one at a time; a materials list past the cap refused', async () => {
+  const saved = [globalThis.createImageBitmap, globalThis.OffscreenCanvas];
+  let calls = 0, inFlight = 0, peak = 0;
+  globalThis.createImageBitmap = async () => { calls++; inFlight++; peak = Math.max(peak, inFlight); await new Promise((r) => setTimeout(r, 1)); inFlight--; return {}; };
+  globalThis.OffscreenCanvas = class { getContext() { return { drawImage() {}, getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4).map((_, i) => (i % 4 === 3 ? 255 : 64)) }) }; } };
+  const decodes = async (j) => { calls = 0; peak = 0; await openJ(j); return { calls, peak }; };
+  const mat = (t) => ({ pbrMetallicRoughness: { baseColorTexture: { index: t } } });
+  try {
+    // 1000 materials naming one image, one primitive using material 0
+    const j = gltfOf({ positions: TRI1, more: { materials: Array.from({ length: 1000 }, () => mat(0)), textures: [{ source: 0 }], images: [{ uri: 'data:image/png;base64,AAAA' }] } });
+    j.meshes[0].primitives[0].material = 0;
+    assert.deepEqual(await decodes(j), { calls: 1, peak: 1 }, 'one image');
+    // three images; texture 3 names image 0 again; primitives use materials 0, 2 and 3 (material
+    // 1, image 1, is drawn by none): images 0 and 2 decoded, one after the other
+    const k = gltfOf({ positions: TRI1, more: { materials: [mat(0), mat(1), mat(2), mat(3)], textures: [{ source: 0 }, { source: 1 }, { source: 2 }, { source: 0 }],
+      images: ['AAAA', 'BBBB', 'CCCC'].map((b) => ({ uri: `data:image/png;base64,${b}` })) } });
+    const a = k.meshes[0].primitives[0].attributes;
+    k.meshes[0].primitives = [0, 2, 3].map((material) => ({ attributes: a, material }));
+    assert.deepEqual(await decodes(k), { calls: 2, peak: 1 }, 'images used');
+  } finally {
+    [globalThis.createImageBitmap, globalThis.OffscreenCanvas] = saved;
+  }
+  await refusedFast(() => openJ({ ...gltfOf({ positions: TRI1 }), materials: Array.from({ length: 65_537 }, () => ({})) }, 'm.gltf'),
+    /^m\.gltf holds more than the 65,536 materials this viewer opens/);
+});
+await test('r8-5 3MF tags inside comments, CDATA sections and processing instructions are not read', async () => {
+  const res = `<resources><object id="1" name="part">${TRI3MF}</object></resources>`;
+  for (const hide of ['<!-- <item objectid="9"/> -->', '<![CDATA[ <item objectid="9"/> ]]>', '<?note <item objectid="9"/> ?>', '<!-- a -- b > <item objectid="9"/> -->']) {
+    const m = await parseMesh('3mf', m3of(`${res}<build>${hide}<item objectid="1"/></build>`), 'p.3mf');
+    assert.equal(m.meshes.length, 1, hide);
+  }
+  // a commented-out object after the real one, with its id
+  const old = await parseMesh('3mf', m3of(`<resources><object id="1" name="part">${TRI3MF}</object><!-- <object id="1" name="old"></object> --></resources><build><item objectid="1"/></build>`), 'p.3mf');
+  assert.equal(old.root.children[0].name, 'part');
+  // a comment never closed: the rest of the part is inside it
+  const open = await parseMesh('3mf', m3of(`${res}<build><item objectid="1"/></build><!-- <item objectid="9"/>`), 'p.3mf');
+  assert.equal(open.meshes.length, 1);
+  // a million comments are passed over in linear time
+  const many = m3of(`${'<!-- x -->'.repeat(1_000_000)}${res}<build><item objectid="1"/></build>`);
+  const t0 = Date.now();
+  assert.equal((await parseMesh('3mf', many, 'p.3mf')).meshes.length, 1);
+  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+});
+await test('r8-6 3MF material groups (basematerials, colorgroup) have a cap of their own, named in the refusal (not "objects")', async () => {
+  const head = '<model unit="millimeter"><resources>', t = '<basematerials/>';
+  const z = await zipDeflated('3D/3dmodel.model', Buffer.concat([Buffer.from(head), Buffer.alloc(2_000_001 * t.length, t)]));
+  await refusedFast(() => parseMesh('3mf', z, 'g.3mf'), /^g\.3mf holds more than the 2,000,000 material groups this viewer opens/, 5000);
+});
 
 done();

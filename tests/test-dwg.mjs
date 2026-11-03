@@ -90,6 +90,33 @@ t('5.10 R2007 decompression refuses a back reference before the start and a lite
   // and an output shorter than the stream says
   assert.throws(() => decompress21(Uint8Array.of(0x00, ...lit), 0, 9, 4), /literal past the end/);
 });
+// a bit string for an object's data, as the spec writes it: RD as its 8 little-endian bytes,
+// RC and a BS's payload MSB first
+const b8 = (n) => n.toString(2).padStart(8, '0');
+const rd = (x) => { const v = new Uint8Array(new Float64Array([x]).buffer); return [...v].map(b8).join(''); };
+const tv = (s) => `01${b8(s.length)}${[...s].map((c) => b8(c.charCodeAt(0))).join('')}`; // T to R2004: BS (8-bit form) + bytes
+// a per-type decoder (20.4.x) run on bits alone: the handle stream stubbed (owner, style)
+const decodeData = (type, v, s) => {
+  const o = { h: { Ha: () => 0 } };
+  _internal.DECODE[type].call({ entityHandles() {} }, o, new Bits(bits(s), v), v);
+  return o.d;
+};
+t('20.4.32 3DFACE, R14: four 3BD corners and the invisible-edge flags', () => {
+  // corners (0,0,0) (1,0,0) (1,1,0) (0,1,0) as BD codes (10 = 0.0, 01 = 1.0); flags BS 01 + 5
+  const d = decodeData('3DFACE', 14, '101010 011010 010110 100110 01' + b8(5));
+  assert.deepEqual(d, { c: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], flags: 5 });
+});
+t('20.4.32 3DFACE, R2000+: the first corner raw, each next as DDs on the one before', () => {
+  // no flags, z zero; (2.5, -1); then x 11+RD(4), y 00, z 00; x 00, y 11+RD(3), z 00; x 11+RD(2.5), y 00, z 00
+  const s = `1 1 ${rd(2.5)} ${rd(-1)} 11${rd(4)} 00 00  00 11${rd(3)} 00  11${rd(2.5)} 00 00`;
+  assert.deepEqual(decodeData('3DFACE', 15, s), { c: [[2.5, -1, 0], [4, -1, 0], [4, 3, 0], [2.5, 3, 0]], flags: 0 });
+});
+t('20.4.4 ATTRIB, R2000: the text data, then its tag and flags (1: invisible)', () => {
+  // DataFlags FF (no elevation, alignment, oblique, rotation, width, generation, alignments);
+  // insertion (5, 6); extrusion default (B 1); thickness 0 (B 1); height 2.5; text; tag; BS 0; RC 1
+  const d = decodeData('ATTRIB', 15, `11111111 ${rd(5)} ${rd(6)} 1 1 ${rd(2.5)} ${tv('PN1')} ${tv('TAG')} 10 ${b8(1)}`);
+  assert.deepEqual([d.p, d.h, d.text, d.tag, d.flags], [[5, 6], 2.5, 'PN1', 'TAG', 1]);
+});
 t('pairsToDXF writes control characters and carets in caret notation, and parseDXF reads them back', () => {
   const P = [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, '0'], [20, '0'], [40, '1'], [1, 'a\x03b^c'], [0, 'ENDSEC'], [0, 'EOF']];
   const s = pairsToDXF(P);

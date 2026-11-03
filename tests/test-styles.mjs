@@ -3,7 +3,7 @@
 // contrast as the plan states it.   node tests/test-styles.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { CUT_FILL, PAPER, PAPER_EDGES, STYLES, contrast, defaultStyle, edgePasses, styleFor, toggleEdges } from '../js/styles.js';
+import { CUT_FILL, DEFAULT_STYLE, PAPER, PAPER_EDGES, STYLES, contrast, edgePasses, styleFor, toggleEdges } from '../js/styles.js';
 
 import { test, done } from './harness.mjs';
 
@@ -13,12 +13,11 @@ test('six styles; the paper ones are Hidden line, Hidden grey and Wire; outlines
   assert.deepEqual(STYLES.filter((s) => s.outline).map((s) => s.id), ['hidden', 'hiddengrey', 'wire', 'xray']);
 });
 test('default: Shaded for every file, b-rep or mesh; a known choice wins', () => {
-  assert.equal(defaultStyle(false), 'shaded');
-  assert.equal(defaultStyle(true), 'shaded');
-  assert.equal(styleFor('wire', false), 'wire');
-  assert.equal(styleFor('edges', false), 'edges');
-  assert.equal(styleFor('nonsense', true), 'shaded');
-  assert.equal(styleFor(null, false), 'shaded');
+  assert.equal(DEFAULT_STYLE, 'shaded');
+  assert.equal(styleFor('wire'), 'wire');
+  assert.equal(styleFor('edges'), 'edges');
+  assert.equal(styleFor('nonsense'), 'shaded');
+  assert.equal(styleFor(null), 'shaded');
 });
 test('E switches Shaded and Shaded + edges only', () => {
   assert.equal(toggleEdges('shaded'), 'edges');

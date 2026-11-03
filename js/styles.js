@@ -35,11 +35,11 @@ export const STYLE_IDS = STYLES.map((s) => s.id);
 // Until a choice is made: Shaded, for every file. (A b-rep file started in
 // Shaded + edges; its outlines, drawn over every part once the edge list was
 // built, made a board look worse, operator 2026-10-29.) E or the Style
-// select turns them on. The argument stays for callers that pass the type.
-export const defaultStyle = (_isMeshFile) => 'shaded';
+// select turns them on.
+export const DEFAULT_STYLE = 'shaded';
 
-// The style in force: an explicit, known choice, else the per-type default.
-export const styleFor = (choice, isMeshFile) => (styleById(choice) ? choice : defaultStyle(isMeshFile));
+// The style in force: an explicit, known choice, else the default.
+export const styleFor = (choice) => (styleById(choice) ? choice : DEFAULT_STYLE);
 
 // E: Shaded <-> Shaded + edges. In any other style it changes nothing, and
 // the caller says so on #hover.

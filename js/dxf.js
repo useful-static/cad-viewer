@@ -476,6 +476,14 @@ function emit(recs, M, byBlock, depth, ctx) {
   walk(ctx.budget, recs.length);
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
+    // an entity marked invisible (60 = 1; a DWG's "invisibility") is not drawn: AutoCAD's dynamic
+    // blocks mark every visibility state but the shown one so, and all of them were drawn on top
+    // of each other (the records that belong to it -- a POLYLINE's VERTEXes, an INSERT's
+    // ATTRIBs, to their SEQEND -- go with it)
+    if (num(r, 60, 0) === 1) {
+      while (i + 1 < recs.length && ['VERTEX', 'ATTRIB', 'SEQEND'].includes(recs[i + 1].type)) if (recs[++i].type === 'SEQEND') break;
+      continue;
+    }
     let layer = get(r, 8, '0');
     // an entity on layer 0 inside a block takes the insert's layer
     if (layer === '0' && byBlock && byBlock.layer) layer = byBlock.layer;

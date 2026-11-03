@@ -94,7 +94,6 @@ const app = {
   // browser; null until a choice, when the file type's default applies
   // (?style=<id> picks one for this page only, for tests and screenshots)
   styleChoice: new URLSearchParams(location.search).get('style') || getPref('cadv.style'),
-  isMeshFile: false, // a mesh format (feature 14): Shaded by default
   showSilhouettes: true, // the outline styles' silhouettes; a test turns them off for a control
   // colours picked for single parts of the loaded model: body index -> [r, g, b],
   // remembered in this browser under the model's key (modelKey)
@@ -102,7 +101,7 @@ const app = {
   modelKey: '',
 };
 
-// A model's key for its remembered part colours: its bodies' names and sizes,
+// A model's key for its remembered part colours: its bodies' names and vertex and index counts,
 // so the same model opened again (from STEP or from a saved .cadmesh) finds
 // them, and a different one does not.
 const modelKeyOf = (header) => `cadv.colours.${header.meshes.length}-${
@@ -1849,7 +1848,7 @@ function startTour(tour, url, only = null) {
   // what the visitor had: each step is applied to it, and leaving puts it back
   // (styleChoice: the visitor's own choice of style, which a step's style is
   // not; leaving puts it back as it was)
-  const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), styleChoice: app.styleChoice,
+  const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), faceOverrides: app.faceOverrides, styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk };
   app.tour = { tour, url, i: 0, saved, base, playing: false };
   // (in place of another tour: the visitor's orientation, not that tour's,
@@ -1861,6 +1860,14 @@ function startTour(tour, url, only = null) {
   // Walk off while it plays (its keys would move the camera off the step);
   // leaving puts it back, the camera with it
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
+  // nothing selected while it plays: a selection greys every other part, so Preview and the
+  // tour's video showed the maker's "frame the selection" pick, not the step (its pictures
+  // drop the selection); leaving puts it back with the rest of the view (saved.selected)
+  if (app.selected.size) select([], false);
+  app.hover = 0;
+  // Paint's face colours are the visitor's, and no step holds them: not drawn while it plays, so
+  // the maker's Show and Preview show what the saved tour will (leaving puts them back)
+  if (app.faceOverrides.size) { app.faceOverrides = new Map(); recolour(); }
   // the tour's orientation while it plays (leaving puts the visitor's back,
   // with the rest of their view)
   if (tour.orient && tour.orient !== app.cam.orient) {
@@ -1901,16 +1908,19 @@ function endTour(restore = true) {
   $('stage').classList.remove('touring');
   if (restore && saved && app.header) {
     app.overrides = base.overrides;
+    if (base.faceOverrides) app.faceOverrides = base.faceOverrides;
     recolour();
     restoreExplode(base.explode);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
     if (!!app.walk !== base.walk) { app.walk = base.walk; $('walk').setAttribute('aria-pressed', String(base.walk)); }
-    app.styleChoice = base.styleChoice;
     updateButtons();
     viewChanged();
   }
+  // the visitor's own style choice, however the tour ends (a new model ending it kept the last
+  // step's style pinned over the next model, and over its list entry's own style)
+  app.styleChoice = base.styleChoice;
   announce('tour closed');
 }
 
@@ -2188,7 +2198,7 @@ function setEmbedActive(on) {
 
 // the style in force: the select's choice, else the model list's style for
 // the model, else the file type's default
-const currentStyle = () => styleById(styleFor(app.styleChoice || (app.header && listEntry(app.sourceUrl)?.style) || null, app.isMeshFile));
+const currentStyle = () => styleById(styleFor(app.styleChoice || (app.header && listEntry(app.sourceUrl)?.style) || null));
 
 // remember: only a choice made in the select is kept (E is not)
 function setStyle(id, remember) {
@@ -2350,7 +2360,9 @@ function turn() {
     if (!app.turntable) return;
     const dt = turnLast ? Math.min(0.1, (t - turnLast) / 1000) : 0;
     turnLast = t;
-    if (app.header && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
+    // (not while a tour is shown: a step's camera is the step's -- a static step spun off it, an
+    // orbit step turned faster than recorded, and its pictures were taken off it)
+    if (app.header && !app.tour && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
       turnAbout(app.cam, orientUp(app.cam.orient), TURN_RAD_S * dt);
       viewChanged();
     }
@@ -3597,6 +3609,9 @@ function clearModel() {
   app.ref = null;
   app.holesFor = null;
   app.partLabels = null;
+  // (and the cleared model's bytes and part data: a drawing shown next held them until the next 3D load)
+  app.meshSource = null;
+  app.stepMeta = null;
   $('download').hidden = true;
   $('sheetsrow').hidden = true;
   $('view').setAttribute('aria-label', '3D view: no model open');
@@ -3870,6 +3885,9 @@ async function addToScene(base, name, seq) {
 // newTree: the tree is built again (a model added); a move keeps the
 // selection, the hidden parts and the tree. Resolves false if superseded.
 async function showScene(models, { newTree = false } = {}) {
+  // a tour plays over the model it was started on (as a new model ends it in loadBuffer): it is
+  // left, the visitor's view put back, before the scene changes under its step
+  endTour();
   const merged = mergeModels(models);
   merged.edgeInfo = { value: null, ready: null };
   const mesh = inScheme(merged, app.overrides);
@@ -3884,6 +3902,9 @@ async function showScene(models, { newTree = false } = {}) {
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
   if (app.stopEdges) app.stopEdges.stop();
   app.scene = models;
+  // "this file is in" re-reads the first model alone, which would drop the others: a scene has
+  // none (a mesh opened alone gets it again)
+  if (models.length > 1) app.meshSource = null;
   app.mesh = mesh;
   app.baseMesh = merged;
   app.header = mesh.header;
@@ -4153,8 +4174,8 @@ async function loadAny(buf, name, seq) {
   if (fmt && fmt.kind === 'mesh') return loadMeshFile(buf, name, seq);
   if (fmt && fmt.kind === '2d') return loadDxf(buf, name, seq);
   if (fmt && fmt.kind === 'zip') return loadZip(buf, name, seq);
-  // A compressed STEP / IGES / BREP (part.stp.gz, about a fifth of the size
-  // to download): unpacked here, then opened as the file inside it
+  // A compressed STEP / IGES / BREP (part.stp.gz, a fraction of the size to
+  // download: README "Load"): unpacked here, then opened as the file inside it
   // (served with Content-Encoding: gzip, fetch has unpacked it already)
   if (fmt && fmt.kind === 'cad' && /\.gz$/i.test(name)) {
     if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
@@ -4278,8 +4299,12 @@ async function meshFromSource(src, unit, seq) {
 function setMeshUnit(u) {
   const src = app.meshSource;
   if (!src || u === src.unit || !MM_PER[u]) return;
+  // (the same file, read again: it keeps the URL it came from -- the address, the view link, the
+  // list entry and a saved tour all name it by that; a new seq dropped it)
+  const url = app.sourceUrl;
   startLoad(() => {
     const seq = beginLoad();
+    if (url) app.urlOfLoad = { seq, url };
     setStatus('loading', `reading ${src.name} in ${u}`);
     return meshFromSource(src, u, seq).then(() => announce(`${src.name} read in ${u}`));
   });
@@ -4932,7 +4957,7 @@ function labelMeshes() {
   app.bodyKeys = bodyKeys(labels);
   // the model list's labels for its parts ("HDMI_1_3" -> "HDMI"), each piece
   // of "owner › body" on its own
-  app.meshLabel = app.partLabels ? labels.map((l) => l.split(' › ').map(partLabel).join(' › ')) : labels;
+  app.meshLabel = app.partLabels ? labels.map((l, i) => (i < firstModelBodies() ? l.split(' › ').map(partLabel).join(' › ') : l)) : labels;
 }
 
 const meshLabel = (id) => app.meshLabel[id - 1];
@@ -4949,10 +4974,18 @@ const partLabel = (s) => {
   return labelIndex.map.get(String(s).trim().toLowerCase()) ?? s;
 };
 
+// The bodies the list entry's labels and the STEP file's part data describe: the first model's,
+// which a scene's added models follow (their own bodies named alike -- COMPONENT1, Body1 -- took
+// the first model's label and part number)
+const firstModelBodies = () => (app.scene && app.scene.length > 1 ? app.scene[0].base.header.meshes.length : Infinity);
+const ofFirstModel = (ids) => ids.every((id) => id <= firstModelBodies());
+
 // The name a tree node shows: its own, else its one body's, else "(unnamed)";
-// as the model list labels it
-const nodeName = (n) => partLabel(n.name
-  || (n.meshes.length === 1 && !n.children.length ? app.header.meshes[n.meshes[0]].name : '') || '(unnamed)');
+// as the model list labels it (ids: its bodies, the labels being the first model's)
+const nodeName = (n, ids = null) => {
+  const s = n.name || (n.meshes.length === 1 && !n.children.length ? app.header.meshes[n.meshes[0]].name : '') || '(unnamed)';
+  return !ids || ofFirstModel(ids) ? partLabel(s) : s;
+};
 
 // Repeated names among siblings get a number ("L000", "L000 #2", …): a row
 // that reads exactly like eleven others cannot be told apart.
@@ -4996,7 +5029,7 @@ function buildTree() {
     row.className = 'row';
     row.style.paddingLeft = `${depth * 12 + 4}px`;
     const items = node.meshes.length === 1 && !node.children.length ? [] : kidsOf(node);
-    const names = numberRepeats(items.map(nodeName));
+    const names = numberRepeats(items.map((c) => nodeName(c, idsOf(c))));
     const kids = items.map((c, j) => mk(c, depth + 1, names[j])).filter(Boolean);
     if (ids.length === 1 && !app.rowOf.has(ids[0])) app.rowOf.set(ids[0], li); // the deepest wins
     const tw = document.createElement('span');
@@ -5012,7 +5045,7 @@ function buildTree() {
     // the full name (the row truncates it) and the body count
     // (and, for a part the model list labels, the file's own name)
     const own = node.name || (node.meshes.length === 1 && !node.children.length ? app.header.meshes[node.meshes[0]].name : '');
-    label.title = `${label.textContent}${own && partLabel(own) !== own ? ` (${own} in the file)` : ''} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
+    label.title = `${label.textContent}${own && ofFirstModel(ids) && partLabel(own) !== own ? ` (${own} in the file)` : ''} · ${ids.length} bod${ids.length === 1 ? 'y' : 'ies'}`;
     cb.setAttribute('aria-label', `Show ${label.textContent}`); // a screen reader names the part
     const cnt = document.createElement('span');
     cnt.className = 'cnt';
@@ -5103,7 +5136,7 @@ function buildTree() {
     if (start.name || start.meshes.length || k.length !== 1) break;
     start = k[0];
   }
-  const top = mk(start, 0, nodeName(start));
+  const top = mk(start, 0, nodeName(start, idsOf(start)));
   if (top) {
     root.append(top);
     top.querySelector('.label').tabIndex = 0; // the tree's one tab stop
@@ -5476,7 +5509,8 @@ function fillInfo(el) {
   } else add('selection', title);
   // the part's id and description from the STEP file (js/step-meta.js), when
   // it carries more than the name
-  const meta = ids.length === 1 && app.stepMeta && app.stepMeta.get(app.header.meshes[ids[0] - 1].name);
+  // (the STEP file's part data is the first model's: an added model's body of the same name is not it)
+  const meta = ids.length === 1 && ofFirstModel(ids) && app.stepMeta && app.stepMeta.get(app.header.meshes[ids[0] - 1].name);
   if (meta) add('part', [meta.id, meta.description].filter(Boolean).join(' · '));
   // "size (mm)" rather than "extent X × Y × Z (mm)": the longer label wrapped
   // the third value onto a line of its own in the 300 px panel
@@ -6133,6 +6167,8 @@ function wireInput() {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
     orient: () => app.cam.orient || null,
+    // the model open now, by its content (the same file opened again is the same model)
+    model: () => (app.header ? { key: modelKeyOf(app.header), name: app.sourceName || 'another model' } : null),
     save: (text, name) => downloadText(text, name, 'application/json'),
     validate: (text) => parseTour(text, location.href),
     pictures: tourPictures,

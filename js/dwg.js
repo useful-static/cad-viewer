@@ -1624,7 +1624,7 @@ export function dwgToPairs(dwg) {
 }
 
 // for the tests: the pieces, so each layer can be checked on its own
-export const _internal = { Bits, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, readHeader, deRS, checksum04, checksum21, magic };
+export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, readHeader, deRS, checksum04, checksum21, magic };
 
 // The pairs as DXF text; a string's control characters and carets in DXF's caret notation (a
 // text may hold U+0003; written raw, a line feed would split the pair)

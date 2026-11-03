@@ -55,7 +55,7 @@ export function stepFromView(captured, keep = {}) {
 export function createTourRecorder(api) {
   const $ = (id) => document.getElementById(id);
   // orient: an opened tour's orientation, written back as it was (a new tour has none)
-  const draft = { title: '', mode: 'static', loop: false, orient: null, steps: [], sel: -1 };
+  const draft = { title: '', mode: 'static', loop: false, orient: null, steps: [], sel: -1, model: null };
   let busy = false; // a picture or video export under way
 
   const el = {
@@ -70,6 +70,16 @@ export function createTourRecorder(api) {
   el.sText.maxLength = TEXT_MAX;
 
   const note = (t) => { el.note.textContent = t; if (t) api.announce(t); };
+
+  // The model the draft's steps were made on: a tour plays over one model, so with another
+  // open, its steps are not added to, shown or saved (saved, they named the other model)
+  const model = () => (api.model ? api.model() : null);
+  const sameModel = (what) => {
+    const m = model();
+    if (!draft.steps.length || !draft.model || !m || draft.model.key === m.key) return true;
+    note(`not ${what}: these steps were made on ${draft.model.name}; open it again to go on with them`);
+    return false;
+  };
 
   // (a new tour is written with the orientation its steps were taken in: its presets and
   // orbits mean that up on any page, whatever the page's own orientation)
@@ -145,16 +155,19 @@ export function createTourRecorder(api) {
   }
 
   el.add.onclick = () => {
+    if (!sameModel('added')) return;
     const prev = draft.steps[draft.sel];
     // (the step before's dimming and timing carry over: its words, id and orbit do not)
     const s = take(prev ? Object.fromEntries(CARRIED_FIELDS.map((k) => [k, prev[k]])) : {});
     if (!s) { note('select parts first to frame them, or choose "this exact view"'); return; }
+    if (!draft.steps.length) draft.model = model();
     draft.steps.splice(draft.sel + 1, 0, s);
     select(draft.sel + 1);
     note(`step ${draft.sel + 1} added: give it a title and a text`);
     el.sTitle.focus();
   };
   el.sUpdate.onclick = () => {
+    if (!sameModel('updated')) return;
     const old = draft.steps[draft.sel];
     if (!old) return;
     const s = take(old);
@@ -187,6 +200,7 @@ export function createTourRecorder(api) {
   // play the draft: from the step being edited, paused there (Show), or all
   // of it from the start as it will play (Preview)
   function preview(from, play) {
+    if (!sameModel('shown')) return;
     let tour;
     try { tour = api.validate(text()); } catch (e) { note(`not ready: ${e.message}`); return; }
     api.preview(tour, from, play);
@@ -195,6 +209,7 @@ export function createTourRecorder(api) {
   el.play.onclick = () => preview(0, true);
 
   el.save.onclick = () => {
+    if (!sameModel('saved')) return;
     let t;
     try { api.validate(text()); t = text(); } catch (e) { note(`not saved: ${e.message}`); return; }
     const slug = (draft.title || 'tour').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tour';
@@ -204,6 +219,7 @@ export function createTourRecorder(api) {
 
   // the tour as files: its pictures (a zip), or a video of it playing
   async function exportAs(kind) {
+    if (!sameModel(kind === 'video' ? 'recorded' : 'pictured')) return;
     let tour;
     try { tour = api.validate(text()); } catch (e) { note(`not ready: ${e.message}`); return; }
     busy = true;
@@ -228,6 +244,7 @@ export function createTourRecorder(api) {
     draft.loop = tour.loop;
     draft.orient = tour.orient || null;
     draft.steps = tour.steps.map((s) => ({ ...s }));
+    draft.model = model(); // (a tour read back is edited over the model open now)
     draft.sel = draft.steps.length ? 0 : -1;
     el.title.value = draft.title;
     el.mode.value = draft.mode;
