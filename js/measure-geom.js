@@ -184,7 +184,10 @@ const bitsKey = (P, v) => {
 export function bodyGeometry(model, meshIndex) {
   const P = model.position, I = model.index, h = model.header;
   const m = h.meshes[meshIndex];
-  const a = h.angularDeflection ?? 0.5;
+  // (the body's own model's angular deflection, where a scene merged models meshed differently:
+  // the scene's smallest set every model's circle test, and a board beside a model meshed at 0.1
+  // listed 0 of its 125 holes)
+  const a = m.angularDeflection ?? h.angularDeflection ?? 0.5;
   const faces = [];
   const tri0 = m.idxStart / 3, ntri = m.idxCount / 3;
   if (model.faces && m.faceCount) {
@@ -214,6 +217,7 @@ export function bodyGeometry(model, meshIndex) {
   const span = P.length / 3 + 1;
   for (const [fi, f] of faces.entries()) {
     f.plane = f.whole ? null : planeOf(P, I, f.tri0, f.ntri);
+    if (f.plane && model.normal) facingNormals(f.plane, model.normal, I, f.tri0, f.ntri);
     f.circles = [];
     if (!f.ntri) continue;
     const loops = faceLoops(I, f.tri0, f.ntri, span);
@@ -270,25 +274,23 @@ export function bodyGeometry(model, meshIndex) {
   for (let k = 0; k < nodeP.length; k++) {
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
-  // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; inward: the body is
-  // wound inside out, its signed volume negative -- a mirrored placement, another writer's file --
-  // so its faces' normals look into it)
-  return { faces, corners, edges, circles, P, I, inward: signedVolume(P, I, tri0, ntri) < 0 };
+  // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; a: the angular
+  // deflection its circles were tested at, for the drawing's)
+  return { faces, corners, edges, circles, P, I, a };
 }
 
-// A body's signed volume (float64, about its first vertex): negative when it is wound inward
-export function signedVolume(P, I, tri0, ntri) {
-  if (!ntri) return 0;
-  const o = I[3 * tri0] * 3, ox = P[o], oy = P[o + 1], oz = P[o + 2];
-  let V = 0;
-  for (let t = tri0; t < tri0 + ntri; t++) {
-    const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
-    const ax = P[a] - ox, ay = P[a + 1] - oy, az = P[a + 2] - oz;
-    const bx = P[b] - ox, by = P[b + 1] - oy, bz = P[b + 2] - oz;
-    const cx = P[c] - ox, cy = P[c + 1] - oy, cz = P[c + 2] - oz;
-    V += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+// A face's plane turned to look the way its vertex normals do: the normals are what the view
+// shades and cuts by (js/renderer-webgl.js), so Measure's outside is the view's. A mirrored
+// placement winds its triangles inward and keeps its normals out; the winding's sign, turned by
+// the body's signed volume, was a second rule (an open body's sign is about its first vertex, and
+// a washer with no outer wall read as two blind holes). N: the decoded snorm16 x4 normals
+function facingNormals(plane, N, I, t0, nt) {
+  let s = 0;
+  for (let t = t0; t < t0 + nt; t++) for (let j = 0; j < 3; j++) {
+    const v = I[3 * t + j] * 4;
+    s += plane.normal[0] * N[v] + plane.normal[1] * N[v + 1] + plane.normal[2] * N[v + 2];
   }
-  return V / 6;
+  if (s < 0) { plane.normal = plane.normal.map((x) => -x); plane.d = -plane.d; }
 }
 
 // The midpoint of a polyline, by length
@@ -436,12 +438,8 @@ export function holesOf(geom) {
   // A through-hole's two rims: the nearest rim on its axis, of its radius, behind its face, whose
   // face looks the other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
-  // (a rim's face's outward normal: its plane's, turned round on a body wound inward)
-  const faceN = (c) => {
-    const f = geom.faces[c.face];
-    if (!(f && f.plane)) return c.normal;
-    return geom.inward ? f.plane.normal.map((v) => -v) : f.plane.normal;
-  };
+  // (a rim's face's outward normal: its plane's, which looks as its vertex normals do)
+  const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
   // The candidates, by key: the radius, in steps of the radius test (and the steps either side),
   // and the axis line's point nearest the origin, in cells (and the cells round it) -- the same for
   // every rim on one line wherever along it, whatever its direction. (Every rim against every other
@@ -455,9 +453,11 @@ export function holesOf(geom) {
   const o = [0, 1, 2].map((k) => (rims.length ? rims.reduce((s2, c) => s2 + c.centre[k], 0) / rims.length : 0));
   const reach = rims.reduce((m2, c) => Math.max(m2, len(sub(c.centre, o))), 0);
   const CELL = Math.max(0.5, reach * 2e-4);
-  // (the axis signed by its largest component: by its first one not tiny, a component that should
-  // be 0 took either sign from float32 noise, and a bore's two rims sorted apart)
-  const canon = (n) => { let k = 0; for (let j = 1; j < 3; j++) if (Math.abs(n[j]) > Math.abs(n[k])) k = j; return n[k] < 0 ? n.map((v) => -v) : n; };
+  // (the axis signed by a fixed direction no CAD axis lies across: by its first component not tiny,
+  // one that should be 0 took either sign from float32 noise; by its largest, an axis with two
+  // equal of opposite sign -- (0, 1, -1) -- took either; each time a bore's two rims sorted apart)
+  const G = [0.5257311121, 0.6180339887, 0.5847102846];
+  const canon = (n) => (dot(n, G) < 0 ? n.map((v) => -v) : n);
   // (and which way its face looks along the axis: a rim pairs only with one looking the other way,
   // so the two are kept apart -- 16,000 rims all looking one way each walked all the rest)
   const keyOf = (c) => {

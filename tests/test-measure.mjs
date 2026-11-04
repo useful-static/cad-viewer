@@ -167,9 +167,12 @@ test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off t
   };
   const bad = [];
   // the canon sign of a component float32 noise gives either sign: 5 of 60 lost
-  for (const o of [[0, 0, 0], [37.3, 12.1, 5.5], [250, -130, 40], [1200, 800, -300]]) for (const n of [24, 32, 40, 48, 64]) for (const ph of [0, 0.1, 0.37]) {
-    const h = holesOf(bodyGeometry(model([{ name: 'yz', faces: bore(2, 5, 6, n, [0, 0.5, Math.sqrt(0.75)], o, ph) }]), 0));
-    if (!(h.length === 1 && h[0].rims === 2 && Math.abs(h[0].depth - 6) < 1e-3)) bad.push(`yz ${o} ${n} ${ph}`);
+  // (and by its largest, an axis with two equal components of opposite sign: 20-28 of 60 lost)
+  for (const d of [[0, 0.5, Math.sqrt(0.75)], [0, 1, -1], [1, -1, 0], [1, 0, -1], [1, -1, 1]]) {
+    for (const o of [[0, 0, 0], [37.3, 12.1, 5.5], [250, -130, 40], [1200, 800, -300]]) for (const n of [24, 32, 40, 48, 64]) for (const ph of [0, 0.1, 0.37]) {
+      const h = holesOf(bodyGeometry(model([{ name: 'tilted', faces: bore(2, 5, 6, n, d, o, ph) }]), 0));
+      if (!(h.length === 1 && h[0].rims === 2 && Math.abs(h[0].depth - 6) < 1e-3)) bad.push(`${d} ${o} ${n} ${ph}`);
+    }
   }
   // the axis line's point from the world origin, moved by the normals' noise past the cells searched
   for (const d of [[0.5, 0.3, Math.sqrt(0.66)], [0.3, 0.4, Math.sqrt(0.75)]]) for (const [ri, h] of [[0.3, 0.8], [0.5, 1.6], [0.5, 0.8]]) for (const n of [24, 32, 48]) for (const ph of [0, 0.2]) {
@@ -178,12 +181,33 @@ test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off t
   }
   assert.deepEqual(bad, []);
 });
-test('a washer wound inside out (a mirrored placement) is still one through-hole', () => {
-  const m = model([{ name: 'mirrored', faces: washer(2, 6, 1.6, 40, 0, 0).map((f) => f.map(([a, b, c]) => [a, c, b])) }]);
-  const g = bodyGeometry(m, 0);
-  assert.equal(g.inward, true);
+// the vertex normals of a model, as the file stores them (snorm16 x4), from its winding; flip:
+// its triangles then wound the other way, the normals kept (a mirrored placement's shape)
+function withNormals(m, flip = false) {
+  const P = m.position, I = m.index, N = new Float64Array(P.length);
+  for (let t = 0; t < I.length / 3; t++) {
+    const [a, b, c] = [I[3 * t], I[3 * t + 1], I[3 * t + 2]].map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) N[3 * I[3 * t + j] + k] += n[k];
+  }
+  m.normal = new Int16Array(P.length / 3 * 4);
+  for (let v = 0; v < P.length / 3; v++) {
+    const l = Math.hypot(N[3 * v], N[3 * v + 1], N[3 * v + 2]) || 1;
+    for (let k = 0; k < 3; k++) m.normal[4 * v + k] = Math.round((N[3 * v + k] / l) * 32767);
+  }
+  if (flip) for (let t = 0; t < I.length / 3; t++) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
+  return m;
+}
+test('a washer whose triangles wind inward but whose normals look out (a mirrored placement) is one through-hole', () => {
+  const g = bodyGeometry(withNormals(model([{ name: 'mirrored', faces: washer(2, 6, 1.6, 40, 0, 0) }]), true), 0);
   assert.deepEqual(holesOf(g).map((x) => [x.rims, Math.round(x.depth * 1e4) / 1e4]), [[2, 1.6]]);
-  assert.equal(bodyGeometry(model([{ name: 'w', faces: washer(2, 6, 1.6, 40, 0, 0) }]), 0).inward, false);
+});
+test('an open washer (no outer wall) wound outward is one through-hole (its signed volume is no answer)', () => {
+  // R 5, r 4, 1 thick: its signed volume about the first vertex is negative (-24)
+  const [top, bottom, bore] = washer(4, 5, 1, 40, 0, 0);
+  const g = bodyGeometry(withNormals(model([{ name: 'open', faces: [top, bottom, bore] }])), 0);
+  assert.deepEqual(holesOf(g).map((x) => [x.rims, Math.round(x.depth * 1e4) / 1e4]), [[2, 1]]);
 });
 test('two blind holes drilled from either side, material between, are two holes, not one through-hole', () => {
   // a round block 0..10 high, radius 6; a hole of radius 2 from the top 3 deep and one from the

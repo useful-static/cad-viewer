@@ -46,7 +46,7 @@ export function drawingSVG(parts, right, up, { a = 0.5, title = '', margin = 5 }
       if (closed && !round.length) {
         // a closed edge that is a circle seen face on (geometry without its
         // faces' circles): a true circle
-        const c = circleOf(e.slice(0, -1), a);
+        const c = circleOf(e.slice(0, -1), part.geom.a ?? a); // (the part's own: a scene's models differ)
         if (c && Math.abs(Math.abs(dot(c.normal, toward)) - 1) < 1e-3) {
           const [cx, cy] = P(c.centre);
           grow(cx - c.radius, cy - c.radius);

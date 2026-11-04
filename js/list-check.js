@@ -113,7 +113,10 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const bits = [total ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
   if (sniff) {
-    const start = await head(res, 65536);
+    // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
+    // threw through the whole list check, which stopped with no verdict)
+    let start;
+    try { start = await head(res, 65536); } catch (e) { return { level: 'bad', detail: `its start could not be read: ${e && e.message ? e.message : e}`, url }; }
     const gz = isGzip(start);
     const inner = gz ? await gunzipStart(start) : start;
     const got = inner ? sniffFormat(inner) : null;
@@ -200,10 +203,16 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
   const n = r.entries.length;
   const entries = await pool(r.entries.map((e, i) => async () => {
     const checks = [];
-    checks.push({ what: 'model', ...(await checkFile(e.url, { fetchFn, sniff: true })) });
-    if (e.image) checks.push({ what: 'picture', ...(await checkFile(e.image, { fetchFn, method: 'HEAD' })) });
-    if (e.step) checks.push({ what: 'STEP', ...(await checkFile(e.step, { fetchFn, method: 'HEAD', download: true })) });
-    for (const t of e.tours || []) checks.push({ what: `tour "${t.name}"`, ...(await checkTour(t.url, fetchFn)) });
+    // (each check's own failure is that check's bad row, never the whole list's)
+    const add = async (what, url, run) => {
+      let r;
+      try { r = await run(); } catch (err) { r = { level: 'bad', detail: `could not be checked: ${err && err.message ? err.message : err}`, url }; }
+      checks.push({ what, ...r });
+    };
+    await add('model', e.url, () => checkFile(e.url, { fetchFn, sniff: true }));
+    if (e.image) await add('picture', e.image, () => checkFile(e.image, { fetchFn, method: 'HEAD' }));
+    if (e.step) await add('STEP', e.step, () => checkFile(e.step, { fetchFn, method: 'HEAD', download: true }));
+    for (const t of e.tours || []) await add(`tour "${t.name}"`, t.url, () => checkTour(t.url, fetchFn));
     const out = { name: e.name, url: e.url, id: e.id || null, checks };
     if (onEntry) onEntry(out, i, n);
     return out;

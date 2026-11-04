@@ -121,6 +121,22 @@ test('a model with faces and one without (an STL): the faces kept, the other\'s 
     }
   }
 });
+test('each body keeps its model\'s angular deflection, and one model\'s silhouettes are kept beside a model without', () => {
+  const coarse = { ...board, header: { ...board.header, angularDeflection: 0.5 } };
+  const fine = { ...lid, header: { ...lid.header, angularDeflection: 0.1 } };
+  const s = mergeModels([{ base: coarse, name: 'a' }, { base: fine, name: 'b' }]);
+  assert.deepEqual(s.header.meshes.map((m) => m.angularDeflection), [0.5, 0.5, 0.1]);
+  // silhouettes: the board with its own, the lid's left out over the cap (its count omitted)
+  const sil = { ...board, silhouettes: Uint32Array.of(0, 1, 1, 2), silhouetteNormals: new Int16Array(16) };
+  const none = { ...lid, silhouettes: null, silhouetteNormals: null, header: { ...lid.header, silhouettesOmitted: 7 } };
+  const t = mergeModels([{ base: sil, name: 'a' }, { base: none, name: 'b' }]);
+  assert.deepEqual([...t.silhouettes], [0, 1, 1, 2]);
+  assert.equal(t.silhouetteNormals.length, 16);
+  assert.equal(t.header.silhouettesOmitted, 7);
+  const t2 = mergeModels([{ base: none, name: 'b' }, { base: sil, name: 'a' }]);
+  const v0 = lid.header.vertexCount;
+  assert.deepEqual([...t2.silhouettes], [v0, v0 + 1, v0 + 1, v0 + 2], 'renumbered after the model before');
+});
 test('a pin wholly inside a solid block overlaps it: 0, not the gap between their surfaces', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
@@ -151,6 +167,15 @@ test('containment names the part and the solid that holds it; a part in two over
   const s2 = mergeModels([{ base: file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]), name: 'pin.stp' }, { base: two, name: 'two.stp' }]);
   const r2 = clearance(s2.position, s2.index, trisOf(s2, [1]), trisOf(s2, [2, 3]), { solidA: trisOf(s2, [1]), solidB: trisOf(s2, [2, 3]) });
   assert.deepEqual([r2.distance, r2.inside], [0, true]);
+});
+test('a pin in a hollow block\'s cavity is not inside it: its gap to the cavity wall (the crossings counted, not just met)', () => {
+  // one solid: a block 0..10 with a cavity 2..8 (its outer and inner walls one triangle range)
+  const hollow = file('hollow', [['outer', [0, 0, 0], [10, 10, 10]], ['cavity', [2, 2, 2], [8, 8, 8]]]);
+  const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
+  const s = mergeModels([{ base: hollow, name: 'hollow.stp' }, { base: pin, name: 'pin.stp' }]);
+  const [[t0, c1], [, c2]] = trisOf(s, [1, 2]);
+  const r = clearance(s.position, s.index, trisOf(s, [3]), trisOf(s, [1, 2]), { solidA: trisOf(s, [3]), solidB: [[t0, c1 + c2]] });
+  assert.deepEqual([Math.round(r.distance * 1e6) / 1e6, !!r.inside], [2, false], JSON.stringify(r));
 });
 test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);

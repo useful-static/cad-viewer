@@ -4110,7 +4110,10 @@ async function runClearance() {
   const t0 = performance.now();
   const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
   const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B) });
-  if (stopped() || !r) return;
+  if (stopped()) return;
+  // (a set with no triangle -- a selected body with none: clearance() has nothing; it was left at
+  // "checking …")
+  if (!r) { $('clearval').textContent = 'nothing shown to measure between'; return; }
   const ms = Math.round(performance.now() - t0);
   // the bodies the two nearest triangles belong to
   const bodyOf = (t) => {

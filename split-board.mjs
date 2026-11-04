@@ -23,7 +23,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, modelFactsOf } from './js/cadmesh.js';
-import { CliError, parseCli, positive } from './js/cli-args.js';
+import { CliError, parseCli, positive, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report]
 
@@ -257,4 +257,4 @@ function main() {
 }
 
 // run as a command (a path with a space or through a symlink included)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('split-board', main);

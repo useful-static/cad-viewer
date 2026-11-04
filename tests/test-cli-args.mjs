@@ -32,8 +32,10 @@ test('parseCli: values, flags, --k=v, each once, a value never an option, help o
     [['a', 'b'], /one input file, not 2/], [['a', '--to', '-h'], /--to needs a value/], [['a', '--raw=1'], /takes no value/], [['a', '--to='], /--to needs a value/]]) {
     assert.throws(() => parseCli(argv, spec), (e) => e instanceof CliError && msg.test(e.message), argv.join(' '));
   }
-  // (a negative number is a value, not an option)
+  // (a word starting with "-" that is no option of the tool's is a value: a negative number, an
+  // orientation, a pattern)
   assert.deepEqual(parseCli(['-o', '-5'], { values: ['-o'] }).opts, { '-o': '-5' });
+  assert.deepEqual(parseCli(['a', '--orient', '-z+y', '--skip', '-old'], { values: ['--orient', '--skip'] }).opts, { '--orient': '-z+y', '--skip': '-old' });
   assert.equal(positive({ '--s': '2.5' }, '--s'), 2.5);
   assert.equal(positive({}, '--s', 1.2), 1.2);
   for (const v of ['abc', '0', '-1', 'Infinity']) assert.throws(() => positive({ '--s': v }, '--s'), CliError, v);
@@ -48,24 +50,36 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
     ['cadmesh-export.mjs', ['b.cadmesh', '--skip', '-h'], 2, /--skip needs a value/],
     ['cadmesh-export.mjs', ['b.cadmesh', '--to', 'stl,stl'], 2, /a format twice/],
     ['cadmesh-export.mjs', ['b.cadmesh', '--orient', '+z-y', '--model-up', 'y'], 2, /one of --orient/],
+    // (an orientation starting with "-" is a value: refused for its input, not its options)
+    ['cadmesh-export.mjs', ['missing.cadmesh', '--orient', '-z+y'], 1, /no such file/],
     ['dwg-check.mjs', [], 2, /no DWG file given/],
     ['dwg-check.mjs', ['--dxf', 'x1.dxf', '--dxf', 'x2.dxf', 'a.dwg'], 2, /given twice/],
     ['split-board.mjs', ['b.cadmesh', '-o', 'o.cadmesh', '--edgs'], 2, /unknown option --edgs/],
     ['split-board.mjs', ['b.cadmesh', '-o', 'o.cadmesh', '--sliver', 'abc'], 2, /--sliver needs a positive number/],
     ['set-colours.mjs', ['b.cadmesh', 'c.rgb', '--agian', '-o', 'o.cadmesh', '--by', 'me'], 2, /unknown option --agian/],
     ['set-colours.mjs', ['b.cadmesh', 'c.rgb', '-o', 'o.cadmesh'], 2, /--by/],
+    ['set-colours.mjs', ['b.cadmesh', 'c.rgb', '-o', 'o.cadmesh', '--by', 'me', '--show'], 2, /--show reads the input alone/],
+    // an input it cannot read: one line, exit 1, in every tool
+    ['split-board.mjs', ['missing.cadmesh', '-o', 'o.cadmesh'], 1, /no such file/],
+    ['split-board.mjs', [notCad, '-o', 'o.cadmesh'], 1, /^split-board: /],
+    ['set-colours.mjs', ['missing.cadmesh', 'c.rgb', '-o', 'o.cadmesh', '--by', 'me'], 1, /no such file/],
+    ['cadmesh-export.mjs', ['missing.cadmesh'], 1, /no such file/],
+    ['dwg-check.mjs', ['missing.dwg'], 1, /no such file/],
+    ['stp2mesh.mjs', ['missing.stp'], 1, /no such file/],
   ];
   const bad = [];
   for (const [tool, args, rc, msg] of cases) {
     const r = run(tool, args);
-    // (said on stderr, no stack trace, nothing on stdout)
-    if (r.rc !== rc || !msg.test(r.err) || /\n\s+at /.test(r.err) || r.out) bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 160))}, stdout ${JSON.stringify(r.out.slice(0, 80))}`);
+    // (said on stderr, no stack trace, nothing on stdout -- but dwg-check's report line, which
+    // names a file it could not read on stdout)
+    const said = tool === 'dwg-check.mjs' && rc === 1 ? r.out + r.err : r.err;
+    if (r.rc !== rc || !msg.test(said) || /\n\s+at /.test(r.err) || (r.out && said === r.err)) bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 160))}, stdout ${JSON.stringify(r.out.slice(0, 80))}`);
   }
   assert.deepEqual(bad, []);
   // and -h is help: exit 0, the usage on stdout
   for (const tool of ['stp2mesh.mjs', 'cadmesh-export.mjs', 'dwg-check.mjs', 'split-board.mjs', 'set-colours.mjs']) {
     const r = run(tool, ['-h']);
-    assert.ok(r.rc === 0 && /usage/.test(r.out + r.err), `${tool} -h: rc ${r.rc}`);
+    assert.ok(r.rc === 0 && /usage/.test(r.out) && !r.err, `${tool} -h: rc ${r.rc}, stdout ${JSON.stringify(r.out.slice(0, 60))}, stderr ${JSON.stringify(r.err.slice(0, 60))}`);
   }
 });
 

@@ -168,6 +168,19 @@ await test('the check page puts each entry\'s rows in the list\'s order, whateve
   assert.deepEqual(body.rows.map((r) => r.name), ['e0.0', 'e1.0', 'e1.1', 'e2.0', 'e2.1', 'e2.2', 'e3.0', 'e4.0', 'e4.1']);
 });
 
+await test('a model whose body drops after its headers is that model\'s red row, not the whole check stopped', async () => {
+  const list = JSON.stringify({ 'a.stl': 'good', 'b.stl': 'dropped', 'c.stl': 'also good' });
+  const stl = new TextEncoder().encode('solid x\nfacet normal 0 0 1\n');
+  const bodyOf = (fail) => { let bytes = stl; return { getReader: () => ({ read: async () => { if (fail) throw new TypeError('network error'); const v = bytes; bytes = null; return v ? { done: false, value: v } : { done: true }; }, cancel: async () => {} }) }; };
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('list.json')) return new Response(list, { status: 200, headers: { 'content-type': 'application/json' } });
+    return { ok: true, status: 200, headers: new Headers({ 'content-length': '100' }), body: bodyOf(String(url).endsWith('b.stl')), arrayBuffer: async () => stl.buffer };
+  };
+  const r = await checkLists(['https://x.test/list.json'], 'https://x.test/', { fetchFn, parallel: 1 });
+  assert.deepEqual(r.entries.map((e) => [e.name, e.checks[0].level]), [['good', 'ok'], ['dropped', 'bad'], ['also good', 'ok']]);
+  assert.match(r.entries[1].checks[0].detail, /could not be read: network error/);
+});
+
 await test('whole-list', async () => {
   const seen = [];
   const r = await checkLists([`${B}models.json`], 'https://cad.place/', { fetchFn: fakeFetch, onEntry: (e) => seen.push(e.name) });

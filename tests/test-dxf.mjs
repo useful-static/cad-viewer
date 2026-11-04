@@ -698,9 +698,12 @@ test('the 2D snaps and the hover\'s line: the index finds what a scan of every o
   const paths = [];
   for (let i = 0; i < 400; i++) { const x = rnd() * 100, y = rnd() * 100; paths.push({ layer: i % 5 ? 'A' : 'HID', closed: i % 7 === 0, pts: Float64Array.of(x, y, x + rnd() * 3, y + rnd() * 3, x + rnd() * 3, y - rnd() * 2) }); }
   paths.push({ layer: 'A', closed: false, pts: Float64Array.of(-500, 37, 600, 38) });
+  // 45-degree hatching: short, in the short segments' tree (the long one holds the line across)
+  for (let i = 0; i < 40; i++) paths.push({ layer: 'A', closed: false, pts: Float64Array.of(10 + i * 0.7, 60, 10 + i * 0.7 + 2.5, 62.5) });
   const grid = segmentGrid(paths, [0, 0], 100);
+  assert.equal(grid.longTree.m, 1, `long: ${grid.longTree.m} (the one line across everything)`);
   // (held in typed arrays: an array per segment and a Map of arrays, 604 MB for 5.2 million)
-  assert.ok(grid.segs instanceof Float64Array && grid.items instanceof Uint32Array && grid.start instanceof Uint32Array, 'typed arrays');
+  assert.ok(grid.segs instanceof Float64Array && grid.tree.order instanceof Uint32Array && grid.tree.box instanceof Float32Array, 'typed arrays');
   const okP = (pi) => paths[pi].layer !== 'HID';
   // (and off the drawing, and a radius that searches the coarse grid)
   for (let q = 0; q < 400; q++) {
@@ -718,6 +721,30 @@ test('the 2D snaps and the hover\'s line: the index finds what a scan of every o
       }
     });
     assert.equal(nearestSegment(grid, x, y, r, okP), best, `segment query ${q}`);
+  }
+});
+test('a drawing whose lines cluster in a corner of its extents: the hover stays fast and right', () => {
+  // 400,000 short segments in a 10 x 10 patch, a sheet 10,000 across (two far marks): a grid sized
+  // from the extents put nearly all in one cell, every query scanning them (a real drawing: 95.6 %
+  // of 1.75 million, 30-40 ms a hover)
+  let s = 7;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const pts = new Float64Array(2 * 400001);
+  for (let i = 0; i <= 400000; i++) { pts[2 * i] = rnd() * 10; pts[2 * i + 1] = rnd() * 10; }
+  const paths = [{ layer: 'A', closed: false, pts }, { layer: 'A', closed: false, pts: Float64Array.of(10000, 10000, 10000.1, 10000) }, { layer: 'A', closed: false, pts: Float64Array.of(-1, -1, -1.1, -1) }];
+  // (zig-zag lines across the patch: each segment up to 14 long, so make them short)
+  for (let i = 1; i <= 400000; i++) { pts[2 * i] = pts[2 * i - 2] + (rnd() - 0.5) * 0.05; pts[2 * i + 1] = pts[2 * i - 1] + (rnd() - 0.5) * 0.05; }
+  const grid = segmentGrid(paths, [0, 0], 10001);
+  const qs = Array.from({ length: 300 }, () => [pts[0] + (rnd() - 0.5) * 0.5, pts[1] + (rnd() - 0.5) * 0.5]);
+  const t0 = performance.now();
+  for (const [x, y] of qs) nearestSegment(grid, x, y, 0.02);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 150, `300 hovers: ${ms.toFixed(0)} ms`);
+  // and right: against a scan of every segment, for the first 20
+  for (const [x, y] of qs.slice(0, 20)) {
+    let best = -1, bd = 0.02 * 0.02;
+    paths.forEach((p, pi) => { for (let i = 0; i + 1 < p.pts.length / 2; i++) { const ax = p.pts[2 * i], ay = p.pts[2 * i + 1], vx = p.pts[2 * i + 2] - ax, vy = p.pts[2 * i + 3] - ay, l2 = vx * vx + vy * vy; const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0; const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2; if (d2 < bd) { bd = d2; best = pi; } } });
+    assert.equal(nearestSegment(grid, x, y, 0.02), best);
   }
 });
 test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {

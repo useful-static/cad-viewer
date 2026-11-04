@@ -166,8 +166,33 @@ function counter(who) {
   return (what, k = 1) => { if ((n[what] += k) > caps[what]) throw tooMany(who, what, caps[what]); };
 }
 
+// Whether welded triangles (tri: corner ids, kept of them; wp: positions) are a closed body --
+// every edge used at least twice -- whose signed volume is negative: wound inward (a mirrored
+// placement, a writer that winds the other way). An open body's sign is no answer: kept as it is.
+export function closedInward(tri, kept, wp) {
+  if (!kept) return false;
+  const nw = wp.length / 3, uses = new Map();
+  for (let t = 0; t < kept; t++) for (let c = 0; c < 3; c++) {
+    const a = tri[t * 3 + c], b = tri[t * 3 + ((c + 1) % 3)];
+    const k = a < b ? a * nw + b : b * nw + a;
+    uses.set(k, (uses.get(k) || 0) + 1);
+  }
+  for (const n of uses.values()) if (n < 2) return false;
+  const o = tri[0] * 3;
+  let V = 0;
+  for (let t = 0; t < kept; t++) {
+    const a = tri[t * 3] * 3, b = tri[t * 3 + 1] * 3, c = tri[t * 3 + 2] * 3;
+    const ax = wp[a] - wp[o], ay = wp[a + 1] - wp[o + 1], az = wp[a + 2] - wp[o + 2];
+    const bx = wp[b] - wp[o], by = wp[b + 1] - wp[o + 1], bz = wp[b + 2] - wp[o + 2];
+    const cx = wp[c] - wp[o], cy = wp[c + 1] - wp[o + 1], cz = wp[c + 2] - wp[o + 2];
+    V += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  return V < 0;
+}
+
 // Weld equal positions, then split each welded vertex by crease (and by
-// triangle colour), normals area-weighted within each group
+// triangle colour), normals area-weighted within each group; a closed body
+// wound inward turned round first (closedInward)
 export function weld(b) {
   const P = b.pos, T = b.tri;
   const map = new Map();
@@ -193,6 +218,14 @@ export function weld(b) {
     tri[kept * 3] = a; tri[kept * 3 + 1] = b2; tri[kept * 3 + 2] = c;
     if (b.col) colKept.push(b.col[t]);
     kept++;
+  }
+  if (closedInward(tri, kept, wp)) {
+    // turned round: the normals made from the winding then look out, as every reader of the body
+    // takes them (the view drew an STL wound inside out as all cut face under a section)
+    for (let t = 0; t < kept; t++) {
+      const x = tri[t * 3 + 1]; tri[t * 3 + 1] = tri[t * 3 + 2]; tri[t * 3 + 2] = x;
+      for (let k = 0; k < 3; k++) fn[t * 3 + k] = -fn[t * 3 + k];
+    }
   }
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
   const unit = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };

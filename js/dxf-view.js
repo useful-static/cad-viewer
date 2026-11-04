@@ -71,14 +71,14 @@ export function nearestPoint(tree, x, y, r, accept = () => true) {
   return best;
 }
 
-// A drawing's line segments in a grid, for the nearest line within r (the hover, a click's layer):
-// each segment in the cells its box covers, a long one in a list of its own -- every segment was
-// tested on every pointer move, 200 ms a move on 5.2 million. paths: the drawing's; o: the offset
+// A drawing's line segments indexed for the nearest line within r (the hover, a click's layer):
+// every segment was tested on every pointer move, 200 ms a move on 5.2 million. paths: the
+// drawing's; o: the offset; span: its size. Two box trees (segmentTree), the short segments' and
+// the long ones'.
 //
-// All typed arrays: segs (ax ay bx by a segment), pathOf, and the cells as one CSR pair (start[c] ..
-// start[c + 1] in items) over an nx x ny block. (A JS array per segment and a string-keyed Map of
-// arrays held 604 MB of heap for 5.2 million segments, built at every drawing's open.)
-export function segmentGrid(paths, o, span, div = 512) {
+// All typed arrays: segs (ax ay bx by a segment), pathOf, each tree's order and boxes. (A JS array
+// per segment and a string-keyed Map of arrays held 604 MB of heap for 5.2 million segments.)
+export function segmentGrid(paths, o, span) {
   let n = 0;
   for (const p of paths) n += p.pts.length / 2;
   const segs = new Float64Array(4 * n), pathOf = new Uint32Array(n);
@@ -95,78 +95,108 @@ export function segmentGrid(paths, o, span, div = 512) {
       if (Number.isFinite(ax + ay + bx + by)) { lx = Math.min(lx, ax, bx); ly = Math.min(ly, ay, by); hx = Math.max(hx, ax, bx); hy = Math.max(hy, ay, by); }
     }
   });
-  // the cell: span / div, no finer than keeps the block within 4 div a side (a few points far out)
-  const cell = Math.max((span || 1) / div, n ? Math.max(hx - lx, hy - ly) / (4 * div) : 0) || 1;
-  const gx0 = n && Number.isFinite(lx) ? Math.floor(lx / cell) : 0, gy0 = n && Number.isFinite(ly) ? Math.floor(ly / cell) : 0;
-  const nx = n && Number.isFinite(hx) ? Math.floor(hx / cell) - gx0 + 1 : 1, ny = n && Number.isFinite(hy) ? Math.floor(hy / cell) - gy0 + 1 : 1;
-  const start = new Uint32Array(nx * ny + 1);
-  const isLong = new Uint8Array(n);
-  let nLong = 0;
-  // (twice over the segments: count each cell's, then place them)
-  const each = (fn) => {
-    for (let t = 0; t < n; t++) {
-      if (isLong[t]) continue;
-      const ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
-      const x0 = Math.floor(Math.min(ax, bx) / cell) - gx0, x1 = Math.floor(Math.max(ax, bx) / cell) - gx0;
-      const y0 = Math.floor(Math.min(ay, by) / cell) - gy0, y1 = Math.floor(Math.max(ay, by) / cell) - gy0;
-      for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) fn(gx * ny + gy, t);
-    }
-  };
+  // the segments far longer than most (a border, a line across the sheet) in a tree of their own:
+  // one in a leaf of short ones made every box above it as wide
+  const longest = (span || Math.max(hx - lx, hy - ly) || 1) / 8;
+  const short = [], long = [];
   for (let t = 0; t < n; t++) {
-    const ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
-    const x0 = Math.floor(Math.min(ax, bx) / cell), x1 = Math.floor(Math.max(ax, bx) / cell);
-    const y0 = Math.floor(Math.min(ay, by) / cell), y1 = Math.floor(Math.max(ay, by) / cell);
-    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64 || !Number.isFinite(x0 + x1 + y0 + y1)) { isLong[t] = 1; nLong++; }
+    const w = Math.max(Math.abs(segs[4 * t + 2] - segs[4 * t]), Math.abs(segs[4 * t + 3] - segs[4 * t + 1]));
+    if (!Number.isFinite(w)) continue; // (a point not a number is never near)
+    (w > longest ? long : short).push(t);
   }
-  each((c) => { start[c + 1]++; });
-  let filled = 0;
-  for (let c = 0; c < nx * ny; c++) { if (start[c + 1]) filled++; start[c + 1] += start[c]; }
-  const items = new Uint32Array(start[nx * ny]);
-  const at = start.slice(0, nx * ny);
-  each((c, t) => { items[at[c]++] = t; });
-  const long = new Uint32Array(nLong);
-  for (let t = 0, k = 0; t < n; t++) if (isLong[t]) long[k++] = t;
-  return { cell, gx0, gy0, nx, ny, start, items, filled, long, segs, pathOf, seen: new Uint32Array(n), stamp: 0, paths, o, span, div };
+  return { tree: segmentTree(segs, Uint32Array.from(short)), longTree: segmentTree(segs, Uint32Array.from(long)), segs, pathOf, paths, o, span };
+}
+
+// A box tree over segments (ids into segs): the segments sorted along a Morton curve of their
+// centres, LEAF a leaf, the leaves the bottom row of a complete binary tree (node i's children
+// 2i + 1, 2i + 2), each node's box (float32, widened a little so rounding never shrinks it)
+// holding its children's. The curve follows the drawing's density: a uniform grid sized from
+// the extents put 95.6 % of a real drawing's 1.75 million segments in one cell, 30-40 ms a hover.
+const LEAF = 16;
+function segmentTree(segs, ids) {
+  const m = ids.length;
+  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
+  for (let k = 0; k < m; k++) {
+    const t = ids[k];
+    const cx = (segs[4 * t] + segs[4 * t + 2]) / 2, cy = (segs[4 * t + 1] + segs[4 * t + 3]) / 2;
+    if (cx < lx) lx = cx; if (cx > hx) hx = cx; if (cy < ly) ly = cy; if (cy > hy) hy = cy;
+  }
+  const sx = hx > lx ? 65535 / (hx - lx) : 0, sy = hy > ly ? 65535 / (hy - ly) : 0;
+  const spread = (v) => { v = (v | (v << 8)) & 0x00ff00ff; v = (v | (v << 4)) & 0x0f0f0f0f; v = (v | (v << 2)) & 0x33333333; return (v | (v << 1)) & 0x55555555; };
+  const code = new Uint32Array(m);
+  for (let k = 0; k < m; k++) {
+    const t = ids[k];
+    const qx = Math.floor(((segs[4 * t] + segs[4 * t + 2]) / 2 - lx) * sx), qy = Math.floor(((segs[4 * t + 1] + segs[4 * t + 3]) / 2 - ly) * sy);
+    code[k] = (spread(qx) | (spread(qy) << 1)) >>> 0;
+  }
+  // (a radix sort by the code, 8 bits a pass, stable)
+  let order = ids.slice(), keys = code, o2 = new Uint32Array(m), k2 = new Uint32Array(m);
+  const count = new Uint32Array(257);
+  for (let shift = 0; shift < 32; shift += 8) {
+    count.fill(0);
+    for (let k = 0; k < m; k++) count[((keys[k] >>> shift) & 255) + 1]++;
+    for (let b = 0; b < 256; b++) count[b + 1] += count[b];
+    for (let k = 0; k < m; k++) { const p = count[(keys[k] >>> shift) & 255]++; o2[p] = order[k]; k2[p] = keys[k]; }
+    [order, o2] = [o2, order]; [keys, k2] = [k2, keys];
+  }
+  const leaves = Math.max(1, Math.ceil(m / LEAF));
+  let P = 1;
+  while (P < leaves) P *= 2;
+  const box = new Float32Array(4 * (2 * P - 1)).fill(NaN);
+  const set = (i, x0, y0, x1, y1) => {
+    // (float32, widened by a few of its own steps: never smaller than the float64 box)
+    const pad = (v) => Math.abs(v) * 4e-7 + 1e-30;
+    box[4 * i] = x0 - pad(x0); box[4 * i + 1] = y0 - pad(y0); box[4 * i + 2] = x1 + pad(x1); box[4 * i + 3] = y1 + pad(y1);
+  };
+  for (let j = 0; j < leaves; j++) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
+      const t = order[k], ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
+      x0 = Math.min(x0, ax, bx); y0 = Math.min(y0, ay, by); x1 = Math.max(x1, ax, bx); y1 = Math.max(y1, ay, by);
+    }
+    if (x0 <= x1) set(P - 1 + j, x0, y0, x1, y1);
+  }
+  for (let i = P - 2; i >= 0; i--) {
+    const a = 2 * i + 1, b = 2 * i + 2;
+    const has = (c) => box[4 * c] === box[4 * c]; // (not NaN: a box)
+    if (!has(a) && !has(b)) continue;
+    const pick = (k, f) => (has(a) && has(b) ? f(box[4 * a + k], box[4 * b + k]) : box[4 * (has(a) ? a : b) + k]);
+    box[4 * i] = pick(0, Math.min); box[4 * i + 1] = pick(1, Math.min); box[4 * i + 2] = pick(2, Math.max); box[4 * i + 3] = pick(3, Math.max);
+  }
+  return { order, m, P, box };
 }
 // -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
 export function nearestSegment(grid, x, y, r, accept = () => true) {
-  // (a radius of many cells -- zoomed far out -- is searched in a grid 32 times coarser, made then)
-  if (r / grid.cell > 64 && grid.div > 16) {
-    if (!grid.coarse) grid.coarse = segmentGrid(grid.paths, grid.o, grid.span, grid.div / 32);
-    return nearestSegment(grid.coarse, x, y, r, accept);
-  }
   let best = -1, bd = r * r;
-  // (a segment in several cells tested once: a stamp per query, not a Set)
-  if (++grid.stamp === 0xffffffff) { grid.seen.fill(0); grid.stamp = 1; }
-  const { segs, pathOf, seen, stamp, start, items, nx, ny } = grid;
+  const { segs, pathOf } = grid;
   const test = (s) => {
-    if (seen[s] === stamp) return;
-    seen[s] = stamp;
     const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
     const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
     if (d2 < bd && accept(pathOf[s])) { bd = d2; best = pathOf[s]; }
   };
-  for (const s of grid.long) test(s);
-  // rings of cells outward from the point's, until the ring lies past the nearest found (or r):
-  // zoomed far out, a box of every cell within r scanned every segment, 1.7 s a move
-  const { cell } = grid;
-  const cx = Math.floor(x / cell) - grid.gx0, cy = Math.floor(y / cell) - grid.gy0;
-  const look = (gx, gy) => {
-    if (gx < 0 || gy < 0 || gx >= nx || gy >= ny) return;
-    const c = gx * ny + gy;
-    for (let q = start[c]; q < start[c + 1]; q++) test(items[q]);
-  };
-  const kmax = Math.ceil(r / cell) + 1;
-  for (let k = 0; k <= kmax; k++) {
-    if (k > 0 && ((k - 1) * cell) ** 2 > bd) break;
-    if (k === 0) { look(cx, cy); continue; }
-    for (let i = -k; i <= k; i++) { look(cx + i, cy - k); look(cx + i, cy + k); }
-    for (let i = -k + 1; i <= k - 1; i++) { look(cx - k, cy + i); look(cx + k, cy + i); }
-    // (an empty region far from everything, or a ring past the block: every cell beyond instead)
-    if ((k * k * 8 > grid.filled || k > nx + ny) && best < 0) {
-      for (let gx = 0; gx < nx; gx++) for (let gy = 0; gy < ny; gy++) if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) > k) look(gx, gy);
-      break;
+  // each tree walked nearest box first, past every box farther than the nearest found (or r)
+  const stack = new Int32Array(128);
+  for (const { order, m, P, box } of [grid.longTree, grid.tree]) {
+    if (!m) continue;
+    const away = (i) => {
+      if (box[4 * i] !== box[4 * i]) return Infinity; // (an empty leaf)
+      const dx = Math.max(box[4 * i] - x, 0, x - box[4 * i + 2]), dy = Math.max(box[4 * i + 1] - y, 0, y - box[4 * i + 3]);
+      return dx * dx + dy * dy;
+    };
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp) {
+      const i = stack[--sp];
+      if (away(i) >= bd) continue;
+      if (i >= P - 1) {
+        const j = i - (P - 1);
+        for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) test(order[k]);
+        continue;
+      }
+      const a = 2 * i + 1, b = 2 * i + 2, da = away(a), db = away(b);
+      // (the nearer pushed last: walked first)
+      if (da <= db) { if (db < bd) stack[sp++] = b; if (da < bd) stack[sp++] = a; } else { if (da < bd) stack[sp++] = a; if (db < bd) stack[sp++] = b; }
     }
   }
   return best;

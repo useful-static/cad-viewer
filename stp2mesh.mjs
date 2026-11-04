@@ -16,7 +16,9 @@ import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.j
 import { CliError, parseCli, positive } from './js/cli-args.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.cadmesh]
+// (the extensions from the viewer's format table, js/formats.js: written out here, .brp was missing)
+const CAD_EXTS = CAD_FORMATS.filter((f) => f.kind === 'cad').flatMap((f) => f.ext);
+const USAGE = `usage: stp2mesh.mjs <in${CAD_EXTS.map((e) => `.${e}`).join('|')}>[.gz] [-o out.cadmesh]
                     [--deflection R] [--absolute MM] [--angular RAD] [--occt DIR | --threads]
 
   -o FILE          output (default: input with .cadmesh)
@@ -35,7 +37,8 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.
                    ready at the same moment: the edges came 0.18-0.20 s later, off the main
                    thread, on a 1280 px WebGL2 run)
 
-  exit 0: written (or -h); 1: the input refused (missing, not CAD, not converted); 2: usage
+  exit 0: written (or -h); 1: the input refused (missing, not CAD, not converted); 2: usage;
+  3: the converter is not installed (fetch-deps.sh)
 `;
 
 // (the tools' one argument rule, js/cli-args.js: a value never an option, each option once)

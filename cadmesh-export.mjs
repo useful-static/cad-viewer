@@ -29,9 +29,14 @@ import { CliError, parseCli } from './js/cli-args.js';
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
 
+// the formats, from the writers' own table (js/export-mesh.js EXPORTS: written out four times here)
+const KINDS = Object.keys(EXPORTS);
+const KIND_WORDS = `(${KINDS.join(', ')})`;
+
+// (help on stdout, exit 0, as the other tools; a usage error on stderr, exit 2)
 function usage(msg, code = 2) {
   if (msg) console.error(`cadmesh-export: ${msg}`);
-  console.error('usage: node cadmesh-export.mjs <in.cadmesh[.gz]> [--to stl,3mf,glb] [--out <base>] [--orient <up,front> | --model-up y|z] [--skip <regex>]');
+  (code ? console.error : console.log)(`usage: node cadmesh-export.mjs <in.cadmesh[.gz]> [--to ${KINDS.join(',')}] [--out <base>] [--orient <up,front> | --model-up y|z] [--skip <regex>]`);
   process.exit(code);
 }
 
@@ -49,7 +54,7 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
   const out = [];
   for (const kind of to) {
     const ex = EXPORTS[kind];
-    if (!ex) throw new Error(`unknown format "${kind}" (stl, 3mf, glb)`);
+    if (!ex) throw new Error(`unknown format "${kind}" ${KIND_WORDS}`);
     const data = await ex.write(model, ids, exportBasis(orient, ex.up), { base, names });
     const buf = data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     out.push({ kind, bytes: buf, bodies: ids.length, of: model.header.meshes.length });
@@ -66,9 +71,9 @@ async function main() {
   const opt = (k) => r.opts[k];
   const inp = r.pos[0];
   if (!inp) usage('no input file');
-  const to = (opt('--to') || 'stl,3mf,glb').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const to = (opt('--to') || KINDS.join(',')).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   if (!to.length) usage('--to names no format');
-  for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" (stl, 3mf, glb)`);
+  for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" ${KIND_WORDS}`);
   // (a format named twice wrote and printed the one file twice)
   if (new Set(to).size < to.length) usage('--to names a format twice');
   // (--orient and --model-up are alternatives: the one silently overrode the other)

@@ -165,6 +165,19 @@ await test('STL binary, header starting "solid"', async () => {
   assert.equal(meshFormatOf('cube.stl', b), 'stl');
   cube(await parseMesh('stl', b, 'cube.stl'));
 });
+await test('a closed STL wound inside out is turned round: outward winding and normals (the view drew it all cut face); an open one is kept', async () => {
+  const stlOf = (tris) => enc(`solid c\n${tris.map((t) => ` facet normal 0 0 0\n  outer loop\n${t.map((v) => `   vertex ${C[v].join(' ')}`).join('\n')}\n  endloop\n endfacet`).join('\n')}\nendsolid c\n`);
+  const vol = (m) => { const P = m.positions, I = m.indices; let V = 0; for (let t = 0; t < I.length; t += 3) { const [a, b, c] = [I[t], I[t + 1], I[t + 2]].map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]); V += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]); } return V / 6; };
+  const inside = (await parseMesh('stl', stlOf(TRIS.map(([a, b, c]) => [a, c, b])), 'c.stl')).meshes[0];
+  assert.equal(Math.round(vol(inside)), 1000);
+  // every normal looks out: away from the cube's centre
+  const P = inside.positions, N = inside.normals;
+  for (let v = 0; v < P.length / 3; v++) assert.ok((P[3 * v] - 5) * N[3 * v] + (P[3 * v + 1] - 5) * N[3 * v + 1] + (P[3 * v + 2] - 5) * N[3 * v + 2] > 0, `vertex ${v}`);
+  // a cube missing its top, wound inward: open, so its winding is the file's
+  const open = (await parseMesh('stl', stlOf(TRIS.filter((_, i) => i !== 2 && i !== 3).map(([a, b, c]) => [a, c, b])), 'c.stl')).meshes[0];
+  assert.ok(vol(open) < 0, `open: ${vol(open)}`);
+});
+
 await test('STL ASCII: the solid name', async () => {
   const m = cube(await parseMesh('stl', stlAscii(), 'cube.stl'));
   assert.equal(m.name, 'cube');

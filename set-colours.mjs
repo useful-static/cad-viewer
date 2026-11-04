@@ -18,7 +18,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, splitCadmesh, withHeader } from './js/cadmesh.js';
-import { CliError, parseCli } from './js/cli-args.js';
+import { CliError, parseCli, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -70,6 +70,8 @@ function main() {
   if (r.help) { process.stdout.write(USAGE); process.exit(0); }
   const a = { in: r.pos[0], colours: r.pos[1], out: r.opts['-o'], by: r.opts['--by'], again: !!r.opts['--again'], show: !!r.opts['--show'] };
   if (!a.in) usage('no input file');
+  // (--show writes nothing: with what a write needs it silently did not write, exit 0)
+  if (a.show && (a.colours || a.out || a.by || a.again)) usage('--show reads the input alone: no colours file, -o, --by or --again with it');
   if (!a.show && !a.colours) usage('no colours file');
   if (!a.show && !a.out) usage('no -o output');
   if (!a.show && !(a.by && a.by.trim())) usage('say what wrote the colours (--by)');
@@ -87,6 +89,4 @@ function main() {
 
 // run as a command (a path with a space or through a symlink included: the plain "file://"
 // + argv[1] test was false there, and the tool exited 0 doing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
-  try { main(); } catch (e) { console.error(`set-colours: ${e.message}`); process.exit(1); }
-}
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('set-colours', main);
