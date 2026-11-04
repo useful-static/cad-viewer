@@ -45,11 +45,13 @@
 //          triangles as snorm16x4 x 2 (w = 0): the edges inside curved faces,
 //          drawn where they are on the outline. Absent when there were more
 //          than SILHOUETTE_CAP (the header's silhouettesOmitted says how many).
-// Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³], net?:[bool] }, one
-// entry per mesh; volume is the material's (js/edges.js materialVolume), meaningful for closed
-// bodies; net, present when any is true: that body's shells touch or cross and its volume may not
-// be its material's. factsRule: the number of the rule the facts were built by (js/edges.js
-// FACTS_RULE); facts of another rule, or none, are rebuilt by the viewer.
+// Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³], net?:[bool],
+// unchecked?:[bool] }, one entry per mesh; volume is the material's (js/edges.js
+// materialVolume), meaningful for closed bodies; net, present when any is true: that body's
+// volume may not be its material's (its shells touch or cross, one is branched, or a part lies in
+// two outer shells); unchecked, likewise: its overlaps were not checked (too large). factsRule:
+// the number of the rule the facts were built by (js/edges.js FACTS_RULE); facts of another rule,
+// or none, are rebuilt by the viewer.
 //
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
@@ -495,6 +497,7 @@ function validateHeader(h) {
       bad('facts are not one closed / area / volume per mesh');
     }
     if (f.net !== undefined && !list(f.net, (x) => typeof x === 'boolean')) bad('facts\' net is not one flag per mesh');
+    if (f.unchecked !== undefined && !list(f.unchecked, (x) => typeof x === 'boolean')) bad('facts\' unchecked is not one flag per mesh');
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
@@ -555,7 +558,8 @@ function validateHeader(h) {
 
 // seven significant digits: a float32's worth, in a short JSON number
 const sig7 = (x) => Number(x.toPrecision(7));
-const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7), ...(f.net && f.net.some(Boolean) ? { net: f.net } : {}) });
+const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7),
+  ...(f.net && f.net.some(Boolean) ? { net: f.net } : {}), ...(f.unchecked && f.unchecked.some(Boolean) ? { unchecked: f.unchecked } : {}) });
 
 export function computeNormals(positions, indices) {
   const n = new Float32Array(positions.length);

@@ -191,7 +191,8 @@ async function main() {
   if (h.facts) {
     process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`
       + `; ${h.facts.closed.filter(Boolean).length} of ${h.facts.closed.length} bodies closed`
-      + `${h.facts.net ? `, ${h.facts.net.filter(Boolean).length} with shells that touch or cross (volume may be off)` : ''}\n`);
+      + `${h.facts.net ? `, ${h.facts.net.filter(Boolean).length} with shells that touch or cross (volume may be off)` : ''}`
+      + `${h.facts.unchecked ? `, ${h.facts.unchecked.filter(Boolean).length} too large to check for overlapping shells` : ''}\n`);
   }
   // the b-rep status of each body, as the converter found it
   const kinds = {};

@@ -19,9 +19,11 @@
 // 4: the b-rep faces (the faces section), the file's declared unit
 // (sourceUnits) and the angular deflection are kept.
 // 5: the edge list (edges, silhouettes) and the body facts.
-// 6: the facts' volume by the material's rule, with `net` and the rule's number (factsRule: a
-// conversion kept before it showed the signed sum, unflagged).
-export const CACHE_VERSION = 6;
+// (The body facts are versioned by their own rule, the header's factsRule (js/edges.js
+// FACTS_RULE): main.js rebuilds a kept conversion's facts of another rule, so a change to the
+// facts alone needs no bump here -- a bump drops every kept conversion, each an OpenCascade run
+// again.)
+export const CACHE_VERSION = 5;
 
 // Keys written under an older CACHE_VERSION: never read again, so dropped.
 export const staleKeys = (entries) => entries.map((e) => e.key).filter((k) => !k.startsWith(`v${CACHE_VERSION}|`));

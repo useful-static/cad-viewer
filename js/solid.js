@@ -309,5 +309,7 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = n
   };
   for (let s = 0; s < ns; s++) rootOf(s);
   const roots = (s) => [...new Set([root[s], ...(others[s] || []).map((o) => root[o])])];
-  return { parent, root, roots, inOpen, V, lo, hi };
+  // (and the grouping and the box tree it built, so a caller asking more of the same shells --
+  // js/edges.js materialVolume -- builds neither again)
+  return { parent, root, roots, inOpen, V, lo, hi, start, list, tree };
 }

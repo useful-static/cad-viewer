@@ -50,7 +50,7 @@ export function mergeModels(models) {
   out.silhouetteNormals = anySil ? new Int16Array(sc * 4) : null;
   const meshes = [];
   const children = [];
-  const facts = models.every((m) => m.base.header.facts) ? { closed: [], area: [], volume: [], net: [] } : null;
+  const facts = models.every((m) => m.base.header.facts) ? { closed: [], area: [], volume: [], net: [], unchecked: [] } : null;
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   let v0 = 0, i0 = 0, m0 = 0, t0 = 0, f0 = 0, e0 = 0, s0 = 0, omitted = 0;
   const units = new Set();
@@ -97,8 +97,9 @@ export function mergeModels(models) {
     }
     if (facts) {
       for (const k of ['closed', 'area', 'volume']) facts[k].push(...h.facts[k]);
-      // (net: per body, present in a model only when one is; the merged list carries every body's)
+      // (net, unchecked: per body, present in a model only when one is; the merged lists carry every body's)
       facts.net.push(...(h.facts.net || h.facts.closed.map(() => false)));
+      facts.unchecked.push(...(h.facts.unchecked || h.facts.closed.map(() => false)));
     }
     children.push(shiftNode({ ...h.root, name: name || h.root.name }, m0));
     if (h.bbox) {

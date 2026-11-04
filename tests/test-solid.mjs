@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { buildEdges, shellTurns, FACTS_RULE } from '../js/edges.js';
+import { buildEdges, shellTurns, FACTS_RULE, factsCurrent } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
 import { box } from './brep-model.mjs';
@@ -220,6 +220,58 @@ test('the volume\'s overlap test is the shells\' surfaces, not their boxes; one 
   assert.deepEqual([a.header.factsRule, a.header.facts.net, b.header.factsRule, b.header.facts.net], [FACTS_RULE, [true], FACTS_RULE, undefined]);
   const s = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }]);
   assert.deepEqual([s.header.factsRule, s.header.facts.net], [FACTS_RULE, [true, false]]);
+  // (and merged with a model of no rule, or an older one: no rule, so rebuilt -- the first model's
+  // rule taken would show the other's old signed sum as today's, r33 Q4)
+  for (const old of [undefined, FACTS_RULE - 1]) {
+    const c = one(cube);
+    c.header = { ...c.header, factsRule: old };
+    const m = mergeModels([{ base: a, name: 'a' }, { base: c, name: 'c' }]);
+    assert.deepEqual([m.header.factsRule, factsCurrent(m.header)], [undefined, false], `merged with a model of rule ${old}`);
+    assert.equal(factsCurrent(c.header), false);
+  }
+  assert.equal(factsCurrent(a.header), true);
+  assert.equal(factsCurrent({ ...a.header, facts: undefined }), false, 'no facts');
+});
+test('the facts\' overlap test asks each shell its parent, not every holder, each shell\'s tree built once: a fine housing with 120 parts and 8,000 concentric shells are exact and quick, not net; past the budget, unchecked -- not said to meet (r33 Q1, A1, A2)', () => {
+  // a box of side 200 meshed fine (k x k quads a face: 6 * 2 * k^2 triangles), wound out
+  const fineBox = (lo, hi, k) => {
+    const T = [];
+    for (let a = 0; a < 3; a++) {
+      const b = (a + 1) % 3, c = (a + 2) % 3;
+      for (const side of [0, 1]) {
+        const at = (u, v) => { const p = [0, 0, 0]; p[a] = side ? hi[a] : lo[a]; p[b] = lo[b] + (hi[b] - lo[b]) * u / k; p[c] = lo[c] + (hi[c] - lo[c]) * v / k; return p; };
+        for (let u = 0; u < k; u++) for (let v = 0; v < k; v++) {
+          const q = [at(u, v), at(u + 1, v), at(u + 1, v + 1), at(u, v + 1)];
+          const t = [[q[0], q[1], q[2]], [q[0], q[2], q[3]]];
+          T.push(...(side ? t : rev(t)));
+        }
+      }
+    }
+    return T;
+  };
+  const factsOf = (T, opts) => {
+    const { P, I } = meshOf(T);
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < P.length; i++) { const k = i % 3; if (P[i] < min[k]) min[k] = P[i]; if (P[i] > max[k]) max[k] = P[i]; }
+    const t0 = performance.now();
+    const { facts: f } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } }] }, opts);
+    return { v: Math.round(f.volume[0] * 1000) / 1000, net: f.net[0], unchecked: f.unchecked[0], ms: performance.now() - t0 };
+  };
+  const housing = fineBox([0, 0, 0], [200, 200, 200], 100), parts = [];
+  assert.ok(vol(housing) > 0);
+  for (let i = 0; i < 120; i++) { const x = 10 + (i % 10) * 18, y = 10 + Math.floor(i / 10) * 15; parts.push(...cubeT([x, y, 50], [x + 1, y + 1, 51])); }
+  const h = factsOf([...housing, ...parts]);
+  assert.deepEqual([h.v, h.net, h.unchecked], [8000000, false, false], 'a fine housing with 120 parts');
+  assert.ok(h.ms < 4000, `${h.ms.toFixed(0)} ms (asked against every holder, each pair's trees built again: 10.8 s, then net)`);
+  // (the budget: past it, unchecked, and not net)
+  const small = factsOf([...housing, ...parts], { overlapBudget: 50 });
+  assert.deepEqual([small.net, small.unchecked], [false, true], 'past the budget');
+  // 8,000 concentric shells, wound alternately: the cavities and the parts in them, each a region
+  const T = [];
+  for (let i = 0; i < 8000; i++) { const d = i * 0.01; T.push(...cubeT([d, d, d], [200 - d, 200 - d, 200 - d], i % 2 === 1)); }
+  const c = factsOf(T);
+  assert.deepEqual([c.net, c.unchecked], [false, false], 'concentric shells');
+  assert.ok(c.ms < 8000, `${c.ms.toFixed(0)} ms (15.1 s, then net)`);
 });
 test('an open shell holds nothing, and a part under one keeps its winding, the same upright and upside down (r28 Q1)', () => {
   // a tray (a box without its lid), and an inward cube in it

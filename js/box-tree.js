@@ -1,7 +1,9 @@
-// One spatial index design for the viewer's "which items are near or around this point"
-// questions, in 2 or 3 dimensions: the 2D view's snaps, lines and texts (js/dxf-view.js), the
-// shells a shell may lie in and a shell's triangles along a ray (js/solid.js). Pure, no DOM. (The 2D view had a 2-d tree beside a box tree; the shells an index on x alone, which a
-// stack along y, or one wide board under its parts, made quadratic again: 7.0 s for 20,000 cubes.)
+// One spatial index design for the viewer's "which items are near, at, or crossing this" questions,
+// in 2 or 3 dimensions: the 2D view's snaps, lines and texts (js/dxf-view.js), the shells a shell
+// may lie in and a shell's triangles along a ray (js/solid.js), the shells whose boxes cross
+// (js/edges.js materialVolume). Pure, no DOM. (The 2D view had a 2-d tree beside a box tree; the
+// shells an index on x alone, which a stack along y, or one wide board under its parts, made
+// quadratic again: 7.0 s for 20,000 cubes.)
 //
 // boxTree(B, ids, D = 2, points = false): B, a Float64Array of two opposite corners per item (D
 // numbers, then D more, in either order: a segment's two ends are its box's), or with points one

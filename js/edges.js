@@ -20,28 +20,32 @@
 //     outline. The second normal is flipped when both triangles traverse the
 //     edge the same way, so an inconsistently wound mesh is not all outline.
 //
-// Body facts: area, and |signed volume| (float64, centred on the body, abs so
-// a mirrored instance is positive). Closed comes from the header's kind (the
-// converter takes it from the b-rep); only a body without kind falls back to
-// the mesh: welded edges, a triangle whose welded corners collapse skipped (one
-// of three distinct corners on a line counts: it closes a T-junction), open
-// where an edge is used once (shellsOf).
+// Body facts: area, and the material's volume (materialVolume: by the nesting of
+// the body's shells, float64), with net and unchecked where it may be off. Closed
+// comes from the header's kind (the converter takes it from the b-rep); only a
+// body without kind falls back to the mesh: welded edges, a triangle whose
+// welded corners collapse skipped (one of three distinct corners on a line
+// counts: it closes a T-junction), open where an edge is used once (shellsOf).
 //
 // Returns { edges: Uint32Array (a, b) pairs, silhouettes: Uint32Array pairs |
 // null, silhouetteNormals: Int16Array (nx ny nz 0) x 2 per candidate | null,
 // silhouettesOmitted: count left out over the cap (0), facts: { closed,
-// area, volume } arrays per body }.
+// area, volume, net, unchecked } arrays per body }.
 
 import { nesting } from './solid.js';
-import { boxTree, itemsIn } from './box-tree.js';
-// (clearance.js imports bodyShells from here: a cycle, safe as neither calls the other while loading)
-import { surfacesMeet } from './clearance.js';
+import { itemsIn } from './box-tree.js';
+import { surfaceTree, treeDistance } from './tri-distance.js';
 
 export const SILHOUETTE_CAP = 2_000_000;
 // The rule the body facts are built by, written beside them (js/cadmesh.js factsRule): bumped when
 // a fact changes meaning, so the viewer rebuilds the facts of a file or kept conversion made by
-// an older one (2: the volume by the material's rule, and `net`; before it, the signed sum)
-export const FACTS_RULE = 2;
+// an older one (2: the volume by the material's rule, and `net`; before it, the signed sum. 3:
+// `unchecked` beside `net`, which no longer covers an overlap test past its budget). The facts
+// are versioned by this alone: a change of it needs no CACHE_VERSION bump (js/mesh-cache.js)
+export const FACTS_RULE = 3;
+// whether a header's facts can be shown as they are: present, and built by today's rule (main.js
+// rebuilds them otherwise: an older file's volume was the signed sum, unflagged)
+export const factsCurrent = (header) => !!header?.facts && header.factsRule === FACTS_RULE;
 
 // The body table the renderers read in the vertex shader, indexed by body id
 // (mesh index + 1; slot 0 unused): two vec4 per body, the explode direction
@@ -106,7 +110,7 @@ const NORMAL_EPS = 1e-4;
 
 const pow2 = (n) => { let s = 16; while (s < n) s *= 2; return s; };
 
-export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOUETTE_CAP } = {}) {
+export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOUETTE_CAP, overlapBudget = OVERLAP_BUDGET } = {}) {
   const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
   const edges = [];
   let sil = [];
@@ -114,14 +118,15 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   let silCount = 0;
   const closed = [];
   const area = [];
-  const volume = [], net = [];
+  const volume = [], net = [], unchecked = [];
   for (const m of meshes) {
-    const r = body(position, bits, index, m, edges, sil, silN);
+    const r = body(position, bits, index, m, edges, sil, silN, overlapBudget);
     silCount += r.sil;
-    closed.push(m.kind ? (m.kind === 'closed' || m.kind === 'capped') : r.closed);
+    closed.push(r.closed);
     area.push(r.area);
     volume.push(r.volume);
     net.push(!!r.net);
+    unchecked.push(!!r.unchecked);
   }
   const omitted = silCount > silhouetteCap ? silCount : 0;
   if (omitted) { sil = null; silN = null; }
@@ -130,17 +135,19 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
     silhouettes: sil ? Uint32Array.from(sil) : null,
     silhouetteNormals: silN ? Int16Array.from(silN) : null,
     silhouettesOmitted: omitted,
-    // (net: per body, its volume the signed sum where its shells overlap -- materialVolume)
-    facts: { closed, area, volume, net },
+    // (net: per body, its shells touch or cross -- or one is branched, or a part lies in two outer
+    // shells -- so its volume may not be its material's; unchecked: its overlaps not checked, past
+    // the budget -- materialVolume)
+    facts: { closed, area, volume, net, unchecked },
   };
 }
 
-function body(pos, bits, index, m, edges, sil, silN) {
+function body(pos, bits, index, m, edges, sil, silN, budget) {
   const nt = m.idxCount / 3;
   const t0 = m.idxStart / 3;
   const v0 = m.vtxStart;
   const nv = m.vtxCount;
-  if (!nt || !nv) return { sil: 0, closed: false, area: 0, volume: 0, net: false };
+  if (!nt || !nv) return { sil: 0, closed: m.kind ? kindClosed(m.kind) : false, area: 0, volume: 0, net: false, unchecked: false };
 
   const weld = weldBits(bits, v0, nv);
   const { tn, degenerate, A, V } = triangleFacts(pos, index, t0, nt, m.bbox);
@@ -224,14 +231,17 @@ function body(pos, bits, index, m, edges, sil, silN) {
   // kind, the mesh's own test where not -- and a solid closed by its b-rep's word lets every shell
   // hold, as Clearance does: a b-rep cube with a one-ulp crack read 1008 for 1000)
   const sh = shellsOf(index, t0, nt, weld, v0, nv);
-  const closed = m.kind ? (m.kind === 'closed' || m.kind === 'capped') : sh.closed;
+  const closed = m.kind ? kindClosed(m.kind) : sh.closed;
   const open = m.kind && closed ? new Uint8Array(sh.shellOpen.length) : sh.shellOpen;
-  return { sil: nsil, closed: m.kind ? null : sh.closed, area: A, ...materialVolume(pos, index, t0, nt, sh.shell, open, sh.shellBranched, closed, V) };
+  return { sil: nsil, closed, area: A, ...materialVolume(pos, index, t0, nt, sh.shell, open, sh.shellBranched, closed, V, budget) };
 }
 
-// The work the overlap test may do on one body (triangles of the box-crossing shell pairs asked):
-// past it the body is said to be net, its overlaps not checked
-const OVERLAP_BUDGET = 20_000_000;
+// a body closed by its b-rep's word (js/cadmesh.js BODY_KINDS): the one place the kind decides it
+const kindClosed = (kind) => kind === 'closed' || kind === 'capped';
+
+// The work the overlap test may do on one body (triangle pairs measured): past it the body's
+// overlaps are not checked, and its facts say so (`unchecked`), not that its shells meet
+export const OVERLAP_BUDGET = 20_000_000;
 
 // A closed body's volume as its material is taken -- each region inside a shell and outside the
 // shells it holds counted when its winding is above 0, the winding of the region round it plus
@@ -239,39 +249,60 @@ const OVERLAP_BUDGET = 20_000_000;
 // shell wound in is turned; a body wound inside out has its volume) -- from the nesting of its
 // shells. So a cavity is taken out once and a part embedded in another counted once (the signed
 // sum counted an embedded part twice). The nesting is exact where no two shells' surfaces meet
-// (each then lies wholly inside or wholly outside the other); where two shells whose boxes cross
-// touch or cross (their nearest distance 0, js/clearance.js surfacesMeet -- not their boxes
-// alone: a pin in the notch of an L-shaped cavity read as overlapping), a shell is branched (two
-// parts face to face), a part lies in two outer shells, or the test is past OVERLAP_BUDGET, the
-// volume is the same count and `net` says it may not be the material's. -> { volume, net }
-function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, closed, V) {
+// (each then lies wholly inside or wholly outside the other); where two shells' surfaces touch or
+// cross (their nearest distance 0, js/tri-distance.js -- not their boxes alone: a pin in the notch
+// of an L-shaped cavity read as overlapping), a shell is branched (two parts face to face), or a
+// part lies in two outer shells, the volume is the same count and `net` says it may not be the
+// material's; past OVERLAP_BUDGET `unchecked` says the test was not finished.
+// -> { volume, net, unchecked }
+function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, closed, V, budget = OVERLAP_BUDGET) {
   const ns = shellOpen.length;
   const anyBranched = shellBranched.some((x) => x === 1);
   if (!closed || ns <= 1) return { volume: Math.abs(V), net: closed && anyBranched };
   const local = index.subarray(3 * t0, 3 * (t0 + nt));
   const nest = nesting(pos, local, shell, ns, shellOpen, shellBranched);
   const { parent, root, V: Vs, lo, hi } = nest;
-  let net = anyBranched;
+  const { start, list, tree } = nest;
+  let net = anyBranched, unchecked = false;
   // (a part in two outer shells)
   for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
-  // (two shells whose boxes cross: by the shells' box tree, then their surfaces)
+  // Which shells' surfaces meet. Asked of each shell and its parent, and of two shells whose boxes
+  // cross with neither in the other's line of holders: a shell that meets not its parent, inside
+  // a parent that meets not its own, lies wholly inside that one too, so no other holder need be
+  // asked (every holder asked against every shell it holds, each pair's trees built again, was
+  // 10.8 s for a 200,000-triangle housing of 120 parts, then net by the budget). Each shell's
+  // triangle tree built once; the budget counts the triangle pairs measured, and past it the
+  // body is `unchecked`, not said to meet.
   if (!net) {
-    const start = new Uint32Array(ns + 1);
-    for (let t = 0; t < nt; t++) if (shell[t] >= 0) start[shell[t] + 1]++;
-    for (let s = 0; s < ns; s++) start[s + 1] += start[s];
-    const at = start.slice(0, ns), tris = new Uint32Array(start[ns]);
-    for (let t = 0; t < nt; t++) if (shell[t] >= 0) tris[at[shell[t]]++] = t;
-    const of = (s) => tris.subarray(start[s], start[s + 1]);
-    const B = new Float64Array(6 * ns);
-    for (let s = 0; s < ns; s++) for (let k = 0; k < 3; k++) { B[6 * s + k] = lo[3 * s + k]; B[6 * s + 3 + k] = hi[3 * s + k]; }
-    const tree = boxTree(B, Uint32Array.from({ length: ns }, (_, s) => s), 3);
+    // (the holders' lines by an Euler tour of the parents: one test whether a holds b)
+    const kids = new Int32Array(ns).fill(-1), sib = new Int32Array(ns).fill(-1);
+    for (let s = ns - 1; s >= 0; s--) if (parent[s] >= 0) { sib[s] = kids[parent[s]]; kids[parent[s]] = s; }
+    const tin = new Int32Array(ns), tout = new Int32Array(ns);
+    let clock = 0;
+    for (let r = 0; r < ns; r++) {
+      if (parent[r] >= 0) continue;
+      const stack = [r];
+      while (stack.length) {
+        const x = stack[stack.length - 1];
+        if (x >= 0) { tin[x] = clock++; stack[stack.length - 1] = ~x; for (let c = kids[x]; c >= 0; c = sib[c]) stack.push(c); } else { tout[~x] = clock++; stack.pop(); }
+      }
+    }
+    const inLine = (a, b) => (tin[a] <= tin[b] && tout[b] <= tout[a]) || (tin[b] <= tin[a] && tout[a] <= tout[b]);
+    const trees = new Map();
+    const treeOf = (s) => { let t = trees.get(s); if (!t) { t = surfaceTree(pos, local, list.subarray(start[s], start[s + 1])); trees.set(s, t); } return t; };
     let work = 0;
-    for (let s = 0; s < ns && !net; s++) {
+    const meet = (a, b) => {
+      const r = treeDistance(pos, local, treeOf(a), treeOf(b));
+      work += r ? r.pairs : 0;
+      if (work > budget) unchecked = true;
+      return !!r && r.distance === 0;
+    };
+    for (let s = 0; s < ns && !net && !unchecked; s++) if (parent[s] >= 0 && meet(s, parent[s])) net = true;
+    for (let s = 0; s < ns && !net && !unchecked; s++) {
       itemsIn(tree, lo.subarray(3 * s, 3 * s + 3), hi.subarray(3 * s, 3 * s + 3), (o) => {
-        if (net || o <= s) return;
+        if (net || unchecked || o <= s || inLine(s, o)) return;
         for (let k = 0; k < 3; k++) if (lo[3 * o + k] > hi[3 * s + k] || lo[3 * s + k] > hi[3 * o + k]) return;
-        work += (start[s + 1] - start[s]) + (start[o + 1] - start[o]);
-        if (work > OVERLAP_BUDGET || surfacesMeet(pos, local, of(s), of(o))) net = true;
+        if (meet(s, o)) net = true;
       });
     }
   }
@@ -289,7 +320,7 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   for (let s = 0; s < ns; s++) { wOf(s); if (parent[s] >= 0) inner[parent[s]] += Math.abs(Vs[s]); }
   let vol = 0;
   for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.abs(Vs[s]) - inner[s];
-  return { volume: vol, net };
+  return { volume: vol, net, unchecked: !net && unchecked };
 }
 
 // a 32-bit finishing mix (MurmurHash3's)

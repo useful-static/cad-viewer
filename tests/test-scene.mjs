@@ -381,6 +381,47 @@ await test('Clearance off the page (main.js clearanceOffPage, with a stand-in wo
   assert.deepEqual(noStart, [{ error: 'Map maximum size exceeded' }, 1, 'page'], 'a worker that cannot start: the page, its throw said');
   const ok = await run((w) => { w.onmessage({ data: { started: true } }); w.onmessage({ data: { ok: true, result: { distance: 2 } } }); }, false);
   assert.deepEqual(ok, [{ distance: 2 }, 0, 'worker']);
+  // a second run stops the first: the first settles STOPPED and its worker is ended (r33 Q5)
+  {
+    const app = {}, ended = [];
+    class Worker {
+      constructor() { this.n = ended.length; ended.push(false); }
+      postMessage() {}
+      terminate() { ended[this.n] = true; }
+    }
+    const off = new Function('app', 'clearance', 'Worker', `${body}; return [clearanceOffPage, STOPPED];`)(app, () => ({}), Worker);
+    const base = { position: new Float32Array(9), index: new Uint32Array(3), normal: null };
+    const first = off[0](base, [[0, 1]], [[0, 1]], [], []);
+    off[0](base, [[0, 1]], [[0, 1]], [], []);
+    const r = await Promise.race([first, new Promise((res) => setTimeout(() => res('pending'), 1000))]);
+    assert.deepEqual([r === off[1], ended[0], ended[1]], [true, true, false], 'the first stopped, its worker ended, the second running');
+  }
+  // the model's copies that do not fit: said, not a rejected promise (r33 Q2)
+  {
+    const app = {};
+    class Worker { postMessage() {} terminate() { this.ended = true; } }
+    const off = new Function('app', 'clearance', 'Worker', `${body}; return clearanceOffPage;`)(app, () => ({}), Worker);
+    const big = { slice() { throw new RangeError('Array buffer allocation failed'); } };
+    const r = await Promise.race([off({ position: big, index: new Uint32Array(3), normal: null }, [[0, 1]], [[0, 1]], [], []).catch((e) => `rejected ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
+    assert.match(String(r?.error), /no room/, JSON.stringify(r));
+    assert.equal(app.clearanceRun, null);
+  }
+});
+await test('the Clearance worker itself says it has started, then a failed run as { ok: false, error } (r33 A6: only the page\'s half was tested)', async () => {
+  const posted = [];
+  const saved = { postMessage: globalThis.postMessage, onmessage: globalThis.onmessage };
+  globalThis.postMessage = (m) => { posted.push(m); };
+  globalThis.onmessage = null; // (a worker's global has it; the module assigns it)
+  try {
+    await import(`../js/clearance-worker.js?t=${Date.now()}`);
+    assert.deepEqual(posted[0], { started: true });
+    globalThis.onmessage({ data: { position: null, index: null, normal: null, trisA: [[0, 1]], trisB: [[0, 1]] } });
+    assert.equal(posted[1].ok, false);
+    assert.equal(typeof posted[1].error, 'string');
+  } finally {
+    globalThis.postMessage = saved.postMessage;
+    globalThis.onmessage = saved.onmessage;
+  }
 });
 test('containment does not trust the winding but the normals: a block wound inside out, or with one side reversed, its normals out, still holds the pin; with no normals its winding is its facing (r30 A2: one rule)', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);

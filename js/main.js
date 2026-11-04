@@ -20,7 +20,7 @@ import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
-import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE } from './edges.js';
+import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, factsCurrent } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
@@ -3878,10 +3878,23 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
   base.edgeInfo.ready = edgesOf(base).then((v) => {
+    // (built by the worker: kept on the model as a file's would be, so a scene it joins merges them
+    // and a move rebuilds nothing -- every Add model and typed move built the whole scene's again)
+    if (v && v.source === 'worker') keepEdges(base, v);
     if (app.baseMesh === base) { pushState(); showInfo(); } // (the facts: volume, area, mass)
     refreshEdges();
     return v;
   });
+}
+
+// a model's worker-built edges and facts, kept on it as a file's are (today's rule)
+function keepEdges(base, v) {
+  base.edges = v.edges;
+  base.silhouettes = v.silhouettes;
+  base.silhouetteNormals = v.silhouetteNormals;
+  base.header.silhouettesOmitted = v.silhouettesOmitted || 0;
+  base.header.facts = v.facts;
+  base.header.factsRule = FACTS_RULE;
 }
 
 // A big CAD file on a phone (a touch-only device) is converted only once
@@ -3958,6 +3971,12 @@ async function showScene(models, { newTree = false } = {}) {
   endTour();
   const merged = mergeModels(models);
   merged.edgeInfo = { value: null, ready: null };
+  // (the same models only moved: the scene's edges and facts are the scene before's -- a move
+  // renumbers no vertex and changes no body -- so they are kept, not built again for every move)
+  merged.sceneBases = models.map((m) => m.base);
+  const prev = app.baseMesh;
+  if (!merged.edges && prev?.sceneBases && prev.edgeInfo?.value && prev.sceneBases.length === models.length
+    && prev.sceneBases.every((b, i) => b === models[i].base)) keepEdges(merged, prev.edgeInfo.value);
   const mesh = inScheme(merged, app.overrides);
   checkFits(app.renderer, mesh);
   app.wanted = mesh;
@@ -4016,6 +4035,7 @@ async function showScene(models, { newTree = false } = {}) {
   updateButtons();
   queueFrame();
   merged.edgeInfo.ready = edgesOf(merged).then((v) => {
+    if (v && v.source === 'worker') keepEdges(merged, v);
     if (app.baseMesh === merged) { pushState(); showInfo(); }
     refreshEdges();
     return v;
@@ -4083,9 +4103,6 @@ async function moveModel(i, k, v) {
   }
 }
 
-// Clearance: the smallest gap between the selected parts (when they all lie
-// in one model; else the first model) and the other models' shown parts,
-// on the tessellation (js/clearance.js), drawn as a Measure distance
 // Clearance in js/clearance-worker.js, on copies of the model's arrays: two triangle trees over
 // millions of triangles held the tab for seconds (9.6 M triangles, 10.8 s). A run started while
 // one is going stops it (STOPPED). Only a worker that cannot start (a file:// page, an old
@@ -4126,12 +4143,21 @@ function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
       if (app.clearanceRun === run) app.clearanceRun = null;
       here();
     };
-    const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
-    w.postMessage({ position, index, normal, trisA, trisB, solidA, solidB },
-      [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]);
+    // (the copies may not fit -- a big model on a small device: said, the worker ended; a throw
+    // here left the promise rejected and the readout at "checking …")
+    try {
+      const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
+      w.postMessage({ position, index, normal, trisA, trisB, solidA, solidB },
+        [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]);
+    } catch (e) {
+      finish({ error: `no room for the model's copy: ${e?.message || e}` });
+    }
   });
 }
 
+// Clearance: the smallest gap between the selected parts (when they all lie in one model; else
+// the first model) and the other models' shown parts, on the tessellation (js/clearance.js), drawn
+// as a Measure distance.
 async function runClearance() {
   if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
   if (app.explode.on) setExplode(false); // the gap is measured where the parts are
@@ -4205,7 +4231,7 @@ function edgesOf(base) {
   const cap = coarseOnly() ? COARSE_SILHOUETTE_CAP : 0;
   // (the file's facts only when built by today's rule: an older file's or kept conversion's
   // volume was the signed sum, unflagged)
-  if (base.edges && base.header.facts && base.header.factsRule === FACTS_RULE) {
+  if (base.edges && factsCurrent(base.header)) {
     const over = cap && base.silhouettes && base.silhouettes.length / 2 > cap;
     info.value = { edges: base.edges, silhouettes: over ? null : base.silhouettes,
       silhouetteNormals: over ? null : base.silhouetteNormals,
@@ -5746,18 +5772,23 @@ function fillInfo(el) {
     app.factsNow = null;
     add('volume', 'computing…');
   } else {
-    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, net = 0;
+    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, net = 0, unchecked = 0;
     for (const id of which) {
       const i = id - 1, kind = app.header.meshes[i].kind;
       area += facts.area[i] || 0;
-      if (facts.closed[i]) { vol += facts.volume[i] || 0; closed++; if (kind === 'capped') capped++; if (facts.net?.[i]) net++; } else if (kind === 'sheet') sheets++; else open++;
+      if (facts.closed[i]) {
+        vol += facts.volume[i] || 0; closed++;
+        if (kind === 'capped') capped++;
+        if (facts.net?.[i]) net++; else if (facts.unchecked?.[i]) unchecked++;
+      } else if (kind === 'sheet') sheets++; else open++;
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
     // (a body whose shells touch or cross, or whose one shell is branched: its volume may not be its
     // material's -- said, as what it is)
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} with shells that touch or cross: the volume may be off there` : ''}`);
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} with shells that touch or cross: the volume may be off there` : ''}`
+      + `${unchecked ? ` · ${fmtInt(unchecked)} too large to check for overlapping shells` : ''}`);
     add('area', `≈ ${fmtArea(area, u)}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
