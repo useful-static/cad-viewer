@@ -261,9 +261,18 @@ export function splitCadmesh(buf) {
 // not decoded whole (a Save inflated and checked the whole file to find nothing: r45 Q7).
 export async function withoutEdgesFailed(buf) {
   const raw = isGzip(buf) ? await inflateCadmesh(buf) : buf;
-  const jlen = new DataView(raw).getUint32(8, true);
-  if (!('edgesFailed' in JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))))) return buf;
+  // (the header asked alone only when it reads as one; anything else falls to splitCadmesh, which
+  // refuses it in the decoder's words -- an engine's RangeError or TypeError was thrown: r46 Q8)
+  const head = () => {
+    if (raw.byteLength < 12) return null;
+    const jlen = new DataView(raw).getUint32(8, true);
+    // (a length past the file throws in the view's making: caught)
+    try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))); return h && typeof h === 'object' ? h : null; } catch { return null; }
+  };
+  const h = head();
+  if (h && !('edgesFailed' in h)) return buf;
   const { header, data } = splitCadmesh(raw);
+  if (header.edgesFailed === undefined) return buf;
   const { edgesFailed, ...rest } = header;
   return withHeader(rest, data);
 }
@@ -557,7 +566,7 @@ function validateHeader(h) {
   // rule -- built again, not refused whole: r45 Q6)
   if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string'
     && (h.edgesFailed.factsRule === undefined || Number.isInteger(h.edgesFailed.factsRule)))) {
-    bad('edgesFailed is not { error, factsRule }');
+    bad('edgesFailed is not { error, factsRule? }');
   }
   // (a failed build and facts both: no writer makes one, and which to believe is no question -- r44 A1)
   if (h.edgesFailed !== undefined && h.facts !== undefined) bad('edgesFailed beside facts');

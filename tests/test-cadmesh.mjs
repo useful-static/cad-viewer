@@ -84,7 +84,7 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
     [false, false, false], 'Safari\'s words, another rule, none');
   const raw = encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: KEEP_WITHOUT_EDGES });
   // (its error not a string: refused by name)
-  assert.throws(() => decodeCadmesh(patchHeader(raw.slice(0), '"error":"Invalid array length"', `"error":${'1'.repeat(22)}`)), /edgesFailed is not \{ error, factsRule \}/);
+  assert.throws(() => decodeCadmesh(patchHeader(raw.slice(0), '"error":"Invalid array length"', `"error":${'1'.repeat(22)}`)), /edgesFailed is not \{ error, factsRule\? \}/);
   // (never beside facts: no writer makes one -- r44 A1)
   const withFacts = splitCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }));
   assert.throws(() => withHeader({ ...withFacts.header, edgesFailed: { error: 'x', factsRule: FACTS_RULE } }, withFacts.data), /edgesFailed beside facts/);
@@ -95,6 +95,12 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   assert.deepEqual([saved.edgesFailed, savedGz.edgesFailed, saved.meshes.length], [undefined, undefined, 1]);
   const plain = encodeCadmesh({ meshes: [quad('a', 0)] });
   assert.equal(await withoutEdgesFailed(plain), plain, 'none: the same buffer');
+  // (asked of its header alone: a file whose data is cut short is not decoded to learn it has no
+  // record -- r46 Q9; one whose header is not one refused in the decoder's words, not an engine's -- Q8)
+  const cutShort = plain.slice(0, plain.byteLength - 8);
+  assert.equal(await withoutEdgesFailed(cutShort), cutShort, 'the header alone read');
+  const badLen = plain.slice(0); new DataView(badLen).setUint32(8, 0xfffffff0, true);
+  await assert.rejects(withoutEdgesFailed(badLen), /^Error: cadmesh/);
   // (the bytes Save writes: decoded, without the record, gzipped where it can -- r45 Q9)
   const toSave = await cadmeshToSave(raw);
   assert.deepEqual([isGzip(toSave), decodeCadmesh(await inflateCadmesh(toSave)).header.edgesFailed], [true, undefined]);

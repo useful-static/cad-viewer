@@ -615,7 +615,8 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     t.made[0].onmessage({ data: { started: true } });
     t.made[0].onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } });
     await p;
-    assert.deepEqual([t.said, t.told, t.app.noFacts], [[], [], 'no edges for this model: Map maximum size exceeded']);
+    // (told at once all the same: r46 A1)
+    assert.deepEqual([t.said, t.told, t.app.noFacts], [[], ['no edges for this model: Map maximum size exceeded'], 'no edges for this model: Map maximum size exceeded']);
   }
   // the moment's rule: a RangeError of a size limit is the model's own, remembered; the page's copy
   // with no room is the moment's (r40 A3, Q2)
@@ -760,7 +761,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   // model's own failing the same way at every try: r40 Q5; one never said -- met while the status
   // was not ready -- said now, once: r37 A3, r38 A2)
   const again = await run('remembered', { line: 'no edges for this scene: s0: Map maximum size exceeded' });
-  assert.deepEqual([again.panel, again.said], ['not computed: s0: Map maximum size exceeded', []]);
+  assert.deepEqual([again.panel, again.said, again.told], ['not computed: s0: Map maximum size exceeded', [], []], 'the same word: not told again');
   const unsaid = await run('unsaid');
   // (told: only the word, not what the ready line always carries -- r45 A2, Q4)
   assert.deepEqual([unsaid.said, unsaid.told], [['ready · no edges for this scene: s0: Map maximum size exceeded'], ['no edges for this scene: s0: Map maximum size exceeded']]);
@@ -800,7 +801,8 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   assert.deepEqual([remerged.built, remerged.v?.source, remerged.said, remerged.app.noFacts ?? null], [['model', 'merged', 'scene'], 'file', [], null]);
   // (an export's progress, said while ready, left alone: the word waits for the next ready line -- r43 Q3)
   const exporting = await run('failed', { shown: 'exporting 12 bodies as STL…' });
-  assert.deepEqual([exporting.said, exporting.app.noFacts], [[], 'no edges for this scene: s0: the worker failed: out of memory']);
+  // (told at once: it waited for the export's end, whose ready-to-ready line no one hears -- r46 A1)
+  assert.deepEqual([exporting.said, exporting.app.noFacts, exporting.told], [[], 'no edges for this scene: s0: the worker failed: out of memory', ['no edges for this scene: s0: the worker failed: out of memory']]);
   // (the word written in place, a tour's note after it kept: r43 A2)
   const noted = await run('failed', { shown: 'ready · the tour names parts this model lacks: J5' });
   assert.deepEqual(noted.said, ['ready · no edges for this scene: s0: the worker failed: out of memory · the tour names parts this model lacks: J5']);
@@ -809,7 +811,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const moved = await run('remembered', { shown: 'ready' });
   assert.deepEqual([moved.said, moved.app.noFacts], [['ready · no edges for this scene: s0: Map maximum size exceeded'], 'no edges for this scene: s0: Map maximum size exceeded']);
   const busy = await run('failed', { status: 'loading' });
-  assert.deepEqual([busy.said, busy.app.noFacts, busy.told], [[], 'no edges for this scene: s0: the worker failed: out of memory', []]);
+  assert.deepEqual([busy.said, busy.app.noFacts, busy.told], [[], 'no edges for this scene: s0: the worker failed: out of memory', ['no edges for this scene: s0: the worker failed: out of memory']]);
   // (every failure a stop: no word, the next scene owns it -- r42 Q7)
   assert.equal(stopped.app.noFacts ?? null, null);
   // (a model's failure does not stop the others: the next stale model is built, the scene merged
@@ -838,7 +840,12 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   // end writes the ready text back)
   const writers = [...src.matchAll(/setStatus\(([^,]*'ready'[^,]*), (`[^`]*`|'[^']*'|[^)]*\))\)/g)].map((m) => m[2]);
   const bare = writers.filter((w) => !/readyText\(\)/.test(w) && !/^`exporting /.test(w));
-  assert.ok(writers.length >= 8, `ready writers found: ${writers.length}`);
+  assert.ok(writers.length >= 6, `ready writers found: ${writers.length}`);
+  // (a tour's first step does not tell its missing parts again: the start told them all -- r46 A4)
+  assert.match(src, /if \(app\.tourMissing\.length && t\.i > 0\) tell\(/);
+  // (Measure is given the one rule, tell, not a show-only flash to pair by hand: r46 A3, Q3 J)
+  assert.match(src, /announce, tell, queueFrame, syncOptbar,/);
+  assert.doesNotMatch(readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8'), /deps\.flash/);
   // (each failure added to the ready line told, by name: an export's failed was shown 1.5 s and never heard -- r45 Q1)
   for (const words of ['export failed: ', 'could not save ', 'could not move ', 'could not recolour: ', 'the tour has no step', 'the tour names parts this model lacks: ', 'the tour ${r.error}']) {
     assert.ok(src.includes(`tellReady(\`${words}`), `told: ${words}`);
@@ -864,9 +871,12 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   const app = { status: 'idle', statusMsg: 'idle' }, heard = [], shown = [];
   const live = { set textContent(t) { heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
   dom.announce = live;
+  // (frames queued, run when the test says: a frame that ran at once hid the repeat path and its stale guard -- r46 Q3)
+  const frames = [];
   const [setStatus, tell, tellReady, announce] = new Function('app', '$', 'flashHover', 'showEmpty', 'PROGRESS_STATES', 'readyText', 'requestAnimationFrame', `${body}; return [setStatus, tell, tellReady, announce];`)(
-    app, (id) => dom[id], (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']), () => 'ready · 3 faces could not be meshed and are missing', (f) => f());
-  const settle = () => new Promise((r) => setTimeout(r, 0));
+    app, (id) => dom[id], (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']), () => 'ready · 3 faces could not be meshed and are missing', (f) => frames.push(f));
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+  const runFrames = () => { for (const f of frames.splice(0)) f(); };
   setStatus('ready', 'ready'); await settle();
   setStatus('ready', 'ready · 3 faces could not be meshed and are missing'); await settle(); // (a rewrite in the same state: silent)
   tellReady('export failed: x'); await settle();
@@ -877,6 +887,33 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   // (said null: shown only, its caller reads out its own words)
   tell('hole 1: Ø 3.2 mm', 3000, null); await settle();
   assert.deepEqual([shown[shown.length - 1], heard.length], ['hole 1: Ø 3.2 mm', 3]);
+  // (said after an await in the same task: still together -- r46 Q2)
+  announce('ready · a.stl'); await Promise.resolve(); await Promise.resolve(); announce('a.stl read in inch'); await settle();
+  assert.equal(heard[heard.length - 1], 'ready · a.stl · a.stl read in inch');
+  // (the same text twice in one moment: once -- r46 Q3 D)
+  announce('copied'); announce('copied'); await settle();
+  assert.equal(heard[heard.length - 1], 'copied');
+  // (the same text again, later: the region emptied, then written in the next frame, so it is heard
+  // again; a newer one said before that frame wins -- r46 Q3 A, B)
+  const n = heard.length;
+  announce('copied'); await settle();
+  assert.deepEqual(heard.slice(n), [''], 'emptied first');
+  runFrames();
+  assert.deepEqual(heard.slice(n), ['', 'copied'], 'then said again');
+  announce('copied'); await settle(); announce('picture copied'); await settle(); runFrames();
+  assert.equal(heard[heard.length - 1], 'picture copied', 'a stale repeat never lands last');
+  // (a new error after an error read out; the same not -- r46 Q3 K)
+  setStatus('error', 'not loaded: a'); await settle();
+  setStatus('error', 'not loaded: b'); await settle();
+  setStatus('error', 'not loaded: b'); await settle(); runFrames();
+  assert.deepEqual(heard.slice(-2), ['not loaded: a', 'not loaded: b']);
+  // (a note added while a load runs, or in an error: told, the state and its line kept -- r46 A2, Q1)
+  setStatus('loading', 'reading b.step 40 %'); await settle();
+  tellReady('could not move B: x'); await settle();
+  assert.deepEqual([app.status, app.statusMsg, heard[heard.length - 1], shown[shown.length - 1]], ['loading', 'reading b.step 40 %', 'could not move B: x', 'could not move B: x']);
+  setStatus('error', 'not loaded: c'); await settle();
+  tellReady('the tour not found (404): t.json'); await settle();
+  assert.deepEqual([app.status, app.statusMsg, heard[heard.length - 1]], ['error', 'not loaded: c', 'the tour not found (404): t.json']);
 });
 await test('the edges drawn are the value\'s: a file\'s drawn while its facts build, then the build\'s uploaded in their place; the same arrays not uploaded again (r40 A1, Q9)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');

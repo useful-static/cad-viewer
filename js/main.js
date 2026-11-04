@@ -148,12 +148,13 @@ const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || 
 // do not run), and be the last thing said.
 // (What is said in one moment is said together, in order: a later write in the same task replaced
 // an earlier one unheard -- the tour's "lacks parts", a scene's missing faces, a drawing's unit
-// -- r45 Q2.)
+// -- r45 Q2. The moment is the task, awaits within it included: a microtask's flush let a write
+// after an await replace the one before -- a re-read's "read in inch", a ?tour='s lines -- r46 Q2.)
 let saySeq = 0, sayParts = null;
 function announce(text) {
   if (sayParts) { if (!sayParts.includes(text)) sayParts.push(text); return; }
   sayParts = [text];
-  queueMicrotask(() => { const t = sayParts.join(' · '); sayParts = null; sayNow(t); });
+  setTimeout(() => { const t = sayParts.join(' · '); sayParts = null; sayNow(t); }, 0);
 }
 function sayNow(text) {
   const el = $('announce');
@@ -167,17 +168,21 @@ function sayNow(text) {
 // out (`said`, if it says it otherwise). The one way a note reaches anyone: a note only shown --
 // "export failed", "the picture could not be copied" -- was never heard, and the status line is not
 // drawn (r45 A1, Q1). flashHover is called only from here.
-// (said null: a caller that reads out its own words -- js/measure-ui.js's flash)
+// (text empty: read out only -- Measure off; said null: shown only, the words said beside it by the
+// caller in its own words -- a tour step's)
 function tell(text, ms = 1500, said = text) {
-  flashHover(text, ms);
+  if (text) flashHover(text, ms);
   if (said) announce(said);
 }
 
-// A note added to the ready line: the line is the ready text with these words after it, and the
-// words -- only they, not what the ready line always carries -- are told (the whole line after
-// "ready · " was shown and read again on every rewrite: r45 A2, Q4)
+// A note added to the ready line: the line is the ready text with these words after it -- written
+// only while the page is ready (a load, an error or a GPU recovery keeps its own state and line:
+// one of these met during a load set 'ready' under it, hid its progress and put the old model's
+// line back; one during a recovery stopped "recovered on …" -- r46 A2, Q1) -- and the words, only
+// they, not what the ready line always carries, told either way (the whole line after "ready · "
+// was shown and read again on every rewrite: r45 A2, Q4)
 function tellReady(words, ms = 6000) {
-  setStatus('ready', `${readyText()} · ${words}`);
+  if (app.status === 'ready') setStatus('ready', `${readyText()} · ${words}`);
   tell(words, ms);
 }
 
@@ -590,13 +595,10 @@ function setExplode(on, focus = false) {
   if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
-  // (said where it is seen and heard: the status line and the screen reader,
-  // not only the hover text -- UI review)
+  // (told, and on the ready line while ready: tellReady, the one guard -- r46 A2)
   if (on && app.measure && app.measure.on) {
     app.measure.setOn(false);
-    const why = 'Measure is off while exploded: it measures the parts where they are, not where Explode draws them';
-    if (app.status === 'ready') setStatus('ready', `${readyText()} · ${why}`);
-    tell('Measure off while exploded', 1500, why);
+    tellReady('Measure is off while exploded: it measures the parts where they are, not where Explode draws them');
   }
   // (Paint picks the faces where they are: off while exploded)
   if (on && app.paintFaces) setPaint(false);
@@ -1045,11 +1047,25 @@ function viewKey(digit) {
 
 // A short note where the hovered part's name goes, for 1.5 s (or ms; or until
 // the next hover replaces it)
+// (a note of 4 s or more -- a failure, a link's note, the touch hint -- holds the line for its time:
+// the next part under the pointer or a tap erased it, never to come back -- r46 Q5)
+let noteHeldUntil = 0;
 function flashHover(text, ms = 1500) {
   const hov = $('hover');
   hov.textContent = text;
+  noteHeldUntil = ms >= 4000 ? performance.now() + ms : 0;
   clearTimeout(viewNameTimer);
-  viewNameTimer = setTimeout(() => { if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, ms);
+  viewNameTimer = setTimeout(() => { noteHeldUntil = 0; if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, ms);
+}
+// the hover line's part name, unless a note holds it (its end shows the part then under the pointer)
+function hoverLabel(text) {
+  if (performance.now() < noteHeldUntil) return;
+  $('hover').textContent = text;
+}
+// the hover line emptied, a note's hold with it (a model or drawing left)
+function clearHover() {
+  noteHeldUntil = 0;
+  $('hover').textContent = '';
 }
 
 // The first model this browser shows on a touch-only screen: the gestures,
@@ -1197,8 +1213,12 @@ async function exportMesh(fmt) {
   if (!ids.length) { tell(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
-  setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
-  await new Promise((r) => setTimeout(r, 0)); // the status line paints first
+  // (told as well as written: the status line is not drawn, and a ready-to-ready line is not heard --
+  // a long export said nothing while it ran: r46 A6, Q7)
+  const going = `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`;
+  setStatus('ready', going);
+  tell(going, 4000);
+  await new Promise((r) => setTimeout(r, 0)); // the note paints first
   let bytes;
   try {
     bytes = await EXPORTS[fmt].write(model, ids, exportBasis(app.cam.orient, EXPORTS[fmt].up), { names, base });
@@ -1883,7 +1903,9 @@ function showTourStep(i) {
   }
   if (x.on) x.t = exNow;
   flyTo(to ? to.pose : null, to ? to.ortho : !!app.cam.ortho, s.transition, s.ease, ex1, holdStep);
-  if (app.tourMissing.length) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  // (not at the first step: the tour's start told every part it lacks, and the two said in one
+  // moment, in two wordings, the start's 6 s note replaced at once -- r46 A4, Q4)
+  if (app.tourMissing.length && t.i > 0) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
 }
 
@@ -3136,7 +3158,7 @@ function applyListEntry() {
     b.onclick = async () => {
       closeMenus();
       const r = await readTour(t.url);
-      if (r.error) { tell(`the tour ${r.error}`, 4000); return; }
+      if (r.error) { tellReady(`the tour ${r.error}`); return; } // (as ?tour='s: one handling -- r46 A5)
       startTourIn(r.tour, t.url);
     };
     tl.append(b);
@@ -3738,7 +3760,7 @@ function clearModel() {
   $('tree').textContent = '';
   $('treefilter').hidden = true;
   updateButtons();
-  $('hover').textContent = '';
+  clearHover();
   $('model').textContent = '';
   document.title = BASE_TITLE;
   $('model').title = '';
@@ -3761,11 +3783,11 @@ function checkFits(r, mesh) {
 // stepBuf: the tessellated buffer when this load came from a STEP import (what
 // Save .cadmesh writes), null for a .cadmesh load.
 // conversion (a conversion only): { unmeshedFaces, threads } -- the faces the
-// converter returned without triangles, shown in the status line and the info
-// panel, and whether it ran on the multi-core converter.
+// converter returned without triangles, named in the info panel and read out
+// with the ready line, and whether it ran on the multi-core converter.
 async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   const unmeshedFaces = conversion?.unmeshedFaces || 0;
-  // Each step names itself (card and status line) and lets that paint first:
+  // Each step names itself (the loading card) and lets that paint first:
   // on a phone, inflate + decode + upload of a big model is a second or more
   // of a frozen page that would otherwise read as "stuck at 100%".
   const phase = async (what, detail) => {
@@ -3862,7 +3884,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.hover = 0;
   app.hoverSeq++; // a hover answer computed against the old model must not apply
   app.viewGen++; // and neither may a click aimed at it
-  $('hover').textContent = '';
+  clearHover();
   pushState();
   // the model list's labels before the tree is built (it is built once)
   app.partLabels = listEntry(app.sourceUrl)?.labels || null;
@@ -4143,19 +4165,17 @@ function fileEdgesValue(base, cap) {
 // facts arrive only in a build of its own, which a model or scene shown is given once: no other
 // take-back can meet it -- r44 A5, Q4).
 // sayNoFacts: the word kept whatever the line says now (a failure met while a load was under way,
-// the load then cancelled, read "ready": r42 Q3); written in place, the line's own words after the
-// ready text kept (a tour's note was lost: r43 A2); a line that is not a ready line -- an export's
-// progress, said while ready -- left alone, the word waiting for the next ready line (r43 Q3).
-// Says whether the line now says something new (then told: shown and read out).
+// the load then cancelled, read "ready": r42 Q3), and told at once when it is new, whatever the line
+// is (one that came during an export waited for the export's end, whose ready-to-ready line no one
+// hears: r46 A1); written into the line in place only when it is the ready line, its own words
+// after the ready text kept (a tour's note was lost: r43 A2) -- an export's progress is left alone.
 function sayNoFacts(text) {
-  const msg = app.statusMsg || '', before = readyText(); // (with a word said before, if any)
+  const msg = app.statusMsg || '', before = readyText(), fresh = app.noFacts !== text; // (with a word said before, if any)
   const tail = msg.startsWith(before) ? msg.slice(before.length) : null;
   app.noFacts = text;
+  if (fresh) tell(text, 6000);
   const line = readyText() + (tail ?? '');
-  if (app.status !== 'ready' || tail === null || line === msg) return false;
-  setStatus('ready', line);
-  tell(text, 6000);
-  return true;
+  if (app.status === 'ready' && tail !== null && line !== msg) setStatus('ready', line);
 }
 
 // The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
@@ -4799,7 +4819,7 @@ function setSheet(i) {
   $('sheet').value = String(i);
   app.dxf.view = createDxfView($('view2d'), shown, {
     onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
-    onHover: (what, snap) => { $('hover').textContent = !what ? '' : snap ? what : `layer ${what}`; },
+    onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
     onMeasure: (r) => tell(r.text, 4000),
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
@@ -4871,7 +4891,7 @@ function leave2D() {
   document.body.classList.remove('mode2d');
   $('view2d').hidden = true;
   $('sheet').hidden = true;
-  $('hover').textContent = '';
+  clearHover();
 }
 
 // the parts list as the drawing's layers: colour, name, line count, a box
@@ -5339,9 +5359,9 @@ function pickModelFile(files) {
 function openFile(f) {
   if (f.size > MAX_FILE_BYTES) {
     const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
-    if (PROGRESS_STATES.has(app.status)) announce(msg); // (a load under way keeps its line)
-    else if (app.mesh) tellReady(msg);
-    else { setStatus('error', msg); announce(msg); }
+    // (a model shown, or a load under way -- which keeps its line: told; else the page's error)
+    if (app.mesh || PROGRESS_STATES.has(app.status)) tellReady(msg);
+    else setStatus('error', msg);
     return;
   }
   startLoad(() => loadFile(f));
@@ -6078,7 +6098,7 @@ function wireInput() {
     },
     lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
     num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
-    announce, flash: (text, ms) => tell(text, ms, null), queueFrame, syncOptbar,
+    announce, tell, queueFrame, syncOptbar,
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => currentStyle().seesHidden,
@@ -6087,7 +6107,8 @@ function wireInput() {
     // and Measure and Paint pick the parts where they are, not where Explode
     // draws them)
     beforeOn: () => {
-      if (app.explode.on) { setExplode(false); tell('Explode off while measuring'); }
+      // (shown: setExplode says "explode off" itself -- said twice in one moment -- r46 Q4)
+      if (app.explode.on) { setExplode(false); tell('Explode off while measuring', 1500, null); }
       if (app.paintFaces) setPaint(false);
     },
   });
@@ -6216,7 +6237,7 @@ function wireInput() {
   const setHover = (id) => {
     if (id === app.hover) return;
     app.hover = id;
-    $('hover').textContent = id ? meshLabel(id) : '';
+    hoverLabel(id ? meshLabel(id) : '');
     pushState();
   };
   const hoverPick = () => {
@@ -6371,7 +6392,7 @@ function wireInput() {
         select(id ? [id] : [], additive);
         if (id) revealRow(id);
         // a finger has no hover: the view's name label shows what a tap picked
-        if (d.type === 'touch') $('hover').textContent = id ? meshLabel(id) : '';
+        if (d.type === 'touch') hoverLabel(id ? meshLabel(id) : '');
         return true;
       });
     }
@@ -6712,8 +6733,7 @@ function wireInput() {
     try {
       bytes = await cadmeshToSave(app.lastStepBuffer);
     } catch (e) {
-      if (app.status === 'ready') tellReady(`could not save ${name}: ${e.message || e}`);
-      else tell(`could not save ${name}: ${e.message || e}`, 6000);
+      tellReady(`could not save ${name}: ${e.message || e}`);
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
@@ -7040,8 +7060,8 @@ async function main() {
 }
 
 // The model lists: fill the drop-down, open the first model when wanted (no
-// other load started), and say on the status line which lists could not be
-// read, or that they name no models
+// other load started), and tell which lists could not be read, or that they
+// name no models (the status line, not drawn, carries it too)
 async function readLists(lists, openFirst) {
   const timed = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
   const r = await fetchModelLists(lists, location.href, timed);
