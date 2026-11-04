@@ -20,7 +20,7 @@ import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
-import { bodyTable, edgeInstances, silhouetteInstances } from './edges.js';
+import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
@@ -4088,16 +4088,21 @@ async function moveModel(i, k, v) {
 // on the tessellation (js/clearance.js), drawn as a Measure distance
 // Clearance in js/clearance-worker.js, on copies of the model's arrays: two triangle trees over
 // millions of triangles held the tab for seconds (9.6 M triangles, 10.8 s). A run started while
-// one is going stops it (STOPPED); with no module worker it runs here, as before.
+// one is going stops it (STOPPED). Only a worker that cannot start (a file:// page, an old
+// browser) hands the run to the page; a run that fails in the worker comes back as { error } --
+// the page running the same failing job again froze the tab and, when it threw, left the
+// readout at "checking …" for good. Always settles.
 const STOPPED = Symbol('stopped');
 function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
   if (app.clearanceRun) app.clearanceRun.stop();
   return new Promise((resolve) => {
-    const here = () => resolve((app.lastClearanceVia = 'page', clearance(base.position, base.index, trisA, trisB, { solidA, solidB, normal: base.normal })));
+    const here = () => {
+      app.lastClearanceVia = 'page';
+      try { resolve(clearance(base.position, base.index, trisA, trisB, { solidA, solidB, normal: base.normal })); } catch (e) { resolve({ error: String(e?.message || e) }); }
+    };
     let w;
     try { w = new Worker(new URL('./clearance-worker.js', import.meta.url), { type: 'module' }); } catch { here(); return; }
-    let finished = false;
-    const run = { stop: () => finish(STOPPED) };
+    let finished = false, started = false;
     const finish = (v) => {
       if (finished) return;
       finished = true;
@@ -4105,17 +4110,22 @@ function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
       if (app.clearanceRun === run) app.clearanceRun = null;
       resolve(v);
     };
+    const run = { stop: () => finish(STOPPED) };
     app.clearanceRun = run;
-    // (a worker that cannot start or fails -- a file:// page, an old browser: the page measures it)
-    const onPage = () => {
+    w.onmessage = (ev) => {
+      if (ev.data.started) { started = true; return; }
+      app.lastClearanceVia = 'worker';
+      finish(ev.data.ok ? ev.data.result : { error: ev.data.error });
+    };
+    w.onerror = (e) => {
+      e.preventDefault?.();
+      if (started) { finish({ error: `the worker failed: ${e.message || 'out of memory?'}` }); return; }
       if (finished) return;
       finished = true;
       w.terminate();
       if (app.clearanceRun === run) app.clearanceRun = null;
       here();
     };
-    w.onmessage = (ev) => { if (ev.data.ok) { app.lastClearanceVia = 'worker'; finish(ev.data.result); } else onPage(); };
-    w.onerror = (e) => { e.preventDefault?.(); onPage(); };
     const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
     w.postMessage({ position, index, normal, trisA, trisB, solidA, solidB },
       [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]);
@@ -4158,7 +4168,11 @@ async function runClearance() {
   // (a set with no triangle -- a selected body with none: clearance() has nothing; it was left at
   // "checking …")
   if (!r) { say('nothing shown to measure between'); return; }
+  if (r.error) { say(`clearance failed: ${r.error}`); return; }
   const ms = Math.round(performance.now() - t0);
+  // (with no facts -- their worker could not start or failed -- no body is known closed and a part
+  // inside another is not asked: said, a pin inside a block read as its gap)
+  const noFacts = !base.edgeInfo?.value?.facts;
   // the bodies the two nearest triangles belong to
   const bodyOf = (t) => {
     const i = t * 3;
@@ -4170,7 +4184,7 @@ async function runClearance() {
   const nm = (id) => `${app.header.meshes[id - 1].name || `part ${id}`} (${modelOf(id) + 1})`;
   const text = r.distance === 0
     ? `0: ${nm(a)} touches or overlaps ${nm(b)}`
-    : `${lenNum(r.distance, 'measure')} ${lenUnit()} from ${nm(a)} to ${nm(b)}`;
+    : `${lenNum(r.distance, 'measure')} ${lenUnit()} from ${nm(a)} to ${nm(b)}${noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;
   say(`clearance ${text}`, `${what} against the other models' shown parts: ${fmtInt(r.pairs)} triangle pairs compared in ${ms} ms`);
   if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
   app.lastClearance = { distance: r.distance, a, b, ms, pairs: r.pairs, pa: r.pa, pb: r.pb }; // (for tests)
@@ -4189,7 +4203,9 @@ const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia(
 function edgesOf(base) {
   const info = base.edgeInfo;
   const cap = coarseOnly() ? COARSE_SILHOUETTE_CAP : 0;
-  if (base.edges && base.header.facts) {
+  // (the file's facts only when built by today's rule: an older file's or kept conversion's
+  // volume was the signed sum, unflagged)
+  if (base.edges && base.header.facts && base.header.factsRule === FACTS_RULE) {
     const over = cap && base.silhouettes && base.silhouettes.length / 2 > cap;
     info.value = { edges: base.edges, silhouettes: over ? null : base.silhouettes,
       silhouetteNormals: over ? null : base.silhouetteNormals,
@@ -5739,8 +5755,9 @@ function fillInfo(el) {
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
-    // (a body whose shells overlap: its volume their signed sum, not its material -- said)
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} with overlapping shells, their overlap counted as written` : ''}`);
+    // (a body whose shells touch or cross, or whose one shell is branched: its volume may not be its
+    // material's -- said, as what it is)
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} with shells that touch or cross: the volume may be off there` : ''}`);
     add('area', `≈ ${fmtArea(area, u)}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };

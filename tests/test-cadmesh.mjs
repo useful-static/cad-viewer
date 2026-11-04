@@ -36,7 +36,7 @@ test('MODEL_FACTS is every header key that comes from the model, and modelFactsO
   const facts = { units: MM, sourceUnits: 'in', angularDeflection: 0.3, recolour: 'a site' };
   const h = decodeCadmesh(encodeCadmesh({ ...facts, meshes: [quad('a', 0)] })).header;
   // the header's other keys are the geometry's own, computed by encodeCadmesh
-  const derived = ['bbox', 'vertexCount', 'indexCount', 'sections', 'meshes', 'root', 'facts', 'silhouettesOmitted'];
+  const derived = ['bbox', 'vertexCount', 'indexCount', 'sections', 'meshes', 'root', 'facts', 'factsRule', 'silhouettesOmitted'];
   const fromModel = Object.keys(h).filter((k) => !derived.includes(k)).sort();
   assert.deepEqual(fromModel, [...MODEL_FACTS].sort(), 'a header key that is neither derived nor carried: add it to MODEL_FACTS');
   assert.deepEqual(modelFactsOf(h), facts);

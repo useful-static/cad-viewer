@@ -19,7 +19,9 @@
 // 4: the b-rep faces (the faces section), the file's declared unit
 // (sourceUnits) and the angular deflection are kept.
 // 5: the edge list (edges, silhouettes) and the body facts.
-export const CACHE_VERSION = 5;
+// 6: the facts' volume by the material's rule, with `net` and the rule's number (factsRule: a
+// conversion kept before it showed the signed sum, unflagged).
+export const CACHE_VERSION = 6;
 
 // Keys written under an older CACHE_VERSION: never read again, so dropped.
 export const staleKeys = (entries) => entries.map((e) => e.key).filter((k) => !k.startsWith(`v${CACHE_VERSION}|`));

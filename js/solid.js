@@ -8,13 +8,13 @@
 //   solidIndex(P, I, tris) -> one shell's triangles (ids into I, three corners each into P, float
 //     xyz) indexed along three fixed ray directions: each triangle's box across each ray in the
 //     one box tree (js/box-tree.js), so a ray meets only the triangles over its foot
-//   crossingsAt(index, p, signed) -> { inside, touch }: whether p is inside that shell, by the
-//     parity of each ray's crossings (whatever its triangles' winding), or signed, by their count
-//     signed by the facing crossed, not 0 (a branched shell, two boxes sharing a face, holds their
-//     overlap, where a parity of 2 read outside), and the majority of the three (one ray through an edge or a corner of the surface
-//     counts it twice: 266 of 981 points read outside along a face's diagonal), and touch,
-//     whether p lies on the surface (within float32's reach of the shell's size and of its
-//     distance from the origin: no answer). Nesting's test of a holder, one shell at a time
+//   crossingsAt(index, p) -> { inside, touch }: whether p is inside that shell, by the parity of
+//     each ray's crossings (whatever its triangles' winding) and the majority of the three (one
+//     ray through an edge or a corner of the surface counts it twice: 266 of 981 points read
+//     outside along a face's diagonal), and touch, whether p lies on the surface (within
+//     float32's reach of the shell's size and of its distance from the origin: no answer). The
+//     tests' reference for one closed shell; nesting applies the same rule (`held`) to many at
+//     once, and to a branched shell by its signed count
 //   windingAt(index, p) -> { inside, touch }: whether p is in a solid's material by its winding
 //     number (each crossing +1 or -1 by the facing of the triangle crossed, above 0, by the
 //     majority of the three rays), the index of every triangle of the solid, wound as its
@@ -22,8 +22,9 @@
 //     first). Two overlapping shells hold their overlap, a cavity's inside is outside, a part
 //     embedded in another is material, two parts face to face wound opposite ways are each what
 //     they are, as the view's cut fill takes them. The facts' volume (js/edges.js
-//     materialVolume) is this rule's where a body's shells only nest, and says it is the
-//     signed sum (net) where they overlap
+//     materialVolume) counts the regions of the nested shells the same way, each shell's sign
+//     taken against its outer shell's rather than its normals, and says it may be off (net)
+//     where shells touch or cross
 //   nesting(P, I, shell, ns, open, branched) -> for a body's shells (shell: per triangle, -1 for
 //     none; open: per shell, 1 when it is open and may hold nothing -- by one ray an open tray
 //     held a cube upright and not upside down; branched: per shell, 1 when an edge of it is used
@@ -119,11 +120,11 @@ function walkRays(index, p, visit, touchedK, epsOfK) {
 // rule, by one shell's index here and by many at once there)
 const held = (a, b, c, signed) => (signed ? (a !== 0) + (b !== 0) + (c !== 0) : (a & 1) + (b & 1) + (c & 1)) >= 2;
 
-export function crossingsAt(index, p, signed = false) {
+export function crossingsAt(index, p) {
   const n = [0, 0, 0], eps = epsFor(index.lo, index.hi, p);
   let touch = false;
-  walkRays(index, p, (r, k, f) => { n[r] += signed ? f : 1; }, () => { touch = true; }, () => eps);
-  return { inside: !touch && held(n[0], n[1], n[2], signed), touch };
+  walkRays(index, p, (r) => { n[r]++; }, () => { touch = true; }, () => eps);
+  return { inside: !touch && held(n[0], n[1], n[2], false), touch };
 }
 
 // Whether p is in a solid's material by its winding number (index: a solidIndex of every triangle

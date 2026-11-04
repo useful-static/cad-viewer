@@ -33,8 +33,15 @@
 // area, volume } arrays per body }.
 
 import { nesting } from './solid.js';
+import { boxTree, itemsIn } from './box-tree.js';
+// (clearance.js imports bodyShells from here: a cycle, safe as neither calls the other while loading)
+import { surfacesMeet } from './clearance.js';
 
 export const SILHOUETTE_CAP = 2_000_000;
+// The rule the body facts are built by, written beside them (js/cadmesh.js factsRule): bumped when
+// a fact changes meaning, so the viewer rebuilds the facts of a file or kept conversion made by
+// an older one (2: the volume by the material's rule, and `net`; before it, the signed sum)
+export const FACTS_RULE = 2;
 
 // The body table the renderers read in the vertex shader, indexed by body id
 // (mesh index + 1; slot 0 unused): two vec4 per body, the explode direction
@@ -212,48 +219,62 @@ function body(pos, bits, index, m, edges, sil, silN) {
     }
   }
 
-  // (every body, a b-rep's too: one written as two overlapping solids in one body read its signed sum)
+  // (every body, a b-rep's too: one written as two overlapping solids in one body read its signed
+  // sum; closed by the one rule the facts' closed flag takes -- the b-rep's word where it gives a
+  // kind, the mesh's own test where not -- and a solid closed by its b-rep's word lets every shell
+  // hold, as Clearance does: a b-rep cube with a one-ulp crack read 1008 for 1000)
   const sh = shellsOf(index, t0, nt, weld, v0, nv);
-  return { sil: nsil, closed: m.kind ? null : sh.closed, area: A, ...materialVolume(pos, index, t0, nt, sh, V) };
+  const closed = m.kind ? (m.kind === 'closed' || m.kind === 'capped') : sh.closed;
+  const open = m.kind && closed ? new Uint8Array(sh.shellOpen.length) : sh.shellOpen;
+  return { sil: nsil, closed: m.kind ? null : sh.closed, area: A, ...materialVolume(pos, index, t0, nt, sh.shell, open, sh.shellBranched, closed, V) };
 }
 
-// A closed mesh body's volume as its material is taken -- js/solid.js windingAt's rule, a point in
-// it where its winding number is above 0, with each shell's facing counted as its outer shell
-// is (the weld's rule: an outer shell wound in is turned) -- from the nesting of its shells: the
-// region inside a shell and outside the shells it holds has the winding of the region round it
-// plus the shell's sign, and counts when that is above 0. So a cavity is taken out once and a
-// part embedded in another counted once (the signed sum counted an embedded part twice, and
-// two cubes overlapping 2,000 mm3 where the material is 1,500). Exact for shells that only
-// nest; where two shells overlap (their boxes cross, neither inside the other), a shell is
-// branched (two parts face to face), or a part lies in two outer shells, the overlap is no
-// one region: the volume is the signed sum there, and net says so. -> { volume, net }
-function materialVolume(pos, index, t0, nt, { closed, shell, shellOpen, shellBranched }, V) {
+// The work the overlap test may do on one body (triangles of the box-crossing shell pairs asked):
+// past it the body is said to be net, its overlaps not checked
+const OVERLAP_BUDGET = 20_000_000;
+
+// A closed body's volume as its material is taken -- each region inside a shell and outside the
+// shells it holds counted when its winding is above 0, the winding of the region round it plus
+// the shell's sign, each shell's sign taken against its outer shell's (the weld's rule: an outer
+// shell wound in is turned; a body wound inside out has its volume) -- from the nesting of its
+// shells. So a cavity is taken out once and a part embedded in another counted once (the signed
+// sum counted an embedded part twice). The nesting is exact where no two shells' surfaces meet
+// (each then lies wholly inside or wholly outside the other); where two shells whose boxes cross
+// touch or cross (their nearest distance 0, js/clearance.js surfacesMeet -- not their boxes
+// alone: a pin in the notch of an L-shaped cavity read as overlapping), a shell is branched (two
+// parts face to face), a part lies in two outer shells, or the test is past OVERLAP_BUDGET, the
+// volume is the same count and `net` says it may not be the material's. -> { volume, net }
+function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, closed, V) {
   const ns = shellOpen.length;
   const anyBranched = shellBranched.some((x) => x === 1);
   if (!closed || ns <= 1) return { volume: Math.abs(V), net: closed && anyBranched };
-  const nest = nesting(pos, index.subarray(3 * t0, 3 * (t0 + nt)), shell, ns, shellOpen, shellBranched);
+  const local = index.subarray(3 * t0, 3 * (t0 + nt));
+  const nest = nesting(pos, local, shell, ns, shellOpen, shellBranched);
   const { parent, root, V: Vs, lo, hi } = nest;
   let net = anyBranched;
   // (a part in two outer shells)
   for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
-  // (two shells whose boxes cross, neither an ancestor of the other: a sweep along x)
+  // (two shells whose boxes cross: by the shells' box tree, then their surfaces)
   if (!net) {
-    const isAnc = (a, s) => { for (let x = parent[s], g = 0; x >= 0 && g <= ns; x = parent[x], g++) if (x === a) return true; return false; };
-    const byX = Uint32Array.from({ length: ns }, (_, s) => s).sort((a, b) => lo[3 * a] - lo[3 * b]);
-    let checks = 0;
-    for (let i = 0; i < ns && !net; i++) {
-      const a = byX[i];
-      for (let j = i + 1; j < ns; j++) {
-        const b = byX[j];
-        if (lo[3 * b] > hi[3 * a]) break;
-        // (past a million box pairs: said to be net rather than counted)
-        if (++checks > 1e6) { net = true; break; }
-        if (lo[3 * b + 1] > hi[3 * a + 1] || lo[3 * a + 1] > hi[3 * b + 1] || lo[3 * b + 2] > hi[3 * a + 2] || lo[3 * a + 2] > hi[3 * b + 2]) continue;
-        if (!isAnc(a, b) && !isAnc(b, a)) { net = true; break; }
-      }
+    const start = new Uint32Array(ns + 1);
+    for (let t = 0; t < nt; t++) if (shell[t] >= 0) start[shell[t] + 1]++;
+    for (let s = 0; s < ns; s++) start[s + 1] += start[s];
+    const at = start.slice(0, ns), tris = new Uint32Array(start[ns]);
+    for (let t = 0; t < nt; t++) if (shell[t] >= 0) tris[at[shell[t]]++] = t;
+    const of = (s) => tris.subarray(start[s], start[s + 1]);
+    const B = new Float64Array(6 * ns);
+    for (let s = 0; s < ns; s++) for (let k = 0; k < 3; k++) { B[6 * s + k] = lo[3 * s + k]; B[6 * s + 3 + k] = hi[3 * s + k]; }
+    const tree = boxTree(B, Uint32Array.from({ length: ns }, (_, s) => s), 3);
+    let work = 0;
+    for (let s = 0; s < ns && !net; s++) {
+      itemsIn(tree, lo.subarray(3 * s, 3 * s + 3), hi.subarray(3 * s, 3 * s + 3), (o) => {
+        if (net || o <= s) return;
+        for (let k = 0; k < 3; k++) if (lo[3 * o + k] > hi[3 * s + k] || lo[3 * s + k] > hi[3 * o + k]) return;
+        work += (start[s + 1] - start[s]) + (start[o + 1] - start[o]);
+        if (work > OVERLAP_BUDGET || surfacesMeet(pos, local, of(s), of(o))) net = true;
+      });
     }
   }
-  if (net) return { volume: Math.abs(V), net: true };
   // the winding inside each shell, parents first (placed by depth), facing taken as its outer shell's
   const w = new Int32Array(ns), done = new Uint8Array(ns), inner = new Float64Array(ns);
   const sign = (s) => (Vs[s] < 0 ? -1 : 1) * (Vs[root[s]] < 0 ? -1 : 1);
@@ -268,7 +289,7 @@ function materialVolume(pos, index, t0, nt, { closed, shell, shellOpen, shellBra
   for (let s = 0; s < ns; s++) { wOf(s); if (parent[s] >= 0) inner[parent[s]] += Math.abs(Vs[s]); }
   let vol = 0;
   for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.abs(Vs[s]) - inner[s];
-  return { volume: vol, net: false };
+  return { volume: vol, net };
 }
 
 // a 32-bit finishing mix (MurmurHash3's)

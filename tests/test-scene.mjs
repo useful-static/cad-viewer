@@ -4,6 +4,7 @@
 //   node tests/test-scene.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { encodeCadmesh, decodeCadmesh, bytesToId } from '../js/cadmesh.js';
 import { mergeModels, modelRanges } from '../js/scene.js';
 import { clearance, triangleDistance } from '../js/clearance.js';
@@ -355,6 +356,31 @@ test('a board inside its case, the two turned 30 degrees about z and 20 about x:
   assert.equal(Math.round(r.distance * 1e3) / 1e3, 3);
   assert.ok(r.pairs < 5000, `${r.pairs} triangle pairs`);
   assert.ok(ms < 3000, `${ms.toFixed(0)} ms`);
+});
+await test('Clearance off the page (main.js clearanceOffPage, with a stand-in worker): a failed run says its error and is not run again on the page; only a worker that cannot start hands it over; the promise always settles (r32 Q1, A6)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('const STOPPED = Symbol'), src.indexOf('async function runClearance')).replaceAll('import.meta.url', "'file:///x/js/main.js'");
+  const run = async (script, pageThrows) => {
+    let pageRuns = 0;
+    const app = {};
+    const page = () => { pageRuns++; if (pageThrows) throw new RangeError('Map maximum size exceeded'); return { distance: 1 }; };
+    class Worker {
+      constructor() { setTimeout(() => script(this), 1); }
+      postMessage() {}
+      terminate() {}
+    }
+    const off = new Function('app', 'clearance', 'Worker', `${body}; return clearanceOffPage;`)(app, page, Worker);
+    const r = await Promise.race([off({ position: new Float32Array(9), index: new Uint32Array(3), normal: null }, [[0, 1]], [[0, 1]], [], []), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
+    return [r, pageRuns, app.lastClearanceVia];
+  };
+  const failed = await run((w) => { w.onmessage({ data: { started: true } }); w.onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } }); }, true);
+  assert.deepEqual(failed, [{ error: 'Map maximum size exceeded' }, 0, 'worker'], 'a run that failed in the worker');
+  const crashed = await run((w) => { w.onmessage({ data: { started: true } }); w.onerror({ message: 'out of memory' }); }, true);
+  assert.deepEqual([crashed[1], typeof crashed[0].error], [0, 'string'], 'a worker that died mid-run');
+  const noStart = await run((w) => { w.onerror({ message: 'module not found' }); }, true);
+  assert.deepEqual(noStart, [{ error: 'Map maximum size exceeded' }, 1, 'page'], 'a worker that cannot start: the page, its throw said');
+  const ok = await run((w) => { w.onmessage({ data: { started: true } }); w.onmessage({ data: { ok: true, result: { distance: 2 } } }); }, false);
+  assert.deepEqual(ok, [{ distance: 2 }, 0, 'worker']);
 });
 test('containment does not trust the winding but the normals: a block wound inside out, or with one side reversed, its normals out, still holds the pin; with no normals its winding is its facing (r30 A2: one rule)', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);

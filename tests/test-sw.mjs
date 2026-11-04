@@ -5,10 +5,10 @@
 //   node tests/test-sw.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, done } from './harness.mjs';
+import { test, skip, done } from './harness.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sw = readFileSync(join(root, 'sw.js'), 'utf8');
@@ -39,6 +39,16 @@ test('every module reached from index.html by import is kept', () => {
   }
   assert.ok(seen.has('main.js') && seen.has('renderer-webgpu.js') && seen.size > 10, `reached ${seen.size}`);
   for (const f of seen) assert.ok(listed.has(f), `${f} is imported but not kept`);
+});
+
+// (the public copy itself carries no export-public.py: skipped there, said)
+if (!existsSync(join(root, 'export-public.py'))) skip('export-public.py FILES holds every file in js/', 'no export-public.py here (the public copy)');
+else test('export-public.py FILES holds every file in js/ (the public copy is built from it: a module missing there is a dead public page, r32 A7)', () => {
+  const py = readFileSync(join(root, 'export-public.py'), 'utf8');
+  const listed = new Set([...py.matchAll(/'js\/([\w.-]+\.js)'/g)].map((x) => x[1]));
+  const files = readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js'));
+  const missing = files.filter((f) => !listed.has(f));
+  assert.deepEqual(missing, []);
 });
 
 test('the cache name is made from the list (a client keeps an old cache until the name changes)', () => {

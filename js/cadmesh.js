@@ -47,13 +47,14 @@
 //          than SILHOUETTE_CAP (the header's silhouettesOmitted says how many).
 // Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³], net?:[bool] }, one
 // entry per mesh; volume is the material's (js/edges.js materialVolume), meaningful for closed
-// bodies; net, present when any is true: that body's shells overlap and its volume is their
-// signed sum.
+// bodies; net, present when any is true: that body's shells touch or cross and its volume may not
+// be its material's. factsRule: the number of the rule the facts were built by (js/edges.js
+// FACTS_RULE); facts of another rule, or none, are rebuilt by the viewer.
 //
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
 
-import { buildEdges } from './edges.js';
+import { buildEdges, FACTS_RULE } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -193,7 +194,7 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
     ...(typeof model.sourceUnits === 'string' ? { sourceUnits: model.sourceUnits } : {}),
     ...(typeof model.recolour === 'string' && model.recolour ? { recolour: model.recolour } : {}),
     ...(model.angularDeflection > 0 ? { angularDeflection: model.angularDeflection } : {}),
-    ...(edgeInfo ? { facts: roundFacts(edgeInfo.facts) } : {}),
+    ...(edgeInfo ? { facts: roundFacts(edgeInfo.facts), factsRule: FACTS_RULE } : {}),
     ...(edgeInfo?.silhouettesOmitted ? { silhouettesOmitted: edgeInfo.silhouettesOmitted } : {}),
   };
   const json = new TextEncoder().encode(JSON.stringify(header));
@@ -494,6 +495,7 @@ function validateHeader(h) {
       bad('facts are not one closed / area / volume per mesh');
     }
     if (f.net !== undefined && !list(f.net, (x) => typeof x === 'boolean')) bad('facts\' net is not one flag per mesh');
+    if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
   if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');

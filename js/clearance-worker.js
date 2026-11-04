@@ -5,6 +5,9 @@
 
 import { clearance } from './clearance.js';
 
+// (said once it has loaded: a failure after this is the run's, not a worker that cannot start)
+postMessage({ started: true });
+
 onmessage = (ev) => {
   const { position, index, normal, trisA, trisB, solidA, solidB } = ev.data;
   try {

@@ -210,20 +210,22 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
   // others)
   const N = opts.normal || null;
   // a range of triangles as a body of their own (vertices numbered from 0), turned to its normals
+  // (vertices renumbered by typed tables, the range's lowest to highest vertex: a Map of them ran
+  // past its 16.7 M-entry limit on a body of 19.2 M vertices, a RangeError after 10.5 s)
   const localOf = ([t0, c], turn) => {
-    const local = new Map(), I = new Uint32Array(3 * c), Pa = [];
-    for (let k = 0; k < 3 * c; k++) {
-      const v = index[3 * t0 + k];
-      let l = local.get(v);
-      if (l === undefined) { l = Pa.length / 3; local.set(v, l); Pa.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
-      I[k] = l;
-    }
+    let v0 = Infinity, v1 = -1;
+    for (let k = 0; k < 3 * c; k++) { const v = index[3 * t0 + k]; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+    const local = new Int32Array(Math.max(0, v1 - v0 + 1)).fill(-1), I = new Uint32Array(3 * c);
+    let nl = 0;
+    for (let k = 0; k < 3 * c; k++) { const v = index[3 * t0 + k] - v0; if (local[v] < 0) local[v] = nl++; I[k] = local[v]; }
+    const Pa = new Float32Array(3 * nl);
+    for (let v = 0; v < local.length; v++) if (local[v] >= 0) { const l = 3 * local[v], g = 3 * (v + v0); Pa[l] = pos[g]; Pa[l + 1] = pos[g + 1]; Pa[l + 2] = pos[g + 2]; }
     if (turn && N) {
       for (let t = 0; t < c; t++) {
         if (windsAgainstNormals(pos, N, index[3 * (t0 + t)], index[3 * (t0 + t) + 1], index[3 * (t0 + t) + 2])) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
       }
     }
-    return { P: Float32Array.from(Pa), I };
+    return { P: Pa, I };
   };
   const within = (parts, solids, aFirst) => {
     if (!solids || !solids.length) return null;
@@ -276,6 +278,13 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
   const inside = within(trisA, opts.solidB, true) || within(trisB, opts.solidA, false);
   if (inside) return { ...r, ...inside, distance: 0, inside: true };
   return r;
+}
+
+// Whether two sets of triangles (lists of triangle ids) touch or cross: their nearest distance 0
+// (the facts' volume asks it of two shells whose boxes cross, js/edges.js materialVolume)
+export function surfacesMeet(pos, index, idsA, idsB) {
+  const r = clearanceOfSurfaces(pos, index, idsA, idsB);
+  return !!r && r.distance === 0;
 }
 
 function clearanceOfSurfaces(pos, index, trisA, trisB) {
@@ -345,13 +354,18 @@ function clearanceOfSurfaces(pos, index, trisA, trisB) {
 const done = (b, pairs) => ({ distance: Math.sqrt(b.d2), pa: b.pa, pb: b.pb, triA: b.triA, triB: b.triB, pairs });
 const boxSize = (B, i) => (B[i * 6 + 3] - B[i * 6]) + (B[i * 6 + 4] - B[i * 6 + 1]) + (B[i * 6 + 5] - B[i * 6 + 2]);
 
-// buildIter's inputs for a set of triangle ranges
+// buildIter's inputs for a set of triangle ranges ([[first, count], ...]) or a list of triangle ids
+// (a Uint32Array)
 function prep(pos, index, tris) {
-  let n = 0;
-  for (const [, c] of tris) n += c;
-  const ids = new Uint32Array(n);
-  let k = 0;
-  for (const [s, c] of tris) for (let t = s; t < s + c; t++) ids[k++] = t;
+  let ids = tris;
+  if (!(tris instanceof Uint32Array)) {
+    let n0 = 0;
+    for (const [, c] of tris) n0 += c;
+    ids = new Uint32Array(n0);
+    let k = 0;
+    for (const [s, c] of tris) for (let t = s; t < s + c; t++) ids[k++] = t;
+  }
+  const n = ids.length;
   // (float32 boxes are exact for float32 positions; any other array kept in float64)
   const F = pos instanceof Float32Array ? Float32Array : Float64Array;
   const box = new F(n * 6), cen = new F(n * 3);

@@ -119,7 +119,12 @@ export function mergeModels(models) {
     root: { name: 'Scene', meshes: [], children },
     sections: first.sections, // (not read after decoding; kept for the shape)
   };
-  if (facts) header.facts = facts;
+  if (facts) {
+    header.facts = facts;
+    // (the rule they were built by, when every model's is the same one; else none: rebuilt)
+    const rules = new Set(models.map((m) => m.base.header.factsRule));
+    if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
+  }
   if (omitted) header.silhouettesOmitted = omitted;
   if (!units.has('unknown')) header.sourceUnits = units.size === 1 ? [...units][0] : 'mixed';
   out.header = header;

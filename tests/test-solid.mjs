@@ -7,7 +7,9 @@
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { buildEdges, shellTurns } from '../js/edges.js';
+import { buildEdges, shellTurns, FACTS_RULE } from '../js/edges.js';
+import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
+import { mergeModels } from '../js/scene.js';
 import { box } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
@@ -168,8 +170,56 @@ test('a body\'s volume is its material\'s, as Clearance takes it: a cavity out o
   assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7], true)]), [936, false], 'a cavity');
   assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7])]), [1000, false], 'an embedded part: counted once');
   assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7]), ...cubeT([4, 4, 4], [6, 6, 6], true)]), [1000, false], 'a cavity in an embedded part: winding 2 - 1, still material, as windingAt reads it');
-  assert.deepEqual(facts([...outer, ...cubeT([5, 0, 0], [15, 10, 10])]), [2000, true], 'two overlapping cubes: the signed sum, said');
+  assert.deepEqual(facts([...outer, ...cubeT([5, 0, 0], [15, 10, 10])])[1], true, 'two overlapping cubes: said');
   assert.deepEqual(facts([...outer, ...cubeT([10, 0, 0], [15, 10, 10], true)])[1], true, 'face to face, one wound in: said');
+});
+test('the volume\'s overlap test is the shells\' surfaces, not their boxes; one closed rule with the facts\' flag; the facts\' rule and net carried through a file and a merge (r32 A1, A2, A8, Q2, Q3)', () => {
+  // a polygon (counter-clockwise in x, y; its caps fanned from corner fan) extruded z0..z1, as triangles
+  const prism = (poly, z0, z1, fan, inward) => {
+    const n = poly.length, at = (k, z) => [poly[k][0], poly[k][1], z], T = [];
+    for (let k = 0; k < n; k++) { const a = (fan + k + 1) % n, b = (fan + k + 2) % n; if (b === fan) break; T.push([at(fan, z1), at(a, z1), at(b, z1)], [at(fan, z0), at(b, z0), at(a, z0)]); }
+    for (let k = 0; k < n; k++) { const k2 = (k + 1) % n; T.push([at(k, z0), at(k2, z0), at(k2, z1)], [at(k, z0), at(k2, z1), at(k, z1)]); }
+    return inward ? rev(T) : T;
+  };
+  const sq = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const factsOf = (T, kind) => {
+    const { P, I } = meshOf(T);
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < P.length; i++) { const k = i % 3; if (P[i] < min[k]) min[k] = P[i]; if (P[i] > max[k]) max[k] = P[i]; }
+    const { facts: f } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max }, ...(kind ? { kind } : {}) }] });
+    return [Math.round(f.volume[0] * 1000) / 1000, f.net[0], f.closed[0]];
+  };
+  const block = prism(sq(0, 0, 10, 10), 0, 10, 0), L = prism([[1, 1], [9, 1], [9, 9], [7, 9], [7, 3], [1, 3]], 1, 9, 4, true);
+  // (a pin in the notch of an L-shaped cavity: in the cavity's box, 2 mm from it -- the boxes
+  // crossing read it as an overlap, net and the signed sum 800)
+  assert.deepEqual(factsOf([...block, ...L, ...prism(sq(3, 5, 5, 7), 2, 8, 0)]), [776, false, true], 'a pin in an L cavity\'s notch');
+  // (an L-shaped part with a cube across its inner corner, the two crossing: said -- the sampled
+  // nesting read it as held, 3000 for 3008, unsaid)
+  const Lpart = prism([[0, 0], [20, 0], [20, 10], [10, 10], [10, 20], [0, 20]], 0, 10, 0);
+  assert.equal(factsOf([...Lpart, ...cubeT([3, 3, 1], [11, 11, 9])])[1], true, 'a cube across an L\'s corner');
+  // (a b-rep body closed by its kind, a part embedded in it and one corner off by one ulp: by the
+  // b-rep's word, every shell may hold -- 1008 for 1000)
+  const cube = cubeT([0, 0, 0], [10, 10, 10]);
+  let moved = 0;
+  const crack = cube.map((t) => t.map((p) => (!moved && p[0] === 10 && p[1] === 10 && p[2] === 10 ? (moved++, [Math.fround(10 + 1e-6), 10, 10]) : p)));
+  const cracked = [...crack, ...cubeT([4, 4, 4], [6, 6, 6])];
+  assert.deepEqual(factsOf(cracked)[2], false, 'the crack is one: the mesh test calls it open');
+  assert.deepEqual(factsOf(cracked, 'closed').slice(0, 2), [1000, false], 'a cracked b-rep cube, a part in it');
+  // (4,096 blocks in a row, each with a part embedded: none overlapping -- a sweep along x alone
+  // gave up past a million pairs, 4608 and net)
+  const many = [];
+  for (let k = 0; k < 4096; k++) many.push(...cubeT([0, 2 * k, 0], [1, 2 * k + 1, 1]), ...cubeT([0.25, 2 * k + 0.25, 0.25], [0.75, 2 * k + 0.75, 0.75]));
+  assert.deepEqual(factsOf(many).slice(0, 2), [4096, false], '4,096 blocks with parts');
+  // the rule's number and net through a file and a merge of two
+  const one = (T) => {
+    const { P, I } = meshOf(T);
+    const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'b', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });
+    return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  };
+  const a = one([...cube, ...cubeT([5, 0, 0], [15, 10, 10])]), b = one(cube);
+  assert.deepEqual([a.header.factsRule, a.header.facts.net, b.header.factsRule, b.header.facts.net], [FACTS_RULE, [true], FACTS_RULE, undefined]);
+  const s = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }]);
+  assert.deepEqual([s.header.factsRule, s.header.facts.net], [FACTS_RULE, [true, false]]);
 });
 test('an open shell holds nothing, and a part under one keeps its winding, the same upright and upside down (r28 Q1)', () => {
   // a tray (a box without its lid), and an inward cube in it

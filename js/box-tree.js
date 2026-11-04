@@ -144,3 +144,28 @@ export function itemsAt(tree, q, visit) {
     }
   } finally { depthAt--; }
 }
+
+// Every item of the tree whose leaf's box crosses the box lo..hi, visited (visit(id)); the caller
+// tests the item's own box. (Which shells' boxes cross which, by the tree: a sweep along x alone
+// compared 4,096 blocks in a row each with each.)
+export function itemsIn(tree, lo, hi, visit) {
+  const { order, m, P, box, D } = tree;
+  if (!m) return;
+  const S = 2 * D;
+  const stack = STACKS[depthAt] || (STACKS[depthAt] = new Int32Array(128));
+  depthAt++;
+  try {
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp) {
+      const i = stack[--sp];
+      let cross = box[S * i] === box[S * i];
+      for (let a = 0; cross && a < D; a++) if (hi[a] < box[S * i + a] || lo[a] > box[S * i + D + a]) cross = false;
+      if (!cross) continue;
+      if (i >= P - 1) {
+        const j = i - (P - 1);
+        for (let k = j * LEAF, e = Math.min(m, (j + 1) * LEAF); k < e; k++) visit(order[k]);
+      } else { stack[sp++] = 2 * i + 2; stack[sp++] = 2 * i + 1; }
+    }
+  } finally { depthAt--; }
+}
