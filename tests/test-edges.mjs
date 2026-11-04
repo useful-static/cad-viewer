@@ -147,6 +147,15 @@ test('the edges and silhouettes collect in typed lists, the candidates only up t
   try { r = buildEdges(m, { silhouetteCap: 3 }); } finally { Array.prototype.push = push; }
   assert.deepEqual([r.silhouettesOmitted, r.edges.length / 2], [63, 2 * 64 + 2]);
   assert.ok(pushed <= 32, `elements pushed into plain arrays: ${pushed}`);
+  // (the candidates' lists never hold more than the cap's: past it they are only counted -- r41 Q6)
+  const most = [];
+  const watched = (T) => {
+    const l = typedList(T), k = most.push(0) - 1, room = l.room;
+    l.room = (n) => { room(n); most[k] = Math.max(most[k], l.n + n); };
+    return l;
+  };
+  const w = buildEdges(m, { silhouetteCap: 3, list: watched });
+  assert.deepEqual([w.silhouettesOmitted, most[1], most[2]], [63, 2 * 3, 8 * 3], 'the edges, then the pairs and normals up to the cap');
 });
 
 test('edge instances: both ends, the body id and the kept face\'s colour, 32 bytes each', () => {

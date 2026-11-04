@@ -246,7 +246,7 @@ async function main() {
     ...modelFactsOf(h), meshes: s.meshes,
     root: { name: h.root?.children?.[0]?.name || h.root?.name || 'model', meshes: s.meshes.map((_, i) => i), children: [] },
   };
-  const enc = new Uint8Array(encodeCadmesh(model, { edges: !!a.edges }));
+  const enc = new Uint8Array(encodeCadmesh(model, { edges: !!a.edges, onEdgesError: (e) => { throw e; } })); // (asked for: refused without)
   writeFileSync(a.out, a.out.endsWith('.gz') ? gzipSync(enc, { level: zc.Z_BEST_COMPRESSION }) : enc);
   console.log(`${a.in}: board slab z ${s.slab[0].toFixed(2)}..${s.slab[1].toFixed(2)} mm, body ${s.board + 1} cut into the board and ${s.parts} parts; ${s.meshes.length} bodies -> ${a.out}`);
   if (a.report) {

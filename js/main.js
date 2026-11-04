@@ -442,7 +442,8 @@ function gpuSync() {
   return run;
 }
 
-// The drawn mesh's edge instances onto renderer r. Built once per mesh (a
+// The drawn mesh's edge instances onto renderer r. Built once per mesh and edge
+// value -- a build's edges replacing a file's drawn before are built again (a
 // recolour makes a new mesh, whose instances carry the new colours). Never
 // throws: edges the GPU cannot hold are left out, and the model stays.
 const edgeData = new WeakMap();
@@ -4029,7 +4030,11 @@ async function showScene(models, { newTree = false } = {}) {
   showInfo();
   updateButtons();
   queueFrame();
-  merged.edgeInfo.ready = sceneEdges(merged, models).then((v) => {
+  merged.edgeInfo.ready = sceneEdges(merged, models).catch((e) => {
+    // (anything else that throws: said on the panel, never a rejection nobody handles -- r41 Q3)
+    merged.edgeInfo.error = String(e?.message || e);
+    return merged.edgeInfo.value;
+  }).then((v) => {
     if (app.baseMesh === merged) { pushState(); showInfo(); }
     refreshEdges();
     return v;
@@ -4062,24 +4067,41 @@ async function sceneEdges(merged, models) {
     // on -- stopping at it left a later model without its edges, and the scene without any)
     if (!v?.facts) failed.push(m);
   }
-  // (merged again only when a model's were built here: mergeModels merged them already)
-  if (stale.length) sceneEdgesFacts(merged, models, { silhouetteCap: cap });
+  // (merged again only when a model's were built here: mergeModels merged them already; a merge
+  // that fails -- it allocates the scene's arrays again -- is the scene's failure, said, not a
+  // rejection nobody handles that left the panel at "computing…": r41 Q3)
+  if (stale.length) {
+    try {
+      sceneEdgesFacts(merged, models, { silhouetteCap: cap });
+    } catch (e) {
+      const info = { error: String(e?.message || e), failed: !momentaryFailure(e), stopped: false, said: false };
+      return sceneFailed(merged, [{ name: 'the scene\'s merge', base: { edgeInfo: info } }], cap);
+    }
+  }
   if (!failed.length) {
     const v = await edgesOf(merged);
     if (app.baseMesh === merged) takeBackNoFacts(); // (the scene's own facts here: a line about them taken back)
     return v;
   }
-  // (the panel reads the scene's: the first failure's state, its model named)
-  const first = failed[0].base.edgeInfo;
-  Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${first.error}`, failed: first.failed, stopped: first.stopped });
+  return sceneFailed(merged, failed, cap);
+}
+
+// A scene whose facts are missing: its state from every model that failed (the first's alone gave
+// "move a model to try again" while a later one's failure was remembered, and left a later one's
+// first failure unsaid: r41 A2, Q1) -- remembered if any is (no try can then give the scene its
+// facts), stopped only if all were; its error the first's, its model named, the others counted
+function sceneFailed(merged, failed, cap) {
+  const infos = failed.map((m) => m.base.edgeInfo);
+  const more = failed.length > 1 ? ` (and ${failed.length - 1} more model${failed.length > 2 ? 's' : ''})` : '';
+  Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${infos[0].error}${more}`, failed: infos.some((i) => i.failed), stopped: infos.every((i) => i.stopped) });
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
-  // (said on the status line, once for the model: not for a stop, which the next scene owns, nor if
-  // it was said already; worded by what is missing -- the edges are drawn when only the facts are --
-  // and by how many failed)
-  if (app.baseMesh === merged && app.status === 'ready' && !first.stopped && !first.said) {
-    sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}${failed.length > 1 ? ` (and ${failed.length - 1} more model${failed.length > 2 ? 's' : ''})` : ''}`);
-    first.said = true;
+  // (said on the status line while any failure not a stop -- the next scene owns a stop -- is unsaid,
+  // once; worded by what is missing -- the edges are drawn when only the facts are)
+  const unsaid = infos.filter((i) => !i.stopped && !i.said);
+  if (app.baseMesh === merged && app.status === 'ready' && unsaid.length) {
+    sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`);
+    for (const i of unsaid) i.said = true;
   }
   return merged.edgeInfo.value;
 }
@@ -4096,18 +4118,20 @@ function fileEdgesValue(base, cap) {
     facts: factsCurrent(base.header) ? base.header.facts : null, source: 'file', ms: 0 };
 }
 
-// The status line's word that the shown model or scene has no facts: after its ready text (the
-// missing faces, the list's note kept -- r40 Q8), and owned: taken back only when the shown model's
-// or scene's own facts arrive and the line is still this one (any model's build that succeeded took
-// back any such line: a scene's failure said once was cleared by another model's -- r40 A2, Q4)
+// The status line's word that the shown model or scene has no facts: kept on it (app.noFacts, its
+// base the one shown) and so in every ready line (readyText), after the missing faces and the list's
+// note (r40 Q8); taken back only when that model's or scene's own facts arrive (any model's build
+// that succeeded took back any such line: a scene's failure said once was cleared by another
+// model's -- r40 A2, Q4), and the line rewritten only while it is still the ready one
 function sayNoFacts(text) {
-  const line = `${readyText()} · ${text}`;
-  setStatus('ready', line);
-  app.factsLine = line;
+  app.noFacts = { base: app.baseMesh, text };
+  setStatus('ready', readyText());
 }
 function takeBackNoFacts() {
-  if (app.factsLine && app.status === 'ready' && app.statusMsg === app.factsLine) setStatus('ready', readyText());
-  app.factsLine = null;
+  if (!app.noFacts || app.noFacts.base !== app.baseMesh) return;
+  const was = readyText();
+  app.noFacts = null;
+  if (app.status === 'ready' && app.statusMsg === was) setStatus('ready', readyText());
 }
 
 // The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
@@ -4206,8 +4230,9 @@ const STOPPED = Symbol('stopped');
 // fit, a big model on a small device: said, not a rejected promise); the worker says it has
 // started, so a failure before that is one that cannot start and after it the run's own. Settles
 // once, the worker ended: { ok: data } | { error, transient? } (transient: a failure of the
-// moment -- no room for the copy, a worker that died, an allocation the worker could not make --
-// tried again at the next ask) | { stopped: why } | { noWorker: why }; each
+// moment -- no room for the copy, a worker that died, a failure the worker says the moment's
+// (js/edges.js momentaryFailure) -- tried again at the next ask, edgesOf up to MOMENT_TRIES) |
+// { stopped: why } | { noWorker: why }; each
 // caller says what no worker means for its job. (Each worker had its own launch, and a copy that
 // failed had to be fixed in each.)
 function workerJob(file, make) {
@@ -4410,10 +4435,16 @@ function stopEdgeJobs(keep, why) {
   for (const [b, j] of [...app.edgeJobs]) if (!keep.has(b)) j.stop(why);
 }
 
-// "ready", or with faces the conversion could not mesh, what is missing
-const readyText = () => (app.unmeshedFaces
-  ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
-  : 'ready') + (app.listNote ? ` · ${app.listNote}` : '');
+// "ready", or with faces the conversion could not mesh, what is missing; the list's note; and while
+// the shown model or scene has no facts and has said so, why (sayNoFacts) -- every writer of the
+// ready line keeps it (only sayNoFacts carried it, and an export's end, the model list's note or
+// the tour's dropped it with the facts still missing: r41 A4, Q2)
+function readyText() {
+  return (app.unmeshedFaces
+    ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
+    : 'ready') + (app.listNote ? ` · ${app.listNote}` : '')
+    + (app.noFacts && app.noFacts.base === app.baseMesh ? ` · ${app.noFacts.text}` : '');
+}
 
 // Keep a conversion in this browser, gzipped where the browser can (about a
 // sixth of the raw size), then update the panel's line. Never throws.

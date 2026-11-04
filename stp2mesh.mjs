@@ -171,7 +171,8 @@ async function main() {
     process.stderr.write(`stp2mesh: WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
-  const buf = encodeCadmesh(model, { edges: !args.noEdges });
+  // (a build of the edges and facts that throws refuses the conversion: its output promises them)
+  const buf = encodeCadmesh(model, { edges: !args.noEdges, onEdgesError: (e) => { throw new Error(`${args.input}: the edges and body facts: ${e.message}`); } });
   // (the page saves a conversion only once it loads; decoded here first too -- written and printed
   // OK before, a model past the viewer's bound left its file behind with an OK line, then FAIL)
   let h;

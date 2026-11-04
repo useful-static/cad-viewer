@@ -64,6 +64,16 @@ test('encode/decode preserves counts, offsets and the tree', () => {
   assert.equal(m.header.root.children[1].name, 'b');
 });
 
+test('an edge build that throws leaves the file without its edges and facts, not refused; a caller that asks is told (r41 A3)', () => {
+  const list = () => { throw new RangeError('Invalid array length'); };
+  const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list } }));
+  assert.deepEqual([m.header.meshes.length, m.edges ?? null, m.header.facts ?? null], [1, null, null], 'written, the viewer to build them');
+  let told = null;
+  encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: (e) => { told = e.message; } });
+  assert.equal(told, 'Invalid array length');
+  assert.throws(() => encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: (e) => { throw e; } }), /Invalid array length/, 'a CLI refuses');
+});
+
 test('per-vertex id bytes carry mesh index + 1', () => {
   const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0), quad('b', 2), quad('c', 4)] }));
   for (let v = 0; v < 12; v++) {

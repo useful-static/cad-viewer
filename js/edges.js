@@ -121,11 +121,12 @@ export function typedList(T, size = 1024) {
   return list;
 }
 
-export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOUETTE_CAP, overlapBudget = OVERLAP_BUDGET } = {}) {
+// (list: the lists' maker -- typedList; a test passes one that records how far each grows)
+export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOUETTE_CAP, overlapBudget = OVERLAP_BUDGET, list = typedList } = {}) {
   const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
-  const edges = typedList(Uint32Array);
+  const edges = list(Uint32Array);
   // (the candidates collected only up to the cap -- past it they are all left out, so only counted)
-  const sil = { pairs: typedList(Uint32Array), normals: typedList(Int16Array), cap: silhouetteCap };
+  const sil = { pairs: list(Uint32Array), normals: list(Int16Array), cap: silhouetteCap };
   let silCount = 0;
   const facts = Object.fromEntries(BODY_FACTS.map((f) => [f.key, []]));
   for (const m of meshes) {
@@ -144,13 +145,16 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
 }
 
 // The one rule for a build's failure that depends on the moment, tried again (js/edges-worker.js
-// says it `transient`): an allocation the memory of the moment could not give. Every other
-// RangeError -- a Map past its size, an array past its length, a deep recursion -- fails the same
-// way on every try and is the model's own.
-export const momentaryFailure = (e) => e instanceof RangeError && /allocation failed/i.test(e.message);
+// says it `transient`; main.js remembers a model's after MOMENT_TRIES): every failure but a
+// size limit the model meets at every try -- a Map past its size, an array or string past its
+// length, a recursion too deep -- named here in each engine's words. (Naming the moment's instead
+// -- V8's "allocation failed" -- left Safari's "Out of memory" the model's own, never tried again.)
+const SIZE_LIMIT = /maximum (call stack )?size exceeded|invalid (typed )?array length|invalid string length|too much recursion/i;
+export const momentaryFailure = (e) => !SIZE_LIMIT.test(String(e?.message ?? e));
 
 // The silhouette cap's one rule: past it a model's (or a scene's) silhouettes are all left out and
-// counted (buildEdges, js/scene.js sceneEdgesFacts, main.js edgesOf for a file's)
+// counted (buildEdges -- which collects them only up to it --, js/scene.js sceneEdgesFacts, main.js
+// fileEdgesValue for a file's)
 export const overSilhouetteCap = (count, cap) => count > cap;
 
 // a per-body fact's value as written: a flag true or false, a number (0 where a body has none)
@@ -262,7 +266,7 @@ function body(pos, bits, index, m, edges, sil, budget) {
         if (Math.abs(n1x - n2x) <= NORMAL_EPS && Math.abs(n1y - n2y) <= NORMAL_EPS && Math.abs(n1z - n2z) <= NORMAL_EPS) continue;
         nsil++;
         const P = sil.pairs;
-        if (P.n / 2 < sil.cap) {
+        if (!overSilhouetteCap(P.n / 2 + 1, sil.cap)) {
           P.room(2); P.a[P.n++] = a; P.a[P.n++] = b;
           const N = sil.normals;
           N.room(8);
