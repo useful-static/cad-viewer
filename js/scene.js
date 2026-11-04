@@ -12,9 +12,10 @@ import { idToBytes } from './cadmesh.js';
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 
 // models: [{ base: decoded cadmesh, name, offset: [x, y, z] mm }], at least 1.
-// Returns a decoded cadmesh of them all. Optional sections (faces, edges,
-// silhouettes) and the body facts are kept only when every model has them
-// (the viewer then builds the edges and facts itself, as for an old file).
+// Returns a decoded cadmesh of them all. The faces are kept when any model has
+// them (a model without: its bodies one face each); the other optional sections
+// (edges, silhouettes) and the body facts only when every model has them (the
+// viewer then builds the edges and facts itself, as for an old file).
 export function mergeModels(models) {
   if (!models.length) throw new Error('scene: no models');
   let vc = 0, ic = 0, mc = 0, fc = 0, ec = 0, sc = 0;
@@ -27,10 +28,14 @@ export function mergeModels(models) {
     if (base.silhouettes) sc += base.silhouettes.length;
   }
   const all = (k) => models.every((m) => m.base[k]);
+  // (the faces kept when any model has them -- they cannot be rebuilt, as edges and facts are: a
+  // board with faces and a case without lost List holes, Face to face and Paint; a model without
+  // has its bodies faceCount 0, one face each, as an old file's)
+  const anyFaces = models.some((m) => m.base.faces);
   const out = {
     position: new Float32Array(vc * 3), normal: new Int16Array(vc * 4), color: new Uint8Array(vc * 4),
     id: new Uint8Array(vc * 4), index: new Uint32Array(ic),
-    faces: all('faces') ? new Uint32Array(fc) : null,
+    faces: anyFaces ? new Uint32Array(fc) : null,
     edges: all('edges') ? new Uint32Array(ec) : null,
     silhouettes: all('silhouettes') && all('silhouetteNormals') ? new Uint32Array(sc) : null,
     silhouetteNormals: all('silhouettes') && all('silhouetteNormals') ? new Int16Array(sc * 4) : null,
@@ -59,7 +64,7 @@ export function mergeModels(models) {
       for (let v = m.vtxStart; v < m.vtxStart + m.vtxCount; v++) out.id.set(b, (v0 + v) * 4);
     }
     for (let i = 0; i < base.index.length; i++) out.index[i0 + i] = base.index[i] + v0;
-    if (out.faces) {
+    if (out.faces && base.faces) {
       // (first triangle, count) pairs in global triangle numbers
       for (let i = 0; i < base.faces.length; i += 2) {
         out.faces[f0 + i] = base.faces[i] + t0;
@@ -74,7 +79,8 @@ export function mergeModels(models) {
     for (const m of h.meshes) {
       const c = { ...m, vtxStart: m.vtxStart + v0, idxStart: m.idxStart + i0 };
       if (m.bbox) c.bbox = { min: add3(m.bbox.min, offset), max: add3(m.bbox.max, offset) };
-      if (m.faceStart !== undefined) c.faceStart = m.faceStart + f0 / 2;
+      if (base.faces && m.faceStart !== undefined) c.faceStart = m.faceStart + f0 / 2;
+      else if (out.faces) { c.faceStart = f0 / 2; c.faceCount = 0; }
       meshes.push(c);
     }
     if (facts) for (const k of ['closed', 'area', 'volume']) facts[k].push(...h.facts[k]);
@@ -87,7 +93,7 @@ export function mergeModels(models) {
     if (h.angularDeflection) angular = Math.min(angular, h.angularDeflection);
     omitted += h.silhouettesOmitted || 0;
     v0 += n; i0 += base.index.length; m0 += h.meshes.length; t0 += base.index.length / 3;
-    if (out.faces) f0 += base.faces.length;
+    if (out.faces && base.faces) f0 += base.faces.length;
     if (out.edges) e0 += base.edges.length;
     if (out.silhouettes) s0 += base.silhouettes.length;
   }

@@ -105,6 +105,22 @@ test('clearance: many triangles, the tree agrees with every pair', () => {
   assert.ok(r.pairs < 36 * 12 * 36 * 12 / 10, `${r.pairs} pairs tested (the tree should skip most)`);
 });
 
+test('a model with faces and one without (an STL): the faces kept, the other\'s bodies one face each', () => {
+  const stl = { ...lid, faces: null, header: { ...lid.header, meshes: lid.header.meshes.map(({ faceStart, faceCount, ...m }) => m) } };
+  for (const order of [[board, stl], [stl, board]]) {
+    const s = mergeModels(order.map((base, i) => ({ base, name: `m${i}` })));
+    assert.ok(s.faces, 'faces kept');
+    const ms = s.header.meshes;
+    const boardMeshes = order[0] === board ? ms.slice(0, 2) : ms.slice(1);
+    const stlMesh = order[0] === board ? ms[2] : ms[0];
+    assert.equal(stlMesh.faceCount, 0);
+    assert.equal(s.faces.length, board.faces.length);
+    for (const m of boardMeshes) {
+      assert.equal(m.faceCount, 6);
+      assert.equal(s.faces[m.faceStart * 2], m.idxStart / 3, 'a board face names its own first triangle');
+    }
+  }
+});
 test('a pin wholly inside a solid block overlaps it: 0, not the gap between their surfaces', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
@@ -135,6 +151,17 @@ test('containment names the part and the solid that holds it; a part in two over
   const s2 = mergeModels([{ base: file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]), name: 'pin.stp' }, { base: two, name: 'two.stp' }]);
   const r2 = clearance(s2.position, s2.index, trisOf(s2, [1]), trisOf(s2, [2, 3]), { solidA: trisOf(s2, [1]), solidB: trisOf(s2, [2, 3]) });
   assert.deepEqual([r2.distance, r2.inside], [0, true]);
+});
+test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin', () => {
+  const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
+  const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
+  for (const flip of ['all', 'one side']) {
+    const s = mergeModels([{ base: block, name: 'block.stp' }, { base: pin, name: 'pin.stp' }]);
+    const [[t0, c]] = trisOf(s, [1]);
+    for (let t = t0; t < t0 + (flip === 'all' ? c : 2); t++) { const x = s.index[3 * t + 1]; s.index[3 * t + 1] = s.index[3 * t + 2]; s.index[3 * t + 2] = x; }
+    const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]) });
+    assert.deepEqual([r.distance, r.inside], [0, true], flip);
+  }
 });
 
 done();

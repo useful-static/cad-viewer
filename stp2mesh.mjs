@@ -13,6 +13,7 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, no
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
+import { CliError, parseCli, positive } from './js/cli-args.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.cadmesh]
@@ -33,43 +34,23 @@ const USAGE = `usage: stp2mesh.mjs <in.stp|.step|.igs|.iges|.brep>[.gz] [-o out.
                    after the model is shown (a 6.2 MB board file is 3.3 MB without them, and
                    ready at the same moment: the edges came 0.18-0.20 s later, off the main
                    thread, on a 1280 px WebGL2 run)
+
+  exit 0: written (or -h); 1: the input refused (missing, not CAD, not converted); 2: usage
 `;
 
+// (the tools' one argument rule, js/cli-args.js: a value never an option, each option once)
 function parseArgs(argv) {
-  const a = { params: { ...DEFAULT_TESSELLATION } };
-  for (let i = 0; i < argv.length; i++) {
-    const k = argv[i];
-    const val = () => {
-      if (i + 1 >= argv.length) throw new Error(`${k} needs a value`);
-      return argv[++i];
-    };
-    if (k === '-h' || k === '--help') { a.help = true; }
-    else if (k === '-o') a.out = val();
-    else if (k === '--deflection' || k === '--absolute') {
-      // one linear-deflection mode per run: given both, the later one used to
-      // overwrite the value while the mode stayed absolute
-      if (a.linearSet) throw new Error('give only one of --deflection / --absolute');
-      a.linearSet = true;
-      const v = Number(val());
-      if (!(v > 0)) throw new Error(`${k} needs a positive number`);
-      if (k === '--absolute') a.params.linearDeflectionType = 'absolute_value';
-      a.params.linearDeflection = v;
-    }
-    else if (k === '--angular') {
-      const v = Number(val());
-      if (!(v > 0)) throw new Error('--angular needs a positive number');
-      a.params.angularDeflection = v;
-    }
-    else if (k === '--occt') a.occt = val();
-    else if (k === '--raw') a.raw = true;
-    else if (k === '--threads') a.threads = true;
-    else if (k === '--progress') a.progress = true;
-    else if (k === '--no-kind') a.noKind = true;
-    else if (k === '--no-edges') a.noEdges = true;
-    else if (k.startsWith('-')) throw new Error(`unknown option ${k}`);
-    else if (!a.input) a.input = k;
-    else throw new Error(`unexpected argument ${k}`);
-  }
+  const r = parseCli(argv, { values: ['-o', '--deflection', '--absolute', '--angular', '--occt'], flags: ['--raw', '--threads', '--progress', '--no-kind', '--no-edges'], max: 1 });
+  if (r.help) return { help: true };
+  const o = r.opts;
+  const a = { params: { ...DEFAULT_TESSELLATION }, input: r.pos[0], out: o['-o'], occt: o['--occt'], raw: !!o['--raw'], threads: !!o['--threads'], progress: !!o['--progress'], noKind: !!o['--no-kind'], noEdges: !!o['--no-edges'] };
+  // one linear-deflection mode per run: given both, the later one used to overwrite the value
+  // while the mode stayed absolute
+  if ('--deflection' in o && '--absolute' in o) throw new CliError('give only one of --deflection / --absolute');
+  if (a.occt && a.threads) throw new CliError('give only one of --occt / --threads');
+  if ('--absolute' in o) { a.params.linearDeflectionType = 'absolute_value'; a.params.linearDeflection = positive(o, '--absolute'); }
+  if ('--deflection' in o) a.params.linearDeflection = positive(o, '--deflection');
+  a.params.angularDeflection = positive(o, '--angular', a.params.angularDeflection);
   return a;
 }
 
@@ -101,13 +82,12 @@ async function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (e) {
+    if (!(e instanceof CliError)) throw e;
     process.stderr.write(`${e.message}\n${USAGE}`);
     return 2;
   }
-  if (args.help || !args.input) {
-    process.stdout.write(USAGE);
-    return args.help ? 0 : 2;
-  }
+  if (args.help) { process.stdout.write(USAGE); return 0; }
+  if (!args.input) { process.stderr.write(`no input file\n${USAGE}`); return 2; }
   // a gzipped file (part.stp.gz) is opened as the one inside it, as the
   // viewer does (review r18)
   const gz = /\.gz$/i.test(args.input);
@@ -129,11 +109,7 @@ async function main() {
   if (!format) {
     process.stderr.write(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`
       + ` (want ${Object.keys(FORMATS).join(', ')})\n`);
-    return 2;
-  }
-  if (args.occt && args.threads) {
-    process.stderr.write(`give only one of --occt / --threads\n${USAGE}`);
-    return 2;
+    return 1; // (the input refused, as a missing one is: 2 is for the options)
   }
   const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');

@@ -15,7 +15,7 @@
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
 // escape() first.
 
-import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
+import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid, signedVolume } from './measure-geom.js';
 import { faceOfTri, makeCaster } from './raycast.js';
 import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
@@ -41,7 +41,8 @@ const HOLE = '#5fd3ff';
 //   view() -> { vp, eye, dir, right, up, ortho, tanV, w, h, target, dist },
 //   sectionPlane(), lenText(mm) "4.00 mm", num(mm) "4.00", unit() "mm", announce(text),
 //   flash(text, ms), queueFrame(), syncOptbar(),
-//   coarse(), showsHidden() }
+//   coarse(), showsHidden(), closed(mi) (the body is closed: closedOf), beforeOn() (run as
+//   Measure turns on) }
 export function createMeasure(deps) {
   const { $, scene } = deps;
   const st = {
@@ -55,8 +56,13 @@ export function createMeasure(deps) {
   // ---- the model's caches ----
   function model() {
     const m = scene.mesh;
-    if (m !== st.model) { st.model = m; st.geom = new Map(); st.caster = m ? makeCaster(m) : null; }
+    if (m !== st.model) { st.model = m; st.geom = new Map(); st.inward = new Map(); st.caster = m ? makeCaster(m) : null; }
     return m;
+  }
+  // whether a body is wound inward (its signed volume negative), once per body
+  function inwardOf(mi) {
+    if (!st.inward.has(mi)) { const m = scene.header.meshes[mi]; st.inward.set(mi, signedVolume(st.model.position, st.model.index, m.idxStart / 3, m.idxCount / 3) < 0); }
+    return st.inward.get(mi);
   }
   // a body's geometry, built at most `budget` ms per call across bodies
   function geomOf(mi, deadline) {
@@ -150,7 +156,7 @@ export function createMeasure(deps) {
       const g = geomOf(mi, deadline);
       if (!g) { pending = true; continue; }
       const consider = (p, kind, info) => {
-        if (skip && skip(p)) return; // (the one cut test, skipCut's: written here a third time, with a 1e-9 of its own)
+        if (skip && skip(p)) return; // (skipCut's test, the one the caster uses)
         const s = v.toScreen(p);
         if (!s) return;
         const dd = Math.hypot(s[0] - x, s[1] - y);
@@ -210,7 +216,8 @@ export function createMeasure(deps) {
     const P = st.model.position, I = st.model.index, t = hit.tri;
     const q = [0, 1, 2].map((j) => [P[3 * I[3 * t + j]], P[3 * I[3 * t + j] + 1], P[3 * I[3 * t + j] + 2]]);
     const n = cross(sub(q[1], q[0]), sub(q[2], q[0]));
-    if (dot(n, ray.d) <= 0) return null; // (its outside: a surface, not the cut)
+    // (its outside: a surface, not the cut -- the normal turned round on a body wound inward)
+    if (dot(n, ray.d) * (inwardOf(hit.mesh) ? -1 : 1) <= 0) return null;
     const den = dot(pl, ray.d);
     if (Math.abs(den) < 1e-12) return null;
     const tp = (pl[3] - dot(pl, ray.o)) / den;
@@ -638,6 +645,7 @@ export function createMeasure(deps) {
     st.loupe = null;
     st.model = null;
     st.geom = new Map();
+    st.inward = new Map();
     setList(false);
     showHoles(null);
     syncRow();

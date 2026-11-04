@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
-import { checkFile, checkLists, namedFormat, sniffFormat, summary } from '../js/list-check.js';
+import { checkFile, checkLists, insertInOrder, namedFormat, sniffFormat, summary } from '../js/list-check.js';
 import { fileNameOfUrl } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
@@ -157,6 +157,15 @@ await test('fileNameOfUrl: the path\'s model name, else a query value naming one
   assert.equal(fileNameOfUrl('https://x/api/download?id=7'), 'download');
   assert.equal(fileNameOfUrl('https://x/my%20part.stp'), 'my part.stp');
   assert.equal(fileNameOfUrl('https://x/README.md'), 'README.md');
+});
+
+await test('the check page puts each entry\'s rows in the list\'s order, whatever order the checks finish in', () => {
+  // a stub tbody: rows in order, insertBefore(fragment, row | null)
+  const body = { rows: [], insertBefore(frag, before) { const k = before ? this.rows.indexOf(before) : this.rows.length; this.rows.splice(k, 0, ...frag.children); } };
+  const frag = (name, n) => ({ children: Array.from({ length: n }, (_, j) => ({ name: `${name}${j}`, dataset: {} })) });
+  // entries 0..4, finished 3, 0, 4, 2, 1; each 1-3 rows (an entry's checks)
+  for (const i of [3, 0, 4, 2, 1]) insertInOrder(body, frag(`e${i}.`, 1 + (i % 3)), i);
+  assert.deepEqual(body.rows.map((r) => r.name), ['e0.0', 'e1.0', 'e1.1', 'e2.0', 'e2.1', 'e2.2', 'e3.0', 'e4.0', 'e4.1']);
 });
 
 await test('whole-list', async () => {

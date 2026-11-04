@@ -109,21 +109,23 @@ test('every kind of point Measure snaps to has its mark and its name (a cut-face
   for (const k of SNAP_KINDS) assert.ok(MARK[k] && KIND_NAME[k], k);
   // and every kind the snapping code gives is one of them (read from its source)
   const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
-  const given = new Set([...src.matchAll(/consider\([^)]*?'([a-z]+)'/g), ...src.matchAll(/return \{[^}]*kind: '([a-z]+)'/g)].map((m) => m[1]));
+  // (every `kind: 'x'` anywhere, however it is given -- the edge kind is pushed, which a `return {`
+  // pattern missed -- but Face to face's picked face, which is no snap)
+  const given = new Set([...src.matchAll(/consider\([^)]*?'([a-z]+)'/g), ...src.matchAll(/kind: '([a-z]+)'/g)].map((m) => m[1]));
+  given.delete('face');
   for (const k of given) assert.ok(SNAP_KINDS.includes(k), `${k} has no mark`);
   assert.ok(given.has('cut') && given.has('surface'), [...given].join(','));
 });
 test('the hole table of 8,000 rims pairs them by their axis lines, fast (every rim against every other froze the page)', () => {
-  // 4,000 holes' top and bottom rims on faces of their own, no walls (so every pair is tried and refused)
+  // 4,000 washers in a grid, each a through-hole of its own (walls and all: a dead index pairs none)
   const faces = [];
-  for (let i = 0; i < 4000; i++) {
-    const x = (i % 80) * 5, y = Math.floor(i / 80) * 5;
-    for (const [z, nz] of [[1.6, 1], [0, -1]]) faces.push({ plane: { normal: [0, 0, nz], d: nz * z }, ntri: 0, circles: [{ centre: [x, y, z], normal: [0, 0, 1], radius: 1, inner: true, face: faces.length }] });
-  }
+  for (let i = 0; i < 4000; i++) faces.push(...washer(1, 2, 1.6, 16, (i % 80) * 5, Math.floor(i / 80) * 5));
+  const g = bodyGeometry(model([{ name: 'grid', faces }]), 0);
   const t0 = Date.now();
-  const h = holesOf({ faces, P: new Float32Array(0), I: new Uint32Array(0) });
-  assert.equal(h.length, 8000);
-  assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
+  const h = holesOf(g);
+  const ms = Date.now() - t0;
+  assert.equal(h.filter((x) => x.rims === 2 && Math.abs(x.depth - 1.6) < 1e-4).length, 4000, JSON.stringify(h.slice(0, 3)));
+  assert.ok(ms < 1500, `${ms} ms`);
 });
 test('a tilted bore, 600 long at 30 degrees, is one through-hole (its rims fell in different cells)', () => {
   const n = 40, ri = 2, ro = 6, L = 600, a = Math.PI / 6;
@@ -136,14 +138,52 @@ test('a tilted bore, 600 long at 30 degrees, is one through-hole (its rims fell 
   assert.deepEqual(h.map((x) => [x.rims, Math.round(x.depth)]), [[2, 600]], JSON.stringify(h.map((x) => [x.rims, x.depth])));
 });
 test('4,000 rims on one axis (fins on a shaft): paired in order along it, fast', () => {
-  // fins 0.5 thick, 0.5 apart, on one axis: no walls (each pair tried and refused)
+  // fins 0.5 thick, 0.5 apart, on one axis, each its own wall: 2,000 through-holes 0.5 deep
   const faces = [];
-  for (let i = 0; i < 2000; i++) {
-    for (const [z, nz] of [[i + 0.5, 1], [i, -1]]) faces.push({ plane: { normal: [0, 0, nz], d: nz * z }, ntri: 0, circles: [{ centre: [0, 0, z], normal: [0, 0, 1], radius: 1, inner: true, face: faces.length }] });
+  for (let i = 0; i < 2000; i++) faces.push(...washer(2, 6, 0.5, 16, 0, 0, i));
+  const g = bodyGeometry(model([{ name: 'shaft', faces }]), 0);
+  const t0 = Date.now();
+  const h = holesOf(g);
+  const ms = Date.now() - t0;
+  assert.equal(h.filter((x) => x.rims === 2 && Math.abs(x.depth - 0.5) < 1e-4).length, 2000, JSON.stringify(h.slice(0, 3)));
+  assert.ok(ms < 1000, `shared axis ${ms} ms`);
+  // 16,000 rims on one axis all looking one way (none can pair): each walked all the rest, 1.8 s
+  const one = [];
+  for (let i = 0; i < 16000; i++) one.push({ plane: { normal: [0, 0, 1], d: i }, ntri: 0, circles: [{ centre: [0, 0, i], normal: [0, 0, 1], radius: 1, inner: true, face: one.length }] });
+  const t1 = Date.now();
+  assert.equal(holesOf({ faces: one, P: new Float32Array(0), I: new Uint32Array(0) }).length, 16000);
+  assert.ok(Date.now() - t1 < 600, `one way ${Date.now() - t1} ms`);
+});
+test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off the origin, and small 5 m out', () => {
+  // a washer about any axis d at o, as float32
+  const unit = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l); };
+  const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const bore = (ri, ro, h, n, d, o, ph) => {
+    d = unit(d);
+    const u = unit(Math.abs(d[0]) < 0.9 ? cr(d, [1, 0, 0]) : cr(d, [0, 1, 0])), v = cr(d, u);
+    const ring = (r, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n + ph; return P(...[0, 1, 2].map((k) => o[k] + r * Math.cos(t) * u[k] + r * Math.sin(t) * v[k] + z * d[k])); });
+    const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+    return [band(ring(ri, h), ring(ro, h)), band(ring(ro, 0), ring(ri, 0)), band(ring(ri, 0), ring(ri, h)), band(ring(ro, h), ring(ro, 0))];
+  };
+  const bad = [];
+  // the canon sign of a component float32 noise gives either sign: 5 of 60 lost
+  for (const o of [[0, 0, 0], [37.3, 12.1, 5.5], [250, -130, 40], [1200, 800, -300]]) for (const n of [24, 32, 40, 48, 64]) for (const ph of [0, 0.1, 0.37]) {
+    const h = holesOf(bodyGeometry(model([{ name: 'yz', faces: bore(2, 5, 6, n, [0, 0.5, Math.sqrt(0.75)], o, ph) }]), 0));
+    if (!(h.length === 1 && h[0].rims === 2 && Math.abs(h[0].depth - 6) < 1e-3)) bad.push(`yz ${o} ${n} ${ph}`);
   }
-  let t0 = Date.now();
-  assert.equal(holesOf({ faces, P: new Float32Array(0), I: new Uint32Array(0) }).length, 4000);
-  assert.ok(Date.now() - t0 < 1000, `shared axis ${Date.now() - t0} ms`);
+  // the axis line's point from the world origin, moved by the normals' noise past the cells searched
+  for (const d of [[0.5, 0.3, Math.sqrt(0.66)], [0.3, 0.4, Math.sqrt(0.75)]]) for (const [ri, h] of [[0.3, 0.8], [0.5, 1.6], [0.5, 0.8]]) for (const n of [24, 32, 48]) for (const ph of [0, 0.2]) {
+    const hs = holesOf(bodyGeometry(model([{ name: 'far', faces: bore(ri, ri + 2, h, n, d, [3000, 3200, 2400], ph) }]), 0));
+    if (!(hs.length === 1 && hs[0].rims === 2 && Math.abs(hs[0].depth - h) < 1e-2)) bad.push(`far ${d} ${ri} ${n} ${ph}`);
+  }
+  assert.deepEqual(bad, []);
+});
+test('a washer wound inside out (a mirrored placement) is still one through-hole', () => {
+  const m = model([{ name: 'mirrored', faces: washer(2, 6, 1.6, 40, 0, 0).map((f) => f.map(([a, b, c]) => [a, c, b])) }]);
+  const g = bodyGeometry(m, 0);
+  assert.equal(g.inward, true);
+  assert.deepEqual(holesOf(g).map((x) => [x.rims, Math.round(x.depth * 1e4) / 1e4]), [[2, 1.6]]);
+  assert.equal(bodyGeometry(model([{ name: 'w', faces: washer(2, 6, 1.6, 40, 0, 0) }]), 0).inward, false);
 });
 test('two blind holes drilled from either side, material between, are two holes, not one through-hole', () => {
   // a round block 0..10 high, radius 6; a hole of radius 2 from the top 3 deep and one from the
@@ -193,14 +233,22 @@ test('a board face 57 mm across with a vertex 0.3 um off is flat (to a micrometr
   const h = holesOf(bodyGeometry(m, 0));
   assert.deepEqual(h.map((x) => x.rims), [2], JSON.stringify(h));
 });
-test('a flat tilted face 1 m from the origin is flat (no finer than float32 stores it)', () => {
-  const faces = washer(1.375, 3, 1.6, 40, 0, 0);
-  const m = model([{ name: 'far', faces }]);
-  // turned 30° about x and moved 1000 mm, stored as float32 as a .cadmesh is
-  const c = Math.cos(Math.PI / 6), s = Math.sin(Math.PI / 6), P = m.position;
-  for (let i = 0; i < P.length; i += 3) { const y = P[i + 1], z = P[i + 2]; P[i] += 1000; P[i + 1] = y * c - z * s + 1000; P[i + 2] = y * s + z * c + 1000; }
-  m.position = Float32Array.from(P);
-  assert.equal(holesOf(bodyGeometry(m, 0)).length, 1);
+test('a flat tilted face 1-1.4 m from the origin is flat (no finer than float32 stores it): one hole, both rims', () => {
+  // stored as float32 as a .cadmesh is: turned 30° about x and moved 1 m; and a washer 5 across,
+  // 64 sides, turned 45° about y and moved 1.4 m out (flat about the face's summed normal, not
+  // about one float32 triangle's)
+  for (const [deg, axis, w, off] of [[30, 'x', [1.375, 3, 1.6, 40], [1000, 1000, 1000]], [45, 'y', [2, 5, 6, 64], [1200, 800, -300]]]) {
+    const m = model([{ name: 'far', faces: washer(...w, 0, 0) }]);
+    const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a), P = m.position;
+    for (let i = 0; i < P.length; i += 3) {
+      const [x, y, z] = [P[i], P[i + 1], P[i + 2]];
+      const q = axis === 'x' ? [x, y * c - z * s, y * s + z * c] : [x * c + z * s, y, -x * s + z * c];
+      for (let k = 0; k < 3; k++) P[i + k] = q[k] + off[k];
+    }
+    m.position = Float32Array.from(P);
+    const h = holesOf(bodyGeometry(m, 0));
+    assert.deepEqual(h.map((x) => x.rims), [2], `${deg}° ${off}: ${JSON.stringify(h)}`);
+  }
 });
 test('results: distance and deltas, the angle at a corner, face to face', () => {
   const d = distance([0, 0, 0], [3, 4, 12]);

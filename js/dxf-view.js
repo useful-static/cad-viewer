@@ -74,30 +74,59 @@ export function nearestPoint(tree, x, y, r, accept = () => true) {
 // A drawing's line segments in a grid, for the nearest line within r (the hover, a click's layer):
 // each segment in the cells its box covers, a long one in a list of its own -- every segment was
 // tested on every pointer move, 200 ms a move on 5.2 million. paths: the drawing's; o: the offset
+//
+// All typed arrays: segs (ax ay bx by a segment), pathOf, and the cells as one CSR pair (start[c] ..
+// start[c + 1] in items) over an nx x ny block. (A JS array per segment and a string-keyed Map of
+// arrays held 604 MB of heap for 5.2 million segments, built at every drawing's open.)
 export function segmentGrid(paths, o, span, div = 512) {
-  const cell = (span || 1) / div;
-  const cells = new Map(), long = [];
-  const segs = [];
+  let n = 0;
+  for (const p of paths) n += p.pts.length / 2;
+  const segs = new Float64Array(4 * n), pathOf = new Uint32Array(n);
+  let s = 0;
+  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
   paths.forEach((p, pi) => {
-    const n = p.pts.length / 2;
-    for (let i = 0; i < n; i++) {
-      const j = i + 1 < n ? i + 1 : p.closed ? 0 : -1;
+    const m = p.pts.length / 2;
+    for (let i = 0; i < m; i++, s++) {
+      const j = i + 1 < m ? i + 1 : p.closed ? 0 : -1;
       const ax = p.pts[i * 2] - o[0], ay = p.pts[i * 2 + 1] - o[1];
       const bx = j < 0 ? ax : p.pts[j * 2] - o[0], by = j < 0 ? ay : p.pts[j * 2 + 1] - o[1];
-      const s = segs.length;
-      segs.push([ax, ay, bx, by, pi]);
-      const x0 = Math.floor(Math.min(ax, bx) / cell), x1 = Math.floor(Math.max(ax, bx) / cell);
-      const y0 = Math.floor(Math.min(ay, by) / cell), y1 = Math.floor(Math.max(ay, by) / cell);
-      if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64 || !Number.isFinite(x0 + x1 + y0 + y1)) { long.push(s); continue; }
-      for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
-        const k = `${gx},${gy}`;
-        let c = cells.get(k);
-        if (!c) cells.set(k, (c = []));
-        c.push(s);
-      }
+      segs[4 * s] = ax; segs[4 * s + 1] = ay; segs[4 * s + 2] = bx; segs[4 * s + 3] = by;
+      pathOf[s] = pi;
+      if (Number.isFinite(ax + ay + bx + by)) { lx = Math.min(lx, ax, bx); ly = Math.min(ly, ay, by); hx = Math.max(hx, ax, bx); hy = Math.max(hy, ay, by); }
     }
   });
-  return { cell, cells, long, segs, paths, o, span, div };
+  // the cell: span / div, no finer than keeps the block within 4 div a side (a few points far out)
+  const cell = Math.max((span || 1) / div, n ? Math.max(hx - lx, hy - ly) / (4 * div) : 0) || 1;
+  const gx0 = n && Number.isFinite(lx) ? Math.floor(lx / cell) : 0, gy0 = n && Number.isFinite(ly) ? Math.floor(ly / cell) : 0;
+  const nx = n && Number.isFinite(hx) ? Math.floor(hx / cell) - gx0 + 1 : 1, ny = n && Number.isFinite(hy) ? Math.floor(hy / cell) - gy0 + 1 : 1;
+  const start = new Uint32Array(nx * ny + 1);
+  const isLong = new Uint8Array(n);
+  let nLong = 0;
+  // (twice over the segments: count each cell's, then place them)
+  const each = (fn) => {
+    for (let t = 0; t < n; t++) {
+      if (isLong[t]) continue;
+      const ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
+      const x0 = Math.floor(Math.min(ax, bx) / cell) - gx0, x1 = Math.floor(Math.max(ax, bx) / cell) - gx0;
+      const y0 = Math.floor(Math.min(ay, by) / cell) - gy0, y1 = Math.floor(Math.max(ay, by) / cell) - gy0;
+      for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) fn(gx * ny + gy, t);
+    }
+  };
+  for (let t = 0; t < n; t++) {
+    const ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
+    const x0 = Math.floor(Math.min(ax, bx) / cell), x1 = Math.floor(Math.max(ax, bx) / cell);
+    const y0 = Math.floor(Math.min(ay, by) / cell), y1 = Math.floor(Math.max(ay, by) / cell);
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64 || !Number.isFinite(x0 + x1 + y0 + y1)) { isLong[t] = 1; nLong++; }
+  }
+  each((c) => { start[c + 1]++; });
+  let filled = 0;
+  for (let c = 0; c < nx * ny; c++) { if (start[c + 1]) filled++; start[c + 1] += start[c]; }
+  const items = new Uint32Array(start[nx * ny]);
+  const at = start.slice(0, nx * ny);
+  each((c, t) => { items[at[c]++] = t; });
+  const long = new Uint32Array(nLong);
+  for (let t = 0, k = 0; t < n; t++) if (isLong[t]) long[k++] = t;
+  return { cell, gx0, gy0, nx, ny, start, items, filled, long, segs, pathOf, seen: new Uint32Array(n), stamp: 0, paths, o, span, div };
 }
 // -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
 export function nearestSegment(grid, x, y, r, accept = () => true) {
@@ -107,31 +136,36 @@ export function nearestSegment(grid, x, y, r, accept = () => true) {
     return nearestSegment(grid.coarse, x, y, r, accept);
   }
   let best = -1, bd = r * r;
-  const seen = new Set();
+  // (a segment in several cells tested once: a stamp per query, not a Set)
+  if (++grid.stamp === 0xffffffff) { grid.seen.fill(0); grid.stamp = 1; }
+  const { segs, pathOf, seen, stamp, start, items, nx, ny } = grid;
   const test = (s) => {
-    if (seen.has(s)) return;
-    seen.add(s);
-    const [ax, ay, bx, by, pi] = grid.segs[s];
-    const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+    if (seen[s] === stamp) return;
+    seen[s] = stamp;
+    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
     const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
-    if (d2 < bd && accept(pi)) { bd = d2; best = pi; }
+    if (d2 < bd && accept(pathOf[s])) { bd = d2; best = pathOf[s]; }
   };
   for (const s of grid.long) test(s);
   // rings of cells outward from the point's, until the ring lies past the nearest found (or r):
   // zoomed far out, a box of every cell within r scanned every segment, 1.7 s a move
   const { cell } = grid;
-  const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
-  const look = (gx, gy) => { const c = grid.cells.get(`${gx},${gy}`); if (c) for (const s of c) test(s); };
+  const cx = Math.floor(x / cell) - grid.gx0, cy = Math.floor(y / cell) - grid.gy0;
+  const look = (gx, gy) => {
+    if (gx < 0 || gy < 0 || gx >= nx || gy >= ny) return;
+    const c = gx * ny + gy;
+    for (let q = start[c]; q < start[c + 1]; q++) test(items[q]);
+  };
   const kmax = Math.ceil(r / cell) + 1;
   for (let k = 0; k <= kmax; k++) {
     if (k > 0 && ((k - 1) * cell) ** 2 > bd) break;
     if (k === 0) { look(cx, cy); continue; }
     for (let i = -k; i <= k; i++) { look(cx + i, cy - k); look(cx + i, cy + k); }
     for (let i = -k + 1; i <= k - 1; i++) { look(cx - k, cy + i); look(cx + k, cy + i); }
-    // (an empty region far from everything: past as many rings as cells, every cell instead)
-    if (k * k * 8 > grid.cells.size && best < 0) {
-      for (const [key, c] of grid.cells) { const [gx, gy] = key.split(',').map(Number); if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) > k) for (const s of c) test(s); }
+    // (an empty region far from everything, or a ring past the block: every cell beyond instead)
+    if ((k * k * 8 > grid.filled || k > nx + ny) && best < 0) {
+      for (let gx = 0; gx < nx; gx++) for (let gy = 0; gy < ny; gy++) if (Math.max(Math.abs(gx - cx), Math.abs(gy - cy)) > k) look(gx, gy);
       break;
     }
   }
@@ -370,7 +404,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)
   let segGrid = null;
   const segments = () => segGrid || (segGrid = segmentGrid(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
-  setTimeout(() => { if (!segGrid) segments(); }, 0);
+  // (cancelled by destroy: a drawing replaced at once built its index for a view that was gone)
+  const segTimer = setTimeout(() => { if (!segGrid) segments(); }, 0);
   // 6 significant figures; a value a billionth of the drawing's size is float
   // noise (a circle centre averaged from its points), shown as 0
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
@@ -501,6 +536,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     measureClick, snapAt,
     layerOn: (name) => !st.off.has(name),
     destroy() {
+      clearTimeout(segTimer);
       ro.disconnect();
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('pointerdown', onDown);

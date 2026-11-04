@@ -699,9 +699,12 @@ test('the 2D snaps and the hover\'s line: the index finds what a scan of every o
   for (let i = 0; i < 400; i++) { const x = rnd() * 100, y = rnd() * 100; paths.push({ layer: i % 5 ? 'A' : 'HID', closed: i % 7 === 0, pts: Float64Array.of(x, y, x + rnd() * 3, y + rnd() * 3, x + rnd() * 3, y - rnd() * 2) }); }
   paths.push({ layer: 'A', closed: false, pts: Float64Array.of(-500, 37, 600, 38) });
   const grid = segmentGrid(paths, [0, 0], 100);
+  // (held in typed arrays: an array per segment and a Map of arrays, 604 MB for 5.2 million)
+  assert.ok(grid.segs instanceof Float64Array && grid.items instanceof Uint32Array && grid.start instanceof Uint32Array, 'typed arrays');
   const okP = (pi) => paths[pi].layer !== 'HID';
-  for (let q = 0; q < 300; q++) {
-    const x = rnd() * 100, y = rnd() * 100, r = [0.05, 1, 8][q % 3];
+  // (and off the drawing, and a radius that searches the coarse grid)
+  for (let q = 0; q < 400; q++) {
+    const off = q >= 300, x = off ? rnd() * 300 - 100 : rnd() * 100, y = off ? rnd() * 300 - 100 : rnd() * 100, r = off ? [2, 30, 90][q % 3] : [0.05, 1, 8][q % 3];
     let best = -1, bd = r * r;
     paths.forEach((p, pi) => {
       const n = p.pts.length / 2;

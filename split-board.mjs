@@ -23,6 +23,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, modelFactsOf } from './js/cadmesh.js';
+import { CliError, parseCli, positive } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report]
 
@@ -35,19 +36,12 @@ const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--e
              "small parts" body (default 1.2)
 `;
 
+// (the tools' one argument rule, js/cli-args.js; and --sliver a positive number: "abc" was NaN,
+// every piece then larger than it, and the board cut into 0 parts, exit 0)
 function args(argv) {
-  const a = { sliver: 1.2 };
-  for (let i = 0; i < argv.length; i++) {
-    const k = argv[i];
-    if (k === '-h' || k === '--help') a.help = true;
-    else if (k === '-o') a.out = argv[++i];
-    else if (k === '--edges') a.edges = true;
-    else if (k === '--report') a.report = true;
-    else if (k === '--sliver') a.sliver = Number(argv[++i]);
-    else if (!a.in) a.in = k;
-    else throw new Error(`unexpected argument ${k}`);
-  }
-  return a;
+  const r = parseCli(argv, { values: ['-o', '--sliver'], flags: ['--edges', '--report'], max: 1 });
+  if (r.help) return { help: true };
+  return { in: r.pos[0], out: r.opts['-o'], edges: !!r.opts['--edges'], report: !!r.opts['--report'], sliver: positive(r.opts, '--sliver', 1.2) };
 }
 
 const toAB = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
@@ -234,8 +228,10 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
 }
 
 function main() {
-  const a = args(process.argv.slice(2));
-  if (a.help || !a.in || !a.out) { process.stdout.write(USAGE); process.exit(a.help ? 0 : 2); }
+  let a;
+  try { a = args(process.argv.slice(2)); } catch (e) { if (!(e instanceof CliError)) throw e; process.stderr.write(`split-board: ${e.message}\n${USAGE}`); process.exit(2); }
+  if (a.help) { process.stdout.write(USAGE); process.exit(0); }
+  if (!a.in || !a.out) { process.stderr.write(`split-board: ${a.in ? 'no -o output' : 'no input file'}\n${USAGE}`); process.exit(2); }
   let raw = readFileSync(a.in);
   if (raw[0] === 0x1f && raw[1] === 0x8b) raw = gunzipSync(raw);
   const d = decodeCadmesh(toAB(raw));

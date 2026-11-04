@@ -211,6 +211,15 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
   return { lists, entries };
 }
 
+// An entry's rows put in the table in the list's order, wherever its check finished (they were in
+// finishing order): each row marked with the entry's place i, put before the first row of a later
+// place. body: a tbody (rows, insertBefore); rows: a fragment of the entry's rows (children)
+export function insertInOrder(body, rows, i) {
+  for (const tr of rows.children) tr.dataset.i = String(i);
+  const after = [...body.rows].find((x) => Number(x.dataset.i) > i);
+  body.insertBefore(rows, after || null);
+}
+
 // A one-line verdict for a result
 export function summary(result) {
   const all = result.entries.flatMap((e) => e.checks);

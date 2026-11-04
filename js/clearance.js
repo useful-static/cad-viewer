@@ -157,8 +157,9 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
   // Each solid on its own (counted together, a part inside two overlapping solids read outside),
-  // by its box first, then one ray through the caster's tree: the first triangle it meets faces
-  // away from it when the point is inside (an inner cavity's wall faces into the cavity: outside).
+  // by its box first, then a ray through the caster's tree, its crossings counted (odd: inside; an
+  // inner cavity adds two). (By the first wall's facing, a solid wound inside out, or with one side
+  // reversed, read a part 4 mm inside it as 4 mm away.)
   // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
   // The answer names the part and the solid that holds it (the nearest surfaces' pair named two
   // others)
@@ -178,15 +179,17 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
       for (let s = 0; s < solids.length; s++) {
         const b = boxes[s];
         if ([0, 1, 2].some((k) => p[k] < b.lo[k] || p[k] > b.hi[k])) continue;
-        if (solids[s][0] === part[0]) continue; // (a part is not inside itself)
         if (!caster) caster = makeCaster({ position: pos, index, header: { meshes: solids.map(([t0, c]) => ({ idxStart: t0 * 3, idxCount: c * 3 })) } });
-        const h = caster.cast([s], p, d);
-        if (!h) continue;
-        const v = [0, 1, 2].map((j) => { const i = index[h.tri * 3 + j] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; });
-        const e1 = v[1].map((x, k) => x - v[0][k]), e2 = v[2].map((x, k) => x - v[0][k]);
-        const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-        if (n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0) {
-          return aFirst ? { triA: part[0], triB: h.tri, pa: p, pb: p } : { triA: h.tri, triB: part[0], pa: p, pb: p };
+        // the ray's crossings of this solid, counted: odd is inside, however it is wound
+        const step = 1e-7 * (Math.hypot(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) + Math.hypot(...p));
+        let o = p, first = null, n = 0;
+        for (let h = caster.cast([s], o, d); h && n < 100000; h = caster.cast([s], o, d)) {
+          if (!first) first = h;
+          n++;
+          o = [0, 1, 2].map((k) => o[k] + d[k] * (h.t + step));
+        }
+        if (n % 2 === 1) {
+          return aFirst ? { triA: part[0], triB: first.tri, pa: p, pb: p } : { triA: first.tri, triB: part[0], pa: p, pb: p };
         }
       }
     }

@@ -18,6 +18,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, splitCadmesh, withHeader } from './js/cadmesh.js';
+import { CliError, parseCli } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -61,20 +62,17 @@ export function setColours(raw, colours, by, { again = false } = {}) {
 }
 
 function main() {
-  const a = { again: false };
-  const argv = process.argv.slice(2);
-  const pos = [];
-  for (let i = 0; i < argv.length; i++) {
-    const k = argv[i];
-    if (k === '-h' || k === '--help') a.help = true;
-    else if (k === '-o') a.out = argv[++i];
-    else if (k === '--by') a.by = argv[++i];
-    else if (k === '--again') a.again = true;
-    else if (k === '--show') a.show = true;
-    else pos.push(k);
-  }
-  [a.in, a.colours] = pos;
-  if (a.help || !a.in || (!a.show && (!a.colours || !a.out))) { process.stdout.write(USAGE); process.exit(a.help ? 0 : 2); }
+  // (the tools' one argument rule, js/cli-args.js: --agian was taken as a third file and ignored,
+  // the file written without --again; and a missing --by is a usage error, as a missing -o is)
+  const usage = (msg) => { process.stderr.write(`set-colours: ${msg}\n${USAGE}`); process.exit(2); };
+  let r;
+  try { r = parseCli(process.argv.slice(2), { values: ['-o', '--by'], flags: ['--again', '--show'], max: 2 }); } catch (e) { if (e instanceof CliError) usage(e.message); throw e; }
+  if (r.help) { process.stdout.write(USAGE); process.exit(0); }
+  const a = { in: r.pos[0], colours: r.pos[1], out: r.opts['-o'], by: r.opts['--by'], again: !!r.opts['--again'], show: !!r.opts['--show'] };
+  if (!a.in) usage('no input file');
+  if (!a.show && !a.colours) usage('no colours file');
+  if (!a.show && !a.out) usage('no -o output');
+  if (!a.show && !(a.by && a.by.trim())) usage('say what wrote the colours (--by)');
   let raw = readFileSync(a.in);
   if (raw[0] === 0x1f && raw[1] === 0x8b) raw = gunzipSync(raw);
   if (a.show) {

@@ -2445,6 +2445,9 @@ const presetQuat = (yaw, pitch, orient) => qMul(orientQuat(orient), quatFromView
 // the camera's turn: its own, else the preset its yaw and pitch name (the one fallback: written at
 // four callers, a fifth that forgot it made roundCamera throw)
 function camQ(c) { return c.q || presetQuat(c.yaw, c.pitch, c.orient); }
+// (and the page's camera has its turn from the start: camera.js's own fallback, by `cam.up`,
+// which app.cam never has, turned it as if Y were up)
+app.cam.q = camQ(app.cam);
 
 // Iso on a tall view looks along a long model (js/orient.js isoView)
 const stageAspectNow = () => { const s = $('stage'); return s.clientWidth / Math.max(1, s.clientHeight); };
@@ -3966,6 +3969,10 @@ async function showScene(models, { newTree = false } = {}) {
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
   if (app.stopEdges) app.stopEdges.stop();
   app.scene = models;
+  // (a clearance read is of the scene before: cleared here, where every scene change passes --
+  // Add model kept "1.65 mm" for a scene whose new case touched)
+  $('clearval').textContent = '';
+  $('clearval').title = '';
   // "this file is in" re-reads the first model alone, which would drop the others: a scene has
   // none (a mesh opened alone gets it again)
   if (models.length > 1) app.meshSource = null;
@@ -4067,7 +4074,6 @@ async function moveModel(i, k, v) {
   const mine = ++moveSeq;
   try {
     if (!(await showScene(models)) || mine !== moveSeq) return;
-    $('clearval').textContent = '';
     announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
   } catch (e) {
     setStatus('ready', `could not move ${models[i].name}: ${e.message || e}`);
@@ -4098,11 +4104,13 @@ async function runClearance() {
   // (each set's closed bodies, for a part lying wholly inside one: closedOf -- the facts awaited
   // when they are on their way: skipped, a pin inside a block read 4 mm after every scene change)
   if (!base.edgeInfo?.value && base.edgeInfo?.ready) { try { await base.edgeInfo.ready; } catch { /* no facts: no containment */ } }
-  if (app.baseMesh !== base) return;
+  // (the scene changed while it waited: said, not left at "checking …")
+  const stopped = () => { if (app.baseMesh !== base) { $('clearval').textContent = 'stopped: the scene changed'; return true; } return false; };
+  if (stopped()) return;
   const t0 = performance.now();
   const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
   const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B) });
-  if (app.baseMesh !== base || !r) return;
+  if (stopped() || !r) return;
   const ms = Math.round(performance.now() - t0);
   // the bodies the two nearest triangles belong to
   const bodyOf = (t) => {

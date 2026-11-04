@@ -91,18 +91,22 @@ export function circleOf(pts, angularDeflection) {
 // A face's plane, or null when its triangles do not all lie in one:
 // { normal, d } with normal · p = d
 function planeOf(P, I, t0, nt) {
-  let n = null;
+  // (the normal summed over the face's triangles, by area: one triangle's, tilted by float32
+  // rounding, spread a flat 45-degree face 1.4 m out 1.38 um about it -- past the tolerance -- for
+  // 0.094 um about the sum)
+  const sum = [0, 0, 0];
   let p0 = null;
-  let area = 0;
   for (let t = t0; t < t0 + nt; t++) {
     const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
     const pa = [P[a], P[a + 1], P[a + 2]], pb = [P[b], P[b + 1], P[b + 2]], pc = [P[c], P[c + 1], P[c + 2]];
     const cr = cross(sub(pb, pa), sub(pc, pa));
-    const l = len(cr);
-    if (l === 0) continue;
-    if (!n || l > area) { n = cr.map((v) => v / l); p0 = pa; area = l; }
+    if (len(cr) === 0) continue;
+    for (let k = 0; k < 3; k++) sum[k] += cr[k];
+    if (!p0) p0 = pa;
   }
-  if (!n) return null;
+  const sl = len(sum);
+  if (!p0 || !(sl > 0)) return null;
+  const n = sum.map((v) => v / sl);
   // every vertex on that plane, to 1e-5 of the face's size (at least a micrometre, and no finer than
   // the positions are stored)
   let lo = Infinity, hi = -Infinity, ext = 0, far = 0;
@@ -206,7 +210,6 @@ export function bodyGeometry(model, meshIndex) {
   };
   const SEG = 2 ** 26;
   const sk = (x, y) => (x < y ? x * SEG + y : y * SEG + x);
-  const segs = new Set();
   const circles = [];
   const span = P.length / 3 + 1;
   for (const [fi, f] of faces.entries()) {
@@ -234,7 +237,6 @@ export function bodyGeometry(model, meshIndex) {
         if (ka === kb) continue;
         nodeNb[ka].add(kb);
         nodeNb[kb].add(ka);
-        segs.add(sk(ka, kb));
       }
     });
   }
@@ -268,8 +270,25 @@ export function bodyGeometry(model, meshIndex) {
   for (let k = 0; k < nodeP.length; k++) {
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
-  // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices)
-  return { faces, corners, edges, circles, segments: segs.size, P, I };
+  // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; inward: the body is
+  // wound inside out, its signed volume negative -- a mirrored placement, another writer's file --
+  // so its faces' normals look into it)
+  return { faces, corners, edges, circles, P, I, inward: signedVolume(P, I, tri0, ntri) < 0 };
+}
+
+// A body's signed volume (float64, about its first vertex): negative when it is wound inward
+export function signedVolume(P, I, tri0, ntri) {
+  if (!ntri) return 0;
+  const o = I[3 * tri0] * 3, ox = P[o], oy = P[o + 1], oz = P[o + 2];
+  let V = 0;
+  for (let t = tri0; t < tri0 + ntri; t++) {
+    const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
+    const ax = P[a] - ox, ay = P[a + 1] - oy, az = P[a + 2] - oz;
+    const bx = P[b] - ox, by = P[b + 1] - oy, bz = P[b + 2] - oz;
+    const cx = P[c] - ox, cy = P[c + 1] - oy, cz = P[c + 2] - oz;
+    V += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  }
+  return V / 6;
 }
 
 // The midpoint of a polyline, by length
@@ -417,7 +436,12 @@ export function holesOf(geom) {
   // A through-hole's two rims: the nearest rim on its axis, of its radius, behind its face, whose
   // face looks the other way (its top's and its bottom's). Every such rim along the axis was merged: a clevis's
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
-  const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
+  // (a rim's face's outward normal: its plane's, turned round on a body wound inward)
+  const faceN = (c) => {
+    const f = geom.faces[c.face];
+    if (!(f && f.plane)) return c.normal;
+    return geom.inward ? f.plane.normal.map((v) => -v) : f.plane.normal;
+  };
   // The candidates, by key: the radius, in steps of the radius test (and the steps either side),
   // and the axis line's point nearest the origin, in cells (and the cells round it) -- the same for
   // every rim on one line wherever along it, whatever its direction. (Every rim against every other
@@ -425,20 +449,47 @@ export function holesOf(geom) {
   // long drifted past the cells searched.) Each key's rims are sorted along their axis, and a rim
   // walks behind its face from where it stands, nearest first, stopping at the first that pairs:
   // 4,000 rims on one shared axis were each tried against all
-  const CELL = 0.5;
+  // (measured from the rims' own centre, the cell sized to how far they reach from it: from the
+  // world origin, 5 m out a small bore's two rims fell 2 cells apart by their normals' noise)
   const rStep = Math.log(1 + RADIUS_TOL);
-  const canon = (n) => { const k = n.findIndex((v) => Math.abs(v) > 1e-12); return k >= 0 && n[k] < 0 ? n.map((v) => -v) : n; };
+  const o = [0, 1, 2].map((k) => (rims.length ? rims.reduce((s2, c) => s2 + c.centre[k], 0) / rims.length : 0));
+  const reach = rims.reduce((m2, c) => Math.max(m2, len(sub(c.centre, o))), 0);
+  const CELL = Math.max(0.5, reach * 2e-4);
+  // (the axis signed by its largest component: by its first one not tiny, a component that should
+  // be 0 took either sign from float32 noise, and a bore's two rims sorted apart)
+  const canon = (n) => { let k = 0; for (let j = 1; j < 3; j++) if (Math.abs(n[j]) > Math.abs(n[k])) k = j; return n[k] < 0 ? n.map((v) => -v) : n; };
+  // (and which way its face looks along the axis: a rim pairs only with one looking the other way,
+  // so the two are kept apart -- 16,000 rims all looking one way each walked all the rest)
   const keyOf = (c) => {
-    const n = c.normal, al = dot(c.centre, n);
-    const q = c.centre.map((x, k) => x - n[k] * al);
-    return { r: Math.round(Math.log(c.radius) / rStep), q: q.map((x) => Math.floor(x / CELL)), t: dot(c.centre, canon(n)) };
+    const n = c.normal, rc = sub(c.centre, o), al = dot(rc, n);
+    const q = rc.map((x, k) => x - n[k] * al);
+    return { r: Math.round(Math.log(c.radius) / rStep), q: q.map((x) => Math.floor(x / CELL)), t: dot(rc, canon(n)), f: dot(faceN(c), canon(n)) > 0 ? 1 : -1 };
   };
   const index = new Map();
   const keys = rims.map(keyOf);
-  keys.forEach((k, i) => { const s = `${k.r}|${k.q.join(',')}`; let a = index.get(s); if (!a) index.set(s, (a = [])); a.push(i); });
-  for (const a of index.values()) a.sort((x, y) => keys[x].t - keys[y].t);
-  const out = [];
+  keys.forEach((k, i) => { const s = `${k.f}|${k.r}|${k.q.join(',')}`; let a = index.get(s); if (!a) index.set(s, (a = [])); a.push(i); });
+  // each key's rims sorted along the axis, with links past the used ones either way (a used rim
+  // walked over each time: 16,000 rims on one axis, 1.8 s)
+  const place = new Map(); // rim -> [its key's array, its place]
+  const skips = new Map(); // array -> { up: Int32Array, down: Int32Array }
+  for (const a of index.values()) {
+    a.sort((x, y) => keys[x].t - keys[y].t);
+    a.forEach((j, p) => place.set(j, [a, p]));
+    const up = new Int32Array(a.length + 1), down = new Int32Array(a.length + 1);
+    for (let p = 0; p <= a.length; p++) { up[p] = p; down[p] = p; }
+    skips.set(a, { up, down });
+  }
+  // the first unused place at or after p (up), at or before p (down; -1 for none), compressing
+  const find = (arr, p) => { let r2 = p; while (arr[r2] !== r2) r2 = arr[r2]; while (arr[p] !== r2) { const nx = arr[p]; arr[p] = r2; p = nx; } return r2; };
+  const nextUp = (a, p) => find(skips.get(a).up, p);
+  const nextDown = (a, p) => (p < 0 ? -1 : find(skips.get(a).down, p + 1) - 1);
   const used = new Set();
+  const markUsed = (j) => {
+    used.add(j);
+    const [a, p] = place.get(j), sk2 = skips.get(a);
+    sk2.up[p] = p + 1; sk2.down[p + 1] = p;
+  };
+  const out = [];
   // whether rim j can be rim r's other end: its radius, its axis, facing the other way, on the
   // line, behind r's face (into the material: the nearest either way crossed an air gap thinner than
   // an arm -- a fork's arms 10 thick and 1 apart read as holes 1 and 21 deep) -> its distance, or -1
@@ -455,22 +506,23 @@ export function holesOf(geom) {
   for (let i = 0; i < rims.length; i++) {
     if (used.has(i)) continue;
     const r = rims[i], k = keys[i];
-    // (behind r's face, along its own sorted axis: the direction t grows or falls)
-    const s = dot(faceN(r), canon(r.normal)) > 0 ? -1 : 1;
+    // (behind r's face, along its own sorted axis: the direction t grows or falls; among the rims
+    // looking the other way)
+    const s = k.f > 0 ? -1 : 1;
     let best = -1, bestAlong = Infinity;
     for (let dr = -1; dr <= 1; dr++) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      const a = index.get(`${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
+      const a = index.get(`${-k.f}|${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
       if (!a) continue;
       let lo = 0, hi = a.length;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (keys[a[mid]].t < k.t) lo = mid + 1; else hi = mid; }
-      // walk from there, behind (the equal t either side looked at too)
+      // walk from there, behind (the equal t either side looked at too), over the unused only
       let p = s > 0 ? lo : lo - 1;
-      while (p > 0 && p - 1 < a.length && s > 0 && keys[a[p - 1]].t >= k.t - 1e-9) p--;
+      while (p > 0 && s > 0 && keys[a[p - 1]].t >= k.t - 1e-9) p--;
       while (p + 1 < a.length && s < 0 && keys[a[p + 1]].t <= k.t + 1e-9) p++;
-      for (; p >= 0 && p < a.length; p += s) {
+      for (p = s > 0 ? nextUp(a, Math.max(0, p)) : nextDown(a, Math.min(a.length - 1, p)); p >= 0 && p < a.length; p = s > 0 ? nextUp(a, p + 1) : nextDown(a, p - 1)) {
         const j = a[p];
         if ((keys[j].t - k.t) * s > bestAlong + 1e-6) break;
-        if (j === i || used.has(j)) continue;
+        if (j === i) continue;
         const al = pairs(r, rims[j]);
         if (al >= 0) { if (al < bestAlong) { bestAlong = al; best = j; } break; }
       }
@@ -478,8 +530,8 @@ export function holesOf(geom) {
     // (and a wall joins them: a curved face on the hole's cylinder spanning rim to rim -- two blind
     // holes drilled from either side, material between, read as one through-hole)
     if (best >= 0 && !wallJoins(geom, r, rims[best])) best = -1;
-    used.add(i);
-    if (best >= 0) used.add(best);
+    markUsed(i);
+    if (best >= 0) markUsed(best);
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
   }
   return out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);

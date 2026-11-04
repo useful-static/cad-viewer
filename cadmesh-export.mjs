@@ -24,6 +24,7 @@ import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
+import { CliError, parseCli } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -57,24 +58,21 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
 }
 
 async function main() {
-  const a = process.argv.slice(2);
-  if (!a.length) usage();
-  if (a.includes('-h') || a.includes('--help')) usage(null, 0); // (help is not an error, as the other CLIs)
-  // (an option it does not know is a usage error, as stp2mesh's are: --skp exported every body)
-  const KNOWN = ['--to', '--out', '--orient', '--model-up', '--skip'];
-  a.forEach((x, i) => { if (x.startsWith('-') && !KNOWN.includes(x) && !(i > 0 && KNOWN.includes(a[i - 1]))) usage(`unknown option ${x}`); });
-  // (an option given with no value is a usage error: --to or --out alone fell back to the default)
-  const opt = (k) => { const i = a.indexOf(k); if (i < 0) return undefined; const v = a[i + 1]; if (v === undefined || v.startsWith('--')) usage(`${k} needs a value`); return v; };
-  const inputs = a.filter((x, i) => !x.startsWith('--') && !(i > 0 && a[i - 1].startsWith('--')));
-  const inp = inputs[0];
+  // (the tools' one argument rule, js/cli-args.js: an unknown or repeated option, a value that is
+  // an option, a second input -- each a usage error)
+  let r;
+  try { r = parseCli(process.argv.slice(2), { values: ['--to', '--out', '--orient', '--model-up', '--skip'], max: 1 }); } catch (e) { if (e instanceof CliError) usage(e.message); throw e; }
+  if (r.help) usage(null, 0); // (help is not an error, as the other CLIs)
+  const opt = (k) => r.opts[k];
+  const inp = r.pos[0];
   if (!inp) usage('no input file');
-  // (one input, each option once, and a --to that names a format: a second file, a repeated option
-  // or "--to ," were taken without a word, exit 0)
-  if (inputs.length > 1) usage(`one input file, not ${inputs.length}`);
-  for (const k of KNOWN) if (a.filter((x) => x === k).length > 1) usage(`${k} given twice`);
   const to = (opt('--to') || 'stl,3mf,glb').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   if (!to.length) usage('--to names no format');
   for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" (stl, 3mf, glb)`);
+  // (a format named twice wrote and printed the one file twice)
+  if (new Set(to).size < to.length) usage('--to names a format twice');
+  // (--orient and --model-up are alternatives: the one silently overrode the other)
+  if (opt('--orient') && opt('--model-up')) usage('give one of --orient / --model-up');
   const modelUp = opt('--model-up') || 'z';
   if (!MODEL_UP[modelUp]) usage(`--model-up must be y or z, not "${modelUp}"`);
   let orient = MODEL_UP[modelUp];

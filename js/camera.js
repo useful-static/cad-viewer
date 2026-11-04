@@ -81,6 +81,8 @@ export function quatFromView(yaw, pitch, up) {
 // makes every axis free: there is no pole to stop at and no world-up to keep.
 // From a preset with the world up on screen, a horizontal drag starts exactly
 // like the old yaw orbit.
+// (A cam with no q -- here and below -- turns by its yaw and pitch about cam.up: the tests' cams.
+// The page's camera always has one, from main.js camQ, which reads the model's orientation.)
 export function orbitBy(cam, dx, dy, rate = 0.008) {
   if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
   let q = qMul(cam.q, qAxis([0, 1, 0], -dx * rate));

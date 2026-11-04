@@ -7,19 +7,18 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
+import { CliError, parseCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
-const args = process.argv.slice(2);
-if (!args.length || args.includes('-h') || args.includes('--help')) { console.log(USAGE); process.exit(args.length ? 0 : 2); }
-// (an option it does not know, or --dxf with no value, is a usage error: --jsn was taken for a file
-// name and ignored, exit 0)
+// (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
+// name -- a --dxf with no value, or given twice, is a usage error, on stderr as the others')
 const usageError = (msg) => { console.error(`dwg-check: ${msg}\n${USAGE}`); process.exit(2); };
-for (const a of args) if (a.startsWith('-') && !['--json', '--dxf'].includes(a)) usageError(`unknown option ${a}`);
-const json = args.includes('--json');
-const di = args.indexOf('--dxf');
-const dxfOut = di >= 0 ? args[di + 1] : null;
-if (di >= 0 && (dxfOut === undefined || dxfOut.startsWith('--'))) usageError('--dxf needs a file name');
-const files = args.filter((a, k) => !a.startsWith('--') && !(di >= 0 && k === di + 1));
+let parsed;
+try { parsed = parseCli(process.argv.slice(2), { values: ['--dxf'], flags: ['--json'] }); } catch (e) { if (e instanceof CliError) usageError(e.message); throw e; }
+if (parsed.help) { console.log(USAGE); process.exit(0); }
+const json = !!parsed.opts['--json'];
+const dxfOut = parsed.opts['--dxf'] || null;
+const files = parsed.pos;
 // (no drawing given, and --dxf with more than one -- each overwrote the one file -- are usage errors)
 if (!files.length) usageError('no DWG file given');
 if (dxfOut && files.length > 1) usageError('--dxf writes one file: give one DWG');
