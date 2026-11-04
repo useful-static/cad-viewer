@@ -480,12 +480,12 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     + line('const GONE = Symbol(') + cut('function showBase(next, keep, why) {') + cut('function fileEdgesValue(base, cap) {')
     + cut('function sayNoFacts(text) {') + line('const MOMENT_TRIES = ') + cut('function readyText() {');
   const make = (usable = false, cap = 2e6, current = false, noWorker = false) => {
-    const app = { status: 'ready', statusMsg: 'ready', edgeJobs: new Map() }, made = [], said = [], kept = [], drawn = [];
+    const app = { status: 'ready', statusMsg: 'ready', edgeJobs: new Map() }, made = [], said = [], kept = [], drawn = [], told = [];
     class Worker { constructor() { if (noWorker) throw new Error('module workers are not supported'); made.push(this); } postMessage() {} terminate() { this.ended = true; } }
     const setStatus = (s, t) => { said.push(t); app.status = s; app.statusMsg = t; };
-    const [edgesOf, stopEdgeJobs, showBase] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'factsCurrent', 'keepEdges', 'Worker', 'setStatus', 'refreshEdges', 'fmtInt', 'momentaryFailure', 'writtenSizeLimit', `${body}; return [edgesOf, stopEdgeJobs, showBase];`)(
-      app, () => cap, () => usable, overSilhouetteCap, () => current, (b, v) => kept.push([b, v]), Worker, setStatus, () => drawn.push(true), (n) => String(n), momentaryFailure, writtenSizeLimit);
-    return { app, made, said, kept, drawn, edgesOf, stopEdgeJobs, showBase };
+    const [edgesOf, stopEdgeJobs, showBase] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'factsCurrent', 'keepEdges', 'Worker', 'setStatus', 'refreshEdges', 'fmtInt', 'momentaryFailure', 'writtenSizeLimit', 'tell', `${body}; return [edgesOf, stopEdgeJobs, showBase];`)(
+      app, () => cap, () => usable, overSilhouetteCap, () => current, (b, v) => kept.push([b, v]), Worker, setStatus, () => drawn.push(true), (n) => String(n), momentaryFailure, writtenSizeLimit, (t) => told.push(t));
+    return { app, made, said, kept, drawn, told, edgesOf, stopEdgeJobs, showBase };
   };
   const { app, made, said, edgesOf } = make();
   const base = { edgeInfo: { value: null }, position: { slice() { throw new RangeError('Array buffer allocation failed'); } }, index: new Uint32Array(3), header: { meshes: [] } };
@@ -523,7 +523,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     t.made[0].onmessage({ data: { started: true } });
     t.made[0].onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } });
     assert.equal(await p, null);
-    assert.deepEqual([b.edgeInfo.failed, b.edgeInfo.said, t.said.length], [true, true, 1]);
+    assert.deepEqual([b.edgeInfo.failed, t.said.length, t.told], [true, 1, ['no edges for this model: Map maximum size exceeded']]);
     assert.deepEqual([await t.edgesOf(b), t.made.length], [null, 1], 'asked again: no second worker');
     const t2 = make(), b2 = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
     const p2 = t2.edgesOf(b2);
@@ -576,10 +576,8 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     const p1 = t.edgesOf(b);
     t.made[0].onmessage({ data: { started: true } }); t.made[0].onerror({ message: 'out of memory' });
     await p1;
-    assert.deepEqual([b.edgeInfo.said, b.edgeInfo.failed, t.said[t.said.length - 1]], [true, undefined, 'ready · no edges for this model: the worker failed: out of memory']);
+    assert.deepEqual([b.edgeInfo.failed, t.said[t.said.length - 1]], [undefined, 'ready · no edges for this model: the worker failed: out of memory']);
     const p2 = t.edgesOf(b);
-    // (the build that starts says its own: `said` cleared, so a scene the model is in says it)
-    assert.equal(b.edgeInfo.said, false, 'cleared when the next build starts');
     t.made[1].onmessage({ data: { started: true } });
     t.made[1].onmessage({ data: { ok: true, result: { edges: new Uint32Array(0), facts: { closed: [] } }, ms: 1 } });
     await p2;
@@ -617,7 +615,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     t.made[0].onmessage({ data: { started: true } });
     t.made[0].onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } });
     await p;
-    assert.deepEqual([t.said, b.edgeInfo.said, t.app.noFacts], [[], false, 'no edges for this model: Map maximum size exceeded']);
+    assert.deepEqual([t.said, t.told, t.app.noFacts], [[], [], 'no edges for this model: Map maximum size exceeded']);
   }
   // the moment's rule: a RangeError of a size limit is the model's own, remembered; the page's copy
   // with no room is the moment's (r40 A3, Q2)
@@ -671,7 +669,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     const t = make(false, 2e6, false, true), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
     t.app.baseMesh = b;
     await t.edgesOf(b);
-    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: this browser runs no module worker, and the page builds no edges or volume itself (module workers are not supported)']]);
+    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: no module worker could start here, and the page builds no edges or volume itself (module workers are not supported)']]);
   }
   // a size limit met when the file was read, written in it under today's rule: remembered at once,
   // no worker (r43 A3); one of the moment, or one written under another rule, built (r44 A1, Q2)
@@ -736,12 +734,13 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
       if (edged) m.edges = new Uint32Array(2);
     };
     const setStatus = (s, t) => { said.push(t); app.status = s; app.statusMsg = t; };
-    const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', 'GONE', 'refreshEdges', 'fmtInt', 'overSilhouetteCap', 'factsCurrent', 'momentaryFailure', `${body}; return [sceneEdges, pendingVolume];`)(
-      app, edgesOf, () => stale, merge, () => 5e5, setStatus, GONE, () => drawn.push(merged.edgeInfo.value), (n) => String(n), overSilhouetteCap, () => false, momentaryFailure);
+    const told = [];
+    const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', 'GONE', 'refreshEdges', 'fmtInt', 'overSilhouetteCap', 'factsCurrent', 'momentaryFailure', 'tell', `${body}; return [sceneEdges, pendingVolume];`)(
+      app, edgesOf, () => stale, merge, () => 5e5, setStatus, GONE, () => drawn.push(merged.edgeInfo.value), (n) => String(n), overSilhouetteCap, () => false, momentaryFailure, (t) => told.push(t));
     const pending = sceneEdges(merged, models).catch((e) => `rejected ${e.message}`);
     if (fail === 'never') leave(); // (another scene shown while this one waits)
     const v = await Promise.race([pending, new Promise((r) => setTimeout(() => r('still waiting'), 500))]);
-    return { v, built, panel: pendingVolume(merged.edgeInfo, app.scene.length > 1), said, caps, drawn, app, merged, info: stale[0]?.base.edgeInfo };
+    return { v, built, panel: pendingVolume(merged.edgeInfo, app.scene.length > 1), said, told, caps, drawn, app, merged, info: stale[0]?.base.edgeInfo };
   };
   const ok = await run(false);
   assert.deepEqual([ok.built, ok.v?.source, ok.caps], [['model', 'merged', 'scene'], 'file', [5e5]], 'the stale model built, the scene merged under the device\'s cap, then its own from the merge');
@@ -763,7 +762,8 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const again = await run('remembered', { line: 'no edges for this scene: s0: Map maximum size exceeded' });
   assert.deepEqual([again.panel, again.said], ['not computed: s0: Map maximum size exceeded', []]);
   const unsaid = await run('unsaid');
-  assert.deepEqual([unsaid.said, unsaid.info.said], [['ready · no edges for this scene: s0: Map maximum size exceeded'], true]);
+  // (told: only the word, not what the ready line always carries -- r45 A2, Q4)
+  assert.deepEqual([unsaid.said, unsaid.told], [['ready · no edges for this scene: s0: Map maximum size exceeded'], ['no edges for this scene: s0: Map maximum size exceeded']]);
   // (several failing: the first named, the others counted: r40 Q7)
   const all = await run('allfail', { stale: 3 });
   assert.deepEqual(all.said, ['ready · no edges for this scene: s0: Map maximum size exceeded (and 2 more models)']);
@@ -809,7 +809,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const moved = await run('remembered', { shown: 'ready' });
   assert.deepEqual([moved.said, moved.app.noFacts], [['ready · no edges for this scene: s0: Map maximum size exceeded'], 'no edges for this scene: s0: Map maximum size exceeded']);
   const busy = await run('failed', { status: 'loading' });
-  assert.deepEqual([busy.said, busy.app.noFacts, busy.info.said], [[], 'no edges for this scene: s0: the worker failed: out of memory', undefined]);
+  assert.deepEqual([busy.said, busy.app.noFacts, busy.told], [[], 'no edges for this scene: s0: the worker failed: out of memory', []]);
   // (every failure a stop: no word, the next scene owns it -- r42 Q7)
   assert.equal(stopped.app.noFacts ?? null, null);
   // (a model's failure does not stop the others: the next stale model is built, the scene merged
@@ -838,31 +838,45 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   // end writes the ready text back)
   const writers = [...src.matchAll(/setStatus\(([^,]*'ready'[^,]*), (`[^`]*`|'[^']*'|[^)]*\))\)/g)].map((m) => m[2]);
   const bare = writers.filter((w) => !/readyText\(\)/.test(w) && !/^`exporting /.test(w));
-  assert.ok(writers.length >= 12, `ready writers found: ${writers.length}`);
+  assert.ok(writers.length >= 8, `ready writers found: ${writers.length}`);
+  // (each failure added to the ready line told, by name: an export's failed was shown 1.5 s and never heard -- r45 Q1)
+  for (const words of ['export failed: ', 'could not save ', 'could not move ', 'could not recolour: ', 'the tour has no step', 'the tour names parts this model lacks: ', 'the tour ${r.error}']) {
+    assert.ok(src.includes(`tellReady(\`${words}`), `told: ${words}`);
+  }
   assert.deepEqual(bare, [], 'a ready line without the ready text');
-  // (and a writer that keeps the status it finds -- Save's failure -- through it when that is ready: r43 Q4)
-  const keeps = src.split('\n').filter((l) => /setStatus\(app\.status, /.test(l));
-  assert.ok(keeps.length >= 1 && keeps.every((l) => /app\.status === 'ready' \? `\$\{readyText\(\)\} · `/.test(l)), keeps.join('\n'));
-  // (Save .cadmesh writes the kept bytes without a written edges failure, this browser's reading -- r44 Q2)
-  assert.match(src, /const buf = await withoutEdgesFailed\(app\.lastStepBuffer\);/);
+  // (no writer keeps the status it finds and adds words to it unseen: r43 Q4, r45 A1)
+  assert.deepEqual(src.split('\n').filter((l) => /setStatus\(app\.status, /.test(l)), []);
+  // (one owner of a note: flashHover called only from tell -- its definition and that call -- r45 A1)
+  assert.equal([...src.matchAll(/flashHover\(/g)].length, 2);
+  // (Save .cadmesh writes js/cadmesh.js cadmeshToSave's bytes, without a written edges failure -- r44 Q2, r45 Q9)
+  assert.match(src, /bytes = await cadmeshToSave\(app\.lastStepBuffer\);/);
   // (the page's read where no worker could be made builds no edges or facts: never on the page -- r43 A4)
   assert.match(src, /await readMeshFile\(\{ \.\.\.src, unit, edges: false \}\)/);
 });
-test('a ready line rewritten with new words is read out and its note shown where the view\'s notes go: #status is not drawn (r44 Q1, A2)', () => {
+await test('a note is told -- shown where the view\'s notes go and read out -- the words a writer adds to the ready line alone; a change of state read out; what is said at once said together (r44 Q1, r45 A1, A2, Q1, Q2, Q4)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const at = src.indexOf('function setStatus(s, msg) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const body = line('let saySeq = 0') + cut('function announce(text) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text) {')
+    + cut('function tellReady(words, ms = 6000) {') + cut('function setStatus(s, msg) {');
   const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
-  const dom = { status: el(), progress: el(), hover: el(), announce: el() };
+  const dom = { status: el(), progress: el(), announce: el() };
   const app = { status: 'idle', statusMsg: 'idle' }, heard = [], shown = [];
-  const setStatus = new Function('app', '$', 'announce', 'flashHover', 'showEmpty', 'PROGRESS_STATES', `${body}; return setStatus;`)(
-    app, (id) => dom[id], (t) => heard.push(t), (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']));
-  setStatus('ready', 'ready');
-  setStatus('ready', 'ready · could not save a.step: Array buffer allocation failed');
-  setStatus('ready', 'ready · could not save a.step: Array buffer allocation failed'); // (the same: not again)
-  setStatus('loading', 'reading 40 %');
-  setStatus('ready', 'ready · no volume for this model: x');
-  assert.deepEqual(heard, ['ready', 'ready · could not save a.step: Array buffer allocation failed', 'ready · no volume for this model: x']);
-  assert.deepEqual(shown, ['could not save a.step: Array buffer allocation failed', 'no volume for this model: x']);
+  const live = { set textContent(t) { heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
+  dom.announce = live;
+  const [setStatus, tell, tellReady, announce] = new Function('app', '$', 'flashHover', 'showEmpty', 'PROGRESS_STATES', 'readyText', 'requestAnimationFrame', `${body}; return [setStatus, tell, tellReady, announce];`)(
+    app, (id) => dom[id], (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']), () => 'ready · 3 faces could not be meshed and are missing', (f) => f());
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  setStatus('ready', 'ready'); await settle();
+  setStatus('ready', 'ready · 3 faces could not be meshed and are missing'); await settle(); // (a rewrite in the same state: silent)
+  tellReady('export failed: x'); await settle();
+  assert.deepEqual([app.statusMsg, shown, heard], ['ready · 3 faces could not be meshed and are missing · export failed: x', ['export failed: x'], ['ready', 'export failed: x']]);
+  // (two in one moment: said together, in order -- the later replaced the earlier unheard)
+  tell('the tour names parts this model lacks: J5'); announce('Step 1 of 3'); await settle();
+  assert.equal(heard[heard.length - 1], 'the tour names parts this model lacks: J5 · Step 1 of 3');
+  // (said null: shown only, its caller reads out its own words)
+  tell('hole 1: Ø 3.2 mm', 3000, null); await settle();
+  assert.deepEqual([shown[shown.length - 1], heard.length], ['hole 1: Ø 3.2 mm', 3]);
 });
 await test('the edges drawn are the value\'s: a file\'s drawn while its facts build, then the build\'s uploaded in their place; the same arrays not uploaded again (r40 A1, Q9)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -892,10 +906,11 @@ test('keepEdges keeps a build on its model as a file\'s would be: edges, silhoue
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const at = src.indexOf('function keepEdges(base, v) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2);
   const keepEdges = new Function('FACTS_RULE', `${body}; return keepEdges;`)(FACTS_RULE);
-  const base = { header: {} }, v = { edges: new Uint32Array(2), silhouettes: null, silhouetteNormals: null, silhouettesOmitted: 7, facts: { closed: [true] } };
+  // (a written failure of the moment, then built: gone with the facts -- never beside them, r45 A9)
+  const base = { header: { edgesFailed: { error: 'Array buffer allocation failed', factsRule: FACTS_RULE } } }, v = { edges: new Uint32Array(2), silhouettes: null, silhouetteNormals: null, silhouettesOmitted: 7, facts: { closed: [true] } };
   keepEdges(base, v);
-  assert.deepEqual([base.edges, base.silhouettes, base.silhouetteNormals, base.header.silhouettesOmitted, base.header.facts, base.header.factsRule],
-    [v.edges, null, null, 7, v.facts, FACTS_RULE]);
+  assert.deepEqual([base.edges, base.silhouettes, base.silhouetteNormals, base.header.silhouettesOmitted, base.header.facts, base.header.factsRule, 'edgesFailed' in base.header],
+    [v.edges, null, null, 7, v.facts, FACTS_RULE, false]);
 });
 test('the selftest\'s edges report: a file\'s edges kept while its facts failed read as edges, the facts\' error beside, not a TypeError (r39 A2, Q3)', () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');

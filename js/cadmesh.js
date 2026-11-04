@@ -255,19 +255,30 @@ export function splitCadmesh(buf) {
   return { header, data: new Uint8Array(buf.slice(align8(12 + jlen))) };
 }
 
-// header + data region -> a raw .cadmesh (ArrayBuffer), checked to read back.
-// Section offsets are from the data's start, so a longer header moves nothing
-// they name.
 // A .cadmesh (raw or gzipped) without its written edges failure, for a file that leaves this
 // browser (main.js Save .cadmesh): the failure is this browser's reading, and another may build
-// them (r44 Q2). The same buffer back when it carries none.
+// them (r44 Q2). The same buffer back when it carries none -- a raw one asked of its header alone,
+// not decoded whole (a Save inflated and checked the whole file to find nothing: r45 Q7).
 export async function withoutEdgesFailed(buf) {
   const raw = isGzip(buf) ? await inflateCadmesh(buf) : buf;
+  const jlen = new DataView(raw).getUint32(8, true);
+  if (!('edgesFailed' in JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))))) return buf;
   const { header, data } = splitCadmesh(raw);
-  if (header.edgesFailed === undefined) return buf;
   const { edgesFailed, ...rest } = header;
   return withHeader(rest, data);
 }
+
+// The bytes Save .cadmesh writes: without a written edges failure, gzipped where the browser can
+// (about a sixth of the raw size; one opened from the browser's kept conversions is gzipped
+// already)
+export async function cadmeshToSave(buf) {
+  const b = await withoutEdgesFailed(buf);
+  return isGzip(b) || typeof CompressionStream !== 'function' ? b : deflateCadmesh(b);
+}
+
+// header + data region -> a raw .cadmesh (ArrayBuffer), checked to read back.
+// Section offsets are from the data's start, so a longer header moves nothing
+// they name.
 export function withHeader(header, data) {
   const json = new TextEncoder().encode(JSON.stringify(header));
   const dataStart = align8(12 + json.byteLength);
@@ -542,7 +553,10 @@ function validateHeader(h) {
     }
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
-  if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string' && Number.isInteger(h.edgesFailed.factsRule))) {
+  // (its factsRule may be missing: round 43 wrote { error, sizeLimit }, read now as a record of no
+  // rule -- built again, not refused whole: r45 Q6)
+  if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string'
+    && (h.edgesFailed.factsRule === undefined || Number.isInteger(h.edgesFailed.factsRule)))) {
     bad('edgesFailed is not { error, factsRule }');
   }
   // (a failed build and facts both: no writer makes one, and which to believe is no question -- r44 A1)

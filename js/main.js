@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, withoutEdgesFailed } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
@@ -146,13 +146,39 @@ const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || 
 // nothing newer was said meanwhile -- else a queued "loading x" could land
 // after "ready" or an error (a fast failure, or a background tab, where frames
 // do not run), and be the last thing said.
-let saySeq = 0;
+// (What is said in one moment is said together, in order: a later write in the same task replaced
+// an earlier one unheard -- the tour's "lacks parts", a scene's missing faces, a drawing's unit
+// -- r45 Q2.)
+let saySeq = 0, sayParts = null;
 function announce(text) {
+  if (sayParts) { if (!sayParts.includes(text)) sayParts.push(text); return; }
+  sayParts = [text];
+  queueMicrotask(() => { const t = sayParts.join(' · '); sayParts = null; sayNow(t); });
+}
+function sayNow(text) {
   const el = $('announce');
   const seq = ++saySeq;
   if (el.textContent !== text) { el.textContent = text; return; }
   el.textContent = '';
   requestAnimationFrame(() => { if (seq === saySeq) el.textContent = text; });
+}
+
+// A note for the user: shown where the view's short notes go (the hover line, for ms) and read
+// out (`said`, if it says it otherwise). The one way a note reaches anyone: a note only shown --
+// "export failed", "the picture could not be copied" -- was never heard, and the status line is not
+// drawn (r45 A1, Q1). flashHover is called only from here.
+// (said null: a caller that reads out its own words -- js/measure-ui.js's flash)
+function tell(text, ms = 1500, said = text) {
+  flashHover(text, ms);
+  if (said) announce(said);
+}
+
+// A note added to the ready line: the line is the ready text with these words after it, and the
+// words -- only they, not what the ready line always carries -- are told (the whole line after
+// "ready · " was shown and read again on every rewrite: r45 A2, Q4)
+function tellReady(words, ms = 6000) {
+  setStatus('ready', `${readyText()} · ${words}`);
+  tell(words, ms);
 }
 
 // States whose status text is progress, rewritten per fetch chunk or per
@@ -162,22 +188,15 @@ const PROGRESS_STATES = new Set(['loading', 'tessellating']);
 
 function setStatus(s, msg) {
   // Screen readers hear an EVENT through the polite live region: a state
-  // change into ready / idle / error / recovering / init, a new error after an
-  // error (the shown model dropped after a failed load; "GPU lost repeatedly;
-  // reload"), and a line rewritten in the same state with new words (a note on
-  // the ready line: "no volume …", "could not save …", a tour's). #status
-  // itself is rewritten on every progress tick.
-  // (#status is not drawn -- the footer that held it is hidden -- so a note the line gains is shown
-  // where the view's short notes go too: written on the ready line while ready, it reached no one,
-  // seen or heard -- r44 Q1, A2)
-  const text = msg || s, changed = s !== app.status || text !== app.statusMsg;
-  if (!PROGRESS_STATES.has(s) && changed) {
-    announce(text);
-    const note = s === 'ready' && text.startsWith('ready · ') ? text.slice('ready · '.length) : '';
-    if (note && $('hover')) flashHover(note, 6000);
-  }
+  // change into ready / idle / error / recovering / init, and a new error
+  // after an error (the shown model dropped after a failed load; "GPU lost
+  // repeatedly; reload"). #status itself is rewritten on every progress tick.
+  // (#status is not drawn -- the footer that held it is hidden: words a writer adds to the ready
+  // line while ready reach the user as a note -- tellReady, sayNoFacts -- r44 Q1)
+  const text = msg || s;
+  if (!PROGRESS_STATES.has(s) && (s !== app.status || (s === 'error' && text !== app.statusMsg))) announce(text);
   app.status = s;
-  app.statusMsg = msg || s; // (what the line says: a facts failure taken back when its build succeeds)
+  app.statusMsg = msg || s; // (what the line says: sayNoFacts writes its word in place, showBase takes it back)
   $('status').textContent = msg || s;
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
@@ -576,9 +595,8 @@ function setExplode(on, focus = false) {
   if (on && app.measure && app.measure.on) {
     app.measure.setOn(false);
     const why = 'Measure is off while exploded: it measures the parts where they are, not where Explode draws them';
-    flashHover('Measure off while exploded');
     if (app.status === 'ready') setStatus('ready', `${readyText()} · ${why}`);
-    announce(why);
+    tell('Measure off while exploded', 1500, why);
   }
   // (Paint picks the faces where they are: off while exploded)
   if (on && app.paintFaces) setPaint(false);
@@ -1022,8 +1040,7 @@ function viewKey(digit) {
   }
   // name the result where the hovered part's name goes, so 9's is never a
   // guess; the next hover replaces it
-  flashHover(name);
-  announce(`${name} view`);
+  tell(name, 1500, `${name} view`);
 }
 
 // A short note where the hovered part's name goes, for 1.5 s (or ms; or until
@@ -1045,7 +1062,7 @@ function touchHintOnce() {
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
   setPref('cadv.touchHint', '1');
-  flashHover(TOUCH_HINT, 6000);
+  tell(TOUCH_HINT, 6000);
 }
 
 // ---------- view links (js/view-link.js) ----------
@@ -1133,14 +1150,12 @@ function applyView(v, link = false) {
   if (link && bodies.selected.length && !bodies.changed) {
     const ids = bodies.selected;
     const name = ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} parts`;
-    flashHover(`linked: ${name}`, 4000);
-    announce(`the link points at ${name}`);
+    tell(`linked: ${name}`, 4000, `the link points at ${name}`);
   }
   if (bodies.changed) {
     const note = `this model has changed since the link was made: ${v.selNames?.length
       ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : 'its parts are not selected'}${v.hidden?.length ? ', hidden parts not applied' : ''}`;
-    flashHover(note);
-    announce(note);
+    tell(note, 6000);
   }
 }
 
@@ -1179,7 +1194,7 @@ async function exportMesh(fmt) {
   const model = { ...app.baseMesh, color: app.mesh.color };
   // (the bodies shown that have a triangle: what is written, counted and said -- js/export-mesh.js)
   const ids = exportable(model, app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id)));
-  if (!ids.length) { flashHover(NOTHING_TO_EXPORT); return; }
+  if (!ids.length) { tell(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
   setStatus('ready', `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`);
@@ -1188,17 +1203,16 @@ async function exportMesh(fmt) {
   try {
     bytes = await EXPORTS[fmt].write(model, ids, exportBasis(app.cam.orient, EXPORTS[fmt].up), { names, base });
   } catch (e) {
-    setStatus('ready', readyText());
-    flashHover(`export failed: ${e.message || e}`);
+    // (on the ready line and told: shown 1.5 s and never heard, the export's failure reached a
+    // screen reader as "ready" -- r45 Q1, A1)
+    tellReady(`export failed: ${e.message || e}`);
     return;
   }
   const name = `${base}.${fmt}`;
   downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
   app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name }; // (for tests)
   setStatus('ready', readyText());
-  const note = `saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`;
-  flashHover(note, 3000);
-  announce(note);
+  tell(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`, 3000);
 }
 
 // Save picture (P): the view as a PNG at the picture options' size and
@@ -1214,12 +1228,12 @@ async function savePicture(print = false) {
     if (print) return printPng(blob);
     const name = pictureName(app.dxf.name);
     downloadBlob(blob, name);
-    flashHover(`saved ${name}`, 3000);
+    tell(`saved ${name}`, 3000);
     return;
   }
   if (!app.header || !app.renderer) return;
   const pic = await renderPicture();
-  if (!pic) { flashHover('the picture could not be read from the GPU'); return; }
+  if (!pic) { tell('the picture could not be read from the GPU', 4000); return; }
   const out = pic.canvas;
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
   if (print) return printPng(png);
@@ -1228,9 +1242,7 @@ async function savePicture(print = false) {
     const url = downloadBlob(png, name);
     app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
     // (a size the view has grown too big for saves at the largest allowed)
-    const note = `saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`;
-    flashHover(note, 3000);
-    announce(note);
+    tell(`saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`, 3000);
   };
   // A touch-only device: the render has used up the tap's gesture, and the
   // share sheet needs a fresh one, so "Picture ready: Share / Save" waits 8 s
@@ -1300,8 +1312,8 @@ function copyPicture() {
     return new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
   });
   navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]).then(
-    () => { flashHover('picture copied', 3000); announce('picture copied'); },
-    (e) => flashHover(`the picture could not be copied: ${e.message || e}`, 4000));
+    () => tell('picture copied', 3000),
+    (e) => tell(`the picture could not be copied: ${e.message || e}`, 4000));
 }
 
 // The picture options (File > Save picture ▾), remembered in this browser:
@@ -1414,13 +1426,13 @@ function setPaint(on) {
   // while exploded)
   // (not while a tour plays: no step holds face colours, and they are set aside meanwhile -- refused
   // first, before it turns Measure or the step's Explode off for nothing)
-  if (on && app.tour) { flashHover('Paint is off while a tour plays: a tour step holds no face colours'); on = false; }
+  if (on && app.tour) { tell('Paint is off while a tour plays: a tour step holds no face colours', 3000); on = false; }
   if (on && app.measure && app.measure.on) app.measure.setOn(false);
   if (on && app.explode.on) setExplode(false);
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
-  if (on && !app.paintFaces) flashHover('this model has no b-rep faces to paint');
-  else if (on) flashHover('Paint: click a face to paint it in the swatch\'s colour', 3000);
+  if (on && !app.paintFaces) tell('this model has no b-rep faces to paint', 3000);
+  else if (on) tell('Paint: click a face to paint it in the swatch\'s colour', 3000);
   updateButtons();
 }
 function paintFace(f) {
@@ -1448,7 +1460,7 @@ async function printPng(png) {
 function saveDrawing() {
   if (!app.header || !app.baseMesh?.faces) return;
   const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
-  if (!ids.length) { flashHover('nothing shown to draw'); return; }
+  if (!ids.length) { tell('nothing shown to draw'); return; }
   const preset = nearestPreset(app.cam);
   const [yaw, pitch] = VIEWS[preset];
   const c = { q: presetQuat(yaw, pitch, app.cam.orient) };
@@ -1462,9 +1474,7 @@ function saveDrawing() {
   const name = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
   downloadBlob(new Blob([d.svg], { type: 'image/svg+xml' }), name);
   app.lastDrawing = { name, preset, width: d.width, height: d.height, lines: d.lines, circles: d.circles, svg: d.svg }; // (for tests)
-  const note = `saved ${name}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`;
-  flashHover(note, 3000);
-  announce(note);
+  tell(`saved ${name}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`, 3000);
 }
 
 // The model in the address, one way only: with a ?list=, a model the list
@@ -1557,10 +1567,8 @@ async function shareView() {
   // (a link carries the first MAX_NOTES notes: said, not left for the visitor to find)
   const nNotes = app.measure ? app.measure.notes().length : 0;
   const cut = nNotes > MAX_NOTES ? ` (with the first ${MAX_NOTES} of its ${nNotes} notes: a link is short)` : '';
-  const note = (app.sourceUrl ? 'View link copied'
-    : 'View link copied: it holds the view, not the file (opened from this device)') + cut;
-  flashHover(note);
-  announce(note);
+  tell((app.sourceUrl ? 'View link copied'
+    : 'View link copied: it holds the view, not the file (opened from this device)') + cut, 3000);
 }
 
 // ---------- tours (js/tour.js) ----------
@@ -1875,7 +1883,7 @@ function showTourStep(i) {
   }
   if (x.on) x.t = exNow;
   flyTo(to ? to.pose : null, to ? to.ortho : !!app.cam.ortho, s.transition, s.ease, ex1, holdStep);
-  if (app.tourMissing.length) flashHover(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  if (app.tourMissing.length) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
 }
 
@@ -1890,7 +1898,7 @@ function startTour(tour, url, only = null) {
   if (only) {
     const s = tour.steps.find((x) => x.id === only);
     if (!s) {
-      setStatus('ready', `${readyText()} · the tour has no step "${only}"`);
+      tellReady(`the tour has no step "${only}"`);
       return false;
     }
     tour = { ...tour, steps: [s], mode: 'static', loop: false };
@@ -1943,7 +1951,7 @@ function startTour(tour, url, only = null) {
   $('stage').classList.add('touring');
   // the names it uses that this model lacks, once (a tour outlives a model update)
   const missing = tourParts(tourNames(tour)).missing;
-  if (missing.length) setStatus('ready', `${readyText()} · the tour names parts this model lacks: ${missing.join(', ')}`);
+  if (missing.length) tellReady(`the tour names parts this model lacks: ${missing.join(', ')}`);
   showTourStep(0);
   return true;
 }
@@ -2419,8 +2427,7 @@ function setWalk(on) {
     levelOrbitBy(c, orientUp(c.orient), 0, 0);
     viewChanged();
   }
-  flashHover(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000);
-  announce(on ? 'walk on' : 'walk off');
+  tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000, on ? 'walk on' : 'walk off');
 }
 
 // one animation frame of the turntable; runs only while it is on
@@ -2445,11 +2452,10 @@ function turn() {
 // E: Shaded <-> Shaded + edges; elsewhere it says why nothing happened
 function edgesKey() {
   const next = toggleEdges(currentStyle().id);
-  if (!next) { flashHover('E switches edges in the Shaded styles'); return; }
+  if (!next) { tell('E switches edges in the Shaded styles'); return; }
   setStyle(next, false);
   const s = styleById(next);
-  flashHover(s.label);
-  announce(`${s.label} style`);
+  tell(s.label, 1500, `${s.label} style`);
 }
 
 // A preset's camera orientation, taken in the model's orientation
@@ -3130,7 +3136,7 @@ function applyListEntry() {
     b.onclick = async () => {
       closeMenus();
       const r = await readTour(t.url);
-      if (r.error) { flashHover(`the tour ${r.error}`, 4000); return; }
+      if (r.error) { tell(`the tour ${r.error}`, 4000); return; }
       startTourIn(r.tour, t.url);
     };
     tl.append(b);
@@ -3617,7 +3623,7 @@ function recolour(announcement) {
     if (app.wanted !== view) return;
     app.mesh = before;
     app.wanted = before;
-    setStatus('ready', `${readyText()} · could not recolour: ${e.message || e}`);
+    tellReady(`could not recolour: ${e.message || e}`);
   });
 }
 
@@ -3903,6 +3909,8 @@ function keepEdges(base, v) {
   base.header.silhouettesOmitted = v.silhouettesOmitted || 0;
   base.header.facts = v.facts;
   base.header.factsRule = FACTS_RULE;
+  // (a written failure gone with the facts built: never beside facts -- the decoder's rule, r45 A9)
+  delete base.header.edgesFailed;
 }
 
 // A big CAD file on a phone (a touch-only device) is converted only once
@@ -4091,7 +4099,7 @@ async function sceneEdges(merged, models) {
   }
   // (with the models that failed, not in their place: a model's failure remembered, then the merge's
   // of the moment, advised a move that could never give the scene its facts -- r42 A1, Q2)
-  if (mergeError) failed.push({ name: 'the scene\'s merge', merge: true, base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false, said: false } } });
+  if (mergeError) failed.push({ name: 'the scene\'s merge', merge: true, base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false } } });
   if (!failed.length) return edgesOf(merged);
   return sceneFailed(merged, failed, cap);
 }
@@ -4110,13 +4118,10 @@ function sceneFailed(merged, failed, cap) {
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
   // (the word kept for the scene unless every failure is a stop -- the next scene owns a stop --
-  // and said on its ready line; worded by what is missing -- the edges are drawn when only the
-  // facts are. A move with a failure said before kept no word, and its ready line read "ready": r42
-  // Q3. Each model's failure then marked said.)
-  if (app.baseMesh === merged && !merged.edgeInfo.stopped
-    && sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`)) {
-    for (const i of infos) if (!i.stopped) i.said = true;
-  }
+  // and told; worded by what is missing -- the edges are drawn when only the facts are. A move
+  // with a failure said before kept no word, and its ready line read "ready": r42 Q3. Told again
+  // after each move that leaves it -- the move the panel advises -- the same words not twice.)
+  if (app.baseMesh === merged && !merged.edgeInfo.stopped) sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`);
   return merged.edgeInfo.value;
 }
 
@@ -4141,7 +4146,7 @@ function fileEdgesValue(base, cap) {
 // the load then cancelled, read "ready": r42 Q3); written in place, the line's own words after the
 // ready text kept (a tour's note was lost: r43 A2); a line that is not a ready line -- an export's
 // progress, said while ready -- left alone, the word waiting for the next ready line (r43 Q3).
-// Says whether the line now says something new (setStatus then reads it out and shows its note).
+// Says whether the line now says something new (then told: shown and read out).
 function sayNoFacts(text) {
   const msg = app.statusMsg || '', before = readyText(); // (with a word said before, if any)
   const tail = msg.startsWith(before) ? msg.slice(before.length) : null;
@@ -4149,6 +4154,7 @@ function sayNoFacts(text) {
   const line = readyText() + (tail ?? '');
   if (app.status !== 'ready' || tail === null || line === msg) return false;
   setStatus('ready', line);
+  tell(text, 6000);
   return true;
 }
 
@@ -4240,7 +4246,7 @@ async function moveModel(i, k, v) {
     if (!(await showScene(models)) || mine !== moveSeq) return;
     announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
   } catch (e) {
-    setStatus('ready', `${readyText()} · could not move ${models[i].name}: ${e.message || e}`);
+    tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
 }
 
@@ -4407,21 +4413,22 @@ function edgesOf(base) {
   // MOMENT_TRIES)
   if (info.failed) return Promise.resolve(info.value);
   // (a build before that was stopped or failed for the moment: this one says its own)
-  info.error = null; info.stopped = false; info.said = false;
-  // a build that failed: its state, and said where it shows (and the info panel says it too),
-  // worded by what is missing -- the file's edges are drawn when only the facts failed; `said`
-  // marks it, so a scene says it once
+  info.error = null; info.stopped = false;
+  // a build that failed: its state, and told where it shows (and the info panel says it too),
+  // worded by what is missing -- the file's edges are drawn when only the facts failed; the same
+  // words are not told twice (sayNoFacts)
   const fail = (v) => {
     // (no module worker: said as why there are neither edges nor volume -- the page builds neither,
-    // in its read either: r44 Q3)
-    info.error = v.stopped || v.error || `this browser runs no module worker, and the page builds no edges or volume itself (${v.noWorker})`;
+    // in its read either: r44 Q3; "could start here", not "this browser runs none": a file:// page
+    // or a worker file that fails to load is no browser's want -- r45 A5)
+    info.error = v.stopped || v.error || `no module worker could start here, and the page builds no edges or volume itself (${v.noWorker})`;
     // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
     // is remembered, one of the moment not -- until its second try: one that fails the same way
     // every time started a worker and copied the model at every move -- r40 A3, Q2)
     info.stopped = !!v.stopped;
     if (v.transient) info.tries = (info.tries || 0) + 1;
     if (!v.stopped && (!v.transient || info.tries >= MOMENT_TRIES)) info.failed = true;
-    if (!info.stopped && app.baseMesh === base && sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`)) info.said = true;
+    if (!info.stopped && app.baseMesh === base) sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`);
     return info.value; // (the file's edges, when it carries them; else null)
   };
   // (a build that met a size limit when the file was read -- js/cadmesh.js edgesFailed -- fails the
@@ -4793,7 +4800,7 @@ function setSheet(i) {
   app.dxf.view = createDxfView($('view2d'), shown, {
     onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
     onHover: (what, snap) => { $('hover').textContent = !what ? '' : snap ? what : `layer ${what}`; },
-    onMeasure: (r) => { flashHover(r.text, 4000); announce(r.text); },
+    onMeasure: (r) => tell(r.text, 4000),
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
@@ -4853,8 +4860,7 @@ function toggle2DMeasure() {
   v.setMeasure(on);
   if (!on) v.clearMeasure();
   $('measure').setAttribute('aria-pressed', String(on));
-  flashHover(on ? 'Measure: click two points (they snap to line ends, middles and circle centres)' : 'measure off', 3000);
-  announce(on ? 'measure on' : 'measure off');
+  tell(on ? 'Measure: click two points (they snap to line ends, middles and circle centres)' : 'measure off', 3000, on ? 'measure on' : 'measure off');
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)
@@ -5333,8 +5339,9 @@ function pickModelFile(files) {
 function openFile(f) {
   if (f.size > MAX_FILE_BYTES) {
     const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
-    announce(msg);
-    if (!PROGRESS_STATES.has(app.status)) setStatus(app.mesh ? 'ready' : 'error', app.mesh ? `${readyText()} · ${msg}` : msg);
+    if (PROGRESS_STATES.has(app.status)) announce(msg); // (a load under way keeps its line)
+    else if (app.mesh) tellReady(msg);
+    else { setStatus('error', msg); announce(msg); }
     return;
   }
   startLoad(() => loadFile(f));
@@ -6071,7 +6078,7 @@ function wireInput() {
     },
     lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
     num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
-    announce, flash: flashHover, queueFrame, syncOptbar,
+    announce, flash: (text, ms) => tell(text, ms, null), queueFrame, syncOptbar,
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => currentStyle().seesHidden,
@@ -6080,7 +6087,7 @@ function wireInput() {
     // and Measure and Paint pick the parts where they are, not where Explode
     // draws them)
     beforeOn: () => {
-      if (app.explode.on) { setExplode(false); flashHover('Explode off while measuring'); }
+      if (app.explode.on) { setExplode(false); tell('Explode off while measuring'); }
       if (app.paintFaces) setPaint(false);
     },
   });
@@ -6353,7 +6360,7 @@ function wireInput() {
     if (!d.moved && e.button === 0 && app.mesh && !d.dismiss && app.paintFaces) {
       const hit = app.measure.faceAt(...stageXY(e));
       if (hit && hit.face >= 0) paintFace(hit.face);
-      else flashHover('no face there to paint');
+      else tell('no face there to paint');
       return;
     }
     if (!d.moved && e.button === 0 && app.mesh && !d.dismiss) {
@@ -6699,16 +6706,14 @@ function wireInput() {
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;
-    // gzipped (about a sixth of the raw size); a browser without
-    // CompressionStream saves the raw layout, which loads the same. A model
-    // opened from the browser's saved conversions is gzipped already.
-    // (without a written edges failure: it is this browser's reading -- js/cadmesh.js withoutEdgesFailed)
+    // (js/cadmesh.js cadmeshToSave: gzipped where the browser can, without a written edges
+    // failure -- it is this browser's reading)
     let bytes;
     try {
-      const buf = await withoutEdgesFailed(app.lastStepBuffer);
-      bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
+      bytes = await cadmeshToSave(app.lastStepBuffer);
     } catch (e) {
-      setStatus(app.status, `${app.status === 'ready' ? `${readyText()} · ` : ''}could not save ${name}: ${e.message || e}`);
+      if (app.status === 'ready') tellReady(`could not save ${name}: ${e.message || e}`);
+      else tell(`could not save ${name}: ${e.message || e}`, 6000);
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
@@ -7020,7 +7025,8 @@ async function main() {
   if (touring) {
     const r = await touring;
     if (r.error) {
-      setStatus(app.header ? 'ready' : 'error', `${app.header ? `${readyText()} · ` : ''}the tour ${r.error}`);
+      if (app.header) tellReady(`the tour ${r.error}`);
+      else setStatus('error', `the tour ${r.error}`);
     } else {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
@@ -7041,7 +7047,7 @@ async function readLists(lists, openFirst) {
   const r = await fetchModelLists(lists, location.href, timed);
   fillModelList(r.entries);
   app.listNote = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
-  if (app.listNote) announce(app.listNote);
+  if (app.listNote) tell(app.listNote, 6000); // (shown and heard: the status line is not drawn)
   if (openFirst() && r.entries.length) {
     await loadListed(r.entries[0].url);
   } else if (app.status === 'ready') setStatus('ready', readyText());

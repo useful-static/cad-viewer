@@ -1,8 +1,9 @@
 // The edge list and the body facts, from a decoded model's global arrays, in
 // one pass per body. Pure, no DOM: run by the converter (js/cadmesh.js, so a
 // new .cadmesh carries them) and by a worker for a .cadmesh without today's
-// (an older one, or one whose build failed for the moment when it was read --
-// a size limit is written in its header and not built again). Its closed
+// (an older one, or one whose build failed when it was read -- the failure is
+// written in its header, and one that is a size limit under today's rule is
+// not built again: js/cadmesh.js writtenSizeLimit). Its closed
 // test (shellsOf) is also the mesh readers': js/mesh-formats.js weld calls
 // shellTurns, here, to turn a shell wound the wrong way, and Clearance asks
 // bodyShells for a part's shells (js/clearance.js).

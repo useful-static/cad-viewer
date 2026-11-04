@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflate, inflateCadmesh,
   isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels, KEEP_WITHOUT_EDGES, refuseWithoutEdges,
-  writtenSizeLimit, withoutEdgesFailed,
+  writtenSizeLimit, withoutEdgesFailed, cadmeshToSave,
 } from '../js/cadmesh.js';
 import { FACTS_RULE } from '../js/edges.js';
 import { readMeshFile } from '../js/read-file.js';
@@ -95,6 +95,12 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   assert.deepEqual([saved.edgesFailed, savedGz.edgesFailed, saved.meshes.length], [undefined, undefined, 1]);
   const plain = encodeCadmesh({ meshes: [quad('a', 0)] });
   assert.equal(await withoutEdgesFailed(plain), plain, 'none: the same buffer');
+  // (the bytes Save writes: decoded, without the record, gzipped where it can -- r45 Q9)
+  const toSave = await cadmeshToSave(raw);
+  assert.deepEqual([isGzip(toSave), decodeCadmesh(await inflateCadmesh(toSave)).header.edgesFailed], [true, undefined]);
+  // (round 43's record, { error, sizeLimit }: read, as one of no rule -- built again, not refused: r45 Q6)
+  const r43 = withHeader({ ...splitCadmesh(raw).header, edgesFailed: { error: 'Invalid array length', sizeLimit: true } }, splitCadmesh(raw).data);
+  assert.equal(writtenSizeLimit(decodeCadmesh(r43).header), false);
   // (the CLIs' refusal: one wording, the input named; both CLIs refuse through it -- r43 A5, A9)
   assert.throws(() => refuseWithoutEdges('board.cadmesh')(new RangeError('Invalid array length')), /^Error: board\.cadmesh: the edges and body facts: Invalid array length$/);
   for (const cli of ['stp2mesh.mjs', 'split-board.mjs']) assert.match(readFileSync(join(HERE, '..', cli), 'utf8'), /encodeCadmesh\(model, \{ edges: [^}]*onEdgesError: refuseWithoutEdges\(/, cli);

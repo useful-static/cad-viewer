@@ -40,7 +40,7 @@ const HOLE = '#5fd3ff';
 //   its header, the hidden body ids, its bounding sphere: read when used),
 //   view() -> { vp, eye, dir, right, up, ortho, tanV, w, h, target, dist },
 //   sectionPlane(), lenText(mm) "4.00 mm", num(mm) "4.00", unit() "mm", announce(text),
-//   flash(text, ms), queueFrame(), syncOptbar(),
+//   flash(text, ms) (shown only: what is shown is announced here too), queueFrame(), syncOptbar(),
 //   coarse(), showsHidden(), closed(mi) (the body is closed: closedOf), beforeOn() (run as
 //   Measure turns on) }
 export function createMeasure(deps) {
@@ -287,6 +287,7 @@ export function createMeasure(deps) {
     if (p && text.trim() && count >= NOTES_MAX) {
       // (as many as a model list or a tour step holds: js/view-link.js NOTES_MAX)
       deps.flash(`${NOTES_MAX} notes is the most a view holds`, 4000);
+      deps.announce(`${NOTES_MAX} notes is the most a view holds`);
     } else if (p && text.trim()) {
       st.results.push({ mode: 'note', pts: [p.p], main: cutText(text.trim(), NOTE_TEXT_MAX), sub: '', value: null });
       deps.announce(`note: ${text.trim()}`);
@@ -317,11 +318,15 @@ export function createMeasure(deps) {
     if (st.mode === 'note' && st.pending.length) return true; // its text is being typed
     if (st.mode === 'face') {
       const f = faceAt(x, y);
-      if (!f) { deps.flash('no face here'); return true; }
+      if (!f) { deps.flash('no face here'); deps.announce('no face here'); return true; }
       st.pending.push({ p: f.p, kind: 'face', face: f });
     } else {
       const s = snapAt(x, y);
-      if (!s || !s.p) { deps.flash(s && s.pending ? 'still reading the parts here: try again' : 'no surface here'); return true; }
+      if (!s || !s.p) {
+        const why = s && s.pending ? 'still reading the parts here: try again' : 'no surface here';
+        deps.flash(why); deps.announce(why);
+        return true;
+      }
       st.pending.push(s);
     }
     if (st.pending.length >= need()) finish();
@@ -586,7 +591,7 @@ export function createMeasure(deps) {
       const copy = document.createElement('button');
       copy.textContent = 'Copy';
       copy.title = 'Copy this result';
-      copy.onclick = () => navigator.clipboard?.writeText(t.textContent).then(() => deps.flash('copied'), () => {});
+      copy.onclick = () => navigator.clipboard?.writeText(t.textContent).then(() => { deps.flash('copied'); deps.announce('copied'); }, () => {});
       const x = document.createElement('button');
       x.textContent = '×';
       x.setAttribute('aria-label', `Remove ${r.main}`);
@@ -717,7 +722,13 @@ export function createMeasure(deps) {
         td.textContent = c;
         tr.append(td);
       }
-      const pick = () => { st.holes.pick = r.n - 1; for (const x of tb.children) x.classList.toggle('pick', x === tr); deps.flash(`hole ${r.n}: Ø ${deps.lenText(r.d)} at ${t.posHead} ${r.at}`, 3000); deps.queueFrame(); };
+      const pick = () => {
+        st.holes.pick = r.n - 1;
+        for (const x of tb.children) x.classList.toggle('pick', x === tr);
+        const said = `hole ${r.n}: Ø ${deps.lenText(r.d)} at ${t.posHead} ${r.at}`;
+        deps.flash(said, 3000); deps.announce(said);
+        deps.queueFrame();
+      };
       tr.onclick = pick;
       tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
       tb.append(tr);
@@ -726,7 +737,7 @@ export function createMeasure(deps) {
       const u = deps.unit();
       const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u})`,
         ...t.rows.map((r) => `${r.n},${deps.num(r.d)},"${r.at}",${r.through ? deps.num(r.depth) : ''}`)].join('\n');
-      navigator.clipboard?.writeText(csv).then(() => deps.flash('hole table copied'), () => {});
+      navigator.clipboard?.writeText(csv).then(() => { deps.flash('hole table copied'); deps.announce('hole table copied'); }, () => {});
     };
     box.hidden = false;
     deps.queueFrame();

@@ -43,8 +43,9 @@ await test('the DWG row\'s range is the releases js/dwg.js reads, first to last 
   const readme = readFileSync(join(here, '..', 'README.md'), 'utf8');
   const said = (readme.match(/R1\d\s*(?:to|through|–|—|-|\.\.)\s*R?20\d\d/g) || []).map((s) => s.replace(/\s*(?:through|–|—|-|\.\.)\s*/, ' to ').replace(/\s+/g, ' '));
   assert.deepEqual(said.filter((s) => s !== range), [], 'a README range not the row\'s');
-  const tags = Object.keys(VERSION_NAMES), spans = readme.match(/AC10\d\d\s*\.\.\s*AC10\d\d/g) || [];
-  assert.deepEqual(spans.filter((s) => s.replace(/\s+/g, ' ') !== `${tags[0]} .. ${tags[tags.length - 1]}`), [], 'a README tag range not VERSION_NAMES\'');
+  // (with any connective too: r45 Q10)
+  const tags = Object.keys(VERSION_NAMES), spans = readme.match(/AC10\d\d\s*(?:\.\.|to|through|–|—|-)\s*AC10\d\d/g) || [];
+  assert.deepEqual(spans.filter((s) => s.replace(/\s*(?:\.\.|to|through|–|—|-)\s*/, ' .. ') !== `${tags[0]} .. ${tags[tags.length - 1]}`), [], 'a README tag range not VERSION_NAMES\'');
 });
 await test('a name says its format, through .gz and a query', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');
