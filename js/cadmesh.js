@@ -56,7 +56,7 @@
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
 
-import { buildEdges, FACTS_RULE } from './edges.js';
+import { buildEdges, FACTS_RULE, BODY_FACTS } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -493,12 +493,13 @@ function validateHeader(h) {
   if (h.facts !== undefined) {
     const f = h.facts;
     const list = (a, test) => Array.isArray(a) && a.length === (h.meshes || []).length && a.every(test);
-    const num = (x) => Number.isFinite(x) && x >= 0;
-    if (!f || !list(f.closed, (x) => typeof x === 'boolean') || !list(f.area, num) || !list(f.volume, num)) {
-      bad('facts are not one closed / area / volume per mesh');
+    const num = (x) => Number.isFinite(x) && x >= 0, flag = (x) => typeof x === 'boolean';
+    if (!f) bad('facts are not one closed / area / volume per mesh');
+    // (each per-body fact by its kind, js/edges.js BODY_FACTS: the ones always written required)
+    for (const { key, kind, always } of BODY_FACTS) {
+      if (f[key] === undefined && !always) continue;
+      if (!list(f[key], kind === 'flag' ? flag : num)) bad(always ? 'facts are not one closed / area / volume per mesh' : `facts' ${key} is not one flag per mesh`);
     }
-    if (f.net !== undefined && !list(f.net, (x) => typeof x === 'boolean')) bad('facts\' net is not one flag per mesh');
-    if (f.unchecked !== undefined && !list(f.unchecked, (x) => typeof x === 'boolean')) bad('facts\' unchecked is not one flag per mesh');
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
@@ -559,8 +560,9 @@ function validateHeader(h) {
 
 // seven significant digits: a float32's worth, in a short JSON number
 const sig7 = (x) => Number(x.toPrecision(7));
-const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7),
-  ...(f.net && f.net.some(Boolean) ? { net: f.net } : {}), ...(f.unchecked && f.unchecked.some(Boolean) ? { unchecked: f.unchecked } : {}) });
+// (numbers to 7 significant figures; a fact not always written only when one body has it)
+const roundFacts = (f) => Object.fromEntries(BODY_FACTS.filter(({ key, always }) => always || (f[key] && f[key].some(Boolean)))
+  .map(({ key, kind }) => [key, kind === 'number' ? f[key].map(sig7) : f[key]]));
 
 export function computeNormals(positions, indices) {
   const n = new Float32Array(positions.length);

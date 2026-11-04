@@ -223,16 +223,18 @@ export function treeDistance(pos, index, TA, TB, maxWork = Infinity) {
     return top;
   };
   while (heap.length) {
-    if (++work > maxWork) return done(best, true);
     const [d2, a, b] = pop();
     if (d2 >= best.d2) break; // every pair left is at least as far
+    // (the limit tested once the search is known to go on: the pop that ends it is no step)
+    if (++work > maxWork) return done(best, true);
     const la = TA.left[a] < 0, lb = TB.left[b] < 0;
     if (la && lb) {
       for (let i = TA.first[a]; i < TA.first[a] + TA.count[a]; i++) {
         if (boxDist2(TA.tbox, i, TB.box, b) >= best.d2) continue;
         const ta = TA.tri[i], A = tri(ta), nA = unitNormal(A);
         for (let j = TB.first[b]; j < TB.first[b] + TB.count[b]; j++) {
-          work++;
+          // (and inside a leaf pair, so a call never runs past its limit unchecked)
+          if (++work > maxWork) return done(best, true);
           if (boxDist2(TA.tbox, i, TB.tbox, j) >= best.d2) continue;
           const tb = TB.tri[j], Bt = tri(tb);
           // (and a pair one of whose triangles lies wholly beyond the other's plane by the best

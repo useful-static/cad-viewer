@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { encodeCadmesh, decodeCadmesh, bytesToId } from '../js/cadmesh.js';
-import { mergeModels, modelRanges, sceneKeeps, splitScene } from '../js/scene.js';
-import { buildEdges, FACTS_RULE } from '../js/edges.js';
+import { mergeModels, modelRanges, staleModels } from '../js/scene.js';
+import { buildEdges, FACTS_RULE, factsCurrent } from '../js/edges.js';
 import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
@@ -416,50 +416,74 @@ test('a scene\'s silhouettes past the cap are left out and counted, as one model
   assert.equal(under.silhouettes.length / 2, 6, 'under the cap: kept');
   const over = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }], { silhouetteCap: 4 });
   assert.deepEqual([over.silhouettes, over.header.silhouettesOmitted], [null, 6], 'past it: left out, counted');
-  // the keep: the same models (only moved) keep the scene before's; another list does not; nor a
-  // merge already carrying today's
-  const models = [{ base: a, name: 'a' }, { base: b, name: 'b', offset: [3, 0, 0] }];
-  const prev = { sceneBases: [a, b], edgeInfo: { value: { edges: new Uint32Array(0) } } };
-  const plain = { edges: null, header: {} };
-  assert.equal(sceneKeeps(prev, models, plain), true, 'a move');
-  assert.equal(sceneKeeps(prev, [models[0]], plain), false, 'a model fewer');
-  assert.equal(sceneKeeps({ ...prev, sceneBases: [b, a] }, models, plain), false, 'another order');
-  assert.equal(sceneKeeps({ sceneBases: [a, b], edgeInfo: { value: null } }, models, plain), false, 'nothing built before');
-  const edged = { edges: new Uint32Array(2), header: { facts: { closed: [] }, factsRule: 1 } };
-  assert.equal(sceneKeeps(prev, models, edged), true, 'a merge with edges but facts of an older rule: kept, not rebuilt');
-  assert.equal(sceneKeeps(prev, models, { ...edged, header: { ...edged.header, factsRule: FACTS_RULE } }), false, 'a merge of today\'s: its own');
-  // the split: a scene's edges, silhouettes and facts back in each model's numbering (boxes of
-  // their own corners: the shared-corner boxes above carry no edges to split)
+  // the silhouettes' normals carried at their stride: 8 a candidate, each model's after the one before
+  for (const [k, m] of [a, b].entries()) m.silhouetteNormals = Int16Array.from({ length: 24 }, (_, i) => 100 * (k + 1) + i);
+  const kept = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }], { silhouetteCap: 6 });
+  assert.deepEqual([Array.from(kept.silhouettes), Array.from(kept.silhouetteNormals)],
+    [[0, 1, 1, 2, 2, 3, 8, 9, 9, 10, 10, 11], [...a.silhouetteNormals, ...b.silhouetteNormals]], 'silhouettes and their normals');
+});
+test('a scene\'s edges and facts are its models\' own, each built unmoved: a model far out keeps its exact volume; only the models without today\'s are built (r35 A2, Q5, Q6)', () => {
+  // boxes of their own corners (the shared-corner boxes above carry no edges)
   const own3 = (lo, hi) => {
     const T = box(lo, hi).flat(), P = [], I = [];
     for (const t of T) for (const p of t) { I.push(P.length / 3); P.push(...p); }
     const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'b', color: [0.5, 0.5, 0.5], positions: Float32Array.from(P), normals: null, colors: null, indices: Uint32Array.from(I) }], root: { name: 'm', meshes: [0], children: [] } });
     return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
   };
-  const c = own3([0, 0, 0], [1, 1, 1]), d = own3([5, 0, 0], [6, 2, 1]);
-  const s = mergeModels([{ base: c, name: 'c' }, { base: d, name: 'd' }]);
+  const c = own3([0, 0, 0], [1, 1, 1]), d = own3([0, 0, 0], [0.3, 0.3, 0.3]);
   const be = (m) => buildEdges({ position: m.position, index: m.index, meshes: m.header.meshes });
-  const built = be(s);
-  const parts = splitScene([{ base: c }, { base: d }], built);
-  for (const [i, m] of [c, d].entries()) {
-    const own = be(m);
-    assert.ok(own.edges.length > 0, 'edges to split');
-    assert.deepEqual([Array.from(parts[i].edges), parts[i].facts.closed, parts[i].facts.volume.map((v) => Math.round(v))],
-      [Array.from(own.edges), own.facts.closed, own.facts.volume.map((v) => Math.round(v))], `model ${i}`);
-  }
-  assert.equal(splitScene([{ base: c }, { base: d }], { ...built, silhouettes: null, silhouettesOmitted: 9 }), null, 'silhouettes left out: not split');
+  // (as the viewer keeps a model's built ones: js/main.js keepEdges)
+  const keep = (m) => { const v = be(m); m.edges = v.edges; m.silhouettes = v.silhouettes; m.silhouetteNormals = v.silhouetteNormals; m.header.facts = v.facts; m.header.factsRule = FACTS_RULE; return v; };
+  const models = [{ base: c, name: 'c' }, { base: d, name: 'd', offset: [1e5, 1e5, 1e5] }];
+  // a file's facts current, then one of an older rule: only that one is stale
+  assert.deepEqual(staleModels(models).length, 0, 'both carry today\'s facts from their files');
+  d.header = { ...d.header, factsRule: FACTS_RULE - 1 };
+  assert.deepEqual(staleModels(models).map((m) => m.name), ['d']);
+  const ownD = keep(d);
+  assert.deepEqual(staleModels(models).length, 0);
+  const s = mergeModels(models);
+  assert.equal(factsCurrent(s.header), true, 'the merge carries today\'s');
+  // the scene's edges are each model's, its vertex numbers moved after the ones before
+  assert.deepEqual(Array.from(s.edges), [...Array.from(c.edges), ...Array.from(d.edges, (v) => v + c.header.vertexCount)]);
+  // and d's volume is the one built where it lies in its own file, not on the copy 100,000 mm out
+  // (that copy's float32 gave 1 % low, kept after a move back)
+  assert.equal(s.header.facts.volume[1], ownD.facts.volume[0]);
+  const far = be(s);
+  assert.notEqual(far.facts.volume[1], ownD.facts.volume[0], 'the far copy\'s own build differs (what the merge avoids)');
 });
 await test('the edges worker\'s copies that do not fit: said, the worker ended, the facts not left "computing…" (r34 A2)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const at = src.indexOf('function edgesOf(base) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'");
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'"); };
+  const body = cut('function workerJob(file, make) {') + cut('function edgesOf(base) {');
   const app = { status: 'ready' }, made = [], said = [];
   class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
-  const edgesOf = new Function('app', 'coarseOnly', 'COARSE_SILHOUETTE_CAP', 'factsCurrent', 'Worker', 'setStatus', `${body}; return edgesOf;`)(
-    app, () => false, 0, () => false, Worker, (s, t) => said.push(t));
+  const edgesOf = new Function('app', 'silhouetteCapHere', 'factsCurrent', 'Worker', 'setStatus', `${body}; return edgesOf;`)(
+    app, () => 2e6, () => false, Worker, (s, t) => said.push(t));
   const base = { edgeInfo: { value: null }, position: { slice() { throw new RangeError('Array buffer allocation failed'); } }, index: new Uint32Array(3), header: { meshes: [] } };
   app.baseMesh = base;
   const r = await Promise.race([edgesOf(base).catch((e) => `rejected ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
   assert.deepEqual([r, made[0]?.ended, app.stopEdges, /no room/.test(base.edgeInfo.error), said.length], [null, true, null, true, 1]);
+});
+await test('a scene\'s edges: only its stale models built, each kept, then the scene merged from them; a failed build stops it and is said, the panel saying why there is no volume (r35 Q1, A3)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const body = cut('async function sceneEdges(merged, models) {') + line('const pendingVolume = ');
+  const run = async (fail) => {
+    const built = [], kept = [];
+    const stale = [{ name: 'b', base: { header: {} } }];
+    const models = [{ name: 'a', base: { header: {} } }, ...stale];
+    const merged = { edgeInfo: { value: null }, header: {} };
+    const edgesOf = async (base) => { built.push(base === merged ? 'scene' : 'model'); if (fail && base !== merged) { base.edgeInfo.error = 'stopped: the scene changed'; return null; } return { source: base === merged ? 'file' : 'worker' }; };
+    const [sceneEdges, pendingVolume] = new Function('edgesOf', 'keepEdges', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', `${body}; return [sceneEdges, pendingVolume];`)(
+      edgesOf, (b) => kept.push(b), () => stale, () => built.push('merged'), () => 2e6);
+    const v = await sceneEdges(merged, models);
+    return { v, built, kept: kept.length, panel: pendingVolume(merged.edgeInfo), error: merged.edgeInfo.error };
+  };
+  const ok = await run(false);
+  assert.deepEqual([ok.built, ok.kept, ok.v?.source], [['model', 'merged', 'scene'], 1, 'file'], 'the stale model built and kept, the scene merged, then its own from the merge');
+  const bad = await run(true);
+  assert.deepEqual([bad.v, bad.built, bad.kept, bad.panel], [null, ['model'], 0, 'not computed: stopped: the scene changed']);
 });
 await test('the Clearance worker itself says it has started, then a failed run as { ok: false, error } (r33 A6: only the page\'s half was tested)', async () => {
   const posted = [];

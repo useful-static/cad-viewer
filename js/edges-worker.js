@@ -6,6 +6,9 @@
 
 import { buildEdges } from './edges.js';
 
+// (said once it has loaded, as js/clearance-worker.js: main.js workerJob's handshake)
+postMessage({ started: true });
+
 onmessage = (ev) => {
   const { position, index, meshes, silhouetteCap } = ev.data;
   try {

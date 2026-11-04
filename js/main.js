@@ -26,7 +26,7 @@ import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
-import { mergeModels, modelRanges, sceneKeeps, splitScene } from './scene.js';
+import { mergeModels, modelRanges, sceneEdgesFacts, staleModels } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -3711,7 +3711,7 @@ function clearModel() {
   app.unmeshedFaces = 0;
   // and what loadBuffer set for it: no link to a model not shown, no edge
   // worker running on for it
-  if (app.stopEdges) { app.stopEdges.stop(); app.stopEdges = null; }
+  if (app.stopEdges) { app.stopEdges.stop('stopped: another model was opened'); app.stopEdges = null; }
   app.sourceUrl = null;
   app.stats = null;
   syncModelList();
@@ -3802,7 +3802,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     return;
   }
   // the edge worker of the model this one replaces has no one to answer
-  if (app.stopEdges && app.stopEdges.base !== base) app.stopEdges.stop();
+  if (app.stopEdges && app.stopEdges.base !== base) app.stopEdges.stop('stopped: another model was opened');
   if (app.clearanceRun) app.clearanceRun.stop(); // (and a clearance run of the scene before)
   leave2D(); // a 3D model replaces a drawing shown
   app.mesh = mesh;
@@ -3969,12 +3969,8 @@ async function showScene(models, { newTree = false } = {}) {
   // a tour plays over the model it was started on (as a new model ends it in loadBuffer): it is
   // left, the visitor's view put back, before the scene changes under its step
   endTour();
-  const merged = mergeModels(models, { silhouetteCap: coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP });
+  const merged = mergeModels(models, { silhouetteCap: silhouetteCapHere() });
   merged.edgeInfo = { value: null, ready: null };
-  // (the same models only moved: the scene's edges and facts are the scene before's, kept, not
-  // built again for every move -- js/scene.js sceneKeeps)
-  merged.sceneBases = models.map((m) => m.base);
-  if (sceneKeeps(app.baseMesh, models, merged)) keepEdges(merged, app.baseMesh.edgeInfo.value);
   const mesh = inScheme(merged, app.overrides);
   checkFits(app.renderer, mesh);
   app.wanted = mesh;
@@ -3985,7 +3981,7 @@ async function showScene(models, { newTree = false } = {}) {
     throw e;
   }
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
-  if (app.stopEdges) app.stopEdges.stop();
+  if (app.stopEdges) app.stopEdges.stop('stopped: the scene changed');
   if (app.clearanceRun) app.clearanceRun.stop();
   app.scene = models;
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
@@ -4032,20 +4028,36 @@ async function showScene(models, { newTree = false } = {}) {
   showInfo();
   updateButtons();
   queueFrame();
-  merged.edgeInfo.ready = edgesOf(merged).then((v) => {
-    if (v && v.source === 'worker') {
-      keepEdges(merged, v);
-      // (and each model's share kept on it, where it had none of today's: an added model, one of an
-      // older rule -- the next Add model or merge then builds nothing of theirs again)
-      const parts = splitScene(models, v);
-      if (parts) models.forEach((m, i) => { if (!(m.base.edges && factsCurrent(m.base.header))) keepEdges(m.base, parts[i]); });
-    }
+  merged.edgeInfo.ready = sceneEdges(merged, models).then((v) => {
     if (app.baseMesh === merged) { pushState(); showInfo(); }
     refreshEdges();
     return v;
   });
   return true;
 }
+
+// A scene's edges and facts: each model without today's built on its own, unmoved, one after
+// another (and kept on it: a move or the next Add model then builds nothing), and the scene's
+// merged from the models' (js/scene.js sceneEdgesFacts). (The whole scene built on its moved
+// float32 copy and split back gave a model moved 100,000 mm a volume 1 % low, and rebuilt every
+// model already current.) A model whose build fails or is stopped leaves the scene without.
+async function sceneEdges(merged, models) {
+  for (const m of staleModels(models)) {
+    m.base.edgeInfo ||= { value: null, ready: null, error: null };
+    const v = await edgesOf(m.base);
+    if (!v) { merged.edgeInfo.error = m.base.edgeInfo.error; merged.edgeInfo.value = null; return null; }
+    keepEdges(m.base, v);
+  }
+  sceneEdgesFacts(merged, models, { silhouetteCap: silhouetteCapHere() });
+  return edgesOf(merged);
+}
+
+// the info panel's volume while there are no facts: a build that failed or was stopped said, not
+// "computing…" for good
+const pendingVolume = (info) => (info?.error ? `not computed: ${info.error}` : 'computing…');
+
+// the device's silhouette cap: a coarse-pointer device's smaller one, else edges.js's
+const silhouetteCapHere = () => (coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP);
 
 // The info panel's models: each by name, the added ones with their offset
 function syncScene() {
@@ -4109,53 +4121,62 @@ async function moveModel(i, k, v) {
 
 // Clearance in js/clearance-worker.js, on copies of the model's arrays: two triangle trees over
 // millions of triangles held the tab for seconds (9.6 M triangles, 10.8 s). A run started while
-// one is going stops it (STOPPED). Only a worker that cannot start (a file:// page, an old
-// browser) hands the run to the page; a run that fails in the worker comes back as { error } --
-// the page running the same failing job again froze the tab and, when it threw, left the
-// readout at "checking …" for good. Always settles.
+// one is going stops it (STOPPED). A run that failed in the worker run again on the page froze
+// the tab and, when it threw, left the readout at "checking …" for good. Always settles.
 const STOPPED = Symbol('stopped');
-function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
-  if (app.clearanceRun) app.clearanceRun.stop();
-  return new Promise((resolve) => {
-    const here = () => {
-      app.lastClearanceVia = 'page';
-      try { resolve(clearance(base.position, base.index, trisA, trisB, { solidA, solidB, normal: base.normal })); } catch (e) { resolve({ error: String(e?.message || e) }); }
-    };
+
+// One run of a module worker (the facts' js/edges-worker.js, Clearance's js/clearance-worker.js):
+// make() builds the message and its transfer list (the model's copies: in a try -- they may not
+// fit, a big model on a small device: said, not a rejected promise); the worker says it has
+// started, so a failure before that is one that cannot start and after it the run's own. Settles
+// once, the worker ended: { ok: data } | { error } | { stopped: why } | { noWorker: why }; each
+// caller says what no worker means for its job. (Each worker had its own launch, and a copy that
+// failed had to be fixed in each.)
+function workerJob(file, make) {
+  let stopIt = () => {};
+  const promise = new Promise((resolve) => {
     let w;
-    try { w = new Worker(new URL('./clearance-worker.js', import.meta.url), { type: 'module' }); } catch { here(); return; }
+    try { w = new Worker(new URL(file, import.meta.url), { type: 'module' }); } catch (e) { resolve({ noWorker: String(e?.message || e) }); return; }
     let finished = false, started = false;
-    const finish = (v) => {
-      if (finished) return;
-      finished = true;
-      w.terminate();
-      if (app.clearanceRun === run) app.clearanceRun = null;
-      resolve(v);
-    };
-    const run = { stop: () => finish(STOPPED) };
-    app.clearanceRun = run;
+    const finish = (v) => { if (finished) return; finished = true; w.terminate(); resolve(v); };
+    stopIt = (why) => finish({ stopped: why || 'stopped' });
     w.onmessage = (ev) => {
       if (ev.data.started) { started = true; return; }
-      app.lastClearanceVia = 'worker';
-      finish(ev.data.ok ? ev.data.result : { error: ev.data.error });
+      finish(ev.data.ok ? { ok: ev.data } : { error: ev.data.error });
     };
     w.onerror = (e) => {
       e.preventDefault?.();
-      if (started) { finish({ error: `the worker failed: ${e.message || 'out of memory?'}` }); return; }
-      if (finished) return;
-      finished = true;
-      w.terminate();
-      if (app.clearanceRun === run) app.clearanceRun = null;
-      here();
+      finish(started ? { error: `the worker failed: ${e.message || 'out of memory?'}` } : { noWorker: e.message || 'could not start' });
     };
-    // (the copies may not fit -- a big model on a small device: said, the worker ended; a throw
-    // here left the promise rejected and the readout at "checking …")
     try {
-      const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
-      w.postMessage({ position, index, normal, trisA, trisB, solidA, solidB },
-        [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]);
+      const [msg, transfer] = make();
+      w.postMessage(msg, transfer);
     } catch (e) {
       finish({ error: `no room for the model's copy: ${e?.message || e}` });
     }
+  });
+  return { promise, stop: (why) => stopIt(why) };
+}
+
+// Clearance off the page: a worker that cannot start (a file:// page, an old browser) hands it to
+// the page; a run that fails in the worker is said, never run again here.
+function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
+  if (app.clearanceRun) app.clearanceRun.stop();
+  const job = workerJob('./clearance-worker.js', () => {
+    const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
+    return [{ position, index, normal, trisA, trisB, solidA, solidB }, [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]];
+  });
+  const run = { stop: () => job.stop() };
+  app.clearanceRun = run;
+  return job.promise.then((v) => {
+    if (app.clearanceRun === run) app.clearanceRun = null;
+    if (v.stopped) return STOPPED;
+    if (v.noWorker) {
+      app.lastClearanceVia = 'page';
+      try { return clearance(base.position, base.index, trisA, trisB, { solidA, solidB, normal: base.normal }); } catch (e) { return { error: String(e?.message || e) }; }
+    }
+    app.lastClearanceVia = 'worker';
+    return v.ok ? v.ok.result : { error: v.error };
   });
 }
 
@@ -4232,57 +4253,36 @@ const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia(
 // silhouettesOmitted, facts, source, ms }), or null when the build failed.
 function edgesOf(base) {
   const info = base.edgeInfo;
-  const cap = coarseOnly() ? COARSE_SILHOUETTE_CAP : 0;
+  const cap = silhouetteCapHere();
   // (the file's facts only when built by today's rule: an older file's or kept conversion's
   // volume was the signed sum, unflagged)
   if (base.edges && factsCurrent(base.header)) {
-    const over = cap && base.silhouettes && base.silhouettes.length / 2 > cap;
+    const over = !!base.silhouettes && base.silhouettes.length / 2 > cap;
     info.value = { edges: base.edges, silhouettes: over ? null : base.silhouettes,
       silhouetteNormals: over ? null : base.silhouetteNormals,
       silhouettesOmitted: over ? base.silhouettes.length / 2 : (base.header.silhouettesOmitted || 0),
       facts: base.header.facts, source: 'file', ms: 0 };
     return Promise.resolve(info.value);
   }
-  return new Promise((resolve) => {
-    let w;
-    try {
-      w = new Worker(new URL('./edges-worker.js', import.meta.url), { type: 'module' });
-    } catch (e) {
-      info.error = `no module worker: ${e.message || e}`;
-      resolve(null); // no edges, which nothing needs yet
-      return;
-    }
-    let finished = false;
-    const done = (v) => {
-      if (finished) return;
-      finished = true;
-      w.terminate();
-      info.value = v;
-      if (app.stopEdges && app.stopEdges.base === base) app.stopEdges = null;
-      // said where it shows, or the edge styles silently draw none
-      if (!v && info.error && app.baseMesh === base && app.status === 'ready') setStatus('ready', `no edges for this model: ${info.error}`);
-      resolve(v);
-    };
-    // stopped when another model replaces this one on screen (loadBuffer):
-    // its worker and its copies of the arrays would otherwise run on
-    app.stopEdges = { base, stop: () => { info.error = 'stopped: another model was opened'; done(null); } };
-    w.onmessage = (ev) => {
-      if (!ev.data.ok) info.error = ev.data.error;
-      done(ev.data.ok ? { ...ev.data.result, source: 'worker', ms: Math.round(ev.data.ms) } : null);
-    };
-    w.onerror = (e) => { info.error = `worker failed: ${e.message || 'could not start'}`; done(null); };
-    // copies: the model's own buffers stay with the page and the GPU upload (they may not fit -- a
-    // big model on a small device: said, the worker ended, as Clearance's; a throw here left the
-    // facts "computing…" for good, the worker running)
-    try {
-      const position = base.position.slice();
-      const index = base.index.slice();
-      w.postMessage({ position, index, meshes: base.header.meshes, silhouetteCap: cap || undefined },
-        [position.buffer, index.buffer]);
-    } catch (e) {
-      info.error = `no room for the model's copy: ${e?.message || e}`;
-      done(null);
-    }
+  // (built by the worker on copies: the model's own buffers stay with the page and the GPU upload;
+  // with no module worker there are none -- not built on the page, where a big model's would hold
+  // the tab -- and the volume, the cut fill and Clearance's part-inside test go without, said)
+  info.error = null; // (a build before that failed or was stopped: this one says its own)
+  const job = workerJob('./edges-worker.js', () => {
+    const position = base.position.slice(), index = base.index.slice();
+    return [{ position, index, meshes: base.header.meshes, silhouetteCap: cap }, [position.buffer, index.buffer]];
+  });
+  // stopped when another model or scene replaces this one on screen (stop(why): the reason
+  // said), its worker and its copies of the arrays would otherwise run on
+  app.stopEdges = { base, stop: (why) => job.stop(why) };
+  return job.promise.then((v) => {
+    if (app.stopEdges && app.stopEdges.base === base) app.stopEdges = null;
+    const value = v.ok ? { ...v.ok.result, source: 'worker', ms: Math.round(v.ok.ms) } : null;
+    if (!value) info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
+    info.value = value;
+    // said where it shows, or the edge styles silently draw none (and the info panel says it too)
+    if (!value && !v.stopped && app.baseMesh === base && app.status === 'ready') setStatus('ready', `no edges for this model: ${info.error}`);
+    return value;
   });
 }
 
@@ -5781,7 +5781,7 @@ function fillInfo(el) {
   const which = ids.length ? ids : app.header.meshes.map((_, i) => i + 1);
   if (!facts) {
     app.factsNow = null;
-    add('volume', 'computing…');
+    add('volume', pendingVolume(app.baseMesh?.edgeInfo));
   } else {
     let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, net = 0, unchecked = 0;
     for (const id of which) {

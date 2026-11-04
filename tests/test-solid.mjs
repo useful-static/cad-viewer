@@ -10,6 +10,7 @@ import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
 import { buildEdges, shellTurns, FACTS_RULE, factsCurrent } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
+import { surfaceTree, treeDistance } from '../js/tri-distance.js';
 import { box } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
@@ -298,6 +299,23 @@ test('the overlap budget bounds the work of one pair too: two cones apex to apex
   assert.deepEqual(d.header.facts.unchecked, [true], 'written and read back');
   const cube = (() => { const { P: p, I: i } = meshOf(cubeT([0, 0, 0], [1, 1, 1])); const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: p, normals: null, colors: null, indices: i }], root: { name: 'm', meshes: [0], children: [] } }); return decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength)); })();
   assert.deepEqual(mergeModels([{ base: d, name: 'd' }, { base: cube, name: 'c' }]).header.facts.unchecked, [true, false], 'merged');
+});
+test('at the budget\'s edge: given the steps the meeting pair takes, the body is net; one fewer, unchecked -- never unchecked for a test that finished (r35 A7, Q3)', () => {
+  const T = [...cubeT([0, 0, 0], [10, 10, 10]), ...cubeT([5, 5, 5], [15, 15, 15])];
+  const { P, I } = meshOf(T);
+  const min = [0, 0, 0], max = [15, 15, 15];
+  const TA = surfaceTree(P, I, Uint32Array.from({ length: 12 }, (_, t) => t)), TB = surfaceTree(P, I, Uint32Array.from({ length: 12 }, (_, t) => t + 12));
+  const steps = treeDistance(P, I, TA, TB).work;
+  // (a call never runs past its limit: one step short it stops -- the limit tested only at the
+  // next node pair let it finish inside a leaf pair, distance 0, stopped false, past its limit)
+  const short = treeDistance(P, I, TA, TB, steps - 1);
+  assert.deepEqual([short.stopped, short.work <= steps - 1 + 1], [true, true], JSON.stringify({ steps, work: short.work }));
+  const at = (budget) => {
+    const { facts: f } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } }] }, { overlapBudget: budget });
+    return [f.net[0], f.unchecked[0]];
+  };
+  assert.deepEqual(at(steps), [true, false], `${steps} steps`);
+  assert.deepEqual(at(steps - 1), [false, true]);
 });
 test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
   const n = 300000;

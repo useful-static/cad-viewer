@@ -116,17 +116,11 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   let sil = [];
   let silN = [];
   let silCount = 0;
-  const closed = [];
-  const area = [];
-  const volume = [], net = [], unchecked = [];
+  const facts = Object.fromEntries(BODY_FACTS.map((f) => [f.key, []]));
   for (const m of meshes) {
     const r = body(position, bits, index, m, edges, sil, silN, overlapBudget);
     silCount += r.sil;
-    closed.push(r.closed);
-    area.push(r.area);
-    volume.push(r.volume);
-    net.push(!!r.net);
-    unchecked.push(!!r.unchecked);
+    for (const f of BODY_FACTS) facts[f.key].push(f.kind === 'flag' ? !!r[f.key] : r[f.key]);
   }
   const omitted = silCount > silhouetteCap ? silCount : 0;
   if (omitted) { sil = null; silN = null; }
@@ -135,19 +129,31 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
     silhouettes: sil ? Uint32Array.from(sil) : null,
     silhouetteNormals: silN ? Int16Array.from(silN) : null,
     silhouettesOmitted: omitted,
-    // (net: per body, its shells touch or cross -- or one is branched, or a part lies in two outer
-    // shells -- so its volume may not be its material's; unchecked: its overlaps not checked, past
-    // the budget -- materialVolume)
-    facts: { closed, area, volume, net, unchecked },
+    facts,
   };
 }
+
+// The per-body facts, one list for every place that builds, writes, reads, checks or merges them
+// (js/cadmesh.js roundFacts and the decoder's checks, js/scene.js mergeModels): a fact added here
+// is carried by all (one named in seven places was dropped by a merge that then called the
+// scene's facts current). always: written for every model; else written only when one body has it.
+// net: the body's shells touch or cross -- or one is branched, or a part lies in two outer shells
+// -- so its volume may not be its material's; unchecked: its overlaps not checked, past the budget
+// (materialVolume).
+export const BODY_FACTS = [
+  { key: 'closed', kind: 'flag', always: true },
+  { key: 'area', kind: 'number', always: true },
+  { key: 'volume', kind: 'number', always: true },
+  { key: 'net', kind: 'flag' },
+  { key: 'unchecked', kind: 'flag' },
+];
 
 function body(pos, bits, index, m, edges, sil, silN, budget) {
   const nt = m.idxCount / 3;
   const t0 = m.idxStart / 3;
   const v0 = m.vtxStart;
   const nv = m.vtxCount;
-  if (!nt || !nv) return { sil: 0, closed: m.kind ? kindClosed(m.kind) : false, area: 0, volume: 0, net: false, unchecked: false };
+  if (!nt || !nv) return { sil: 0, closed: m.kind ? kindClosed(m.kind) : false, area: 0, volume: 0 };
 
   const weld = weldBits(bits, v0, nv);
   const { tn, degenerate, A, V } = triangleFacts(pos, index, t0, nt, m.bbox);
@@ -273,7 +279,7 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   // a parent that meets not its own, lies wholly inside that one too, so no other holder need be
   // asked (every holder asked against every shell it holds, each pair's trees built again, was
   // 10.8 s for a 200,000-triangle housing of 120 parts, then net by the budget). Each shell's
-  // triangle tree built once; the budget counts the triangle pairs measured, and past it the
+  // triangle tree built once; the budget counts the distance search's steps, and past it the
   // body is `unchecked`, not said to meet.
   if (!net) {
     // (the holders' lines by an Euler tour of the parents: one test whether a holds b)
@@ -298,7 +304,9 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
     const meet = (a, b) => {
       const r = treeDistance(pos, local, treeOf(a), treeOf(b), Math.max(0, budget - work));
       work += r ? r.work : 0;
-      if (work > budget) { unchecked = true; return false; } // (a call stopped short has spent it)
+      // (by the call's own word: one that found the shells meet within its steps is a meeting,
+      // whatever the total; `work > budget` called such a body unchecked)
+      if (r?.stopped) { unchecked = true; return false; }
       return !!r && r.distance === 0;
     };
     for (let s = 0; s < ns && !net && !unchecked; s++) if (parent[s] >= 0 && meet(s, parent[s])) net = true;
