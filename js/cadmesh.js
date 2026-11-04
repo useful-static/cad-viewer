@@ -15,7 +15,11 @@
 //     meshes:[{ name, color, vtxStart, vtxCount, idxStart, idxCount, bbox, kind?,
 //               faceStart?, faceCount? }],
 //     root:{ name, meshes:[i...], children:[...] },
-//     sourceUnits?, angularDeflection?, recolour? }
+//     sourceUnits?, angularDeflection?, recolour?,
+//     facts?, factsRule?, silhouettesOmitted?, edgesFailed?:{ error, factsRule } }
+// edgesFailed (never beside facts): the edges' and facts' build failed when the
+// viewer read the file (KEEP_WITHOUT_EDGES); the viewer builds them again unless
+// it was a size limit under today's rule (writtenSizeLimit). Save .cadmesh drops it.
 // kind (optional; absent from files converted before it existed) is the
 // body's status taken from the b-rep by the converter, not from the mesh:
 // "closed", "capped" (closed by planar faces the converter added where the
@@ -95,13 +99,18 @@ export function bytesToId(b0, b1, b2, b3) {
 // list and the body facts are built here (opts.edges = false leaves them out).
 // (opts.overlapBudget: passed to the facts' overlap test, js/edges.js buildEdges)
 // What encodeCadmesh does when the edges' and facts' build throws (its onEdgesError): refuse, or
-// keep the file without them, the failure written in its header (`edgesFailed`: the error, and
-// whether it is a size limit met at every try -- js/edges.js momentaryFailure -- so the viewer does
-// not build them again to fail the same way, at each open of a kept conversion too: r43 A3)
+// keep the file without them, the failure written in its header (`edgesFailed`: the error and the
+// facts' rule it was met under, so the viewer does not build them again to fail the same way, at
+// each open of a kept conversion too: r43 A3). Whether it is a size limit is asked of it when read,
+// by today's js/edges.js momentaryFailure, and only under today's rule -- a yes/no written with it
+// was a second copy of that rule, obeyed for good (r44 A1, Q2); Save .cadmesh writes a file without it
 export const REFUSE_WITHOUT_EDGES = (e) => { throw e; };
 // a CLI's refusal, in one wording: the input named (stp2mesh.mjs, split-board.mjs -- r43 A9)
 export const refuseWithoutEdges = (input) => (e) => { throw new Error(`${input}: the edges and body facts: ${e?.message || e}`); };
-export const KEEP_WITHOUT_EDGES = (e) => ({ error: String(e?.message || e), sizeLimit: !momentaryFailure(e) });
+export const KEEP_WITHOUT_EDGES = (e) => ({ error: String(e?.message || e), factsRule: FACTS_RULE });
+// a written failure the viewer may take as the model's own, not built again: a size limit by today's
+// rule, met under today's facts rule (main.js edgesOf)
+export const writtenSizeLimit = (h) => !!h?.edgesFailed && h.edgesFailed.factsRule === FACTS_RULE && !momentaryFailure(h.edgesFailed.error);
 
 // (edgeOptions: passed to js/edges.js buildEdges as they are -- its list maker, for a test)
 export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, onEdgesError = REFUSE_WITHOUT_EDGES, edgeOptions = {} } = {}) {
@@ -249,6 +258,16 @@ export function splitCadmesh(buf) {
 // header + data region -> a raw .cadmesh (ArrayBuffer), checked to read back.
 // Section offsets are from the data's start, so a longer header moves nothing
 // they name.
+// A .cadmesh (raw or gzipped) without its written edges failure, for a file that leaves this
+// browser (main.js Save .cadmesh): the failure is this browser's reading, and another may build
+// them (r44 Q2). The same buffer back when it carries none.
+export async function withoutEdgesFailed(buf) {
+  const raw = isGzip(buf) ? await inflateCadmesh(buf) : buf;
+  const { header, data } = splitCadmesh(raw);
+  if (header.edgesFailed === undefined) return buf;
+  const { edgesFailed, ...rest } = header;
+  return withHeader(rest, data);
+}
 export function withHeader(header, data) {
   const json = new TextEncoder().encode(JSON.stringify(header));
   const dataStart = align8(12 + json.byteLength);
@@ -523,9 +542,11 @@ function validateHeader(h) {
     }
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
-  if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string' && typeof h.edgesFailed.sizeLimit === 'boolean')) {
-    bad('edgesFailed is not { error, sizeLimit }');
+  if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string' && Number.isInteger(h.edgesFailed.factsRule))) {
+    bad('edgesFailed is not { error, factsRule }');
   }
+  // (a failed build and facts both: no writer makes one, and which to believe is no question -- r44 A1)
+  if (h.edgesFailed !== undefined && h.facts !== undefined) bad('edgesFailed beside facts');
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
   if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');
   if (h.angularDeflection !== undefined && !(Number.isFinite(h.angularDeflection) && h.angularDeflection > 0)) {

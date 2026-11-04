@@ -1,5 +1,7 @@
 // The edge list and body facts (js/edges.js) for one model whose .cadmesh does
-// not carry them, or carries facts of another rule (js/scene.js edgesUsable),
+// not carry them, or carries facts of another rule (js/scene.js edgesUsable) --
+// not for one whose header writes a size limit met when it was read
+// (js/cadmesh.js writtenSizeLimit: said, not built again) --
 // off the main thread (a scene's are merged from its models', each built here on
 // its own: main.js sceneEdges). The
 // page sends COPIES of the model's position and index arrays, never the

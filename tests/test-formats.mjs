@@ -38,8 +38,13 @@ await test('the DWG row\'s range is the releases js/dwg.js reads, first to last 
   assert.equal(FORMATS.find((f) => f.label === 'DWG').range, range);
   assert.match(opensText(), new RegExp(`DWG \\(${range}\\)`));
   // (the README's words for it too, wherever it says one -- the public export's README says none: r43 Q11)
-  const said = readFileSync(join(here, '..', 'README.md'), 'utf8').match(/R1\d to R?20\d\d/g) || [];
+  // (any connective -- "to", "through", a dash, "..": one phrasing alone let "R14 – 2018" by -- r44 Q6;
+  // and the tags beside it, held to VERSION_NAMES' first and last -- r44 A4)
+  const readme = readFileSync(join(here, '..', 'README.md'), 'utf8');
+  const said = (readme.match(/R1\d\s*(?:to|through|–|—|-|\.\.)\s*R?20\d\d/g) || []).map((s) => s.replace(/\s*(?:through|–|—|-|\.\.)\s*/, ' to ').replace(/\s+/g, ' '));
   assert.deepEqual(said.filter((s) => s !== range), [], 'a README range not the row\'s');
+  const tags = Object.keys(VERSION_NAMES), spans = readme.match(/AC10\d\d\s*\.\.\s*AC10\d\d/g) || [];
+  assert.deepEqual(spans.filter((s) => s.replace(/\s+/g, ' ') !== `${tags[0]} .. ${tags[tags.length - 1]}`), [], 'a README tag range not VERSION_NAMES\'');
 });
 await test('a name says its format, through .gz and a query', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');

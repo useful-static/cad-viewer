@@ -2,7 +2,7 @@
 // (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
 // orbit camera, part tree, picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, withoutEdgesFailed } from './cadmesh.js';
 import { meshFormatOf, unzip } from './mesh-formats.js';
 import { readDrawing, readMeshFile } from './read-file.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
@@ -162,11 +162,19 @@ const PROGRESS_STATES = new Set(['loading', 'tessellating']);
 
 function setStatus(s, msg) {
   // Screen readers hear an EVENT through the polite live region: a state
-  // change into ready / idle / error / recovering / init, and a new error
-  // after an error (the shown model dropped after a failed load; "GPU lost
-  // repeatedly; reload"). #status itself is rewritten on every progress tick.
-  if (!PROGRESS_STATES.has(s) && (s !== app.status || (s === 'error' && (msg || s) !== $('announce').textContent))) {
-    announce(msg || s);
+  // change into ready / idle / error / recovering / init, a new error after an
+  // error (the shown model dropped after a failed load; "GPU lost repeatedly;
+  // reload"), and a line rewritten in the same state with new words (a note on
+  // the ready line: "no volume …", "could not save …", a tour's). #status
+  // itself is rewritten on every progress tick.
+  // (#status is not drawn -- the footer that held it is hidden -- so a note the line gains is shown
+  // where the view's short notes go too: written on the ready line while ready, it reached no one,
+  // seen or heard -- r44 Q1, A2)
+  const text = msg || s, changed = s !== app.status || text !== app.statusMsg;
+  if (!PROGRESS_STATES.has(s) && changed) {
+    announce(text);
+    const note = s === 'ready' && text.startsWith('ready · ') ? text.slice('ready · '.length) : '';
+    if (note && $('hover')) flashHover(note, 6000);
   }
   app.status = s;
   app.statusMsg = msg || s; // (what the line says: a facts failure taken back when its build succeeds)
@@ -4084,11 +4092,7 @@ async function sceneEdges(merged, models) {
   // (with the models that failed, not in their place: a model's failure remembered, then the merge's
   // of the moment, advised a move that could never give the scene its facts -- r42 A1, Q2)
   if (mergeError) failed.push({ name: 'the scene\'s merge', merge: true, base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false, said: false } } });
-  if (!failed.length) {
-    const v = await edgesOf(merged);
-    if (app.baseMesh === merged) takeBackNoFacts(); // (the scene's own facts here: a line about them taken back)
-    return v;
-  }
+  if (!failed.length) return edgesOf(merged);
   return sceneFailed(merged, failed, cap);
 }
 
@@ -4105,14 +4109,13 @@ function sceneFailed(merged, failed, cap) {
   Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${infos[0].error}${more}`, failed: infos.some((i) => i.failed), stopped: infos.every((i) => i.stopped) });
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
-  // (the word kept for the scene unless every failure is a stop -- the next scene owns a stop -- and
-  // said on the status line while any failure is unsaid, once; worded by what is missing -- the
-  // edges are drawn when only the facts are. A move with a failure said before kept no word, and
-  // its ready line read "ready": r42 Q3)
-  const unsaid = infos.filter((i) => !i.stopped && !i.said);
-  if (app.baseMesh === merged && !merged.edgeInfo.stopped) {
-    const said = sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`, unsaid.length > 0);
-    if (said) for (const i of unsaid) i.said = true;
+  // (the word kept for the scene unless every failure is a stop -- the next scene owns a stop --
+  // and said on its ready line; worded by what is missing -- the edges are drawn when only the
+  // facts are. A move with a failure said before kept no word, and its ready line read "ready": r42
+  // Q3. Each model's failure then marked said.)
+  if (app.baseMesh === merged && !merged.edgeInfo.stopped
+    && sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`)) {
+    for (const i of infos) if (!i.stopped) i.said = true;
   }
   return merged.edgeInfo.value;
 }
@@ -4129,34 +4132,24 @@ function fileEdgesValue(base, cap) {
     facts: factsCurrent(base.header) ? base.header.facts : null, source: 'file', ms: 0 };
 }
 
-// The status line's word that the shown model or scene has no facts: kept on it (app.noFacts, its
-// base the one shown) and so in every ready line (readyText), after the missing faces and the list's
-// note (r40 Q8); taken back only when that model's or scene's own facts arrive (any model's build
-// that succeeded took back any such line: a scene's failure said once was cleared by another
-// model's -- r40 A2, Q4), and the line rewritten only while it is still the ready one (its own
-// words after it kept: a tour's note, "Measure is off" -- r42 Q4).
+// The status line's word that the shown model or scene has no facts (app.noFacts, its text): kept,
+// and so in every ready line (readyText), after the missing faces and the list's note (r40 Q8),
+// until the shown model or scene changes -- showBase, its one owner, takes it back then (a model's
+// facts arrive only in a build of its own, which a model or scene shown is given once: no other
+// take-back can meet it -- r44 A5, Q4).
 // sayNoFacts: the word kept whatever the line says now (a failure met while a load was under way,
-// the load then cancelled, read "ready": r42 Q3); the line written now when `announce` and the
-// status is ready, or when it is the ready line without the word. Says whether it wrote the line.
-// (written in place, the line's own words after the ready text kept -- a tour's note was lost: r43 A2)
-function sayNoFacts(text, announce = true) {
+// the load then cancelled, read "ready": r42 Q3); written in place, the line's own words after the
+// ready text kept (a tour's note was lost: r43 A2); a line that is not a ready line -- an export's
+// progress, said while ready -- left alone, the word waiting for the next ready line (r43 Q3).
+// Says whether the line now says something new (setStatus then reads it out and shows its note).
+function sayNoFacts(text) {
   const msg = app.statusMsg || '', before = readyText(); // (with a word said before, if any)
-  app.noFacts = null;
-  const plain = readyText();
-  const tail = msg.startsWith(before) ? msg.slice(before.length) : msg.startsWith(plain) ? msg.slice(plain.length) : null;
-  app.noFacts = { base: app.baseMesh, text };
-  // (a line that is not a ready line -- an export's progress, said while ready -- left alone: the
-  // word waits for the next ready line, and the failure is said then: r43 Q3)
+  const tail = msg.startsWith(before) ? msg.slice(before.length) : null;
+  app.noFacts = text;
   const line = readyText() + (tail ?? '');
-  if (app.status !== 'ready' || tail === null || (!announce && line === msg)) return false;
+  if (app.status !== 'ready' || tail === null || line === msg) return false;
   setStatus('ready', line);
   return true;
-}
-function takeBackNoFacts() {
-  if (!app.noFacts || app.noFacts.base !== app.baseMesh) return;
-  const was = readyText();
-  app.noFacts = null;
-  if (app.status === 'ready' && (app.statusMsg || '').startsWith(was)) setStatus('ready', readyText() + app.statusMsg.slice(was.length));
 }
 
 // The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
@@ -4167,11 +4160,13 @@ const GONE = Symbol('gone');
 function showBase(next, keep, why) {
   stopEdgeJobs(new Set(keep), why);
   app.baseMesh?.edgeInfo?.leave?.();
-  // (the "no volume" word of the one left taken back, and let go: a move that gave the scene its
-  // facts kept "no edges for this scene" on the line, and the word held the scene before in memory
-  // under a 2D drawing too -- r43 A1)
-  takeBackNoFacts();
-  app.noFacts = null;
+  // (the "no volume" word of the one left taken back, the line's own words after it kept: a move
+  // that gave the scene its facts kept "no edges for this scene" on the line -- r43 A1)
+  if (app.noFacts) {
+    const was = readyText(), msg = app.statusMsg || '';
+    app.noFacts = null;
+    if (app.status === 'ready' && msg.startsWith(was)) setStatus('ready', readyText() + msg.slice(was.length));
+  }
   app.baseMesh = next;
 }
 
@@ -4417,7 +4412,9 @@ function edgesOf(base) {
   // worded by what is missing -- the file's edges are drawn when only the facts failed; `said`
   // marks it, so a scene says it once
   const fail = (v) => {
-    info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
+    // (no module worker: said as why there are neither edges nor volume -- the page builds neither,
+    // in its read either: r44 Q3)
+    info.error = v.stopped || v.error || `this browser runs no module worker, and the page builds no edges or volume itself (${v.noWorker})`;
     // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
     // is remembered, one of the moment not -- until its second try: one that fails the same way
     // every time started a worker and copied the model at every move -- r40 A3, Q2)
@@ -4430,8 +4427,7 @@ function edgesOf(base) {
   // (a build that met a size limit when the file was read -- js/cadmesh.js edgesFailed -- fails the
   // same way here: remembered at once, not built again, nor again at each open of a kept
   // conversion -- r43 A3)
-  const written = base.header.edgesFailed;
-  if (written?.sizeLimit) return Promise.resolve(fail({ error: `${written.error} (when it was read)` }));
+  if (writtenSizeLimit(base.header)) return Promise.resolve(fail({ error: `${base.header.edgesFailed.error} (when it was read)` }));
   const job = workerJob('./edges-worker.js', () => {
     const position = base.position.slice(), index = base.index.slice();
     return [{ position, index, meshes: base.header.meshes, silhouetteCap: cap }, [position.buffer, index.buffer]];
@@ -4454,9 +4450,6 @@ function edgesOf(base) {
       // and then added to a scene built nothing again)
       keepEdges(base, value);
       info.value = value;
-      // (a line a try before left -- "no edges …" -- taken back now that they are here: the shown
-      // model's own; a scene's model's success leaves the scene's line to the scene, sceneEdges)
-      if (app.baseMesh === base) takeBackNoFacts();
       return value;
     }
     return fail(v);
@@ -4485,7 +4478,7 @@ function readyText() {
   return (d ? `ready · 2D drawing${d.drawing.units ? '' : ' (its unit is not stored)'}` : app.unmeshedFaces
     ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
     : 'ready') + (app.listNote ? ` · ${app.listNote}` : '')
-    + (app.noFacts && app.noFacts.base === app.baseMesh ? ` · ${app.noFacts.text}` : '');
+    + (app.noFacts ? ` · ${app.noFacts}` : '');
 }
 
 // Keep a conversion in this browser, gzipped where the browser can (about a
@@ -6709,9 +6702,10 @@ function wireInput() {
     // gzipped (about a sixth of the raw size); a browser without
     // CompressionStream saves the raw layout, which loads the same. A model
     // opened from the browser's saved conversions is gzipped already.
-    const buf = app.lastStepBuffer;
+    // (without a written edges failure: it is this browser's reading -- js/cadmesh.js withoutEdgesFailed)
     let bytes;
     try {
+      const buf = await withoutEdgesFailed(app.lastStepBuffer);
       bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
     } catch (e) {
       setStatus(app.status, `${app.status === 'ready' ? `${readyText()} · ` : ''}could not save ${name}: ${e.message || e}`);
