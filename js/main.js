@@ -1444,7 +1444,7 @@ function saveDrawing() {
   const parts = ids.map((id) => ({ id: `body-${id}`, name: meshLabel(id), geom: app.measure.geometry(id - 1) }));
   const base = saveBase(app.sourceName);
   const label = $('model').querySelector('.mname')?.textContent || base;
-  const d = drawingSVG(parts, right, up, { a: app.header.angularDeflection ?? 0.5,
+  const d = drawingSVG(parts, right, up, {
     title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${app.selected.size ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
   const name = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
   downloadBlob(new Blob([d.svg], { type: 'image/svg+xml' }), name);
@@ -3973,6 +3973,7 @@ async function showScene(models, { newTree = false } = {}) {
   // Add model kept "1.65 mm" for a scene whose new case touched)
   $('clearval').textContent = '';
   $('clearval').title = '';
+  app.lastClearance = null;
   // "this file is in" re-reads the first model alone, which would drop the others: a scene has
   // none (a mesh opened alone gets it again)
   if (models.length > 1) app.meshSource = null;
@@ -4097,15 +4098,19 @@ async function runClearance() {
   ranges.forEach((r, m) => { if (m !== mA) for (let id = r.first; id < r.first + r.count; id++) if (shown(id)) B.push(id); });
   const tris = (ids) => ids.map((id) => { const m = app.header.meshes[id - 1]; return [m.idxStart / 3, m.idxCount / 3]; });
   const what = inOne ? `the ${sel.length === 1 ? 'selected part' : `${fmtInt(sel.length)} selected parts`}` : app.scene[0].name;
-  if (!A.length || !B.length) { $('clearval').textContent = 'nothing shown to measure between'; return; }
-  $('clearval').textContent = `checking ${what}…`;
+  // (every state of the read in one place, its tooltip with it: "nothing shown to measure between"
+  // kept the run before's "N triangle pairs compared", and app.lastClearance its result)
+  const say = (text, title = '') => { $('clearval').textContent = text; $('clearval').title = title; };
+  app.lastClearance = null;
+  if (!A.length || !B.length) { say('nothing shown to measure between'); return; }
+  say(`checking ${what}…`);
   await nextPaint();
   const base = app.baseMesh;
   // (each set's closed bodies, for a part lying wholly inside one: closedOf -- the facts awaited
   // when they are on their way: skipped, a pin inside a block read 4 mm after every scene change)
   if (!base.edgeInfo?.value && base.edgeInfo?.ready) { try { await base.edgeInfo.ready; } catch { /* no facts: no containment */ } }
   // (the scene changed while it waited: said, not left at "checking …")
-  const stopped = () => { if (app.baseMesh !== base) { $('clearval').textContent = 'stopped: the scene changed'; return true; } return false; };
+  const stopped = () => { if (app.baseMesh !== base) { say('stopped: the scene changed'); return true; } return false; };
   if (stopped()) return;
   const t0 = performance.now();
   const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
@@ -4113,7 +4118,7 @@ async function runClearance() {
   if (stopped()) return;
   // (a set with no triangle -- a selected body with none: clearance() has nothing; it was left at
   // "checking …")
-  if (!r) { $('clearval').textContent = 'nothing shown to measure between'; return; }
+  if (!r) { say('nothing shown to measure between'); return; }
   const ms = Math.round(performance.now() - t0);
   // the bodies the two nearest triangles belong to
   const bodyOf = (t) => {
@@ -4127,8 +4132,7 @@ async function runClearance() {
   const text = r.distance === 0
     ? `0: ${nm(a)} touches or overlaps ${nm(b)}`
     : `${lenNum(r.distance, 'measure')} ${lenUnit()} from ${nm(a)} to ${nm(b)}`;
-  $('clearval').textContent = `clearance ${text}`;
-  $('clearval').title = `${what} against the other models' shown parts: ${fmtInt(r.pairs)} triangle pairs compared in ${ms} ms`;
+  say(`clearance ${text}`, `${what} against the other models' shown parts: ${fmtInt(r.pairs)} triangle pairs compared in ${ms} ms`);
   if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
   app.lastClearance = { distance: r.distance, a, b, ms, pairs: r.pairs, pa: r.pa, pb: r.pb }; // (for tests)
   announce(`clearance ${text}`);

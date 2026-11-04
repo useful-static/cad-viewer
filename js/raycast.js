@@ -28,6 +28,29 @@ function hitTri(P, I, t, o, d) {
   return tt > 0 ? tt : Infinity;
 }
 
+// Whether the ray o + t d meets triangle t on its inside -- the view's own cut test: the vertex
+// normals (N, snorm16 x4) interpolated at the hit, as each fragment's is (js/renderer-webgl.js
+// FS_SHADE: dot(vNrm, v) < 0 is the cut face), looking along d. The three normals' sum, the
+// centroid's, disagreed with the view on a smooth curved face near its outline: 31 of 41 grazing
+// views of a 12-segment cylinder's triangle. Null when the ray misses the triangle's plane.
+export function seesInside(P, N, I, t, o, d) {
+  const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
+  const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
+  const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
+  const px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+  const det = e1x * px + e1y * py + e1z * pz;
+  if (Math.abs(det) < 1e-20) return null;
+  const inv = 1 / det;
+  const sx = o[0] - P[a], sy = o[1] - P[a + 1], sz = o[2] - P[a + 2];
+  const u = (sx * px + sy * py + sz * pz) * inv;
+  const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+  const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+  const w = 1 - u - v, na = I[3 * t] * 4, nb = I[3 * t + 1] * 4, nc = I[3 * t + 2] * 4;
+  let s = 0;
+  for (let k = 0; k < 3; k++) s += (w * N[na + k] + u * N[nb + k] + v * N[nc + k]) * d[k];
+  return s > 0;
+}
+
 // slab test: the entry t of a box, or Infinity
 function hitBox(lo, hi, o, inv, tmax) {
   let t0 = 0, t1 = tmax;

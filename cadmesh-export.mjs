@@ -24,7 +24,7 @@ import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
-import { CliError, parseCli } from './js/cli-args.js';
+import { CliError, parseCli, runCli } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -91,18 +91,17 @@ async function main() {
     files = await exportCadmesh(readFileSync(inp), { to, orient, skip, base: base.split('/').pop() });
   } catch (e) {
     // (a damaged or unreadable input is a refusal, exit 1 -- not a usage error, exit 2, which is for
-    // the options)
-    console.error(`${inp}: ${e.message}`);
-    process.exit(1);
+    // the options -- said by runCli in the five tools' one shape, "cadmesh-export: ...")
+    throw new Error(`${inp}: ${e.message}`);
   }
   for (const f of files) {
     const path = `${base}.${f.kind}`;
     // (a write that fails is said in one line, exit 1: node's stack trace was all it printed)
-    try { writeFileSync(path, f.bytes); } catch (e) { console.error(`cadmesh-export: could not write ${path}: ${e.message}`); process.exit(1); }
+    try { writeFileSync(path, f.bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
     console.log(`${path}: ${f.bodies} of ${f.of} bodies, ${f.bytes.length} bytes`);
   }
 }
 
 // run as a command (a path with a space, or through a symlink, included: the plain
 // "file://" + argv[1] test was false there, and the tool exited 0 writing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('cadmesh-export', main);

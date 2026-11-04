@@ -13,11 +13,11 @@ import { cross, dot } from './vec3.js';
 const esc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const n3 = (v) => (Math.abs(v) < 5e-4 ? '0' : v.toFixed(3).replace(/\.?0+$/, ''));
 
-// parts: [{ name, geom }] (geom: bodyGeometry's { edges, circles }); right, up:
-// the drawing's x and y axes as model-frame unit vectors (toward = right x up
-// is the viewer); a: the file's angular deflection (for the circle test);
-// title: a caption. -> { svg, width, height } (mm)
-export function drawingSVG(parts, right, up, { a = 0.5, title = '', margin = 5 } = {}) {
+// parts: [{ name, geom }] (geom: bodyGeometry's { edges, circles, a }: a, the
+// body's own angular deflection, sets its circle test); right, up: the
+// drawing's x and y axes as model-frame unit vectors (toward = right x up is
+// the viewer); title: a caption. -> { svg, width, height } (mm)
+export function drawingSVG(parts, right, up, { title = '', margin = 5 } = {}) {
   const toward = cross(right, up);
   const P = (p) => [dot(p, right), -dot(p, up)];
   const groups = [];
@@ -46,7 +46,7 @@ export function drawingSVG(parts, right, up, { a = 0.5, title = '', margin = 5 }
       if (closed && !round.length) {
         // a closed edge that is a circle seen face on (geometry without its
         // faces' circles): a true circle
-        const c = circleOf(e.slice(0, -1), part.geom.a ?? a); // (the part's own: a scene's models differ)
+        const c = circleOf(e.slice(0, -1), part.geom.a); // (the part's own: a scene's models differ)
         if (c && Math.abs(Math.abs(dot(c.normal, toward)) - 1) < 1e-3) {
           const [cx, cy] = P(c.centre);
           grow(cx - c.radius, cy - c.radius);

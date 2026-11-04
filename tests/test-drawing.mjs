@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The 1:1 SVG drawing (js/drawing-svg.js) of bodies built the way OpenCascade
-// meshes them (as tests/test-measure.mjs builds them).
+// meshes them (tests/brep-model.mjs, as tests/test-measure.mjs builds them).
 //   node tests/test-drawing.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
@@ -9,38 +9,8 @@ import { bodyGeometry } from '../js/measure-geom.js';
 
 import { test, done } from './harness.mjs';
 
-function model(bodies, angularDeflection = 0.5) {
-  const pos = [], idx = [], faces = [], meshes = [];
-  for (const b of bodies) {
-    const m = { name: b.name, idxStart: idx.length, faceStart: faces.length / 2, faceCount: b.faces.length };
-    for (const f of b.faces) {
-      const map = new Map();
-      faces.push(idx.length / 3, f.length);
-      for (const tri of f) for (const p of tri) {
-        const k = p.join(',');
-        if (!map.has(k)) { map.set(k, pos.length / 3); pos.push(...p); }
-        idx.push(map.get(k));
-      }
-    }
-    m.idxCount = idx.length - m.idxStart;
-    meshes.push(m);
-  }
-  return { position: new Float32Array(pos), index: new Uint32Array(idx), faces: new Uint32Array(faces), header: { meshes, angularDeflection } };
-}
-const P = (x, y, z) => [Math.fround(x), Math.fround(y), Math.fround(z)];
-function box(lo, hi) {
-  const c = (x, y, z) => P(x ? hi[0] : lo[0], y ? hi[1] : lo[1], z ? hi[2] : lo[2]);
-  const q = (a, b, cc, d) => [[a, b, cc], [a, cc, d]];
-  return [q(c(0, 0, 0), c(1, 0, 0), c(1, 1, 0), c(0, 1, 0)), q(c(0, 0, 1), c(0, 1, 1), c(1, 1, 1), c(1, 0, 1)),
-    q(c(0, 0, 0), c(0, 0, 1), c(1, 0, 1), c(1, 0, 0)), q(c(0, 1, 0), c(1, 1, 0), c(1, 1, 1), c(0, 1, 1)),
-    q(c(0, 0, 0), c(0, 1, 0), c(0, 1, 1), c(0, 0, 1)), q(c(1, 0, 0), c(1, 0, 1), c(1, 1, 1), c(1, 1, 0))];
-}
-function washer(ri, ro, h, n) {
-  const ring = (r, z) => Array.from({ length: n }, (_, i) => P(r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n), z));
-  const it = ring(ri, h), ot = ring(ro, h), ib = ring(ri, 0), ob = ring(ro, 0);
-  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
-  return [band(it, ot), band(ob, ib), band(ib, it), band(ot, ob)];
-}
+// (the shared builder, tests/brep-model.mjs, as test-measure's)
+import { box, model, washer } from './brep-model.mjs';
 const TOP = [[1, 0, 0], [0, 1, 0]];   // right x, up y: seen from +z
 const FRONT = [[1, 0, 0], [0, 0, 1]]; // right x, up z: seen from -y
 
@@ -63,6 +33,18 @@ test('a washer from the top: its rims as true circles; from the front, none', ()
   const front = drawingSVG([{ name: 'w', geom: g }], ...FRONT);
   assert.equal(front.circles, 0, 'a rim seen edge on is a line, not a circle');
   assert.equal(front.lines, 4);
+});
+test('without faces\' circles, a closed edge is a circle by its own body\'s angle: 16 points at 0.5, none at 0.1 (r25 Q3, Q8)', () => {
+  // an annulus of 16 segments, the file without its faces section: its two rims closed edges
+  const at = (a) => {
+    const m = model([{ name: 'ring', faces: [washer(1.6, 4, 2, 16)[0]] }], a);
+    m.faces = null;
+    const g = bodyGeometry(m, 0);
+    assert.equal(g.a, a);
+    return drawingSVG([{ name: 'ring', geom: g }], ...TOP).circles;
+  };
+  assert.equal(at(0.5), 2);
+  assert.equal(at(0.1), 0, 'a 0.1 file needs 62 points for a circle');
 });
 test('the caption and names are escaped', () => {
   const g = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 1, 1]) }]), 0);

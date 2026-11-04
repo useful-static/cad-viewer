@@ -177,6 +177,78 @@ await test('a closed STL wound inside out is turned round: outward winding and n
   const open = (await parseMesh('stl', stlOf(TRIS.filter((_, i) => i !== 2 && i !== 3).map(([a, b, c]) => [a, c, b])), 'c.stl')).meshes[0];
   assert.ok(vol(open) < 0, `open: ${vol(open)}`);
 });
+await test('the weld turns a shell by the facts\' own closed test, each shell by its own volume (r25 A1, Q4)', async () => {
+  // corners facing out: the share of a part's output corners whose normal looks away from its centre
+  const facing = (m, c, t0, t1) => {
+    let out = 0;
+    for (let t = t0; t < t1; t++) for (let k = 0; k < 3; k++) {
+      const v = m.indices[t * 3 + k];
+      out += [0, 1, 2].reduce((s, j) => s + (m.positions[v * 3 + j] - c[j]) * m.normals[v * 3 + j], 0) > 0 ? 1 : 0;
+    }
+    return out;
+  };
+  // a cube (side s at x0) of 12 triangles, own corners, wound out or in
+  const cubeAt = (x0, s, inward) => {
+    const pos = [], tri = [];
+    for (const t of TRIS) for (const v of inward ? [t[0], t[2], t[1]] : t) { tri.push(pos.length / 3); pos.push(x0 + C[v][0] * s / S, C[v][1] * s / S, C[v][2] * s / S); }
+    return { pos, tri };
+  };
+  const join = (...bs) => {
+    const pos = [], tri = [];
+    for (const b of bs) { const o = pos.length / 3; pos.push(...b.pos); tri.push(...b.tri.map((i) => i + o)); }
+    return { name: 'p', pos, tri };
+  };
+  const factsClosed = (m) => decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'p', meshes: [0], children: [] } })).header.facts.closed[0];
+  // (a) an inward cube with a triangle of no area against the body (corners on an edge, the middle
+  // one 1e-13 off it: degenerate by the facts' relative test, not zero): the facts skip it
+  // (closed), so the weld turns the cube (the old rule counted its edges: open, not turned)
+  const sliver = join(cubeAt(0, 10, true), { pos: [0, 0, 0, 5, 1e-13, 0, 10, 0, 0], tri: [0, 1, 2] });
+  let m = weld(sliver);
+  assert.equal(factsClosed(m), true);
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 36, 'the cube with a sliver: every corner faces out');
+  // (b) an inward cube with one corner written twice, apart in float64 by 1e-12, one in float32
+  const split = cubeAt(0, 10, true);
+  const v = split.tri.find((i) => split.pos[i * 3 + 2] === 10);
+  split.pos[v * 3 + 2] += 1e-12;
+  assert.notEqual(split.pos[v * 3 + 2], 10);
+  assert.equal(Math.fround(split.pos[v * 3 + 2]), 10);
+  m = weld(split);
+  assert.equal(factsClosed(m), true);
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 36, 'the cube with a float64-split corner: every corner faces out');
+  // (c) two closed parts in one body, one wound out and one in, both ways round in size: each is
+  // turned by its own volume (the old rule turned both by the larger's, or neither)
+  for (const [sOut, sIn] of [[20, 10], [10, 20]]) {
+    m = weld(join(cubeAt(0, sOut, false), cubeAt(100, sIn, true)));
+    assert.equal(facing(m, [sOut / 2, sOut / 2, sOut / 2], 0, 12), 36, `outward part ${sOut} beside inward ${sIn}: kept`);
+    assert.equal(facing(m, [100 + sIn / 2, sIn / 2, sIn / 2], 12, 24), 36, `inward part ${sIn} beside outward ${sOut}: turned`);
+  }
+  // (d) an open part beside a closed inward one: the closed one is turned, the open one kept as wound
+  const openIn = cubeAt(0, 10, true);
+  openIn.tri.splice(6, 6); // its top's two triangles gone
+  m = weld(join(cubeAt(100, 10, true), openIn));
+  assert.equal(facing(m, [105, 5, 5], 0, 12), 36, 'the closed inward part: turned');
+  assert.equal(facing(m, [5, 5, 5], 12, 22), 0, 'the open inward part: kept');
+});
+await test('the closed test counts edges in typed tables: a closed torus of 2 M triangles in under 1.5 s (r25 Q5)', async () => {
+  const { inwardTriangles } = await import('../js/edges.js');
+  const N = 1000;
+  const pos = new Float32Array(N * N * 3);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const u = (2 * Math.PI * i) / N, w = (2 * Math.PI * j) / N, k = (i * N + j) * 3;
+    pos[k] = (10 + 3 * Math.cos(w)) * Math.cos(u); pos[k + 1] = (10 + 3 * Math.cos(w)) * Math.sin(u); pos[k + 2] = 3 * Math.sin(w);
+  }
+  const tri = new Uint32Array(N * N * 6);
+  let p = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const a = i * N + j, b = ((i + 1) % N) * N + j, c = ((i + 1) % N) * N + ((j + 1) % N), d = i * N + ((j + 1) % N);
+    tri[p++] = a; tri[p++] = c; tri[p++] = b; tri[p++] = a; tri[p++] = d; tri[p++] = c; // wound in
+  }
+  const t0 = performance.now();
+  const flip = inwardTriangles(pos, tri);
+  const ms = performance.now() - t0;
+  assert.ok(flip && flip.every((x) => x === 1), 'the inward torus is turned');
+  assert.ok(ms < 1500, `${ms.toFixed(0)} ms`);
+});
 
 await test('STL ASCII: the solid name', async () => {
   const m = cube(await parseMesh('stl', stlAscii(), 'cube.stl'));

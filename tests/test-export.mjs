@@ -99,6 +99,63 @@ await test('GLB: the header and chunks; per body a node, positions in metres wit
   for (const v of j.bufferViews) assert.equal(v.byteOffset % 4, 0);
 });
 
+await test('a body wound inward with its normals out (a mirrored placement) is written with its outside out: STL, 3MF and GLB as the view shows it (r25 A3)', async () => {
+  // a cube of 12 triangles, own corners: wound inward, the stored normals outward (its centre 5, 5, 5)
+  const S = 10, C = [];
+  for (let i = 0; i < 8; i++) C.push([i & 1 ? S : 0, i & 2 ? S : 0, i & 4 ? S : 0]);
+  const q = (a, b, c, d) => [[a, b, c], [a, c, d]];
+  const TRIS = [...q(0, 2, 3, 1), ...q(4, 5, 7, 6), ...q(0, 1, 5, 4), ...q(2, 6, 7, 3), ...q(0, 4, 6, 2), ...q(1, 3, 7, 5)];
+  const pos = [], nrm = [], idx = [];
+  for (const [a, b, c] of TRIS) {
+    const n = (() => { const u = C[b].map((x, k) => x - C[a][k]), w = C[c].map((x, k) => x - C[a][k]); const v = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]; const l = Math.hypot(...v); return v.map((x) => Math.round((x / l) * 32767)); })();
+    for (const v of [a, c, b]) { idx.push(pos.length / 3); pos.push(...C[v]); nrm.push(...n, 0); }
+  }
+  const nv = pos.length / 3;
+  const mirrored = {
+    position: new Float32Array(pos), normal: Int16Array.from(nrm), color: new Uint8Array(nv * 4).fill(200), index: Uint32Array.from(idx),
+    header: { meshes: [{ name: 'cube', vtxStart: 0, vtxCount: nv, idxStart: 0, idxCount: idx.length }] },
+  };
+  const out = (p, n) => (p[0] - 5) * n[0] + (p[1] - 5) * n[1] + (p[2] - 5) * n[2] > 0;
+  const windOut = (P, I) => {
+    let k = 0;
+    for (let t = 0; t < I.length; t += 3) {
+      const [a, b, c] = [I[t], I[t + 1], I[t + 2]].map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]);
+      const u = b.map((x, j) => x - a[j]), w = c.map((x, j) => x - a[j]);
+      if (out(a.map((x, j) => (x + b[j] + c[j]) / 3), [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]])) k++;
+    }
+    return k;
+  };
+  // STL: the facet normals and the corner order
+  const s = toSTL(mirrored, [1], IDENT, 'cube');
+  const dv = new DataView(s.buffer);
+  const sp = [], si = [];
+  let facets = 0;
+  for (let t = 0; t < 12; t++) {
+    const o = 84 + t * 50;
+    const n = [0, 1, 2].map((k) => dv.getFloat32(o + 4 * k, true));
+    const corners = [0, 1, 2].map((v) => [0, 1, 2].map((k) => dv.getFloat32(o + 12 + 12 * v + 4 * k, true)));
+    if (out(corners.map((p) => p).reduce((m, p) => m.map((x, j) => x + p[j] / 3), [0, 0, 0]), n)) facets++;
+    for (const p of corners) { si.push(sp.length / 3); sp.push(...p); }
+  }
+  assert.equal(facets, 12, 'STL facet normals out');
+  assert.equal(windOut(sp, si), 12, 'STL winding out');
+  // 3MF: the triangles' corner order
+  const z = unzip(await to3MF(mirrored, [1], IDENT, ['cube']));
+  const xml = z['3D/3dmodel.model'];
+  const vx = [...xml.matchAll(/<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"\/>/g)].flatMap((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
+  const tx = [...xml.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"/g)].flatMap((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
+  assert.equal(windOut(vx, tx), 12, '3MF winding out');
+  // GLB: its indices' winding (glTF's front face)
+  const g = toGLB(mirrored, [1], IDENT);
+  const jl = new DataView(g.buffer).getUint32(12, true);
+  const j = JSON.parse(new TextDecoder().decode(g.slice(20, 20 + jl)));
+  const bin = g.slice(20 + jl + 8);
+  const acc = (i) => { const a = j.accessors[i], v = j.bufferViews[a.bufferView], o = (v.byteOffset || 0) + (a.byteOffset || 0); return bin.slice(o, o + v.byteLength); };
+  const prim = j.meshes[0].primitives[0];
+  const gp = new Float32Array(acc(prim.attributes.POSITION).buffer.slice(0)), ib = acc(prim.indices);
+  const gi = j.accessors[prim.indices].componentType === 5125 ? new Uint32Array(ib.buffer.slice(0)) : new Uint16Array(ib.buffer.slice(0));
+  assert.equal(windOut(gp.map((x) => x * 1000), gi), 12, 'GLB winding out');
+});
 await test('EXPORTS: each row writes its own format through the one call shape', async () => {
   const magic = { stl: (b) => b.length === 84 + 50 * 3, '3mf': (b) => b[0] === 0x50 && b[1] === 0x4b, glb: (b) => new TextDecoder().decode(b.slice(0, 4)) === 'glTF' };
   for (const [fmt, row] of Object.entries(EXPORTS)) {

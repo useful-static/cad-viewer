@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentGrid } from '../js/dxf-view.js';
+import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, textAt, textIndex } from '../js/dxf-view.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
@@ -700,12 +700,12 @@ test('the 2D snaps and the hover\'s line: the index finds what a scan of every o
   paths.push({ layer: 'A', closed: false, pts: Float64Array.of(-500, 37, 600, 38) });
   // 45-degree hatching: short, in the short segments' tree (the long one holds the line across)
   for (let i = 0; i < 40; i++) paths.push({ layer: 'A', closed: false, pts: Float64Array.of(10 + i * 0.7, 60, 10 + i * 0.7 + 2.5, 62.5) });
-  const grid = segmentGrid(paths, [0, 0], 100);
+  const grid = segmentIndex(paths, [0, 0], 100);
   assert.equal(grid.longTree.m, 1, `long: ${grid.longTree.m} (the one line across everything)`);
   // (held in typed arrays: an array per segment and a Map of arrays, 604 MB for 5.2 million)
   assert.ok(grid.segs instanceof Float64Array && grid.tree.order instanceof Uint32Array && grid.tree.box instanceof Float32Array, 'typed arrays');
   const okP = (pi) => paths[pi].layer !== 'HID';
-  // (and off the drawing, and a radius that searches the coarse grid)
+  // (and off the drawing, and a radius wider than the drawing)
   for (let q = 0; q < 400; q++) {
     const off = q >= 300, x = off ? rnd() * 300 - 100 : rnd() * 100, y = off ? rnd() * 300 - 100 : rnd() * 100, r = off ? [2, 30, 90][q % 3] : [0.05, 1, 8][q % 3];
     let best = -1, bd = r * r;
@@ -734,7 +734,15 @@ test('a drawing whose lines cluster in a corner of its extents: the hover stays 
   const paths = [{ layer: 'A', closed: false, pts }, { layer: 'A', closed: false, pts: Float64Array.of(10000, 10000, 10000.1, 10000) }, { layer: 'A', closed: false, pts: Float64Array.of(-1, -1, -1.1, -1) }];
   // (zig-zag lines across the patch: each segment up to 14 long, so make them short)
   for (let i = 1; i <= 400000; i++) { pts[2 * i] = pts[2 * i - 2] + (rnd() - 0.5) * 0.05; pts[2 * i + 1] = pts[2 * i - 1] + (rnd() - 0.5) * 0.05; }
-  const grid = segmentGrid(paths, [0, 0], 10001);
+  // each segment its own path, in a shuffled file order: one polyline in walk order was already in
+  // spatial order, and the tree without its Morton sort passed (r25 Q2: 1,643 ms shuffled)
+  const ix = Array.from({ length: 400000 }, (_, i) => i);
+  for (let i = ix.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [ix[i], ix[j]] = [ix[j], ix[i]]; }
+  const marks = paths.slice(1);
+  paths.length = 0;
+  for (const i of ix) paths.push({ layer: 'A', closed: false, pts: Float64Array.of(pts[2 * i], pts[2 * i + 1], pts[2 * i + 2], pts[2 * i + 3]) });
+  paths.push(...marks);
+  const grid = segmentIndex(paths, [0, 0], 10001);
   const qs = Array.from({ length: 300 }, () => [pts[0] + (rnd() - 0.5) * 0.5, pts[1] + (rnd() - 0.5) * 0.5]);
   const t0 = performance.now();
   for (const [x, y] of qs) nearestSegment(grid, x, y, 0.02);
@@ -746,6 +754,79 @@ test('a drawing whose lines cluster in a corner of its extents: the hover stays 
     paths.forEach((p, pi) => { for (let i = 0; i + 1 < p.pts.length / 2; i++) { const ax = p.pts[2 * i], ay = p.pts[2 * i + 1], vx = p.pts[2 * i + 2] - ax, vy = p.pts[2 * i + 3] - ay, l2 = vx * vx + vy * vy; const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0; const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2; if (d2 < bd) { bd = d2; best = pi; } } });
     assert.equal(nearestSegment(grid, x, y, 0.02), best);
   }
+});
+test('a site plan far from its centre, hovered at a deep zoom: the float32 boxes never shrink past a line (r25 Q2)', () => {
+  // 2,000,000 across, the offset at its centre, 0.5-unit lines near a corner, an 8 px hover 0.004
+  // units: unpadded float32 boxes missed 158 of 3,000 lines a scan finds
+  let s = 5;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const paths = [{ layer: 'A', closed: true, pts: Float64Array.of(0, 0, 2e6, 0, 2e6, 2e6, 0, 2e6) }];
+  for (let i = 0; i < 3000; i++) {
+    const x = 1.99e6 + rnd() * 5000, y = 1.99e6 + rnd() * 5000, a = rnd() * Math.PI;
+    paths.push({ layer: 'A', closed: false, pts: Float64Array.of(x, y, x + 0.5 * Math.cos(a), y + 0.5 * Math.sin(a)) });
+  }
+  const o = [1e6, 1e6];
+  const index = segmentIndex(paths, o, 2e6);
+  const r = 0.004, bad = [];
+  let found = 0;
+  for (let q = 1; q <= 3000; q++) {
+    const p = paths[q].pts, f = rnd();
+    const x = p[0] - o[0] + (p[2] - p[0]) * f + (rnd() - 0.5) * 0.008, y = p[1] - o[1] + (p[3] - p[1]) * f + (rnd() - 0.5) * 0.008;
+    let best = -1, bd = r * r;
+    paths.forEach((pp, pi) => {
+      const n = pp.pts.length / 2;
+      for (let i = 0; i < (pp.closed ? n : n - 1); i++) {
+        const j = (i + 1) % n, ax = pp.pts[2 * i] - o[0], ay = pp.pts[2 * i + 1] - o[1], vx = pp.pts[2 * j] - o[0] - ax, vy = pp.pts[2 * j + 1] - o[1] - ay, l2 = vx * vx + vy * vy;
+        const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+        const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
+        if (d2 < bd) { bd = d2; best = pi; }
+      }
+    });
+    if (best >= 0) found++;
+    if (nearestSegment(index, x, y, r) !== best) bad.push(q);
+  }
+  assert.ok(found > 2000, `the scan finds a line in ${found}`);
+  assert.deepEqual(bad.slice(0, 10), [], `${bad.length} of 3000 hovers differ from the scan`);
+});
+test('a path\'s segments: point to point, back to the first when closed, a one-point path one of no length (r25 Q7)', () => {
+  const paths = [{ pts: Float64Array.of(0, 0, 1, 0, 1, 1), closed: false }, { pts: Float64Array.of(5, 5, 6, 5, 6, 6), closed: true }, { pts: Float64Array.of(9, 9), closed: false }, { pts: new Float64Array(0), closed: false }];
+  const index = segmentIndex(paths, [0, 0], 10);
+  // 2 + 3 + 1 (an open path of m points had m: one more of no length at its last point)
+  assert.equal(index.pathOf.length, 6);
+  assert.deepEqual([...index.pathOf], [0, 0, 1, 1, 1, 2]);
+  assert.equal(nearestSegment(index, 9.1, 9, 0.5), 2, 'the one-point path is found');
+  assert.equal(nearestSegment(index, 0.5, 0.6, 0.2), -1, 'an open path is not closed');
+  assert.equal(nearestSegment(index, 5.5, 5.6, 0.2), 1, 'a closed one is');
+});
+test('the hover\'s texts are in the one box tree: the first text whose quad holds the point, as a scan finds it, fast over a million (r25 A5, A7)', () => {
+  let s = 3;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  // quads (bottom-left, bottom-right, top-left, top-right) of rotated, overlapping texts
+  const quad = (t) => {
+    const c = Math.cos(t.rot), sn = Math.sin(t.rot);
+    return [[0, 0], [t.w, 0], [0, t.h], [t.w, t.h]].map(([u, v]) => [t.x + u * c - v * sn, t.y + u * sn + v * c]);
+  };
+  const texts = Array.from({ length: 3000 }, (_, i) => ({ x: rnd() * 100, y: rnd() * 100, w: 1 + rnd() * 8, h: 0.5 + rnd() * 2, rot: rnd() * 6.3, layer: i % 4 ? 'A' : 'HID' }));
+  const o = [3, 4];
+  const index = textIndex(texts, quad, o);
+  const ok = (i) => texts[i].layer !== 'HID';
+  const inside = (q, x, y) => { const p = [q[0], q[1], q[3], q[2]]; let pos = 0, neg = 0; for (let k = 0; k < 4; k++) { const [ax, ay] = p[k], [bx, by] = p[(k + 1) % 4]; const cr = (bx - ax) * (y - ay) - (by - ay) * (x - ax); if (cr > 0) pos++; else if (cr < 0) neg++; } return !(pos && neg); };
+  let hits = 0;
+  for (let q = 0; q < 2000; q++) {
+    const x = rnd() * 110 - 5, y = rnd() * 110 - 5;
+    const want = texts.findIndex((t, i) => ok(i) && inside(quad(t), x + o[0], y + o[1]));
+    if (want >= 0) hits++;
+    assert.equal(textAt(index, x, y, ok), want, `query ${q}`);
+  }
+  assert.ok(hits > 500, `${hits} hits`);
+  // a million texts 1 high, 5 apart: a hover over empty sheet tested every one, 360 ms
+  const many = [];
+  for (let i = 0; i < 1e6; i++) many.push({ x: (i % 1000) * 5, y: Math.floor(i / 1000) * 5, w: 3, h: 1, rot: 0 });
+  const big = textIndex(many, quad, [0, 0]);
+  const t0 = performance.now();
+  for (let q = 0; q < 300; q++) textAt(big, 2 + rnd() * 4990, 2.5 + rnd() * 1.5 + 5 * Math.floor(rnd() * 999));
+  const ms = performance.now() - t0;
+  assert.ok(ms < 150, `300 hovers over empty sheet: ${ms.toFixed(0)} ms`);
 });
 test('300 wrapped MTEXTs through 300 viewports: each wrapped once', () => {
   const texts = [], vps = [];

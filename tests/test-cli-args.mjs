@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CliError, parseCli, positive } from '../js/cli-args.js';
+import { encodeCadmesh } from '../js/cadmesh.js';
 
 import { test, done } from './harness.mjs';
 
@@ -76,11 +77,46 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
     if (r.rc !== rc || !msg.test(said) || /\n\s+at /.test(r.err) || (r.out && said === r.err)) bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 160))}, stdout ${JSON.stringify(r.out.slice(0, 80))}`);
   }
   assert.deepEqual(bad, []);
+  // an input refused is said in the one shape the tools share, "<tool>: ..." (they said it four ways)
+  for (const [tool, args] of [['stp2mesh.mjs', [notCad]], ['stp2mesh.mjs', ['missing.stp']], ['cadmesh-export.mjs', ['missing.cadmesh']]]) {
+    const r = run(tool, args);
+    assert.match(r.err, new RegExp(`^${tool.replace('.mjs', '')}: `), `${tool} ${args.join(' ')}: ${JSON.stringify(r.err)}`);
+  }
   // and -h is help: exit 0, the usage on stdout
   for (const tool of ['stp2mesh.mjs', 'cadmesh-export.mjs', 'dwg-check.mjs', 'split-board.mjs', 'set-colours.mjs']) {
     const r = run(tool, ['-h']);
     assert.ok(r.rc === 0 && /usage/.test(r.out) && !r.err, `${tool} -h: rc ${r.rc}, stdout ${JSON.stringify(r.out.slice(0, 60))}, stderr ${JSON.stringify(r.err.slice(0, 60))}`);
   }
+});
+
+test('a write that fails, in every tool that writes: one line "<tool>: ...", exit 1, no stack trace (r25 A4)', () => {
+  // a box .cadmesh and its colours, written here (the tools read real files)
+  const positions = new Float32Array(24);
+  for (let i = 0; i < 8; i++) { positions[i * 3] = i & 1 ? 10 : 0; positions[i * 3 + 1] = i & 2 ? 10 : 0; positions[i * 3 + 2] = i & 4 ? 1 : 0; }
+  const q = (a, b, c, d) => [a, b, c, a, c, d];
+  const indices = new Uint32Array([...q(0, 2, 3, 1), ...q(4, 5, 7, 6), ...q(0, 1, 5, 4), ...q(2, 6, 7, 3), ...q(0, 4, 6, 2), ...q(1, 3, 7, 5)]);
+  const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'box', color: [0.5, 0.5, 0.5], positions, normals: null, colors: null, indices }], root: { name: 'b', meshes: [0], children: [] } });
+  writeFileSync(join(dir, 'box.cadmesh'), new Uint8Array(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)));
+  writeFileSync(join(dir, 'box.rgb'), new Uint8Array(8 * 3).fill(128));
+  writeFileSync(join(dir, 'x.stp'), 'ISO-10303-21;\n');
+  const gone = join(dir, 'no-such-dir');
+  const bad = [];
+  for (const [tool, args] of [
+    ['stp2mesh.mjs', ['x.stp', '-o', join(gone, 'x.cadmesh')]], // (refused before it converts)
+    ['cadmesh-export.mjs', ['box.cadmesh', '--to', 'stl', '--out', join(gone, 'x')]],
+    ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', join(gone, 'x.cadmesh'), '--by', 'test']],
+  ]) {
+    const r = run(tool, args);
+    const lines = r.err.trim().split('\n');
+    if (r.rc !== 1 || lines.length !== 1 || !lines[0].startsWith(`${tool.replace('.mjs', '')}: `) || !/no-such-dir/.test(lines[0]) || /\n\s+at /.test(r.err)) {
+      bad.push(`${tool}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 300))}`);
+    }
+  }
+  assert.deepEqual(bad, []);
+  // dwg-check: a drawing it cannot read is its row, in the reader's words, not "Error: ..."
+  const r = run('dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')]);
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /: \? ERROR (?!Error)/);
 });
 
 done();

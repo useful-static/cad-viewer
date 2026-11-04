@@ -16,7 +16,7 @@
 // escape() first.
 
 import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
-import { faceOfTri, makeCaster } from './raycast.js';
+import { faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
@@ -208,12 +208,10 @@ export function createMeasure(deps) {
     const pl = deps.sectionPlane();
     if (!pl) return null;
     if (deps.closed && !deps.closed(hit.mesh)) return null; // (an open sheet: no cut face drawn)
-    // (its outside: a surface, not the cut -- by the triangle's vertex normals, the view's own test
-    // (js/renderer-webgl.js: a fragment whose normal looks away is the cut face); the winding, turned
-    // by the body's signed volume, was a second rule, and the two disagreed on a body wound inward)
-    const N = st.model.normal, I = st.model.index, t = hit.tri;
-    const n = [0, 1, 2].map((k) => N[4 * I[3 * t] + k] + N[4 * I[3 * t + 1] + k] + N[4 * I[3 * t + 2] + k]);
-    if (dot(n, ray.d) <= 0) return null;
+    // (its outside: a surface, not the cut -- by the vertex normals interpolated at the hit, the
+    // view's own per-fragment test (js/raycast.js seesInside); the winding, turned by the body's
+    // signed volume, was a second rule, and the centroid's normal a third near an outline)
+    if (!seesInside(st.model.position, st.model.normal, st.model.index, hit.tri, ray.o, ray.d)) return null;
     const den = dot(pl, ray.d);
     if (Math.abs(den) < 1e-12) return null;
     const tp = (pl[3] - dot(pl, ray.o)) / den;

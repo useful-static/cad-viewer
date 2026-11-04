@@ -13,7 +13,7 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, no
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
-import { CliError, parseCli, positive } from './js/cli-args.js';
+import { CliError, parseCli, positive, runCli } from './js/cli-args.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // (the extensions from the viewer's format table, js/formats.js: written out here, .brp was missing)
@@ -104,25 +104,29 @@ async function main() {
   if (!st || !st.isFile()) {
     // (an input that cannot be read is refused, exit 1, as cadmesh-export and dwg-check refuse it;
     // 2 is for the options)
-    process.stderr.write(`${args.input}: ${st ? 'not a file' : 'no such file'}\n`);
-    return 1;
+    // (each refusal thrown, said by runCli in the one shape the five tools share: "stp2mesh: ...")
+    throw new Error(`${args.input}: ${st ? 'not a file' : 'no such file'}`);
   }
   // a name that says nothing: told by the bytes, as the viewer does (r22)
   const format = FORMATS[ext] || sniffFile(args.input);
   if (!format) {
-    process.stderr.write(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`
-      + ` (want ${Object.keys(FORMATS).join(', ')})\n`);
-    return 1; // (the input refused, as a missing one is: 2 is for the options)
+    // (the input refused, as a missing one is: 2 is for the options)
+    throw new Error(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`
+      + ` (want ${Object.keys(FORMATS).join(', ')})`);
   }
+  // (the extension dropped only when the name had a CAD one: a bare name in
+  // a dotted directory kept its directory)
+  const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
+  // an output whose directory is missing is refused before the conversion, not after it
+  let od = null;
+  try { od = statSync(dirname(resolve(out))); } catch { /* said below */ }
+  if (!od || !od.isDirectory()) throw new Error(`could not write ${out}: no such directory ${dirname(out)}`);
   const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');
   if (!existsSync(occtJs)) {
     process.stderr.write(`occt-import-js not found at ${occtJs}: run ${join(HERE, 'fetch-deps.sh')}\n`);
     return 3;
   }
-  // (the extension dropped only when the name had a CAD one: a bare name in
-  // a dotted directory kept its directory)
-  const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
   // --progress: print OpenCascade's progress (our occt-progress build only;
   // the stock npm build never calls onProgress): each phase's start and end,
   // and every 10% of it, with the time since the import began
@@ -157,14 +161,13 @@ async function main() {
   try {
     model = conversionModel(result, { sourceUnits: declared, angularDeflection: args.params.angularDeflection });
   } catch (e) {
-    process.stderr.write(`FAIL: ${args.input}: ${e.message}\n`);
-    return 1;
+    throw new Error(`${args.input}: ${e.message}`);
   }
   // no faces (curves or points only): nothing to show, as the viewer refuses
   // it, not an empty .cadmesh written as OK (review r22)
   // (faces the converter could not mesh are not "no faces": r23; the page's words, noSurfaces)
   const none = noSurfaces(model.meshes.reduce((s, m) => s + m.indices.length, 0), args.input, model.unmeshedFaces);
-  if (none) { process.stderr.write(`FAIL: ${none}\n`); return 1; }
+  if (none) throw new Error(none);
   // the statuses are reported (and digested for compare.sh) even when
   // --no-kind leaves them out of the header
   // the converter's own strings, not the filtered kind, so a status the JS
@@ -179,12 +182,12 @@ async function main() {
   // (the page saves a conversion only once it loads; decoded here first too -- written and printed
   // OK before, a model past the viewer's bound left its file behind with an OK line, then FAIL)
   let h;
-  try { h = decodeCadmesh(buf).header; } catch (e) { process.stderr.write(`FAIL: ${args.input}: ${e.message}\n`); return 1; } // (one line, not node's stack)
+  try { h = decodeCadmesh(buf).header; } catch (e) { throw new Error(`${args.input}: ${e.message}`); } // (one line, not node's stack)
   if (model.unmeshedFaces) {
     process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }
   const file = args.raw ? Buffer.from(buf) : gzipSync(Buffer.from(buf), { level: 6 });
-  writeFileSync(out, file);
+  try { writeFileSync(out, file); } catch (e) { throw new Error(`could not write ${out}: ${e.message}`); }
   const meshes = result.meshes.length;
   const tris = result.meshes.reduce((s, m) => s + m.index.array.length / 3, 0);
   const mb = (n) => (n / 1e6).toFixed(1);
@@ -211,4 +214,6 @@ async function main() {
   return 0;
 }
 
-main().then((rc) => process.exit(rc), (e) => { process.stderr.write(`FAIL: ${e.stack || e}\n`); process.exit(1); });
+// (a refused input or a failed write: one line, exit 1, by runCli as the other tools -- the stack
+// trace was printed whole)
+await runCli('stp2mesh', async () => process.exit(await main()));

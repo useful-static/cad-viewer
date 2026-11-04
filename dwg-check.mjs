@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
-import { CliError, parseCli } from './js/cli-args.js';
+import { CliError, parseCli, runCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 // (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
@@ -22,9 +22,10 @@ const files = parsed.pos;
 // (no drawing given, and --dxf with more than one -- each overwrote the one file -- are usage errors)
 if (!files.length) usageError('no DWG file given');
 if (dxfOut && files.length > 1) usageError('--dxf writes one file: give one DWG');
-let bad = 0;
-const reports = [];
-for (const f of files) {
+
+// One drawing's report, its pairs (for --dxf; null when it could not be read) and, when it could
+// not, the reader's message (the row's words, not "Error: ...")
+function check(f) {
   const rep = { file: f };
   try {
     const t0 = Date.now();
@@ -48,7 +49,6 @@ for (const f of files) {
     rep.blocks = [...d.objects.values()].filter((o) => o.name === 'BLOCK_RECORD' && o.d && !o.d.name.startsWith('*')).map((o) => o.d.name);
     const P = dwgToPairs(d);
     rep.pairs = P.length;
-    if (dxfOut) writeFileSync(dxfOut, pairsToDXF(P));
     // and drawn as the page draws it (drawDWG over these pairs, as js/read-file.js readDrawing
     // does over the same reader's), refused by the page's own rule (drawsNothing): a DWG the page
     // refuses, or that draws nothing, is not "all checks pass"
@@ -58,15 +58,31 @@ for (const f of files) {
       rep.drawn = { paths: dr.paths.filter(isShape).length, texts: dr.texts.length, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
-    if (d.failures.length || rep.drawError) bad++;
+    return { rep, P, bad: !!(d.failures.length || rep.drawError), why: '' };
   } catch (err) {
     rep.error = String(err.stack || err);
-    bad++;
-  }
-  reports.push(rep);
-  if (!json) {
-    console.log(`${f}: ${rep.release || '?'} ${rep.error ? 'ERROR ' + rep.error.split('\n')[0] : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
+    return { rep, P: null, bad: true, why: err && err.message ? err.message : String(err) };
   }
 }
-if (json) console.log(JSON.stringify(reports, null, 1));
-process.exit(bad ? 1 : 0);
+
+// One row per drawing, its own verdict (a drawing it cannot read is that row's ERROR, exit 1 at
+// the end); a failure of the tool itself -- the --dxf it cannot write -- is said by runCli in the
+// five tools' one shape, "dwg-check: ...", one line, exit 1.
+function main() {
+  let bad = 0;
+  const reports = [];
+  for (const f of files) {
+    const { rep, P, bad: failed, why } = check(f);
+    if (failed) bad++;
+    reports.push(rep);
+    if (dxfOut && P) {
+      try { writeFileSync(dxfOut, pairsToDXF(P)); } catch (e) { throw new Error(`could not write ${dxfOut}: ${e.message}`); }
+    }
+    if (!json) {
+      console.log(`${f}: ${rep.release || '?'} ${rep.error ? `ERROR ${why}` : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
+    }
+  }
+  if (json) console.log(JSON.stringify(reports, null, 1));
+  process.exit(bad ? 1 : 0);
+}
+await runCli('dwg-check', main);

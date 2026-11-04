@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { encodeCadmesh, decodeCadmesh, bytesToId } from '../js/cadmesh.js';
 import { mergeModels, modelRanges } from '../js/scene.js';
 import { clearance, triangleDistance } from '../js/clearance.js';
+import { bodyGeometry } from '../js/measure-geom.js';
+import { washer } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
 
@@ -120,6 +122,40 @@ test('a model with faces and one without (an STL): the faces kept, the other\'s 
       assert.equal(s.faces[m.faceStart * 2], m.idxStart / 3, 'a board face names its own first triangle');
     }
   }
+});
+test('a model that records no angle keeps its circles beside a model meshed at 0.1, and each body\'s circle test is its own model\'s (r25 A2, Q1, Q3)', () => {
+  // a washer of 16 segments a rim: circles at 0.5 (12 points needed), not at 0.1 (62)
+  const washerFile = (angularDeflection) => {
+    const positions = [], indices = [], faces = [];
+    for (const f of washer(1.6, 4, 2, 16)) {
+      const map = new Map();
+      faces.push(indices.length / 3, f.length);
+      for (const tri of f) for (const p of tri) {
+        const k = p.join(',');
+        if (!map.has(k)) { map.set(k, positions.length / 3); positions.push(...p); }
+        indices.push(map.get(k));
+      }
+    }
+    const mesh = { name: 'washer', color: [0.5, 0.5, 0.5], positions: new Float32Array(positions), normals: null, colors: null, indices: new Uint32Array(indices), faces: new Uint32Array(faces) };
+    const raw = encodeCadmesh({ units: 'mm', meshes: [mesh], root: { name: 'w', meshes: [0], children: [] }, sourceUnits: 'mm', angularDeflection });
+    return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  };
+  const old = washerFile(undefined); // a .cadmesh older than the field
+  assert.equal(old.header.angularDeflection, undefined);
+  const circles = (m, i) => bodyGeometry(m, i).circles.length;
+  assert.equal(circles(old, 0), 8, 'alone: the default angle, its rims (two on each of its four faces)');
+  const fine = { ...lid, header: { ...lid.header, angularDeflection: 0.1 } };
+  for (const order of [[old, fine], [fine, old]]) {
+    const s = mergeModels(order.map((base, i) => ({ base, name: `m${i}`, offset: [i * 100, 0, 0] })));
+    assert.equal(s.header.angularDeflection, undefined, 'the scene has no angle of its own');
+    assert.ok(s.header.meshes.every((m) => m.angularDeflection > 0), 'every body carries its own');
+    const w = order[0] === old ? 0 : 1, l = 1 - w;
+    assert.equal(bodyGeometry(s, w).a, 0.5, 'the angle-less model\'s body: the default');
+    assert.equal(bodyGeometry(s, l).a, 0.1, 'the fine model\'s body: its own');
+    assert.equal(circles(s, w), 8, 'its circles kept beside the 0.1 model');
+  }
+  // a model meshed at 0.1 alone: its own (none of the washer's 16-point rims a circle at 0.1)
+  assert.equal(circles(washerFile(0.1), 0), 0);
 });
 test('each body keeps its model\'s angular deflection, and one model\'s silhouettes are kept beside a model without', () => {
   const coarse = { ...board, header: { ...board.header, angularDeflection: 0.5 } };

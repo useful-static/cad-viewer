@@ -17,17 +17,30 @@ import { orientBasis } from './orient.js';
 
 const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 
-// one body's vertices (in the basis, scaled) and triangles (local numbers)
+// one body's vertices (in the basis, scaled) and triangles (local numbers). A triangle whose
+// winding disagrees with its vertex normals (their sum) is written turned round: the normals are
+// the body's outside to the view and to Measure (js/measure-geom.js facingNormals), and STL and
+// 3MF carry the winding alone, so a mirrored placement -- wound inward, normals out -- went to a
+// slicer inside out while the view showed it right.
 function bodyOf(model, id, basis, scale) {
   const m = model.header.meshes[id - 1];
-  const P = model.position;
+  const P = model.position, N = model.normal;
   const pos = new Float32Array(m.vtxCount * 3);
   for (let v = 0; v < m.vtxCount; v++) {
     const i = (m.vtxStart + v) * 3;
     for (let k = 0; k < 3; k++) pos[v * 3 + k] = dot3(P, i, basis[k]) * scale;
   }
   const idx = new Uint32Array(m.idxCount);
-  for (let t = 0; t < m.idxCount; t++) idx[t] = model.index[m.idxStart + t] - m.vtxStart;
+  for (let t = 0; t < m.idxCount; t += 3) {
+    const a = model.index[m.idxStart + t], b = model.index[m.idxStart + t + 1], c = model.index[m.idxStart + t + 2];
+    const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
+    const vx = P[3 * c] - P[3 * a], vy = P[3 * c + 1] - P[3 * a + 1], vz = P[3 * c + 2] - P[3 * a + 2];
+    const sx = N[4 * a] + N[4 * b] + N[4 * c], sy = N[4 * a + 1] + N[4 * b + 1] + N[4 * c + 1], sz = N[4 * a + 2] + N[4 * b + 2] + N[4 * c + 2];
+    const turn = (uy * vz - uz * vy) * sx + (uz * vx - ux * vz) * sy + (ux * vy - uy * vx) * sz < 0;
+    idx[t] = a - m.vtxStart;
+    idx[t + 1] = (turn ? c : b) - m.vtxStart;
+    idx[t + 2] = (turn ? b : c) - m.vtxStart;
+  }
   return { m, pos, idx };
 }
 

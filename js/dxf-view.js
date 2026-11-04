@@ -21,104 +21,26 @@ const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
 
-// The nearest of many points to (x, y) within r, that accept(point) takes: a 2-d tree over them,
-// built once (a grid sized from the drawing's extents held 397,389 points in one cell of a
-// clustered drawing, 46 ms a move; past it, every point, 110 ms). pts: [[x, y, ...], ...]
-export function pointTree(pts) {
-  const n = pts.length, ids = new Uint32Array(n);
-  const xy = [new Float64Array(n), new Float64Array(n)];
-  for (let i = 0; i < n; i++) { ids[i] = i; xy[0][i] = pts[i][0]; xy[1][i] = pts[i][1]; }
-  const key = (i, ax) => xy[ax][i];
-  // ids[lo, hi) arranged so its middle is the median on the axis, the halves either side, down
-  const place = (lo, hi, ax) => {
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1;
-      // quickselect for mid on ax
-      let a = lo, b = hi - 1;
-      while (a < b) {
-        const pv = key(ids[(a + b) >> 1], ax);
-        let i = a, j = b;
-        while (i <= j) {
-          while (key(ids[i], ax) < pv) i++;
-          while (key(ids[j], ax) > pv) j--;
-          if (i <= j) { const t = ids[i]; ids[i] = ids[j]; ids[j] = t; i++; j--; }
-        }
-        if (mid <= j) b = j; else if (mid >= i) a = i; else break;
-      }
-      place(lo, mid, ax ^ 1);
-      lo = mid + 1; ax ^= 1;
-    }
-  };
-  place(0, n, 0);
-  return { pts, ids, xy };
-}
-export function nearestPoint(tree, x, y, r, accept = () => true) {
-  const { pts, ids, xy } = tree;
-  let best = null, bd = r * r;
-  const q = [x, y];
-  // the near half first, the far one only while it can hold a nearer point
-  const walk = (lo, hi, ax) => {
-    if (lo >= hi) return;
-    const mid = (lo + hi) >> 1, i = ids[mid];
-    const px = xy[0][i], py = xy[1][i];
-    const d = (px - x) ** 2 + (py - y) ** 2;
-    if (d < bd && accept(pts[i])) { bd = d; best = pts[i]; }
-    const diff = q[ax] - (ax ? py : px);
-    if (diff < 0) { walk(lo, mid, ax ^ 1); if (diff * diff < bd) walk(mid + 1, hi, ax ^ 1); }
-    else { walk(mid + 1, hi, ax ^ 1); if (diff * diff < bd) walk(lo, mid, ax ^ 1); }
-  };
-  walk(0, ids.length, 0);
-  return best;
-}
-
-// A drawing's line segments indexed for the nearest line within r (the hover, a click's layer):
-// every segment was tested on every pointer move, 200 ms a move on 5.2 million. paths: the
-// drawing's; o: the offset; span: its size. Two box trees (segmentTree), the short segments' and
-// the long ones'.
+// One index design for the 2D view's one question, "the nearest item to (x, y) within r that
+// accept() takes": a box tree over the items' boxes (boxTree), walked nearest box first
+// (nearestItem). The snaps are points (boxes of no size), the hover's lines segments, its texts
+// their drawn quads. (The snaps had a 2-d tree of their own beside the lines' box tree, a second
+// design a fix to one did not reach; the texts had none: every one tested on a hover over empty
+// sheet, 360 ms a move on a million.)
 //
-// All typed arrays: segs (ax ay bx by a segment), pathOf, each tree's order and boxes. (A JS array
-// per segment and a string-keyed Map of arrays held 604 MB of heap for 5.2 million segments.)
-export function segmentGrid(paths, o, span) {
-  let n = 0;
-  for (const p of paths) n += p.pts.length / 2;
-  const segs = new Float64Array(4 * n), pathOf = new Uint32Array(n);
-  let s = 0;
-  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
-  paths.forEach((p, pi) => {
-    const m = p.pts.length / 2;
-    for (let i = 0; i < m; i++, s++) {
-      const j = i + 1 < m ? i + 1 : p.closed ? 0 : -1;
-      const ax = p.pts[i * 2] - o[0], ay = p.pts[i * 2 + 1] - o[1];
-      const bx = j < 0 ? ax : p.pts[j * 2] - o[0], by = j < 0 ? ay : p.pts[j * 2 + 1] - o[1];
-      segs[4 * s] = ax; segs[4 * s + 1] = ay; segs[4 * s + 2] = bx; segs[4 * s + 3] = by;
-      pathOf[s] = pi;
-      if (Number.isFinite(ax + ay + bx + by)) { lx = Math.min(lx, ax, bx); ly = Math.min(ly, ay, by); hx = Math.max(hx, ax, bx); hy = Math.max(hy, ay, by); }
-    }
-  });
-  // the segments far longer than most (a border, a line across the sheet) in a tree of their own:
-  // one in a leaf of short ones made every box above it as wide
-  const longest = (span || Math.max(hx - lx, hy - ly) || 1) / 8;
-  const short = [], long = [];
-  for (let t = 0; t < n; t++) {
-    const w = Math.max(Math.abs(segs[4 * t + 2] - segs[4 * t]), Math.abs(segs[4 * t + 3] - segs[4 * t + 1]));
-    if (!Number.isFinite(w)) continue; // (a point not a number is never near)
-    (w > longest ? long : short).push(t);
-  }
-  return { tree: segmentTree(segs, Uint32Array.from(short)), longTree: segmentTree(segs, Uint32Array.from(long)), segs, pathOf, paths, o, span };
-}
-
-// A box tree over segments (ids into segs): the segments sorted along a Morton curve of their
-// centres, LEAF a leaf, the leaves the bottom row of a complete binary tree (node i's children
-// 2i + 1, 2i + 2), each node's box (float32, widened a little so rounding never shrinks it)
-// holding its children's. The curve follows the drawing's density: a uniform grid sized from
-// the extents put 95.6 % of a real drawing's 1.75 million segments in one cell, 30-40 ms a hover.
+// boxTree(B, ids): B, a Float64Array of two opposite corners per item (x0 y0 x1 y1, in either
+// order: a segment's two ends are its box's); ids, the items to hold (finite ones). The items sorted along a Morton curve of their boxes' centres, LEAF a leaf, the leaves
+// the bottom row of a complete binary tree (node i's children 2i + 1, 2i + 2), each node's box
+// (float32, widened a little so rounding never shrinks it) holding its children's. The curve
+// follows the drawing's density: a uniform grid sized from the extents put 95.6 % of a real
+// drawing's 1.75 million segments in one cell, 30-40 ms a hover.
 const LEAF = 16;
-function segmentTree(segs, ids) {
+export function boxTree(B, ids) {
   const m = ids.length;
   let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
   for (let k = 0; k < m; k++) {
     const t = ids[k];
-    const cx = (segs[4 * t] + segs[4 * t + 2]) / 2, cy = (segs[4 * t + 1] + segs[4 * t + 3]) / 2;
+    const cx = (B[4 * t] + B[4 * t + 2]) / 2, cy = (B[4 * t + 1] + B[4 * t + 3]) / 2;
     if (cx < lx) lx = cx; if (cx > hx) hx = cx; if (cy < ly) ly = cy; if (cy > hy) hy = cy;
   }
   const sx = hx > lx ? 65535 / (hx - lx) : 0, sy = hy > ly ? 65535 / (hy - ly) : 0;
@@ -126,7 +48,7 @@ function segmentTree(segs, ids) {
   const code = new Uint32Array(m);
   for (let k = 0; k < m; k++) {
     const t = ids[k];
-    const qx = Math.floor(((segs[4 * t] + segs[4 * t + 2]) / 2 - lx) * sx), qy = Math.floor(((segs[4 * t + 1] + segs[4 * t + 3]) / 2 - ly) * sy);
+    const qx = Math.floor(((B[4 * t] + B[4 * t + 2]) / 2 - lx) * sx), qy = Math.floor(((B[4 * t + 1] + B[4 * t + 3]) / 2 - ly) * sy);
     code[k] = (spread(qx) | (spread(qy) << 1)) >>> 0;
   }
   // (a radix sort by the code, 8 bits a pass, stable)
@@ -151,7 +73,7 @@ function segmentTree(segs, ids) {
   for (let j = 0; j < leaves; j++) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
-      const t = order[k], ax = segs[4 * t], ay = segs[4 * t + 1], bx = segs[4 * t + 2], by = segs[4 * t + 3];
+      const t = order[k], ax = B[4 * t], ay = B[4 * t + 1], bx = B[4 * t + 2], by = B[4 * t + 3];
       x0 = Math.min(x0, ax, bx); y0 = Math.min(y0, ay, by); x1 = Math.max(x1, ax, bx); y1 = Math.max(y1, ay, by);
     }
     if (x0 <= x1) set(P - 1 + j, x0, y0, x1, y1);
@@ -165,19 +87,14 @@ function segmentTree(segs, ids) {
   }
   return { order, m, P, box };
 }
-// -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
-export function nearestSegment(grid, x, y, r, accept = () => true) {
+
+// The item of the trees nearest (x, y) by dist(id) (a squared distance; Infinity: not a hit), at
+// most r away, that accept(id) takes, or -1; of equal distances the lowest id (as a scan in
+// order finds it). Each tree walked nearest box first, past every box farther than the best.
+export function nearestItem(trees, x, y, r, dist, accept = () => true) {
   let best = -1, bd = r * r;
-  const { segs, pathOf } = grid;
-  const test = (s) => {
-    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
-    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
-    const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
-    if (d2 < bd && accept(pathOf[s])) { bd = d2; best = pathOf[s]; }
-  };
-  // each tree walked nearest box first, past every box farther than the nearest found (or r)
-  const stack = new Int32Array(128);
-  for (const { order, m, P, box } of [grid.longTree, grid.tree]) {
+  const stack = new Int32Array(128); // (a complete tree's depth is under 32: a node pushes 2 at most)
+  for (const { order, m, P, box } of trees) {
     if (!m) continue;
     const away = (i) => {
       if (box[4 * i] !== box[4 * i]) return Infinity; // (an empty leaf)
@@ -188,18 +105,124 @@ export function nearestSegment(grid, x, y, r, accept = () => true) {
     stack[sp++] = 0;
     while (sp) {
       const i = stack[--sp];
-      if (away(i) >= bd) continue;
+      if (away(i) > bd) continue;
       if (i >= P - 1) {
         const j = i - (P - 1);
-        for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) test(order[k]);
+        for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
+          const t = order[k], d = dist(t);
+          if ((d < bd || (d === bd && (best < 0 || t < best))) && accept(t)) { bd = d; best = t; }
+        }
         continue;
       }
       const a = 2 * i + 1, b = 2 * i + 2, da = away(a), db = away(b);
       // (the nearer pushed last: walked first)
-      if (da <= db) { if (db < bd) stack[sp++] = b; if (da < bd) stack[sp++] = a; } else { if (da < bd) stack[sp++] = a; if (db < bd) stack[sp++] = b; }
+      if (da <= db) { if (db <= bd) stack[sp++] = b; if (da <= bd) stack[sp++] = a; } else { if (da <= bd) stack[sp++] = a; if (db <= bd) stack[sp++] = b; }
     }
   }
   return best;
+}
+
+// The snaps: the nearest point within r that accept(point) takes. pts: [[x, y, ...], ...]
+// (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
+export function pointTree(pts) {
+  const n = pts.length, B = new Float64Array(4 * n), ids = [];
+  for (let i = 0; i < n; i++) {
+    const x = pts[i][0], y = pts[i][1];
+    B[4 * i] = B[4 * i + 2] = x; B[4 * i + 1] = B[4 * i + 3] = y;
+    if (Number.isFinite(x + y)) ids.push(i);
+  }
+  return { pts, tree: boxTree(B, Uint32Array.from(ids)) };
+}
+export function nearestPoint(index, x, y, r, accept = () => true) {
+  const { pts } = index;
+  const i = nearestItem([index.tree], x, y, r, (k) => (pts[k][0] - x) ** 2 + (pts[k][1] - y) ** 2, (k) => accept(pts[k]));
+  return i < 0 ? null : pts[i];
+}
+
+// The hover's texts: the first text (in the drawing's order) whose drawn quad holds (x, y) and
+// that accept(textIndex) takes, or -1. cornersOf(t): its four corners as drawn (bottom-left,
+// bottom-right, top-left, top-right; js/dxf.js textCorners with the view's measured lines), o: the
+// offset. Built once; the corners measured then, once a text.
+export function textIndex(texts, cornersOf, o) {
+  const n = texts.length, B = new Float64Array(4 * n), Q = new Float64Array(8 * n), ids = [];
+  texts.forEach((t, i) => {
+    const c = cornersOf(t);
+    // (in the quad's order round it: bottom-left, bottom-right, top-right, top-left)
+    const q = [c[0], c[1], c[3], c[2]];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    q.forEach(([x, y], k) => {
+      const ux = x - o[0], uy = y - o[1];
+      Q[8 * i + 2 * k] = ux; Q[8 * i + 2 * k + 1] = uy;
+      x0 = Math.min(x0, ux); y0 = Math.min(y0, uy); x1 = Math.max(x1, ux); y1 = Math.max(y1, uy);
+    });
+    B[4 * i] = x0; B[4 * i + 1] = y0; B[4 * i + 2] = x1; B[4 * i + 3] = y1;
+    if (Number.isFinite(x0 + y0 + x1 + y1)) ids.push(i);
+  });
+  return { Q, tree: boxTree(B, Uint32Array.from(ids)) };
+}
+export function textAt(index, x, y, accept = () => true) {
+  const { Q } = index;
+  // inside when on one side of each edge of the quad taken in order (a hit at distance 0)
+  const inside = (i) => {
+    let pos = 0, neg = 0;
+    for (let k = 0; k < 4; k++) {
+      const ax = Q[8 * i + 2 * k], ay = Q[8 * i + 2 * k + 1], bx = Q[8 * i + 2 * ((k + 1) % 4)], by = Q[8 * i + 2 * ((k + 1) % 4) + 1];
+      const cr = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+      if (cr > 0) pos++; else if (cr < 0) neg++;
+    }
+    return !(pos && neg) ? 0 : Infinity;
+  };
+  return nearestItem([index.tree], x, y, 0, inside, accept);
+}
+
+// A drawing's line segments indexed for the nearest line within r (the hover, a click's layer):
+// every segment was tested on every pointer move, 200 ms a move on 5.2 million. paths: the
+// drawing's; o: the offset; span: its size. Two box trees, the short segments' and the long ones'.
+//
+// All typed arrays: segs (ax ay bx by a segment), pathOf, each tree's order and boxes. (A JS array
+// per segment and a string-keyed Map of arrays held 604 MB of heap for 5.2 million segments.)
+// A path's segments run point to point (and back to its first, closed); a path of one point is one
+// segment of no length. (Every open path had one more, of no length at its last point, already
+// the end of its last segment: 15.1 % of the dozens drawings' segments.)
+export function segmentIndex(paths, o, span) {
+  const segsOf = (p) => { const m = p.pts.length / 2; return m === 1 || p.closed ? m : Math.max(0, m - 1); };
+  let n = 0;
+  for (const p of paths) n += segsOf(p);
+  const segs = new Float64Array(4 * n), pathOf = new Uint32Array(n);
+  let s = 0;
+  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
+  paths.forEach((p, pi) => {
+    const m = p.pts.length / 2, k = segsOf(p);
+    for (let i = 0; i < k; i++, s++) {
+      const j = m === 1 ? 0 : (i + 1) % m;
+      const ax = p.pts[i * 2] - o[0], ay = p.pts[i * 2 + 1] - o[1];
+      const bx = p.pts[j * 2] - o[0], by = p.pts[j * 2 + 1] - o[1];
+      segs[4 * s] = ax; segs[4 * s + 1] = ay; segs[4 * s + 2] = bx; segs[4 * s + 3] = by;
+      pathOf[s] = pi;
+      if (Number.isFinite(ax + ay + bx + by)) { lx = Math.min(lx, ax, bx); ly = Math.min(ly, ay, by); hx = Math.max(hx, ax, bx); hy = Math.max(hy, ay, by); }
+    }
+  });
+  // the segments far longer than most (a border, a line across the sheet) in a tree of their own:
+  // one in a leaf of short ones made every box above it as wide
+  const longest = (span || Math.max(hx - lx, hy - ly) || 1) / 8;
+  const short = [], long = [];
+  for (let t = 0; t < n; t++) {
+    const w = Math.max(Math.abs(segs[4 * t + 2] - segs[4 * t]), Math.abs(segs[4 * t + 3] - segs[4 * t + 1]));
+    if (!Number.isFinite(w)) continue; // (a point not a number is never near)
+    (w > longest ? long : short).push(t);
+  }
+  return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)), segs, pathOf, paths, o, span };
+}
+// -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
+export function nearestSegment(index, x, y, r, accept = () => true) {
+  const { segs, pathOf } = index;
+  const dist = (s) => {
+    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
+    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+    return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
+  };
+  const s = nearestItem([index.longTree, index.tree], x, y, r, dist, (k) => accept(pathOf[k]));
+  return s < 0 ? -1 : pathOf[s];
 }
 
 // whether a path is added to its group reversed: a fill (not a hatch's even-odd loops) wound
@@ -432,10 +455,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
   }
   // the lines, indexed once for the hover and a click's layer: built just after the drawing is
   // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)
-  let segGrid = null;
-  const segments = () => segGrid || (segGrid = segmentGrid(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
+  let segIndex = null;
+  const segments = () => segIndex || (segIndex = segmentIndex(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
   // (cancelled by destroy: a drawing replaced at once built its index for a view that was gone)
-  const segTimer = setTimeout(() => { if (!segGrid) segments(); }, 0);
+  const segTimer = setTimeout(() => { if (!segIndex) segments(); }, 0);
+  // the texts, indexed by their drawn quads (the measured lines, once a text) on the first hover
+  // that finds no line
+  let txtIndex = null;
+  const textsIndexed = () => txtIndex || (txtIndex = textIndex(drawing.texts, (t) => textCorners(t, linesOf(t), widthOf(t)), o));
   // 6 significant figures; a value a billionth of the drawing's size is float
   // noise (a circle centre averaged from its points), shown as 0
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
@@ -464,22 +491,12 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // use could not be picked
     // (the box drawn: the text's measured lines, cut to its viewport's frame, and only when it is
     // drawn at all -- the estimate's box, uncut, picked a layer from empty sheet past a frame)
-    for (const t of drawing.texts) {
-      if (st.off.has(t.layer) || t.h * st.s < MIN_TEXT_PX) continue;
-      if (t.clip && !(ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3])) continue;
-      const c = textCorners(t, linesOf(t), widthOf(t)).map(([x, y]) => [x - o[0], y - o[1]]);
-      // the corners are bottom-left, bottom-right, top-left, top-right: inside when on one side of
-      // each edge of the quad taken in order
-      const q = [c[0], c[1], c[3], c[2]];
-      let pos = 0, neg = 0;
-      for (let i = 0; i < 4; i++) {
-        const [ax, ay] = q[i], [bx, by] = q[(i + 1) % 4];
-        const cr = (bx - ax) * (uy - ay) - (by - ay) * (ux - ax);
-        if (cr > 0) pos++; else if (cr < 0) neg++;
-      }
-      if (!(pos && neg)) return t.layer;
-    }
-    return null;
+    const ti = textAt(textsIndexed(), ux, uy, (i) => {
+      const t = drawing.texts[i];
+      if (st.off.has(t.layer) || t.h * st.s < MIN_TEXT_PX) return false;
+      return !t.clip || (ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3]);
+    });
+    return ti >= 0 ? drawing.texts[ti].layer : null;
   }
 
   // ---- input ----

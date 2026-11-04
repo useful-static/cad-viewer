@@ -29,6 +29,7 @@ const storedFloor = (far) => 8 * 2 ** -23 * far;
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
 import { cross, dot, len, sub, unit } from './vec3.js';
+import { DEFAULT_TESSELLATION } from './cadmesh.js';
 
 // Newell's normal and the centroid of a closed polygon
 function newell(pts) {
@@ -184,10 +185,14 @@ const bitsKey = (P, v) => {
 export function bodyGeometry(model, meshIndex) {
   const P = model.position, I = model.index, h = model.header;
   const m = h.meshes[meshIndex];
+  // a face's outside is its vertex normals' (facingNormals), the one rule: a decoded model always
+  // has them (its normal section is required), so a model without is a caller's error, said so
+  if (!model.normal) throw new Error('bodyGeometry: the model has no vertex normals');
   // (the body's own model's angular deflection, where a scene merged models meshed differently:
   // the scene's smallest set every model's circle test, and a board beside a model meshed at 0.1
-  // listed 0 of its 125 holes)
-  const a = m.angularDeflection ?? h.angularDeflection ?? 0.5;
+  // listed 0 of its 125 holes). A merged scene gives every body one (js/scene.js); a model read
+  // alone has its own header's, or, recording none, the converter's default.
+  const a = m.angularDeflection ?? h.angularDeflection ?? DEFAULT_TESSELLATION.angularDeflection;
   const faces = [];
   const tri0 = m.idxStart / 3, ntri = m.idxCount / 3;
   if (model.faces && m.faceCount) {
@@ -217,7 +222,7 @@ export function bodyGeometry(model, meshIndex) {
   const span = P.length / 3 + 1;
   for (const [fi, f] of faces.entries()) {
     f.plane = f.whole ? null : planeOf(P, I, f.tri0, f.ntri);
-    if (f.plane && model.normal) facingNormals(f.plane, model.normal, I, f.tri0, f.ntri);
+    if (f.plane) facingNormals(f.plane, model.normal, I, f.tri0, f.ntri);
     f.circles = [];
     if (!f.ntri) continue;
     const loops = faceLoops(I, f.tri0, f.ntri, span);

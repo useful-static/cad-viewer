@@ -6,57 +6,17 @@
 
 import assert from 'node:assert/strict';
 import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid } from '../js/measure-geom.js';
-import { BVH_MIN, faceOfTri, makeCaster } from '../js/raycast.js';
+import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
 import { KIND_NAME, MARK, SNAP_KINDS } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
 
 import { test, done } from './harness.mjs';
 
-// A model builder: bodies of faces, each face a list of triangles given as
-// point triples; points are deduplicated within a face only (OpenCascade's way)
-function model(bodies, angularDeflection = 0.5) {
-  const pos = [], idx = [], faces = [], meshes = [];
-  for (const b of bodies) {
-    const m = { name: b.name, idxStart: idx.length, faceStart: faces.length / 2, faceCount: b.faces.length };
-    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-    for (const f of b.faces) {
-      const map = new Map();
-      faces.push(idx.length / 3, f.length);
-      for (const tri of f) {
-        for (const p of tri) {
-          const k = p.join(',');
-          if (!map.has(k)) { map.set(k, pos.length / 3); pos.push(...p); for (let j = 0; j < 3; j++) { lo[j] = Math.min(lo[j], p[j]); hi[j] = Math.max(hi[j], p[j]); } }
-          idx.push(map.get(k));
-        }
-      }
-    }
-    m.idxCount = idx.length - m.idxStart;
-    m.bbox = { min: lo, max: hi };
-    meshes.push(m);
-  }
-  return {
-    position: new Float32Array(pos), index: new Uint32Array(idx), faces: new Uint32Array(faces),
-    header: { meshes, angularDeflection },
-  };
-}
+// (the shared builder: bodies of faces as OpenCascade meshes them, with the vertex normals a
+// decoded file carries, so every arm runs the page's rule for a face's outside -- r25 A6: 14 of
+// the 16 holesOf arms ran a winding-only path the page never takes)
+import { P, box, model, washer, withNormals } from './brep-model.mjs';
 const f32 = (v) => Math.fround(v);
-const P = (x, y, z) => [f32(x), f32(y), f32(z)];
-
-// a washer: inner radius ri, outer ro, z from 0 to h, n segments; four faces
-function washer(ri, ro, h, n, cx = 0, cy = 0, z0 = 0) {
-  const ring = (r, z) => Array.from({ length: n }, (_, i) => P(cx + r * Math.cos((2 * Math.PI * i) / n), cy + r * Math.sin((2 * Math.PI * i) / n), z));
-  const it = ring(ri, z0 + h), ot = ring(ro, z0 + h), ib = ring(ri, z0), ob = ring(ro, z0);
-  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
-  return [band(it, ot), band(ob, ib), band(ib, it), band(ot, ob)];
-}
-// a box: six faces of two triangles
-function box(lo, hi) {
-  const c = (x, y, z) => P(x ? hi[0] : lo[0], y ? hi[1] : lo[1], z ? hi[2] : lo[2]);
-  const q = (a, b, cc, d) => [[a, b, cc], [a, cc, d]];
-  return [q(c(0, 0, 0), c(1, 0, 0), c(1, 1, 0), c(0, 1, 0)), q(c(0, 0, 1), c(0, 1, 1), c(1, 1, 1), c(1, 0, 1)),
-    q(c(0, 0, 0), c(0, 0, 1), c(1, 0, 1), c(1, 0, 0)), q(c(0, 1, 0), c(1, 1, 0), c(1, 1, 1), c(0, 1, 1)),
-    q(c(0, 0, 0), c(0, 1, 0), c(0, 1, 1), c(0, 0, 1)), q(c(1, 0, 0), c(1, 0, 1), c(1, 1, 1), c(1, 1, 0))];
-}
 
 test('a circle needs ceil(2π/a) - 1 points: 12 at 0.5 rad; off at 2π/9 and coarser', () => {
   assert.equal(circleMinPoints(0.5), 12);
@@ -181,24 +141,27 @@ test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off t
   }
   assert.deepEqual(bad, []);
 });
-// the vertex normals of a model, as the file stores them (snorm16 x4), from its winding; flip:
-// its triangles then wound the other way, the normals kept (a mirrored placement's shape)
-function withNormals(m, flip = false) {
-  const P = m.position, I = m.index, N = new Float64Array(P.length);
-  for (let t = 0; t < I.length / 3; t++) {
-    const [a, b, c] = [I[3 * t], I[3 * t + 1], I[3 * t + 2]].map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]);
-    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-    for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) N[3 * I[3 * t + j] + k] += n[k];
+test('the cut test is the view\'s: the vertex normals interpolated at the hit, not their sum (r25 Q6)', () => {
+  // one triangle of a smooth 12-segment cylinder (r 10, normals radial at 0 and 30 degrees), hit
+  // near its 30-degree corner, barycentric (0.05, 0.05, 0.9), by rays grazing it at 5..25 degrees
+  const deg = Math.PI / 180;
+  const P = Float32Array.of(10, 0, 0, 10, 0, 10, 10 * Math.cos(30 * deg), 10 * Math.sin(30 * deg), 5);
+  const sn = (a) => [Math.round(Math.cos(a) * 32767), Math.round(Math.sin(a) * 32767), 0, 0];
+  const N = Int16Array.from([...sn(0), ...sn(0), ...sn(30 * deg)]);
+  const I = Uint32Array.of(0, 1, 2);
+  const w = [0.05, 0.05, 0.9];
+  const hit = [0, 1, 2].map((k) => w[0] * P[k] + w[1] * P[3 + k] + w[2] * P[6 + k]);
+  let disagree = 0;
+  for (let k = 0; k <= 40; k++) {
+    const phi = (5 + k * 0.5) * deg, d = [Math.sin(phi), -Math.cos(phi), 0];
+    const o = hit.map((x, j) => x - 50 * d[j]);
+    // the renderers' rule, by hand: the normal at the fragment, dot(n, toward the eye) < 0 is the cut face
+    const n = [0, 1, 2].map((j) => w[0] * N[j] + w[1] * N[4 + j] + w[2] * N[8 + j]);
+    const view = n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0;
+    if (seesInside(P, N, I, 0, o, d) !== view) disagree++;
   }
-  m.normal = new Int16Array(P.length / 3 * 4);
-  for (let v = 0; v < P.length / 3; v++) {
-    const l = Math.hypot(N[3 * v], N[3 * v + 1], N[3 * v + 2]) || 1;
-    for (let k = 0; k < 3; k++) m.normal[4 * v + k] = Math.round((N[3 * v + k] / l) * 32767);
-  }
-  if (flip) for (let t = 0; t < I.length / 3; t++) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
-  return m;
-}
+  assert.equal(disagree, 0, `${disagree} of 41 grazing views disagree with the view (the sum's rule: 31)`);
+});
 test('a washer whose triangles wind inward but whose normals look out (a mirrored placement) is one through-hole', () => {
   const g = bodyGeometry(withNormals(model([{ name: 'mirrored', faces: washer(2, 6, 1.6, 40, 0, 0) }]), true), 0);
   assert.deepEqual(holesOf(g).map((x) => [x.rims, Math.round(x.depth * 1e4) / 1e4]), [[2, 1.6]]);

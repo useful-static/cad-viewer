@@ -127,48 +127,8 @@ function body(pos, bits, index, m, edges, sil, silN) {
   const nv = m.vtxCount;
   if (!nt || !nv) return { sil: 0, closed: false, area: 0, volume: 0 };
 
-  // weld: each vertex -> the first vertex of the body with the same bits
-  const wsize = pow2(nv * 2);
-  const wtab = new Int32Array(wsize).fill(-1);
-  const weld = new Uint32Array(nv);
-  // -0 and +0 are one position
-  const bit = (o) => (bits[o] === 0x80000000 ? 0 : bits[o]);
-  for (let v = 0; v < nv; v++) {
-    const o = (v0 + v) * 3;
-    const x = bit(o), y = bit(o + 1), z = bit(o + 2);
-    let h = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & (wsize - 1);
-    for (;;) {
-      const w = wtab[h];
-      if (w < 0) { wtab[h] = v; weld[v] = v; break; }
-      const p = (v0 + w) * 3;
-      if (bit(p) === x && bit(p + 1) === y && bit(p + 2) === z) { weld[v] = w; break; }
-      h = (h + 1) & (wsize - 1);
-    }
-  }
-
-  // triangle normals, area, volume (float64, centred on the body)
-  const bb = m.bbox;
-  const cx = (bb.min[0] + bb.max[0]) / 2, cy = (bb.min[1] + bb.max[1]) / 2, cz = (bb.min[2] + bb.max[2]) / 2;
-  const diag2 = (bb.max[0] - bb.min[0]) ** 2 + (bb.max[1] - bb.min[1]) ** 2 + (bb.max[2] - bb.min[2]) ** 2;
-  const tn = new Float32Array(nt * 3);
-  const degenerate = new Uint8Array(nt);
-  let A = 0;
-  let V = 0;
-  for (let t = 0; t < nt; t++) {
-    const i = (t0 + t) * 3;
-    const a = index[i] * 3, b = index[i + 1] * 3, c = index[i + 2] * 3;
-    const ax = pos[a] - cx, ay = pos[a + 1] - cy, az = pos[a + 2] - cz;
-    const bx = pos[b] - cx, by = pos[b + 1] - cy, bz = pos[b + 2] - cz;
-    const qx = pos[c] - cx, qy = pos[c + 1] - cy, qz = pos[c + 2] - cz;
-    const ux = bx - ax, uy = by - ay, uz = bz - az;
-    const wx = qx - ax, wy = qy - ay, wz = qz - az;
-    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-    const len = Math.hypot(nx, ny, nz);
-    A += len / 2;
-    V += (ax * (by * qz - bz * qy) + ay * (bz * qx - bx * qz) + az * (bx * qy - by * qx)) / 6;
-    if (len <= diag2 * 1e-14) { degenerate[t] = 1; continue; }
-    tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len;
-  }
+  const weld = weldBits(bits, v0, nv);
+  const { tn, degenerate, A, V } = triangleFacts(pos, index, t0, nt, m.bbox);
 
   // edges by vertex index: count, first and second triangle, direction.
   // Every open-addressed table here holds at most 3 entries per triangle
@@ -244,29 +204,157 @@ function body(pos, bits, index, m, edges, sil, silN) {
     }
   }
 
-  return { sil: nsil, closed: m.kind ? null : meshClosed(index, t0, nt, weld, v0, degenerate), area: A, volume: Math.abs(V) };
+  return { sil: nsil, closed: m.kind ? null : shellsOf(index, t0, nt, weld, v0, nv, degenerate).closed, area: A, volume: Math.abs(V) };
 }
 
-// closed by the mesh alone: every welded edge of the non-degenerate
-// triangles used at least twice (more than twice is non-manifold, not open)
-function meshClosed(index, t0, nt, weld, v0, degenerate) {
-  const size = pow2(nt * 6); // at most half full, as in body()
-  const kA = new Int32Array(size).fill(-1);
-  const kB = new Int32Array(size);
-  const cnt = new Uint8Array(size);
+// weld: each vertex of a body (v0, nv; bits: the positions' float32 bits) -> the first vertex of
+// the body with the same bits (-0 and +0 are one position)
+function weldBits(bits, v0, nv) {
+  const wsize = pow2(nv * 2);
+  const wtab = new Int32Array(wsize).fill(-1);
+  const weld = new Uint32Array(nv);
+  const bit = (o) => (bits[o] === 0x80000000 ? 0 : bits[o]);
+  for (let v = 0; v < nv; v++) {
+    const o = (v0 + v) * 3;
+    const x = bit(o), y = bit(o + 1), z = bit(o + 2);
+    let h = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & (wsize - 1);
+    for (;;) {
+      const w = wtab[h];
+      if (w < 0) { wtab[h] = v; weld[v] = v; break; }
+      const p = (v0 + w) * 3;
+      if (bit(p) === x && bit(p + 1) === y && bit(p + 2) === z) { weld[v] = w; break; }
+      h = (h + 1) & (wsize - 1);
+    }
+  }
+  return weld;
+}
+
+// per triangle: its unit normal (tn), whether it is degenerate (no area against the body's
+// diagonal: such a triangle has no normal, no silhouette and no say in closed), its signed-volume
+// term (vol); and the body's area and signed volume (float64, centred on the body's box bb)
+function triangleFacts(pos, index, t0, nt, bb) {
+  const cx = (bb.min[0] + bb.max[0]) / 2, cy = (bb.min[1] + bb.max[1]) / 2, cz = (bb.min[2] + bb.max[2]) / 2;
+  const diag2 = (bb.max[0] - bb.min[0]) ** 2 + (bb.max[1] - bb.min[1]) ** 2 + (bb.max[2] - bb.min[2]) ** 2;
+  const tn = new Float32Array(nt * 3);
+  const degenerate = new Uint8Array(nt);
+  const vol = new Float64Array(nt);
+  let A = 0;
+  let V = 0;
+  for (let t = 0; t < nt; t++) {
+    const i = (t0 + t) * 3;
+    const a = index[i] * 3, b = index[i + 1] * 3, c = index[i + 2] * 3;
+    const ax = pos[a] - cx, ay = pos[a + 1] - cy, az = pos[a + 2] - cz;
+    const bx = pos[b] - cx, by = pos[b + 1] - cy, bz = pos[b + 2] - cz;
+    const qx = pos[c] - cx, qy = pos[c + 1] - cy, qz = pos[c + 2] - cz;
+    const ux = bx - ax, uy = by - ay, uz = bz - az;
+    const wx = qx - ax, wy = qy - ay, wz = qz - az;
+    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    const len = Math.hypot(nx, ny, nz);
+    A += len / 2;
+    vol[t] = (ax * (by * qz - bz * qy) + ay * (bz * qx - bx * qz) + az * (bx * qy - by * qx)) / 6;
+    V += vol[t];
+    if (len <= diag2 * 1e-14) { degenerate[t] = 1; continue; }
+    tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len;
+  }
+  return { tn, degenerate, vol, A, V };
+}
+
+// The one test of "is this mesh closed" (the facts' closed, and the weld's turning of a shell
+// wound inward): over the non-degenerate triangles, on the welded vertices, every edge used at
+// least twice (more than twice is non-manifold, not open). Per shell too: the shells are those
+// triangles joined where they share a welded vertex. Returns { closed, shell: Int32Array, a
+// triangle's shell (a degenerate one: the shell of its first corner, or -1), shellOpen:
+// Uint8Array per shell }. Typed tables throughout: a Map of edges at the 10 M-triangle cap was
+// 8.7 s and 683 MB.
+function shellsOf(index, t0, nt, weld, v0, nv, degenerate) {
+  const parent = new Int32Array(nv);
+  for (let v = 0; v < nv; v++) parent[v] = v;
+  const find = (v) => { while (parent[v] !== v) { parent[v] = parent[parent[v]]; v = parent[v]; } return v; };
   for (let t = 0; t < nt; t++) {
     if (degenerate[t]) continue;
     const i = (t0 + t) * 3;
-    for (let k = 0; k < 3; k++) {
-      const a = weld[index[i + k] - v0], b = weld[index[i + (k + 1) % 3] - v0];
-      if (a === b) continue;
-      const p = Math.min(a, b), q = Math.max(a, b);
-      let h = (Math.imul(p, 2654435761) ^ Math.imul(q, 40503)) & (size - 1);
-      while (kA[h] >= 0 && !(kA[h] === p && kB[h] === q)) h = (h + 1) & (size - 1);
-      kA[h] = p; kB[h] = q;
-      if (cnt[h] < 255) cnt[h]++;
+    const a = find(weld[index[i] - v0]);
+    for (let k = 1; k < 3; k++) { const b = find(weld[index[i + k] - v0]); if (b !== a) parent[b] = a; }
+  }
+  // dense shell ids, from the roots of the non-degenerate triangles
+  const sid = new Int32Array(nv).fill(-1);
+  let ns = 0;
+  for (let t = 0; t < nt; t++) {
+    if (degenerate[t]) continue;
+    const r = find(weld[index[(t0 + t) * 3] - v0]);
+    if (sid[r] < 0) sid[r] = ns++;
+  }
+  const shell = new Int32Array(nt);
+  for (let t = 0; t < nt; t++) shell[t] = sid[find(weld[index[(t0 + t) * 3] - v0])];
+  // the edges as lists per lower welded vertex (counted, then filled), each list sorted in place
+  // and read by runs: an edge whose run is one long is used once
+  const off = new Uint32Array(nv + 1);
+  const each = (fn) => {
+    for (let t = 0; t < nt; t++) {
+      if (degenerate[t]) continue;
+      const i = (t0 + t) * 3;
+      for (let k = 0; k < 3; k++) {
+        const a = weld[index[i + k] - v0], b = weld[index[i + (k + 1) % 3] - v0];
+        if (a !== b) fn(a < b ? a : b, a < b ? b : a);
+      }
+    }
+  };
+  each((p) => { off[p + 1]++; });
+  for (let v = 0; v < nv; v++) off[v + 1] += off[v];
+  const fill = off.slice(0, nv);
+  const nb = new Uint32Array(off[nv]);
+  each((p, q) => { nb[fill[p]++] = q; });
+  const shellOpen = new Uint8Array(ns);
+  let closed = true;
+  for (let p = 0; p < nv; p++) {
+    const lo = off[p], hi = off[p + 1];
+    // insertion sort for the usual short list; a hub's (a fan's centre) by the typed sort, not quadratic
+    if (hi - lo > 32) nb.subarray(lo, hi).sort();
+    else {
+      for (let j = lo + 1; j < hi; j++) {
+        const x = nb[j];
+        let k = j - 1;
+        while (k >= lo && nb[k] > x) { nb[k + 1] = nb[k]; k--; }
+        nb[k + 1] = x;
+      }
+    }
+    for (let j = lo; j < hi;) {
+      let e = j + 1;
+      while (e < hi && nb[e] === nb[j]) e++;
+      if (e - j === 1) { closed = false; shellOpen[sid[find(p)]] = 1; }
+      j = e;
     }
   }
-  for (let h = 0; h < size; h++) if (kA[h] >= 0 && cnt[h] === 1) return false;
-  return true;
+  return { closed, shell, shellOpen };
+}
+
+// The triangles of one body (position: float32 xyz; index: corner ids into it, its own) that lie
+// in a CLOSED shell wound inward (the shell's own signed volume negative: a mirrored placement, a
+// writer that winds the other way), by the facts' own test (shellsOf) on the float32 positions
+// the body is stored with: a Uint8Array flag per triangle, or null when there is none. Each
+// shell answers for itself: one body may hold a part wound out beside one wound in.
+export function inwardTriangles(position, index) {
+  const nv = position.length / 3, nt = index.length / 3;
+  if (!nt || !nv) return null;
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let v = 0; v < nv; v++) {
+    for (let k = 0; k < 3; k++) {
+      const p = position[v * 3 + k];
+      if (p < min[k]) min[k] = p;
+      if (p > max[k]) max[k] = p;
+    }
+  }
+  const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
+  const weld = weldBits(bits, 0, nv);
+  const { degenerate, vol } = triangleFacts(position, index, 0, nt, { min, max });
+  const { shell, shellOpen } = shellsOf(index, 0, nt, weld, 0, nv, degenerate);
+  const V = new Float64Array(shellOpen.length);
+  for (let t = 0; t < nt; t++) if (!degenerate[t]) V[shell[t]] += vol[t];
+  let any = false;
+  const flip = new Uint8Array(nt);
+  for (let t = 0; t < nt; t++) {
+    const s = shell[t];
+    if (s >= 0 && !shellOpen[s] && V[s] < 0) { flip[t] = 1; any = true; }
+  }
+  return any ? flip : null;
 }
