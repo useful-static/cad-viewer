@@ -29,8 +29,8 @@
 //
 // Returns { edges: Uint32Array (a, b) pairs, silhouettes: Uint32Array pairs |
 // null, silhouetteNormals: Int16Array (nx ny nz 0) x 2 per candidate | null,
-// silhouettesOmitted: count left out over the cap (0), facts: { closed,
-// area, volume, net, unchecked } arrays per body }.
+// silhouettesOmitted: count left out over the cap (0), facts: an array per
+// body of each fact of BODY_FACTS (below) }.
 
 import { nesting } from './solid.js';
 import { itemsIn } from './box-tree.js';
@@ -147,6 +147,10 @@ export const KINDS = {
   flag: { test: (x) => typeof x === 'boolean', value: (v) => !!v, named: 'flag', rounded: false },
   number: { test: (x) => Number.isFinite(x) && x >= 0, value: (v) => (Number.isFinite(v) ? v : 0), named: 'number at least 0', rounded: true },
 };
+
+// The flags said beside a volume, each "n words" joined by sep: the info panel's (' · ') and
+// stp2mesh's (', '), one text
+export const flagsSaid = (facts, bodies, sep) => flagCounts(facts, bodies).map(({ fact, n }) => `${sep}${n.toLocaleString('en-US')} ${fact.said}`).join('');
 
 // Each flag fact that has its words (`said`) counted over the given bodies that are closed -- the
 // one count the info panel and stp2mesh say: [{ fact, n }] for the flags set on any of them

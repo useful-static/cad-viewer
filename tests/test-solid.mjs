@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS, flagCounts } from '../js/edges.js';
+import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS, flagCounts, flagsSaid } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
 import { surfaceTree, treeDistance } from '../js/tri-distance.js';
@@ -349,6 +349,15 @@ test('flagCounts: each flag with its words counted over the closed bodies asked,
   assert.deepEqual(flagCounts(facts, [0, 1, 2, 3]).map(({ fact, n }) => [fact.key, n]), [['net', 2], ['unchecked', 1]], 'an open body\'s flag not counted');
   assert.deepEqual(flagCounts(facts, [1]).map(({ fact, n }) => [fact.key, n]), [['unchecked', 1]], 'only the bodies asked');
   assert.deepEqual(flagCounts({ closed: [true] }, [0]), [], 'no flags written: none');
+  // (the words the panel and stp2mesh write, one text a separator each: r39 Q7)
+  assert.equal(flagsSaid(facts, [0, 1, 2, 3], ', '), ', 2 with shells that touch or cross: the volume may be off there, 1 too large to check for overlapping shells');
+  assert.equal(flagsSaid(facts, [1], ' · '), ' · 1 too large to check for overlapping shells');
+  // (the writer rounds a number fact to 7 significant digits, KINDS.number.rounded: r39 Q8)
+  const { P, I } = meshOf(cubeT([0, 0, 0], [1 / 3, 1 / 3, 1 / 3]));
+  const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });
+  const v = decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength)).header.facts.volume[0];
+  assert.equal(v, Number(v.toPrecision(7)), `written ${v}`);
+  assert.ok(String(v).replace(/^0\.0*|\./g, '').length <= 7, `${v}: at most 7 significant digits`);
 });
 test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
   const n = 300000;

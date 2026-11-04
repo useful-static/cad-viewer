@@ -15,7 +15,7 @@ import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
 import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 import { circleMinPoints } from './js/measure-geom.js';
-import { flagCounts } from './js/edges.js';
+import { flagsSaid } from './js/edges.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // (the extensions from the viewer's format table, js/formats.js: written out here, .brp was missing)
@@ -193,7 +193,7 @@ async function main() {
     process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`
       + `; ${h.facts.closed.filter(Boolean).length} of ${h.facts.closed.length} bodies closed`
       // (each flag fact a closed body may have, counted and worded as the panel does: js/edges.js flagCounts)
-      + flagCounts(h.facts, h.facts.closed.map((_, i) => i)).map(({ fact, n }) => `, ${n} ${fact.said}`).join('')
+      + flagsSaid(h.facts, h.facts.closed.map((_, i) => i), ', ')
       + '\n');
   }
   // the b-rep status of each body, as the converter found it

@@ -20,7 +20,7 @@ import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
-import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagCounts, factsCurrent } from './edges.js';
+import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
@@ -169,6 +169,7 @@ function setStatus(s, msg) {
     announce(msg || s);
   }
   app.status = s;
+  app.statusMsg = msg || s; // (what the line says: a facts failure taken back when its build succeeds)
   $('status').textContent = msg || s;
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
@@ -4040,29 +4041,30 @@ async function showScene(models, { newTree = false } = {}) {
 // model already current.) A model whose build fails or is stopped leaves the scene without.
 async function sceneEdges(merged, models) {
   const stale = staleModels(models);
+  let failed = null;
   for (const m of stale) {
     m.base.edgeInfo ||= { value: null, ready: null, error: null };
     // (a scene replaced while it waits ends here, merging nothing: each move typed during a
     // build kept the whole scene before it, about 85 MB a move, until the build ended)
     const v = await Promise.race([edgesOf(m.base), merged.edgeInfo.gone]);
     if (v === GONE) return null;
-    // (a build keeps its own on its model: edgesOf)
-    if (!v?.facts) {
-      const info = m.base.edgeInfo;
-      merged.edgeInfo.error = info.error; merged.edgeInfo.failed = info.failed; // (the panel reads the scene's)
-      // (said on the status line, once for the model: not for a stop, which the next scene owns,
-      // nor if it was said already -- a failure met while the status was not ready went unsaid)
-      if (app.baseMesh === merged && app.status === 'ready' && !info.stopped && !info.said) { setStatus('ready', `no edges for this scene: ${info.error}`); info.said = true; }
-      // (the scene's edges still drawn when every model carries its own: only the facts are missing)
-      sceneEdgesFacts(merged, models, { silhouetteCap: silhouetteCapHere() });
-      merged.edgeInfo.value = merged.edges ? { edges: merged.edges, silhouettes: merged.silhouettes, silhouetteNormals: merged.silhouetteNormals,
-        silhouettesOmitted: merged.header.silhouettesOmitted || 0, facts: null, source: 'file', ms: 0 } : null;
-      return merged.edgeInfo.value;
-    }
+    // (a build keeps its own on its model, edgesOf; a model's failure noted and the others built
+    // on -- stopping at it left a later model without its edges, and the scene without any)
+    if (!v?.facts && !failed) failed = m.base.edgeInfo;
   }
   // (merged again only when a model's were built here: mergeModels merged them already)
   if (stale.length) sceneEdgesFacts(merged, models, { silhouetteCap: silhouetteCapHere() });
-  return edgesOf(merged);
+  if (!failed) return edgesOf(merged);
+  merged.edgeInfo.error = failed.error; merged.edgeInfo.failed = failed.failed; merged.edgeInfo.noWorker = failed.noWorker; // (the panel reads the scene's)
+  // (the scene's edges still drawn when every model carries its own: only the facts are missing)
+  merged.edgeInfo.value = merged.edges ? { edges: merged.edges, silhouettes: merged.silhouettes, silhouetteNormals: merged.silhouetteNormals,
+    silhouettesOmitted: merged.header.silhouettesOmitted || 0, facts: null, source: 'file', ms: 0 } : null;
+  // (said on the status line, once for the model: not for a stop, which the next scene owns, nor if
+  // it was said already; worded by what is missing -- the edges are drawn when only the facts are)
+  if (app.baseMesh === merged && app.status === 'ready' && !failed.stopped && !failed.said) {
+    setStatus('ready', `${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${failed.error}`); failed.said = true;
+  }
+  return merged.edgeInfo.value;
 }
 
 // The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
@@ -4078,7 +4080,11 @@ function showBase(next, keep, why) {
 
 // the info panel's volume while there are no facts: a build that failed or was stopped said, not
 // "computing…" for good
-const pendingVolume = (info) => (info?.error ? `not computed: ${info.error}${info.failed ? ' (open the file again to try again)' : ''}` : 'computing…');
+// (the advice fits the case: none where no worker starts -- opening it again fails the same way;
+// a scene's model is added again, a model alone opened again)
+const pendingVolume = (info) => (info?.error
+  ? `not computed: ${info.error}${info.failed && !info.noWorker ? (info === app.baseMesh?.edgeInfo && app.scene?.length > 1 ? ' (add the model again to try again)' : ' (open the file again to try again)') : ''}`
+  : 'computing…');
 
 // the device's silhouette cap: a coarse-pointer device's smaller one, else edges.js's
 const silhouetteCapHere = () => (coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP);
@@ -4153,7 +4159,9 @@ const STOPPED = Symbol('stopped');
 // make() builds the message and its transfer list (the model's copies: in a try -- they may not
 // fit, a big model on a small device: said, not a rejected promise); the worker says it has
 // started, so a failure before that is one that cannot start and after it the run's own. Settles
-// once, the worker ended: { ok: data } | { error } | { stopped: why } | { noWorker: why }; each
+// once, the worker ended: { ok: data } | { error, transient? } (transient: a failure of the
+// moment -- no room for the copy, a worker that died, an allocation the worker could not make --
+// tried again at the next ask) | { stopped: why } | { noWorker: why }; each
 // caller says what no worker means for its job. (Each worker had its own launch, and a copy that
 // failed had to be fixed in each.)
 function workerJob(file, make) {
@@ -4166,7 +4174,7 @@ function workerJob(file, make) {
     stopIt = (why) => finish({ stopped: why || 'stopped' });
     w.onmessage = (ev) => {
       if (ev.data.started) { started = true; return; }
-      finish(ev.data.ok ? { ok: ev.data } : { error: ev.data.error });
+      finish(ev.data.ok ? { ok: ev.data } : { error: ev.data.error, ...(ev.data.transient ? { transient: true } : {}) });
     };
     w.onerror = (e) => {
       e.preventDefault?.();
@@ -4292,7 +4300,8 @@ function edgesOf(base) {
     info.value = fromFile();
     return Promise.resolve(info.value);
   }
-  if (base.edges && !info.value) info.value = fromFile(); // (the edges now; the facts built below)
+  // (the edges now, drawn now -- the draw came only once the facts' build ended; the facts built below)
+  if (base.edges && !info.value) { info.value = fromFile(); if (app.baseMesh === base) refreshEdges(); }
   // (built by the worker on copies: the model's own buffers stay with the page and the GPU upload;
   // with no module worker there are none -- not built on the page, where a big model's would hold
   // the tab -- and the volume, the cut fill and Clearance's part-inside test go without, said)
@@ -4305,7 +4314,8 @@ function edgesOf(base) {
   // again; opening the file again tries. A failure of the moment -- no room for the copy, a worker
   // that died -- is tried again at the next ask)
   if (info.failed) return Promise.resolve(info.value);
-  info.error = null; info.stopped = false; // (a build before that was stopped: this one says its own)
+  // (a build before that was stopped or failed for the moment: this one says its own)
+  info.error = null; info.stopped = false; info.said = false;
   const job = workerJob('./edges-worker.js', () => {
     const position = base.position.slice(), index = base.index.slice();
     return [{ position, index, meshes: base.header.meshes, silhouetteCap: cap }, [position.buffer, index.buffer]];
@@ -4328,16 +4338,19 @@ function edgesOf(base) {
       // and then added to a scene built nothing again)
       keepEdges(base, value);
       info.value = value;
+      // (a line a try before left -- "no edges …" -- taken back now that they are here)
+      if (app.status === 'ready' && /^no (edges|volume) for this /.test(app.statusMsg || '')) setStatus('ready', readyText());
       return value;
     }
     info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
     // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
     // is remembered, one of the moment not)
     info.stopped = !!v.stopped;
+    info.noWorker = !!v.noWorker;
     if (!v.stopped && !v.transient) info.failed = true;
-    // said where it shows, or the edge styles silently draw none (and the info panel says it too);
-    // `said` marks it, so a scene says it once and only if it was not said here
-    if (!info.stopped && app.baseMesh === base && app.status === 'ready') { setStatus('ready', `no edges for this model: ${info.error}`); info.said = true; }
+    // said where it shows (and the info panel says it too), worded by what is missing -- the file's
+    // edges are drawn when only the facts failed; `said` marks it, so a scene says it once
+    if (!info.stopped && app.baseMesh === base && app.status === 'ready') { setStatus('ready', `${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`); info.said = true; }
     return info.value; // (the file's edges, when it carries them; else null)
   });
   info.job = entry;
@@ -5861,8 +5874,7 @@ function fillInfo(el) {
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagCounts, as stp2mesh)
-    const flags = flagCounts(facts, which.map((id) => id - 1)).map(({ fact, n }) => ` · ${fmtInt(n)} ${fact.said}`).join('');
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${flags}`);
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
     add('area', `≈ ${fmtArea(area, u)}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
@@ -6956,7 +6968,9 @@ async function selftest() {
       const e = await app.baseMesh?.edgeInfo?.ready;
       out.edges = e ? { source: e.source, ms: e.ms, boundary: e.edges.length / 2,
         silhouettes: e.silhouettes ? e.silhouettes.length / 2 : 0, omitted: e.silhouettesOmitted,
-        closed: e.facts.closed.filter(Boolean).length } : { error: app.baseMesh?.edgeInfo?.error || 'none' };
+        // (the file's edges kept while its facts failed: the edges reported, the facts' error beside)
+        closed: e.facts ? e.facts.closed.filter(Boolean).length : null, ...(e.facts ? {} : { factsError: app.baseMesh?.edgeInfo?.error || 'none' }) }
+        : { error: app.baseMesh?.edgeInfo?.error || 'none' };
       // ?bench=N: orbit the camera one step per animation frame for N frames
       // (each step redraws the whole model) and report the frame intervals.
       // Frames run on the display's vsync, so a GPU that keeps up reads as the

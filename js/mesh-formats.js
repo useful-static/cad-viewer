@@ -128,7 +128,8 @@ const text = (buf, what = 'the file', encoding = 'utf-8') => {
 // raw bodies [{ name, pos: number[], tri: number[], col?: [r,g,b] per
 // triangle or null, color }] -> the encodeCadmesh model, one tree node
 // a face pointing past the vertices, or a coordinate that is not a number, is a damaged file:
-// said so here, not met later as NaN geometry ("facts are not one closed / area / volume")
+// said so here, not met later as NaN geometry (the decoder's "facts' area is not one number at
+// least 0 per mesh")
 // (MAX_COORD: js/cadmesh.js, the one bound)
 function checkBodies(rootName, bodies) {
   for (const b of bodies) {

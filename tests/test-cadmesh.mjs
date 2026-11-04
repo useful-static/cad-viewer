@@ -355,6 +355,8 @@ test('encode builds the edge sections and facts; decode validates them', () => {
   assert.throws(() => decodeCadmesh(rewrite((h) => { h.facts.volume = [-1]; })), /facts' volume is not one number at least 0 per mesh/);
   assert.throws(() => decodeCadmesh(rewrite((h) => { h.facts.net = [1]; })), /facts' net is not one flag per mesh/);
   assert.throws(() => decodeCadmesh(rewrite((h) => { h.factsRule = 4.5; })), /factsRule is not a whole number/);
+  // (a fact always written, missing: refused -- skipped, the panel threw on it: r39 Q6)
+  assert.throws(() => decodeCadmesh(rewrite((h) => { delete h.facts.area; })), /facts' area is not one number at least 0 per mesh/);
 });
 
 test('occt mapping: refuses a failed import', () => {

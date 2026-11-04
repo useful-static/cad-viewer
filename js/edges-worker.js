@@ -19,6 +19,8 @@ onmessage = (ev) => {
     const transfer = [r.edges.buffer, r.silhouettes?.buffer, r.silhouetteNormals?.buffer].filter(Boolean);
     postMessage({ ok: true, result: r, ms }, transfer);
   } catch (e) {
-    postMessage({ ok: false, error: String(e && e.message ? e.message : e) });
+    // (an allocation that failed -- a RangeError: no room for an array -- is a failure of the
+    // moment, tried again as the page's own copy failing is; anything else the model's own)
+    postMessage({ ok: false, error: String(e && e.message ? e.message : e), ...(e instanceof RangeError ? { transient: true } : {}) });
   }
 };
