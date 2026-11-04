@@ -7,7 +7,8 @@
 //   surfaceTree(pos, index, tris) -> a set's tree: a bounding-volume tree over its triangles
 //     (tris: [[first, count], ...] ranges or a Uint32Array of triangle ids), boxes split at the
 //     median of their longest axis, 2 to 4 triangles a leaf; built once, asked many times
-//   treeDistance(pos, index, TA, TB) -> { distance, pa, pb, triA, triB, pairs } or null
+//   treeDistance(pos, index, TA, TB, maxWork) -> { distance, pa, pb, triA, triB, pairs, work,
+//     stopped } or null
 //     when a set is empty: the two trees walked together, nearest box pair first, a pair skipped
 //     when the boxes -- or the triangles' own boxes, or one triangle lying wholly beyond the
 //     other's plane -- are already farther than the best; between two triangles 0 if an edge of
@@ -192,11 +193,16 @@ export function surfaceDistance(pos, index, trisA, trisB) {
   return treeDistance(pos, index, surfaceTree(pos, index, trisA), surfaceTree(pos, index, trisB));
 }
 
-export function treeDistance(pos, index, TA, TB) {
+// (maxWork: the steps it may take -- each node pair taken from the heap and each triangle pair
+// looked at, pruned or measured -- then it stops, stopped: true, its distance an upper bound;
+// counting only the pairs measured let a turned wall and liner of 3.84 M triangles run 32.9 s on
+// 2,163 of them. work: the steps taken)
+export function treeDistance(pos, index, TA, TB, maxWork = Infinity) {
   if (TA.root < 0 || TB.root < 0) return null;
   const tri = (t) => [0, 1, 2].map((c) => { const v = index[t * 3 + c] * 3; return [pos[v], pos[v + 1], pos[v + 2]]; });
   let best = { d2: Infinity, pa: null, pb: null, triA: -1, triB: -1 };
-  let pairs = 0;
+  let pairs = 0, work = 0;
+  const done = (b, stopped = false) => ({ distance: Math.sqrt(b.d2), pa: b.pa, pb: b.pb, triA: b.triA, triB: b.triB, pairs, work, stopped });
   // nearest pair first: a small binary heap on box distance
   const heap = [[boxDist2(TA.box, TA.root, TB.box, TB.root), TA.root, TB.root]];
   const push = (e) => { heap.push(e); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
@@ -217,6 +223,7 @@ export function treeDistance(pos, index, TA, TB) {
     return top;
   };
   while (heap.length) {
+    if (++work > maxWork) return done(best, true);
     const [d2, a, b] = pop();
     if (d2 >= best.d2) break; // every pair left is at least as far
     const la = TA.left[a] < 0, lb = TB.left[b] < 0;
@@ -225,6 +232,7 @@ export function treeDistance(pos, index, TA, TB) {
         if (boxDist2(TA.tbox, i, TB.box, b) >= best.d2) continue;
         const ta = TA.tri[i], A = tri(ta), nA = unitNormal(A);
         for (let j = TB.first[b]; j < TB.first[b] + TB.count[b]; j++) {
+          work++;
           if (boxDist2(TA.tbox, i, TB.tbox, j) >= best.d2) continue;
           const tb = TB.tri[j], Bt = tri(tb);
           // (and a pair one of whose triangles lies wholly beyond the other's plane by the best
@@ -238,7 +246,7 @@ export function treeDistance(pos, index, TA, TB) {
           pairs++;
           const r = triangleDistance(A, Bt);
           if (r.d2 < best.d2) best = { ...r, triA: ta, triB: tb };
-          if (best.d2 === 0) return done(best, pairs);
+          if (best.d2 === 0) return done(best);
         }
       }
       continue;
@@ -251,10 +259,9 @@ export function treeDistance(pos, index, TA, TB) {
       for (const c of [TB.left[b], TB.right[b]]) { const d = boxDist2(TA.box, a, TB.box, c); if (d < best.d2) push([d, a, c]); }
     }
   }
-  return done(best, pairs);
+  return done(best);
 }
 
-const done = (b, pairs) => ({ distance: Math.sqrt(b.d2), pa: b.pa, pb: b.pb, triA: b.triA, triB: b.triB, pairs });
 const boxSize = (B, i) => (B[i * 6 + 3] - B[i * 6]) + (B[i * 6 + 4] - B[i * 6 + 1]) + (B[i * 6 + 5] - B[i * 6 + 2]);
 
 // buildIter's inputs for a set of triangle ranges ([[first, count], ...]) or a list of triangle ids

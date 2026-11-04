@@ -8,6 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, idToBytes } from './cadmesh.js';
+import { SILHOUETTE_CAP, factsCurrent } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 
@@ -18,8 +19,9 @@ const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 // itself, as for an old file), and with the edges, the silhouettes any model
 // has (one over the cap has none, and counts them omitted). Each body keeps its
 // model's angular deflection (the default where the model records none); the
-// scene has none of its own.
-export function mergeModels(models) {
+// scene has none of its own. opts.silhouetteCap: past it the scene's silhouettes are left out and
+// counted (js/edges.js SILHOUETTE_CAP; the viewer passes a phone's smaller cap).
+export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   if (!models.length) throw new Error('scene: no models');
   let vc = 0, ic = 0, mc = 0, fc = 0, ec = 0, sc = 0;
   for (const { base } of models) {
@@ -96,10 +98,14 @@ export function mergeModels(models) {
       meshes.push(c);
     }
     if (facts) {
-      for (const k of ['closed', 'area', 'volume']) facts[k].push(...h.facts[k]);
-      // (net, unchecked: per body, present in a model only when one is; the merged lists carry every body's)
-      facts.net.push(...(h.facts.net || h.facts.closed.map(() => false)));
-      facts.unchecked.push(...(h.facts.unchecked || h.facts.closed.map(() => false)));
+      // (appended one by one: a spread of a model's 300,000 bodies into push ran out of stack;
+      // net, unchecked: per body, present in a model only when one is -- the merged lists carry
+      // every body's)
+      const nb = h.facts.closed.length;
+      for (let i = 0; i < nb; i++) {
+        facts.closed.push(h.facts.closed[i]); facts.area.push(h.facts.area[i]); facts.volume.push(h.facts.volume[i]);
+        facts.net.push(!!h.facts.net?.[i]); facts.unchecked.push(!!h.facts.unchecked?.[i]);
+      }
     }
     children.push(shiftNode({ ...h.root, name: name || h.root.name }, m0));
     if (h.bbox) {
@@ -126,6 +132,12 @@ export function mergeModels(models) {
     const rules = new Set(models.map((m) => m.base.header.factsRule));
     if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
   }
+  // (past the cap, the scene's silhouettes dropped and counted, as buildEdges drops a model's: two
+  // models each under it merged past it, drawn whole -- 2,454,650 -- where the worker draws none)
+  if (out.silhouettes && out.silhouettes.length / 2 > silhouetteCap) {
+    omitted += out.silhouettes.length / 2;
+    out.silhouettes = null; out.silhouetteNormals = null;
+  }
   if (omitted) header.silhouettesOmitted = omitted;
   if (!units.has('unknown')) header.sourceUnits = units.size === 1 ? [...units][0] : 'mixed';
   out.header = header;
@@ -145,6 +157,48 @@ export function modelRanges(models) {
     const n = base.header.meshes.length;
     out.push({ first: k + 1, count: n });
     k += n;
+  }
+  return out;
+}
+
+// Whether a scene keeps the edges and facts of the scene shown before it (prev: that scene, its
+// sceneBases the models it was made of, its edgeInfo.value what was built): the same models, only
+// moved -- a move renumbers no vertex and changes no body -- and the merge itself does not already
+// carry today's (then the viewer takes the merge's). Keyed on what the viewer would otherwise do:
+// a merge with edges but a model's facts of an older rule went to the worker on every move.
+export function sceneKeeps(prev, models, merged) {
+  if (merged.edges && factsCurrent(merged.header)) return false;
+  return !!(prev?.sceneBases && prev.edgeInfo?.value && prev.sceneBases.length === models.length
+    && prev.sceneBases.every((b, i) => b === models[i].base));
+}
+
+// A scene's built edges and facts (value: { edges, silhouettes, silhouetteNormals,
+// silhouettesOmitted, facts }) split back into each model's own numbering, so a model added to a
+// scene, or one whose facts were of an older rule, has its own from then on (an Add model built
+// every earlier model's again). Null when the scene's silhouettes were left out over the cap: a
+// model's share of them is not known.
+export function splitScene(models, value) {
+  if (!value || !value.edges || (value.silhouettesOmitted && !value.silhouettes)) return null;
+  const out = [];
+  let v0 = 0, b0 = 0;
+  for (const { base } of models) {
+    const n = base.header.vertexCount, nb = base.header.meshes.length, v1 = v0 + n;
+    const pick = (pairs) => {
+      if (!pairs) return { list: null, at: [] };
+      const keep = [], at = [];
+      for (let i = 0; i < pairs.length; i += 2) if (pairs[i] >= v0 && pairs[i] < v1) { keep.push(pairs[i] - v0, pairs[i + 1] - v0); at.push(i / 2); }
+      return { list: Uint32Array.from(keep), at };
+    };
+    const e = pick(value.edges), s = pick(value.silhouettes);
+    let sn = null;
+    if (value.silhouetteNormals && s.list) {
+      sn = new Int16Array(s.at.length * 8);
+      s.at.forEach((j, k) => sn.set(value.silhouetteNormals.subarray(j * 8, j * 8 + 8), k * 8));
+    }
+    const f = value.facts, sl = (a) => (a ? a.slice(b0, b0 + nb) : undefined);
+    out.push({ edges: e.list, silhouettes: s.list, silhouetteNormals: sn, silhouettesOmitted: 0,
+      facts: { closed: sl(f.closed), area: sl(f.area), volume: sl(f.volume), net: sl(f.net), unchecked: sl(f.unchecked) } });
+    v0 = v1; b0 += nb;
   }
   return out;
 }

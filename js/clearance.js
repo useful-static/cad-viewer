@@ -15,8 +15,6 @@ import { bodyShells } from './edges.js';
 import { windsAgainstNormals } from './raycast.js';
 import { surfaceDistance } from './tri-distance.js';
 
-export { triangleDistance, closestOnTriangle, closestSegments } from './tri-distance.js';
-
 // pos: Float32Array xyz, index: Uint32Array triangles; trisA, trisB:
 // [[firstTriangle, count], ...]. Returns { distance, pa, pb, triA, triB,
 // pairs, inside } (pairs: triangle pairs tested), or null when a set is empty. opts.solidA /

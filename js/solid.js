@@ -33,7 +33,9 @@
 //     largest triangles, inside it by crossingsAt's rule; a point on the other's surface passed
 //     over for the next), its outer shell (root), the outer shells of all that hold it (roots),
 //     whether an open shell's box holds it (inOpen) and each shell's signed volume (V): the
-//     weld's question, js/edges.js shellTurns
+//     weld's question, js/edges.js shellTurns; and what it built on the way, for a caller asking
+//     more of the same shells (js/edges.js materialVolume): the shells' boxes (lo, hi), their
+//     triangles grouped (start, list) and the shells' box tree (tree)
 
 import { boxTree, itemsAt } from './box-tree.js';
 

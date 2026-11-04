@@ -239,9 +239,11 @@ function body(pos, bits, index, m, edges, sil, silN, budget) {
 // a body closed by its b-rep's word (js/cadmesh.js BODY_KINDS): the one place the kind decides it
 const kindClosed = (kind) => kind === 'closed' || kind === 'capped';
 
-// The work the overlap test may do on one body (triangle pairs measured): past it the body's
-// overlaps are not checked, and its facts say so (`unchecked`), not that its shells meet
-export const OVERLAP_BUDGET = 20_000_000;
+// The work the overlap test may do on one body (js/tri-distance.js treeDistance's steps: node
+// pairs taken and triangle pairs looked at): past it the body's overlaps are not checked, and its
+// facts say so (`unchecked`), not that its shells meet. (About 2 s of steps: 20 M ran 11 s on two
+// cones of 4,000 slivers apex to apex; every bundled and private model takes under 1 % of it.)
+export const OVERLAP_BUDGET = 4_000_000;
 
 // A closed body's volume as its material is taken -- each region inside a shell and outside the
 // shells it holds counted when its winding is above 0, the winding of the region round it plus
@@ -291,10 +293,12 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
     const trees = new Map();
     const treeOf = (s) => { let t = trees.get(s); if (!t) { t = surfaceTree(pos, local, list.subarray(start[s], start[s + 1])); trees.set(s, t); } return t; };
     let work = 0;
+    // (each call given what the body has left of the budget: one pair of two cones' slivers apex to
+    // apex ran 22 s whatever the budget, checked only after the pair)
     const meet = (a, b) => {
-      const r = treeDistance(pos, local, treeOf(a), treeOf(b));
-      work += r ? r.pairs : 0;
-      if (work > budget) unchecked = true;
+      const r = treeDistance(pos, local, treeOf(a), treeOf(b), Math.max(0, budget - work));
+      work += r ? r.work : 0;
+      if (work > budget) { unchecked = true; return false; } // (a call stopped short has spent it)
       return !!r && r.distance === 0;
     };
     for (let s = 0; s < ns && !net && !unchecked; s++) if (parent[s] >= 0 && meet(s, parent[s])) net = true;

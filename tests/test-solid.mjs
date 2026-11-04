@@ -273,6 +273,43 @@ test('the facts\' overlap test asks each shell its parent, not every holder, eac
   assert.deepEqual([c.net, c.unchecked], [false, false], 'concentric shells');
   assert.ok(c.ms < 8000, `${c.ms.toFixed(0)} ms (15.1 s, then net)`);
 });
+test('the overlap budget bounds the work of one pair too: two cones apex to apex, turned, under a small budget stop at once, unchecked; unchecked through a file and a merge (r34 A1, Q3, Q4)', () => {
+  // two closed cones of K slivers, apex to apex 0.001 apart, turned 30 and 20 degrees: their boxes
+  // cross, neither holds the other, and every sliver pair near the apexes passes the prunes
+  const K = 1000, g = 1e-3, a = 0.5236, b = 0.349;
+  const rot = ([x, y, z]) => { [y, z] = [y * Math.cos(a) - z * Math.sin(a), y * Math.sin(a) + z * Math.cos(a)]; [x, z] = [x * Math.cos(b) + z * Math.sin(b), -x * Math.sin(b) + z * Math.cos(b)]; return [x, y, z]; };
+  const T = [];
+  for (const [apexZ, dir] of [[0, 1], [g, -1]]) {
+    const apex = [0, 0, apexZ], cen = [0, 0, apexZ - dir], rim = (i) => [4 * Math.cos(2 * Math.PI * i / K), 4 * Math.sin(2 * Math.PI * i / K), apexZ - dir];
+    for (let i = 0; i < K; i++) { const r0 = rim(i), r1 = rim((i + 1) % K); T.push(...(dir > 0 ? [[apex, r1, r0], [cen, r0, r1]] : [[apex, r0, r1], [cen, r1, r0]])); }
+  }
+  const { P, I } = meshOf(T.map((t) => t.map(rot)));
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < P.length; i++) { const k = i % 3; if (P[i] < min[k]) min[k] = P[i]; if (P[i] > max[k]) max[k] = P[i]; }
+  const mesh = { idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } };
+  const t0 = performance.now();
+  const { facts: f } = buildEdges({ position: P, index: I, meshes: [mesh] }, { overlapBudget: 50 });
+  const ms = performance.now() - t0;
+  assert.deepEqual([f.net[0], f.unchecked[0]], [false, true]);
+  assert.ok(ms < 1000, `${ms.toFixed(0)} ms (the budget checked only after the pair: 1.8 s at this size, 22 s at 4,000 slivers)`);
+  // the flag written to a file and read back, and kept by a merge
+  const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'cones', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } }, { overlapBudget: 50 });
+  const d = decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  assert.deepEqual(d.header.facts.unchecked, [true], 'written and read back');
+  const cube = (() => { const { P: p, I: i } = meshOf(cubeT([0, 0, 0], [1, 1, 1])); const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: p, normals: null, colors: null, indices: i }], root: { name: 'm', meshes: [0], children: [] } }); return decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength)); })();
+  assert.deepEqual(mergeModels([{ base: d, name: 'd' }, { base: cube, name: 'c' }]).header.facts.unchecked, [true, false], 'merged');
+});
+test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
+  const n = 300000;
+  const big = { position: new Float32Array(0), normal: new Int16Array(0), color: new Uint8Array(0), id: new Uint8Array(0), index: new Uint32Array(0), faces: null, edges: null,
+    header: { units: 'mm', vertexCount: 0, indexCount: 0, root: { name: 'big', meshes: [], children: [] }, meshes: Array.from({ length: n }, () => ({ vtxStart: 0, vtxCount: 0, idxStart: 0, idxCount: 0 })),
+      facts: { closed: new Array(n).fill(true), area: new Array(n).fill(1), volume: new Array(n).fill(1) } } };
+  const { P, I } = meshOf(cubeT([0, 0, 0], [1, 1, 1]));
+  const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });
+  const cube = decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength));
+  const m = mergeModels([{ base: cube, name: 'c' }, { base: big, name: 'big' }]);
+  assert.deepEqual([m.header.facts.closed.length, m.header.facts.net.length, m.header.facts.unchecked[n]], [n + 1, n + 1, false]);
+});
 test('an open shell holds nothing, and a part under one keeps its winding, the same upright and upside down (r28 Q1)', () => {
   // a tray (a box without its lid), and an inward cube in it
   const tray = box([0, 0, 0], [10, 10, 5]).filter((_, f) => f !== 1).flat(); // (face 1: the top)

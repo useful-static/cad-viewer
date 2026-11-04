@@ -6,10 +6,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { encodeCadmesh, decodeCadmesh, bytesToId } from '../js/cadmesh.js';
-import { mergeModels, modelRanges } from '../js/scene.js';
-import { clearance, triangleDistance } from '../js/clearance.js';
+import { mergeModels, modelRanges, sceneKeeps, splitScene } from '../js/scene.js';
+import { buildEdges, FACTS_RULE } from '../js/edges.js';
+import { clearance } from '../js/clearance.js';
+import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
-import { washer } from './brep-model.mjs';
+import { box, washer } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
 
@@ -398,14 +400,66 @@ await test('Clearance off the page (main.js clearanceOffPage, with a stand-in wo
   }
   // the model's copies that do not fit: said, not a rejected promise (r33 Q2)
   {
-    const app = {};
-    class Worker { postMessage() {} terminate() { this.ended = true; } }
+    const app = {}, made = [];
+    class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
     const off = new Function('app', 'clearance', 'Worker', `${body}; return clearanceOffPage;`)(app, () => ({}), Worker);
     const big = { slice() { throw new RangeError('Array buffer allocation failed'); } };
     const r = await Promise.race([off({ position: big, index: new Uint32Array(3), normal: null }, [[0, 1]], [[0, 1]], [], []).catch((e) => `rejected ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
     assert.match(String(r?.error), /no room/, JSON.stringify(r));
-    assert.equal(app.clearanceRun, null);
+    assert.deepEqual([app.clearanceRun, made.length, made[0]?.ended], [null, 1, true], 'the run cleared, its worker ended');
   }
+});
+test('a scene\'s silhouettes past the cap are left out and counted, as one model\'s are; a move keeps the scene\'s built edges and facts, a different scene does not; a scene\'s built ones split back onto each model (r34 Q1, A3, Q5, Q6)', () => {
+  const a = file('a', [['a', [0, 0, 0], [1, 1, 1]]]), b = file('b', [['b', [5, 0, 0], [6, 1, 1]]]);
+  for (const m of [a, b]) { m.silhouettes = Uint32Array.from([0, 1, 1, 2, 2, 3]); m.silhouetteNormals = new Int16Array(3 * 8); }
+  const under = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }], { silhouetteCap: 6 });
+  assert.equal(under.silhouettes.length / 2, 6, 'under the cap: kept');
+  const over = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }], { silhouetteCap: 4 });
+  assert.deepEqual([over.silhouettes, over.header.silhouettesOmitted], [null, 6], 'past it: left out, counted');
+  // the keep: the same models (only moved) keep the scene before's; another list does not; nor a
+  // merge already carrying today's
+  const models = [{ base: a, name: 'a' }, { base: b, name: 'b', offset: [3, 0, 0] }];
+  const prev = { sceneBases: [a, b], edgeInfo: { value: { edges: new Uint32Array(0) } } };
+  const plain = { edges: null, header: {} };
+  assert.equal(sceneKeeps(prev, models, plain), true, 'a move');
+  assert.equal(sceneKeeps(prev, [models[0]], plain), false, 'a model fewer');
+  assert.equal(sceneKeeps({ ...prev, sceneBases: [b, a] }, models, plain), false, 'another order');
+  assert.equal(sceneKeeps({ sceneBases: [a, b], edgeInfo: { value: null } }, models, plain), false, 'nothing built before');
+  const edged = { edges: new Uint32Array(2), header: { facts: { closed: [] }, factsRule: 1 } };
+  assert.equal(sceneKeeps(prev, models, edged), true, 'a merge with edges but facts of an older rule: kept, not rebuilt');
+  assert.equal(sceneKeeps(prev, models, { ...edged, header: { ...edged.header, factsRule: FACTS_RULE } }), false, 'a merge of today\'s: its own');
+  // the split: a scene's edges, silhouettes and facts back in each model's numbering (boxes of
+  // their own corners: the shared-corner boxes above carry no edges to split)
+  const own3 = (lo, hi) => {
+    const T = box(lo, hi).flat(), P = [], I = [];
+    for (const t of T) for (const p of t) { I.push(P.length / 3); P.push(...p); }
+    const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'b', color: [0.5, 0.5, 0.5], positions: Float32Array.from(P), normals: null, colors: null, indices: Uint32Array.from(I) }], root: { name: 'm', meshes: [0], children: [] } });
+    return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  };
+  const c = own3([0, 0, 0], [1, 1, 1]), d = own3([5, 0, 0], [6, 2, 1]);
+  const s = mergeModels([{ base: c, name: 'c' }, { base: d, name: 'd' }]);
+  const be = (m) => buildEdges({ position: m.position, index: m.index, meshes: m.header.meshes });
+  const built = be(s);
+  const parts = splitScene([{ base: c }, { base: d }], built);
+  for (const [i, m] of [c, d].entries()) {
+    const own = be(m);
+    assert.ok(own.edges.length > 0, 'edges to split');
+    assert.deepEqual([Array.from(parts[i].edges), parts[i].facts.closed, parts[i].facts.volume.map((v) => Math.round(v))],
+      [Array.from(own.edges), own.facts.closed, own.facts.volume.map((v) => Math.round(v))], `model ${i}`);
+  }
+  assert.equal(splitScene([{ base: c }, { base: d }], { ...built, silhouettes: null, silhouettesOmitted: 9 }), null, 'silhouettes left out: not split');
+});
+await test('the edges worker\'s copies that do not fit: said, the worker ended, the facts not left "computing…" (r34 A2)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function edgesOf(base) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'");
+  const app = { status: 'ready' }, made = [], said = [];
+  class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
+  const edgesOf = new Function('app', 'coarseOnly', 'COARSE_SILHOUETTE_CAP', 'factsCurrent', 'Worker', 'setStatus', `${body}; return edgesOf;`)(
+    app, () => false, 0, () => false, Worker, (s, t) => said.push(t));
+  const base = { edgeInfo: { value: null }, position: { slice() { throw new RangeError('Array buffer allocation failed'); } }, index: new Uint32Array(3), header: { meshes: [] } };
+  app.baseMesh = base;
+  const r = await Promise.race([edgesOf(base).catch((e) => `rejected ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
+  assert.deepEqual([r, made[0]?.ended, app.stopEdges, /no room/.test(base.edgeInfo.error), said.length], [null, true, null, true, 1]);
 });
 await test('the Clearance worker itself says it has started, then a failed run as { ok: false, error } (r33 A6: only the page\'s half was tested)', async () => {
   const posted = [];

@@ -20,13 +20,13 @@ import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
-import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, factsCurrent } from './edges.js';
+import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, factsCurrent, SILHOUETTE_CAP } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
-import { mergeModels, modelRanges } from './scene.js';
+import { mergeModels, modelRanges, sceneKeeps, splitScene } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -3969,14 +3969,12 @@ async function showScene(models, { newTree = false } = {}) {
   // a tour plays over the model it was started on (as a new model ends it in loadBuffer): it is
   // left, the visitor's view put back, before the scene changes under its step
   endTour();
-  const merged = mergeModels(models);
+  const merged = mergeModels(models, { silhouetteCap: coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP });
   merged.edgeInfo = { value: null, ready: null };
-  // (the same models only moved: the scene's edges and facts are the scene before's -- a move
-  // renumbers no vertex and changes no body -- so they are kept, not built again for every move)
+  // (the same models only moved: the scene's edges and facts are the scene before's, kept, not
+  // built again for every move -- js/scene.js sceneKeeps)
   merged.sceneBases = models.map((m) => m.base);
-  const prev = app.baseMesh;
-  if (!merged.edges && prev?.sceneBases && prev.edgeInfo?.value && prev.sceneBases.length === models.length
-    && prev.sceneBases.every((b, i) => b === models[i].base)) keepEdges(merged, prev.edgeInfo.value);
+  if (sceneKeeps(app.baseMesh, models, merged)) keepEdges(merged, app.baseMesh.edgeInfo.value);
   const mesh = inScheme(merged, app.overrides);
   checkFits(app.renderer, mesh);
   app.wanted = mesh;
@@ -4035,7 +4033,13 @@ async function showScene(models, { newTree = false } = {}) {
   updateButtons();
   queueFrame();
   merged.edgeInfo.ready = edgesOf(merged).then((v) => {
-    if (v && v.source === 'worker') keepEdges(merged, v);
+    if (v && v.source === 'worker') {
+      keepEdges(merged, v);
+      // (and each model's share kept on it, where it had none of today's: an added model, one of an
+      // older rule -- the next Add model or merge then builds nothing of theirs again)
+      const parts = splitScene(models, v);
+      if (parts) models.forEach((m, i) => { if (!(m.base.edges && factsCurrent(m.base.header))) keepEdges(m.base, parts[i]); });
+    }
     if (app.baseMesh === merged) { pushState(); showInfo(); }
     refreshEdges();
     return v;
@@ -4267,11 +4271,18 @@ function edgesOf(base) {
       done(ev.data.ok ? { ...ev.data.result, source: 'worker', ms: Math.round(ev.data.ms) } : null);
     };
     w.onerror = (e) => { info.error = `worker failed: ${e.message || 'could not start'}`; done(null); };
-    // copies: the model's own buffers stay with the page and the GPU upload
-    const position = base.position.slice();
-    const index = base.index.slice();
-    w.postMessage({ position, index, meshes: base.header.meshes, silhouetteCap: cap || undefined },
-      [position.buffer, index.buffer]);
+    // copies: the model's own buffers stay with the page and the GPU upload (they may not fit -- a
+    // big model on a small device: said, the worker ended, as Clearance's; a throw here left the
+    // facts "computing…" for good, the worker running)
+    try {
+      const position = base.position.slice();
+      const index = base.index.slice();
+      w.postMessage({ position, index, meshes: base.header.meshes, silhouetteCap: cap || undefined },
+        [position.buffer, index.buffer]);
+    } catch (e) {
+      info.error = `no room for the model's copy: ${e?.message || e}`;
+      done(null);
+    }
   });
 }
 

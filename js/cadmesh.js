@@ -94,7 +94,8 @@ export function bytesToId(b0, b1, b2, b3) {
 //          numbers}], root, sourceUnits?, angularDeflection?, recolour? }
 // The faces section is written only when every mesh carries faces. The edge
 // list and the body facts are built here (opts.edges = false leaves them out).
-export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
+// (opts.overlapBudget: passed to the facts' overlap test, js/edges.js buildEdges)
+export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget } = {}) {
   let vertexCount = 0;
   let indexCount = 0;
   let faceCount = 0;
@@ -174,7 +175,7 @@ export function encodeCadmesh(model, { edges: withEdges = true } = {}) {
   const arrays = { position, normal, color, id, index, ...(faces ? { faces } : {}) };
   let edgeInfo = null;
   if (withEdges && vertexCount) {
-    edgeInfo = buildEdges({ position, index, meshes: metas });
+    edgeInfo = buildEdges({ position, index, meshes: metas }, overlapBudget !== undefined ? { overlapBudget } : {});
     arrays.edges = edgeInfo.edges;
     if (edgeInfo.silhouettes) {
       arrays.silhouettes = edgeInfo.silhouettes;
