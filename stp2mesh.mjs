@@ -9,7 +9,7 @@ import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
-import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, noSurfaces, DEFAULT_TESSELLATION } from './js/cadmesh.js';
+import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, noSurfaces, DEFAULT_TESSELLATION, refuseWithoutEdges } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
@@ -172,7 +172,7 @@ async function main() {
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
   // (a build of the edges and facts that throws refuses the conversion: its output promises them)
-  const buf = encodeCadmesh(model, { edges: !args.noEdges, onEdgesError: (e) => { throw new Error(`${args.input}: the edges and body facts: ${e.message}`); } });
+  const buf = encodeCadmesh(model, { edges: !args.noEdges, onEdgesError: refuseWithoutEdges(args.input) });
   // (the page saves a conversion only once it loads; decoded here first too -- written and printed
   // OK before, a model past the viewer's bound left its file behind with an OK line, then FAIL)
   let h;

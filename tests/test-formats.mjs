@@ -37,6 +37,9 @@ await test('the DWG row\'s range is the releases js/dwg.js reads, first to last 
   const range = `${names[0]} to ${names[names.length - 1].replace(/^R(?=\d{4})/, '')}`;
   assert.equal(FORMATS.find((f) => f.label === 'DWG').range, range);
   assert.match(opensText(), new RegExp(`DWG \\(${range}\\)`));
+  // (the README's words for it too, wherever it says one -- the public export's README says none: r43 Q11)
+  const said = readFileSync(join(here, '..', 'README.md'), 'utf8').match(/R1\d to R?20\d\d/g) || [];
+  assert.deepEqual(said.filter((s) => s !== range), [], 'a README range not the row\'s');
 });
 await test('a name says its format, through .gz and a query', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');

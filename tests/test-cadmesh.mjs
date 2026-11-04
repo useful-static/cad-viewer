@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflate, inflateCadmesh,
-  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels, KEEP_WITHOUT_EDGES,
+  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels, KEEP_WITHOUT_EDGES, refuseWithoutEdges,
 } from '../js/cadmesh.js';
 import { readMeshFile } from '../js/read-file.js';
 import { deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
@@ -70,6 +70,16 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   assert.throws(() => encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list } }), /Invalid array length/, 'the default refuses');
   const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: KEEP_WITHOUT_EDGES }));
   assert.deepEqual([m.header.meshes.length, m.edges ?? null, m.header.facts ?? null], [1, null, null], 'written, the viewer to build them');
+  // (the failure written in the header -- a size limit not built again by the viewer: r43 A3)
+  assert.deepEqual(m.header.edgesFailed, { error: 'Invalid array length', sizeLimit: true });
+  const moment = () => { throw new RangeError('Array buffer allocation failed'); };
+  assert.deepEqual(decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list: moment }, onEdgesError: KEEP_WITHOUT_EDGES })).header.edgesFailed,
+    { error: 'Array buffer allocation failed', sizeLimit: false }, 'one of the moment: the viewer tries');
+  const raw = encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: KEEP_WITHOUT_EDGES });
+  assert.throws(() => decodeCadmesh(patchHeader(raw, '"sizeLimit":true', '"sizeLimit":1   ')), /edgesFailed is not/);
+  // (the CLIs' refusal: one wording, the input named; both CLIs refuse through it -- r43 A5, A9)
+  assert.throws(() => refuseWithoutEdges('board.cadmesh')(new RangeError('Invalid array length')), /^Error: board\.cadmesh: the edges and body facts: Invalid array length$/);
+  for (const cli of ['stp2mesh.mjs', 'split-board.mjs']) assert.match(readFileSync(join(HERE, '..', cli), 'utf8'), /encodeCadmesh\(model, \{ edges: [^}]*onEdgesError: refuseWithoutEdges\(/, cli);
   let told = null;
   encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: (e) => { told = e.message; } });
   assert.equal(told, 'Invalid array length');

@@ -55,7 +55,7 @@
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
 
-import { buildEdges, FACTS_RULE, BODY_FACTS, KINDS } from './edges.js';
+import { buildEdges, FACTS_RULE, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -95,9 +95,13 @@ export function bytesToId(b0, b1, b2, b3) {
 // list and the body facts are built here (opts.edges = false leaves them out).
 // (opts.overlapBudget: passed to the facts' overlap test, js/edges.js buildEdges)
 // What encodeCadmesh does when the edges' and facts' build throws (its onEdgesError): refuse, or
-// keep the file without them
+// keep the file without them, the failure written in its header (`edgesFailed`: the error, and
+// whether it is a size limit met at every try -- js/edges.js momentaryFailure -- so the viewer does
+// not build them again to fail the same way, at each open of a kept conversion too: r43 A3)
 export const REFUSE_WITHOUT_EDGES = (e) => { throw e; };
-export const KEEP_WITHOUT_EDGES = () => {};
+// a CLI's refusal, in one wording: the input named (stp2mesh.mjs, split-board.mjs -- r43 A9)
+export const refuseWithoutEdges = (input) => (e) => { throw new Error(`${input}: the edges and body facts: ${e?.message || e}`); };
+export const KEEP_WITHOUT_EDGES = (e) => ({ error: String(e?.message || e), sizeLimit: !momentaryFailure(e) });
 
 // (edgeOptions: passed to js/edges.js buildEdges as they are -- its list maker, for a test)
 export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, onEdgesError = REFUSE_WITHOUT_EDGES, edgeOptions = {} } = {}) {
@@ -178,7 +182,7 @@ export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, o
   });
 
   const arrays = { position, normal, color, id, index, ...(faces ? { faces } : {}) };
-  let edgeInfo = null;
+  let edgeInfo = null, edgesFailed = null;
   if (withEdges && vertexCount) {
     // (a build that throws: onEdgesError says what follows -- by default the encoding refused, as
     // a CLI's or a generator's output promises its facts (a default that kept the file wrote one
@@ -188,7 +192,7 @@ export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, o
     try {
       edgeInfo = buildEdges({ position, index, meshes: metas }, { ...(overlapBudget !== undefined ? { overlapBudget } : {}), ...edgeOptions });
     } catch (e) {
-      onEdgesError(e);
+      edgesFailed = onEdgesError(e) || null;
     }
   }
   if (edgeInfo) {
@@ -215,6 +219,7 @@ export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, o
     ...(model.angularDeflection > 0 ? { angularDeflection: model.angularDeflection } : {}),
     ...(edgeInfo ? { facts: roundFacts(edgeInfo.facts), factsRule: FACTS_RULE } : {}),
     ...(edgeInfo?.silhouettesOmitted ? { silhouettesOmitted: edgeInfo.silhouettesOmitted } : {}),
+    ...(edgesFailed ? { edgesFailed } : {}),
   };
   const json = new TextEncoder().encode(JSON.stringify(header));
   const dataStart = align8(12 + json.byteLength);
@@ -517,6 +522,9 @@ function validateHeader(h) {
       if (!list(f[key], KINDS[kind].test)) bad(`facts' ${key} is not one ${KINDS[kind].named} per mesh`);
     }
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
+  }
+  if (h.edgesFailed !== undefined && !(h.edgesFailed && typeof h.edgesFailed.error === 'string' && typeof h.edgesFailed.sizeLimit === 'boolean')) {
+    bad('edgesFailed is not { error, sizeLimit }');
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
   if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');

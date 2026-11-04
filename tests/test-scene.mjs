@@ -54,12 +54,20 @@ const lid = file('case', [['lid', [0, 0, 5], [10, 10, 6]]]);
 test('the edges and facts\' merge that fails part way leaves the scene as it was, not zero-filled; mergeModels keeps its error and the scene (r42 A2, A3, Q1)', () => {
   const s = mergeModels([{ base: board, name: 'board' }, { base: lid, name: 'case' }]);
   const edges = s.edges, sil = s.silhouettes, before = [...s.edges];
-  // (the second model's facts throw when read: after the first model's edges are written)
-  const bad = { ...lid, header: { ...lid.header, get facts() { throw new RangeError('Array buffer allocation failed'); } } };
+  // (the second model's first fact throws when read inside the fill: after both models' edges are
+  // written -- a throw at the facts' test came before the fill and could not see it: r43 Q7)
+  const closed = new Proxy([...lid.header.facts.closed], { get(t, k) { if (k === '0') throw new RangeError('Array buffer allocation failed'); return Reflect.get(t, k); } });
+  const bad = { ...lid, header: { ...lid.header, facts: { ...lid.header.facts, closed } } };
+  const facts = s.header.facts;
   assert.throws(() => sceneEdgesFacts(s, [{ base: board, name: 'board' }, { base: bad, name: 'case' }]), /allocation failed/);
-  assert.deepEqual([s.edges === edges, s.silhouettes === sil, [...s.edges]], [true, true, before], 'the scene\'s own, untouched');
+  assert.deepEqual([s.edges === edges, s.silhouettes === sil, [...s.edges], s.header.facts === facts], [true, true, before, true], 'the scene\'s own, untouched');
   const t = mergeModels([{ base: board, name: 'board' }, { base: bad, name: 'case' }]);
   assert.deepEqual([t.header.meshes.length, t.edges, /allocation failed/.test(t.mergeError?.message)], [3, null, true], 'shown without them, the error kept');
+  // (silhouettes past the cap left out by their count, never allocated: 3e9 entries merge -- r42 A4, r43 Q6)
+  // (a length past any typed array's: allocated first, it throws -- 3e9 was allocated lazily, unseen)
+  const huge = { ...lid, silhouettes: { length: 9e15 }, silhouetteNormals: { length: 3.6e16 } };
+  const u = mergeModels([{ base: board, name: 'board' }, { base: huge, name: 'case' }]);
+  assert.deepEqual([u.mergeError?.message ?? null, u.silhouettes, u.header.silhouettesOmitted >= 4.5e15], [null, null, true]);
 });
 test('merge: counts, ids, tree, moved bodies', () => {
   const s = mergeModels([{ base: board, name: 'board.stp' }, { base: lid, name: 'case.stp', offset: [0, 0, 1] }]);
@@ -472,7 +480,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     + line('const GONE = Symbol(') + cut('function showBase(next, keep, why) {') + cut('function fileEdgesValue(base, cap) {')
     + cut('function sayNoFacts(text, announce = true) {') + cut('function takeBackNoFacts() {') + line('const MOMENT_TRIES = ') + cut('function readyText() {');
   const make = (usable = false, cap = 2e6, current = false) => {
-    const app = { status: 'ready', edgeJobs: new Map() }, made = [], said = [], kept = [], drawn = [];
+    const app = { status: 'ready', statusMsg: 'ready', edgeJobs: new Map() }, made = [], said = [], kept = [], drawn = [];
     class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
     const setStatus = (s, t) => { said.push(t); app.status = s; app.statusMsg = t; };
     const [edgesOf, stopEdgeJobs, showBase] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'factsCurrent', 'keepEdges', 'Worker', 'setStatus', 'refreshEdges', 'fmtInt', 'momentaryFailure', `${body}; return [edgesOf, stopEdgeJobs, showBase];`)(
@@ -644,6 +652,28 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     assert.deepEqual([t.made[0].ended, t.app.edgeJobs.size, t.app.baseMesh], [true, 0, 'another model'], 'another model: its build stopped');
     t.showBase(null, [], 'stopped: another model was opened');
     assert.equal(t.app.baseMesh, null);
+    // (the word of the one left taken back and let go: a move that gave the scene its facts kept
+    // "no edges for this scene" -- r43 A1)
+    const u = make(), s1 = { edgeInfo: {} };
+    u.app.baseMesh = s1;
+    u.app.noFacts = { base: s1, text: 'no edges for this scene: s1: x' };
+    u.app.statusMsg = 'ready · no edges for this scene: s1: x';
+    u.showBase('the moved scene', [], 'stopped: the scene changed');
+    assert.deepEqual([u.said, u.app.noFacts], [['ready'], null]);
+    // (a word of a model no longer shown let go too: it held that model in memory)
+    u.app.noFacts = { base: { edgeInfo: {} }, text: 'no volume for this model: y' };
+    u.showBase('a drawing', [], 'stopped: another model was opened');
+    assert.equal(u.app.noFacts, null);
+  }
+  // a size limit met when the file was read, written in it: remembered at once, no worker (r43 A3)
+  {
+    const t = make(), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [], edgesFailed: { error: 'Invalid array length', sizeLimit: true } } };
+    t.app.baseMesh = b;
+    assert.equal(await t.edgesOf(b), null);
+    assert.deepEqual([t.made.length, b.edgeInfo.failed, t.said], [0, true, ['ready · no edges for this model: Invalid array length (when it was read)']]);
+    const u = make(), c = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [], edgesFailed: { error: 'Array buffer allocation failed', sizeLimit: false } } };
+    u.edgesOf(c);
+    assert.equal(u.made.length, 1, 'one of the moment: built');
   }
   // a file's silhouettes past the device's cap: left out and counted, as a build's are (r37 Q5)
   {
@@ -668,15 +698,16 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   // the status line then shown, by default the ready line carrying it); mergeThrows: the merge's error
   // (mixed: s0 fails for the moment, s1 for itself; laterunsaid: s0's failure said before, s1's new)
   // (mergedError: mergeModels' own merge failed, kept on the scene; status: the status when it ends)
-  const run = async (fail, { stale: nStale = 1, edged = false, edgesFirst = false, line = null, shown = null, mergeThrows = null, mergedError = null, status = 'ready' } = {}) => {
+  // (more: models beside the stale ones, current)
+  const run = async (fail, { stale: nStale = 1, edged = false, edgesFirst = false, line = null, shown = null, mergeThrows = null, mergedError = null, status = 'ready', more = 0 } = {}) => {
     const built = [], said = [], caps = [], drawn = [];
     const before = { remembered: { failed: true, said: true, error: 'Map maximum size exceeded' }, unsaid: { failed: true, said: false, error: 'Map maximum size exceeded' }, firstfails: { failed: true, said: true, error: 'Map maximum size exceeded' }, laterunsaid: { failed: true, said: true, error: 'Map maximum size exceeded' } }[fail];
     // (firstfails: the first stale model's failure remembered, the second would build)
     const stale = Array.from({ length: nStale }, (_, i) => ({ name: `s${i}`, base: { header: {}, edgeInfo: before && ((fail !== 'firstfails' && fail !== 'laterunsaid') || i === 0) ? { ...before } : undefined } }));
-    const models = [{ name: 'a', base: { header: {} } }, ...stale];
+    const models = [{ name: 'a', base: { header: {} } }, ...Array.from({ length: more }, (_, i) => ({ name: `c${i}`, base: { header: {} } })), ...stale];
     let leave;
     const merged = { edgeInfo: { value: null, gone: new Promise((r) => { leave = () => r(GONE); }) }, header: {}, edges: edgesFirst ? new Uint32Array(2) : undefined, mergeError: mergedError };
-    const app = { baseMesh: merged, status, scene: models, noFacts: line && { base: merged, text: line }, statusMsg: shown ?? (line && `ready · ${line}`) };
+    const app = { baseMesh: merged, status, scene: models, noFacts: line && { base: merged, text: line }, statusMsg: shown ?? (line ? `ready · ${line}` : 'ready') };
     const edgesOf = (base) => {
       built.push(base === merged ? 'scene' : 'model');
       if (base === merged) return Promise.resolve({ source: 'file', facts: {} });
@@ -717,7 +748,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   // (a failure said before: the panel says it, the status line not again -- and no advice, the
   // model's own failing the same way at every try: r40 Q5; one never said -- met while the status
   // was not ready -- said now, once: r37 A3, r38 A2)
-  const again = await run('remembered');
+  const again = await run('remembered', { line: 'no edges for this scene: s0: Map maximum size exceeded' });
   assert.deepEqual([again.panel, again.said], ['not computed: s0: Map maximum size exceeded', []]);
   const unsaid = await run('unsaid');
   assert.deepEqual([unsaid.said, unsaid.info.said], [['ready · no edges for this scene: s0: Map maximum size exceeded'], true]);
@@ -749,12 +780,23 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const mergeLimit = await run(false, { mergeThrows: 'Invalid array length' });
   assert.equal(mergeLimit.panel, 'not computed: the scene\'s merge: Invalid array length');
   // (with a model's failure remembered: both, the scene remembered, no advice -- r42 A1, Q2)
+  // (the merge named as itself, not counted as a model: r43 A6)
   const both = await run('remembered', { mergeThrows: 'Array buffer allocation failed' });
-  assert.deepEqual([both.panel, both.merged.edgeInfo.failed, both.said], ['not computed: s0: Map maximum size exceeded (and 1 more model)', true, ['ready · no edges for this scene: s0: Map maximum size exceeded (and 1 more model)']]);
+  assert.deepEqual([both.panel, both.merged.edgeInfo.failed, both.said], ['not computed: s0: Map maximum size exceeded (and the scene\'s merge)', true, ['ready · no edges for this scene: s0: Map maximum size exceeded (and the scene\'s merge)']]);
   // (mergeModels' own merge failed and no model is stale: the scene's failure, not a build of the
-  // whole scene -- r42 A3)
-  const firstMerge = await run(false, { stale: 0, mergedError: new RangeError('Array buffer allocation failed') });
-  assert.deepEqual([firstMerge.built, firstMerge.panel], [[], 'not computed: the scene\'s merge: Array buffer allocation failed (open the file again to try again)']);
+  // whole scene -- r42 A3; a scene of two, its advice a scene's -- r43 A7)
+  const firstMerge = await run(false, { stale: 0, more: 1, mergedError: new RangeError('Array buffer allocation failed') });
+  assert.deepEqual([firstMerge.built, firstMerge.panel], [[], 'not computed: the scene\'s merge: Array buffer allocation failed (move a model to try again)']);
+  // (mergeModels' merge failed, a stale model built, the merge again whole: the scene's own facts,
+  // no word, one merge -- r43 Q5)
+  const remerged = await run(false, { mergedError: new RangeError('Array buffer allocation failed') });
+  assert.deepEqual([remerged.built, remerged.v?.source, remerged.said, remerged.app.noFacts ?? null], [['model', 'merged', 'scene'], 'file', [], null]);
+  // (an export's progress, said while ready, left alone: the word waits for the next ready line -- r43 Q3)
+  const exporting = await run('failed', { shown: 'exporting 12 bodies as STL…' });
+  assert.deepEqual([exporting.said, exporting.app.noFacts?.text], [[], 'no edges for this scene: s0: the worker failed: out of memory']);
+  // (the word written in place, a tour's note after it kept: r43 A2)
+  const noted = await run('failed', { shown: 'ready · the tour names parts this model lacks: J5' });
+  assert.deepEqual(noted.said, ['ready · no edges for this scene: s0: the worker failed: out of memory · the tour names parts this model lacks: J5']);
   // (a move with a failure said before: the word kept, and the bare ready line given it -- it read
   // "ready"; one met while a load is under way: the word kept for the line to come -- r42 Q3)
   const moved = await run('remembered', { shown: 'ready' });
@@ -796,6 +838,11 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   const bare = writers.filter((w) => !/readyText\(\)/.test(w) && !/^`exporting /.test(w));
   assert.ok(writers.length >= 12, `ready writers found: ${writers.length}`);
   assert.deepEqual(bare, [], 'a ready line without the ready text');
+  // (and a writer that keeps the status it finds -- Save's failure -- through it when that is ready: r43 Q4)
+  const keeps = src.split('\n').filter((l) => /setStatus\(app\.status, /.test(l));
+  assert.ok(keeps.length >= 1 && keeps.every((l) => /app\.status === 'ready' \? `\$\{readyText\(\)\} · `/.test(l)), keeps.join('\n'));
+  // (the page's read where no worker could be made builds no edges or facts: never on the page -- r43 A4)
+  assert.match(src, /await readMeshFile\(\{ \.\.\.src, unit, edges: false \}\)/);
 });
 await test('the edges drawn are the value\'s: a file\'s drawn while its facts build, then the build\'s uploaded in their place; the same arrays not uploaded again (r40 A1, Q9)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');

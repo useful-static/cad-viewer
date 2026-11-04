@@ -4031,7 +4031,8 @@ async function showScene(models, { newTree = false } = {}) {
   updateButtons();
   queueFrame();
   merged.edgeInfo.ready = sceneEdges(merged, models).catch((e) => {
-    // (anything else that throws: said on the panel, never a rejection nobody handles -- r41 Q3)
+    // (a backstop: sceneEdges catches the merge's failure itself and nothing known throws past it;
+    // anything that did would be said on the panel, never a rejection nobody handles -- r41 Q3)
     merged.edgeInfo.error = String(e?.message || e);
     return merged.edgeInfo.value;
   }).then((v) => {
@@ -4082,7 +4083,7 @@ async function sceneEdges(merged, models) {
   }
   // (with the models that failed, not in their place: a model's failure remembered, then the merge's
   // of the moment, advised a move that could never give the scene its facts -- r42 A1, Q2)
-  if (mergeError) failed.push({ name: 'the scene\'s merge', base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false, said: false } } });
+  if (mergeError) failed.push({ name: 'the scene\'s merge', merge: true, base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false, said: false } } });
   if (!failed.length) {
     const v = await edgesOf(merged);
     if (app.baseMesh === merged) takeBackNoFacts(); // (the scene's own facts here: a line about them taken back)
@@ -4097,7 +4098,10 @@ async function sceneEdges(merged, models) {
 // facts), stopped only if all were; its error the first's, its model named, the others counted
 function sceneFailed(merged, failed, cap) {
   const infos = failed.map((m) => m.base.edgeInfo);
-  const more = failed.length > 1 ? ` (and ${failed.length - 1} more model${failed.length > 2 ? 's' : ''})` : '';
+  // (the merge's failure named as itself, not counted as a model: r43 A6)
+  const others = failed.slice(1), n = others.filter((m) => !m.merge).length;
+  const also = [n && `${n} more model${n > 1 ? 's' : ''}`, others.some((m) => m.merge) && 'the scene\'s merge'].filter(Boolean);
+  const more = also.length ? ` (and ${also.join(', ')})` : '';
   Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${infos[0].error}${more}`, failed: infos.some((i) => i.failed), stopped: infos.every((i) => i.stopped) });
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
@@ -4134,12 +4138,18 @@ function fileEdgesValue(base, cap) {
 // sayNoFacts: the word kept whatever the line says now (a failure met while a load was under way,
 // the load then cancelled, read "ready": r42 Q3); the line written now when `announce` and the
 // status is ready, or when it is the ready line without the word. Says whether it wrote the line.
+// (written in place, the line's own words after the ready text kept -- a tour's note was lost: r43 A2)
 function sayNoFacts(text, announce = true) {
+  const msg = app.statusMsg || '', before = readyText(); // (with a word said before, if any)
   app.noFacts = null;
   const plain = readyText();
+  const tail = msg.startsWith(before) ? msg.slice(before.length) : msg.startsWith(plain) ? msg.slice(plain.length) : null;
   app.noFacts = { base: app.baseMesh, text };
-  if (app.status !== 'ready' || (!announce && app.statusMsg !== plain)) return false;
-  setStatus('ready', readyText());
+  // (a line that is not a ready line -- an export's progress, said while ready -- left alone: the
+  // word waits for the next ready line, and the failure is said then: r43 Q3)
+  const line = readyText() + (tail ?? '');
+  if (app.status !== 'ready' || tail === null || (!announce && line === msg)) return false;
+  setStatus('ready', line);
   return true;
 }
 function takeBackNoFacts() {
@@ -4157,6 +4167,11 @@ const GONE = Symbol('gone');
 function showBase(next, keep, why) {
   stopEdgeJobs(new Set(keep), why);
   app.baseMesh?.edgeInfo?.leave?.();
+  // (the "no volume" word of the one left taken back, and let go: a move that gave the scene its
+  // facts kept "no edges for this scene" on the line, and the word held the scene before in memory
+  // under a 2D drawing too -- r43 A1)
+  takeBackNoFacts();
+  app.noFacts = null;
   app.baseMesh = next;
 }
 
@@ -4398,6 +4413,25 @@ function edgesOf(base) {
   if (info.failed) return Promise.resolve(info.value);
   // (a build before that was stopped or failed for the moment: this one says its own)
   info.error = null; info.stopped = false; info.said = false;
+  // a build that failed: its state, and said where it shows (and the info panel says it too),
+  // worded by what is missing -- the file's edges are drawn when only the facts failed; `said`
+  // marks it, so a scene says it once
+  const fail = (v) => {
+    info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
+    // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
+    // is remembered, one of the moment not -- until its second try: one that fails the same way
+    // every time started a worker and copied the model at every move -- r40 A3, Q2)
+    info.stopped = !!v.stopped;
+    if (v.transient) info.tries = (info.tries || 0) + 1;
+    if (!v.stopped && (!v.transient || info.tries >= MOMENT_TRIES)) info.failed = true;
+    if (!info.stopped && app.baseMesh === base && sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`)) info.said = true;
+    return info.value; // (the file's edges, when it carries them; else null)
+  };
+  // (a build that met a size limit when the file was read -- js/cadmesh.js edgesFailed -- fails the
+  // same way here: remembered at once, not built again, nor again at each open of a kept
+  // conversion -- r43 A3)
+  const written = base.header.edgesFailed;
+  if (written?.sizeLimit) return Promise.resolve(fail({ error: `${written.error} (when it was read)` }));
   const job = workerJob('./edges-worker.js', () => {
     const position = base.position.slice(), index = base.index.slice();
     return [{ position, index, meshes: base.header.meshes, silhouetteCap: cap }, [position.buffer, index.buffer]];
@@ -4425,17 +4459,7 @@ function edgesOf(base) {
       if (app.baseMesh === base) takeBackNoFacts();
       return value;
     }
-    info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
-    // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
-    // is remembered, one of the moment not -- until its second try: one that fails the same way
-    // every time started a worker and copied the model at every move -- r40 A3, Q2)
-    info.stopped = !!v.stopped;
-    if (v.transient) info.tries = (info.tries || 0) + 1;
-    if (!v.stopped && (!v.transient || info.tries >= MOMENT_TRIES)) info.failed = true;
-    // said where it shows (and the info panel says it too), worded by what is missing -- the file's
-    // edges are drawn when only the facts failed; `said` marks it, so a scene says it once
-    if (!info.stopped && app.baseMesh === base && sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`)) info.said = true;
-    return info.value; // (the file's edges, when it carries them; else null)
+    return fail(v);
   });
   info.job = entry;
   app.edgeJobs.set(base, entry);
@@ -4638,8 +4662,10 @@ async function meshFromSource(src, unit, seq) {
   // a re-read in another unit), else here
   const got = await readInWorker({ kind: 'mesh', buf: src.buf, format: src.format, name: src.name, extras: src.extras, unit }, src.name);
   if (stale(seq)) return;
-  // (the same read, js/read-file.js, here where no worker could be made)
-  const { raw, unitless } = got || await readMeshFile({ ...src, unit });
+  // (the same read, js/read-file.js, here where no worker could be made -- without the edges and
+  // facts, which are never built on the page: a 980,000-triangle STL held the tab 1.1 s longer for
+  // them -- edgesOf's rule, r43 A4)
+  const { raw, unitless } = got || await readMeshFile({ ...src, unit, edges: false });
   if (stale(seq)) return;
   await loadBuffer(raw, src.name, seq, raw);
   // (a model added to a scene keeps the scene's units: no choice there)
