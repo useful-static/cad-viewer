@@ -3803,6 +3803,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   }
   // the edge worker of the model this one replaces has no one to answer
   if (app.stopEdges && app.stopEdges.base !== base) app.stopEdges.stop();
+  if (app.clearanceRun) app.clearanceRun.stop(); // (and a clearance run of the scene before)
   leave2D(); // a 3D model replaces a drawing shown
   app.mesh = mesh;
   app.baseMesh = base;
@@ -3968,6 +3969,7 @@ async function showScene(models, { newTree = false } = {}) {
   }
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
   if (app.stopEdges) app.stopEdges.stop();
+  if (app.clearanceRun) app.clearanceRun.stop();
   app.scene = models;
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
   // Add model kept "1.65 mm" for a scene whose new case touched)
@@ -4084,6 +4086,42 @@ async function moveModel(i, k, v) {
 // Clearance: the smallest gap between the selected parts (when they all lie
 // in one model; else the first model) and the other models' shown parts,
 // on the tessellation (js/clearance.js), drawn as a Measure distance
+// Clearance in js/clearance-worker.js, on copies of the model's arrays: two triangle trees over
+// millions of triangles held the tab for seconds (9.6 M triangles, 10.8 s). A run started while
+// one is going stops it (STOPPED); with no module worker it runs here, as before.
+const STOPPED = Symbol('stopped');
+function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
+  if (app.clearanceRun) app.clearanceRun.stop();
+  return new Promise((resolve) => {
+    const here = () => resolve((app.lastClearanceVia = 'page', clearance(base.position, base.index, trisA, trisB, { solidA, solidB, normal: base.normal })));
+    let w;
+    try { w = new Worker(new URL('./clearance-worker.js', import.meta.url), { type: 'module' }); } catch { here(); return; }
+    let finished = false;
+    const run = { stop: () => finish(STOPPED) };
+    const finish = (v) => {
+      if (finished) return;
+      finished = true;
+      w.terminate();
+      if (app.clearanceRun === run) app.clearanceRun = null;
+      resolve(v);
+    };
+    app.clearanceRun = run;
+    // (a worker that cannot start or fails -- a file:// page, an old browser: the page measures it)
+    const onPage = () => {
+      if (finished) return;
+      finished = true;
+      w.terminate();
+      if (app.clearanceRun === run) app.clearanceRun = null;
+      here();
+    };
+    w.onmessage = (ev) => { if (ev.data.ok) { app.lastClearanceVia = 'worker'; finish(ev.data.result); } else onPage(); };
+    w.onerror = (e) => { e.preventDefault?.(); onPage(); };
+    const position = base.position.slice(), index = base.index.slice(), normal = base.normal ? base.normal.slice() : null;
+    w.postMessage({ position, index, normal, trisA, trisB, solidA, solidB },
+      [position.buffer, index.buffer, ...(normal ? [normal.buffer] : [])]);
+  });
+}
+
 async function runClearance() {
   if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
   if (app.explode.on) setExplode(false); // the gap is measured where the parts are
@@ -4114,7 +4152,8 @@ async function runClearance() {
   if (stopped()) return;
   const t0 = performance.now();
   const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
-  const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B), normal: base.normal });
+  const r = await clearanceOffPage(base, tris(A), tris(B), solids(A), solids(B));
+  if (r === STOPPED) { stopped(); return; } // (a newer run took over and says its own state; or the scene changed)
   if (stopped()) return;
   // (a set with no triangle -- a selected body with none: clearance() has nothing; it was left at
   // "checking …")
@@ -5691,16 +5730,17 @@ function fillInfo(el) {
     app.factsNow = null;
     add('volume', 'computing…');
   } else {
-    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0;
+    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, net = 0;
     for (const id of which) {
       const i = id - 1, kind = app.header.meshes[i].kind;
       area += facts.area[i] || 0;
-      if (facts.closed[i]) { vol += facts.volume[i] || 0; closed++; if (kind === 'capped') capped++; } else if (kind === 'sheet') sheets++; else open++;
+      if (facts.closed[i]) { vol += facts.volume[i] || 0; closed++; if (kind === 'capped') capped++; if (facts.net?.[i]) net++; } else if (kind === 'sheet') sheets++; else open++;
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}`);
+    // (a body whose shells overlap: its volume their signed sum, not its material -- said)
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} with overlapping shells, their overlap counted as written` : ''}`);
     add('area', `≈ ${fmtArea(area, u)}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };

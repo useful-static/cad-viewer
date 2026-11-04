@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Validate js/dwg.js and its DXF adapter on a corpus of DWG files.
 //
-//   node tests/validate-dwg.mjs LIST.txt [--json OUT.json] [--md OUT.md]
+//   NODE_OPTIONS=--max-old-space-size=8192 node tests/validate-dwg.mjs LIST.txt [--json OUT.json] [--md OUT.md]
+//
+// (the larger heap: the dozens' biggest drawings hold several GB at once -- with node's default
+// the run died after 182 s, heap out of memory; the full corpus list runs with 12288)
 //
 // LIST.txt: one "<standard> <path.dwg>" per line (the standard: R13, R14, R2000, R2004, R2007,
 // R2010, R2013, R2018). For each file:

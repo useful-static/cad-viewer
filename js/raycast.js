@@ -1,6 +1,8 @@
 // CPU ray casting against a decoded model's bodies, for Measure: the surface
 // point under the cursor, and whether a snap candidate is visible (nothing in
-// front of it on the segment from the eye). Bodies carry no transform, so
+// front of it on the segment from the eye). Also windsAgainstNormals, the one
+// test of a triangle wound against its vertex normals (export's turn of each
+// triangle, js/export-mesh.js, and Clearance's of a solid, js/clearance.js). Bodies carry no transform, so
 // rays are cast in model coordinates. A body over BVH_MIN triangles is
 // queried through a bounding-volume hierarchy built on its first query
 // (median split, 8 triangles a leaf); smaller ones are scanned.

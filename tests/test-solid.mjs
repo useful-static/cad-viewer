@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // The one point-in-solid test (js/solid.js) and the box tree it stands on (js/box-tree.js):
 // crossings along the three rays (through an edge, through a corner, on the surface), which shells
-// wholly hold which (by the weld's turning, js/edges.js shellTurns), a solid's material (windingAt)
-// (js/edges.js shellTurns), and its cost.   node tests/test-solid.mjs   (exit 0 = all pass)
+// wholly hold which (by the weld's turning, js/edges.js shellTurns), a solid's material (windingAt,
+// Clearance's question) and a body's volume by the same rule (js/edges.js buildEdges), and the
+// cost.   node tests/test-solid.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { shellTurns } from '../js/edges.js';
+import { buildEdges, shellTurns } from '../js/edges.js';
 import { box } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
@@ -70,7 +71,7 @@ test('a second outer shell whose box holds the parent\'s but which does not hold
   assert.equal(turnedVol([...A, ...B, ...C], 16, 28).toFixed(2), cv.toFixed(2), 'C kept as written (by the box test alone, turned with A)');
   assert.equal(turnedVol([...B, ...A, ...C], 16, 28).toFixed(2), cv.toFixed(2));
 });
-test('2,000 concentric rings, none holding another: under 4 s (r29 Q5: 29.9 s, every candidate rescanned a pick)', () => {
+test('4,000 concentric rings, none holding another: under 5 s (r29 Q5: 2,000 of them 29.9 s, every candidate rescanned a pick)', () => {
   // square annular prisms (one closed shell each) of half-width R, wall 0.5, 1 high: every ring's
   // box holds the smaller rings', and none holds another (each smaller one lies in its hole)
   const ring = (R, w, h) => {
@@ -106,22 +107,24 @@ test('2,000 concentric rings, none holding another: under 4 s (r29 Q5: 29.9 s, e
     const turned = (a, b) => (flip ? flip.subarray(a, b).reduce((s, x) => s + x, 0) : 0);
     assert.deepEqual([turned(0, n0), turned(n0, n0 + 12), turned(n0 + 12, n0 + 24), turned(n0 + 24, H.length)], [0, 12, 12, 32], 'rings, box, cube, small ring');
   }
+  // (4,000 of them under 5 s: the counts by shell in Maps and Sets, 9.3 s, r31 Q4)
   const T = [];
-  for (let k = 0; k < 2000; k++) T.push(...ring(10 + k, 0.5, 1));
+  for (let k = 0; k < 4000; k++) T.push(...ring(10 + k, 0.5, 1));
   assert.ok(vol(ring(10, 0.5, 1)) > 0, 'wound out');
   const { P, I } = meshOf(T);
   const t0 = performance.now();
   shellTurns(P, I);
   const ms = performance.now() - t0;
-  assert.ok(ms < 4000, `${ms.toFixed(0)} ms`);
+  assert.ok(ms < 5000, `${ms.toFixed(0)} ms`);
 });
 test('a solid\'s material by its winding number: a cavity (wound in) outside, a part embedded (wound out) inside, an overlap inside, parts face to face each by its own facing, a body inside out none (r28 A1, r30 A1)', () => {
   const insideOf = (T, p) => {
     const { P, I } = meshOf(T);
     return windingAt(solidIndex(P, I, Array.from({ length: I.length / 3 }, (_, t) => t)), p).inside;
   };
-  // two boxes face to face (their shared face one triangulation: one shell), the one wound out and
-  // the other in: each region what its own facing says (one sign for the merged shell read both alike)
+  // two boxes face to face (each with its own copy of the shared face, the copies coincident: the
+  // weld makes them one branched shell), the one wound out and the other in: each region what its
+  // own facing says (one sign for the merged shell read both alike)
   const pair = [...cubeT([0, 0, 0], [10, 10, 10]), ...cubeT([10, 0, 0], [15, 10, 10], true)];
   assert.equal(insideOf(pair, [5, 5, 5]), true, 'the outward box');
   assert.equal(insideOf(pair, [12, 5, 5]), false, 'the inward box');
@@ -131,6 +134,42 @@ test('a solid\'s material by its winding number: a cavity (wound in) outside, a 
   assert.equal(insideOf([...outer, ...cubeT([3, 3, 3], [7, 7, 7])], [5, 5, 5]), true, 'in an embedded part');
   assert.equal(insideOf([...outer, ...cubeT([5, 5, 5], [15, 15, 15])], [7, 7, 7]), true, 'in the overlap');
   assert.equal(insideOf(rev(outer), [5, 5, 5]), false, 'a body wound inside out: none, by its winding (Clearance turns it to its normals first)');
+});
+test('a pin in the overlap of a branched shell (two or three boxes sharing a face) turns with it, never by its own sign: mirrored, nothing turned (r31 A2: the parity of 2 read outside, the pin turned)', () => {
+  for (const N of [2, 3]) {
+    let T = [];
+    for (let i = 0; i < N; i++) T.push(...cubeT([0, 0, 0], [10 + 5 * i, 10, 10])); // (the x = 0 face the same in each)
+    const nB = T.length;
+    T.push(...cubeT([2, 4, 4], [4, 6, 6]));
+    T = rev(T);
+    const { P, I } = meshOf(T), { flip } = shellTurns(P, I);
+    const turned = (a, b) => (flip ? flip.subarray(a, b).reduce((s, x) => s + x, 0) : 0);
+    assert.deepEqual([turned(0, nB), turned(nB, T.length)], [0, 0], `N=${N}: the boxes, the pin`);
+  }
+});
+test('a part held by its nearest holder (wound in) and by 9 or 20 others (wound out, no ancestors of it): its outer shells disagree, kept as written (r31 A4: the many-holders path had no arm)', () => {
+  for (const N of [9, 20]) {
+    const A = cubeT([0, 0, 0], [10, 10, 10], true), Bs = [];
+    for (let i = 1; i <= N; i++) { const e = 0.01 * i; Bs.push(...cubeT([5 - e, 5 - e, 5 - e], [15 + i, 15 + e, 15 + e])); }
+    const C = cubeT([6, 6, 6], [9, 9, 9]), n0 = A.length + Bs.length;
+    assert.equal(Math.round(turnedVol([...A, ...Bs, ...C], n0, n0 + 12)), 27, `N=${N}`);
+  }
+});
+test('a body\'s volume is its material\'s, as Clearance takes it: a cavity out once, an embedded part counted once; overlapping shells and two parts face to face said to be net (r31 A1: 1064 for 1000, 2000 for 1500 unsaid)', () => {
+  const facts = (T) => {
+    const { P, I } = meshOf(T);
+    const min = [0, 1, 2].map((k) => Math.min(...T.flat().map((p) => p[k]))), max = [0, 1, 2].map((k) => Math.max(...T.flat().map((p) => p[k])));
+    const { facts: f } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } }] });
+    return [Math.round(f.volume[0] * 1000) / 1000, f.net[0]];
+  };
+  const outer = cubeT([0, 0, 0], [10, 10, 10]);
+  assert.deepEqual(facts(outer), [1000, false], 'one cube');
+  assert.deepEqual(facts(rev(outer)), [1000, false], 'one cube wound inside out (its outer shell decides its facing)');
+  assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7], true)]), [936, false], 'a cavity');
+  assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7])]), [1000, false], 'an embedded part: counted once');
+  assert.deepEqual(facts([...outer, ...cubeT([3, 3, 3], [7, 7, 7]), ...cubeT([4, 4, 4], [6, 6, 6], true)]), [1000, false], 'a cavity in an embedded part: winding 2 - 1, still material, as windingAt reads it');
+  assert.deepEqual(facts([...outer, ...cubeT([5, 0, 0], [15, 10, 10])]), [2000, true], 'two overlapping cubes: the signed sum, said');
+  assert.deepEqual(facts([...outer, ...cubeT([10, 0, 0], [15, 10, 10], true)])[1], true, 'face to face, one wound in: said');
 });
 test('an open shell holds nothing, and a part under one keeps its winding, the same upright and upside down (r28 Q1)', () => {
   // a tray (a box without its lid), and an inward cube in it

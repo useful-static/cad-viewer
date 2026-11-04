@@ -39,7 +39,7 @@ const inside = (p, b) => p.every((v, k) => v >= b.min[k] && v <= b.max[k]);
 // The share (0-1) of the part's sample rays toward direction d (toward the
 // eye) that another body's box blocks. A box holding the sample point is
 // not counted (the part's own surroundings: a board under a socket's pins).
-// (obstacles: the boxes, or their tree from boxTree -- clearestDirection builds it once: each of a
+// (obstacles: the boxes, or their tree from obstacleTree -- clearestDirection builds it once: each of a
 // step's 72 x 27 rays tested every box, 3.7 s for 100,000 bodies on the page's thread)
 export function blockedShare(box, d, obstacles) {
   const tree = Array.isArray(obstacles) ? null : obstacles;
@@ -52,8 +52,9 @@ export function blockedShare(box, d, obstacles) {
   return blocked / n;
 }
 
-// A tree of boxes (median splits along the longest axis, 8 to a leaf) for the ray tests
-export function boxTree(boxes) {
+// A tree of boxes (median splits along the longest axis, 8 to a leaf) for the ray tests: a ray
+// against boxes, which js/box-tree.js (a point among boxes, the nearest item) does not ask
+export function obstacleTree(boxes) {
   const build = (items) => {
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     for (const b of items) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); }
@@ -148,7 +149,7 @@ export function clearestDirection(box, up, centre, obstacles) {
   h = norm(h);
   const prefer = h.map((v, k) => v * Math.cos(RISES[0]) + up[k] * Math.sin(RISES[0]));
   let best = null;
-  const tree = obstacles.length > 64 ? boxTree(obstacles) : obstacles;
+  const tree = obstacles.length > 64 ? obstacleTree(obstacles) : obstacles;
   for (const d of candidates(up, h)) {
     const blocked = blockedShare(box, d, tree);
     const off = Math.acos(Math.max(-1, Math.min(1, dot(d, prefer)))) / Math.PI;

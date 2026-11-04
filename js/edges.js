@@ -3,7 +3,7 @@
 // new .cadmesh carries them) and by a worker for an older .cadmesh. Its closed
 // test (shellsOf) is also the mesh readers': js/mesh-formats.js weld calls
 // shellTurns, here, to turn a shell wound the wrong way, and Clearance asks
-// bodyShells for a solid's shells (js/clearance.js).
+// bodyShells for a part's shells (js/clearance.js).
 //
 // OpenCascade meshes every b-rep face with its own vertices and never splits
 // a face at its seam, so within a body:
@@ -107,13 +107,14 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   let silCount = 0;
   const closed = [];
   const area = [];
-  const volume = [];
+  const volume = [], net = [];
   for (const m of meshes) {
     const r = body(position, bits, index, m, edges, sil, silN);
     silCount += r.sil;
     closed.push(m.kind ? (m.kind === 'closed' || m.kind === 'capped') : r.closed);
     area.push(r.area);
     volume.push(r.volume);
+    net.push(!!r.net);
   }
   const omitted = silCount > silhouetteCap ? silCount : 0;
   if (omitted) { sil = null; silN = null; }
@@ -122,7 +123,8 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
     silhouettes: sil ? Uint32Array.from(sil) : null,
     silhouetteNormals: silN ? Int16Array.from(silN) : null,
     silhouettesOmitted: omitted,
-    facts: { closed, area, volume },
+    // (net: per body, its volume the signed sum where its shells overlap -- materialVolume)
+    facts: { closed, area, volume, net },
   };
 }
 
@@ -131,7 +133,7 @@ function body(pos, bits, index, m, edges, sil, silN) {
   const t0 = m.idxStart / 3;
   const v0 = m.vtxStart;
   const nv = m.vtxCount;
-  if (!nt || !nv) return { sil: 0, closed: false, area: 0, volume: 0 };
+  if (!nt || !nv) return { sil: 0, closed: false, area: 0, volume: 0, net: false };
 
   const weld = weldBits(bits, v0, nv);
   const { tn, degenerate, A, V } = triangleFacts(pos, index, t0, nt, m.bbox);
@@ -210,7 +212,63 @@ function body(pos, bits, index, m, edges, sil, silN) {
     }
   }
 
-  return { sil: nsil, closed: m.kind ? null : shellsOf(index, t0, nt, weld, v0, nv).closed, area: A, volume: Math.abs(V) };
+  // (every body, a b-rep's too: one written as two overlapping solids in one body read its signed sum)
+  const sh = shellsOf(index, t0, nt, weld, v0, nv);
+  return { sil: nsil, closed: m.kind ? null : sh.closed, area: A, ...materialVolume(pos, index, t0, nt, sh, V) };
+}
+
+// A closed mesh body's volume as its material is taken -- js/solid.js windingAt's rule, a point in
+// it where its winding number is above 0, with each shell's facing counted as its outer shell
+// is (the weld's rule: an outer shell wound in is turned) -- from the nesting of its shells: the
+// region inside a shell and outside the shells it holds has the winding of the region round it
+// plus the shell's sign, and counts when that is above 0. So a cavity is taken out once and a
+// part embedded in another counted once (the signed sum counted an embedded part twice, and
+// two cubes overlapping 2,000 mm3 where the material is 1,500). Exact for shells that only
+// nest; where two shells overlap (their boxes cross, neither inside the other), a shell is
+// branched (two parts face to face), or a part lies in two outer shells, the overlap is no
+// one region: the volume is the signed sum there, and net says so. -> { volume, net }
+function materialVolume(pos, index, t0, nt, { closed, shell, shellOpen, shellBranched }, V) {
+  const ns = shellOpen.length;
+  const anyBranched = shellBranched.some((x) => x === 1);
+  if (!closed || ns <= 1) return { volume: Math.abs(V), net: closed && anyBranched };
+  const nest = nesting(pos, index.subarray(3 * t0, 3 * (t0 + nt)), shell, ns, shellOpen, shellBranched);
+  const { parent, root, V: Vs, lo, hi } = nest;
+  let net = anyBranched;
+  // (a part in two outer shells)
+  for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
+  // (two shells whose boxes cross, neither an ancestor of the other: a sweep along x)
+  if (!net) {
+    const isAnc = (a, s) => { for (let x = parent[s], g = 0; x >= 0 && g <= ns; x = parent[x], g++) if (x === a) return true; return false; };
+    const byX = Uint32Array.from({ length: ns }, (_, s) => s).sort((a, b) => lo[3 * a] - lo[3 * b]);
+    let checks = 0;
+    for (let i = 0; i < ns && !net; i++) {
+      const a = byX[i];
+      for (let j = i + 1; j < ns; j++) {
+        const b = byX[j];
+        if (lo[3 * b] > hi[3 * a]) break;
+        // (past a million box pairs: said to be net rather than counted)
+        if (++checks > 1e6) { net = true; break; }
+        if (lo[3 * b + 1] > hi[3 * a + 1] || lo[3 * a + 1] > hi[3 * b + 1] || lo[3 * b + 2] > hi[3 * a + 2] || lo[3 * a + 2] > hi[3 * b + 2]) continue;
+        if (!isAnc(a, b) && !isAnc(b, a)) { net = true; break; }
+      }
+    }
+  }
+  if (net) return { volume: Math.abs(V), net: true };
+  // the winding inside each shell, parents first (placed by depth), facing taken as its outer shell's
+  const w = new Int32Array(ns), done = new Uint8Array(ns), inner = new Float64Array(ns);
+  const sign = (s) => (Vs[s] < 0 ? -1 : 1) * (Vs[root[s]] < 0 ? -1 : 1);
+  const wOf = (s) => {
+    const path = [];
+    let x = s;
+    while (x >= 0 && !done[x] && path.length <= ns) { path.push(x); x = parent[x]; }
+    let base = x >= 0 ? w[x] : 0;
+    for (let k = path.length - 1; k >= 0; k--) { const y = path[k]; base += sign(y); w[y] = base; done[y] = 1; }
+    return w[s];
+  };
+  for (let s = 0; s < ns; s++) { wOf(s); if (parent[s] >= 0) inner[parent[s]] += Math.abs(Vs[s]); }
+  let vol = 0;
+  for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.abs(Vs[s]) - inner[s];
+  return { volume: vol, net: false };
 }
 
 // a 32-bit finishing mix (MurmurHash3's)
@@ -360,7 +418,7 @@ function shellsOf(index, t0, nt, weld, v0, nv) {
 
 // One body's shells (position: float32 xyz; index: corner ids into it, its own), welded on the
 // position bits as the facts are: shellsOf's { closed, shell, shellOpen, shellBranched }.
-// Clearance asks it of a solid and of a part (js/clearance.js).
+// Clearance asks it of a part, to ask a point of each of its shells (js/clearance.js).
 export function bodyShells(position, index) {
   const nt = index.length / 3, nv = position.length / 3;
   const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
@@ -387,7 +445,7 @@ export function shellTurns(position, index) {
   let any = false;
   // (each closed shell's outer shell, by its nearest holder, js/solid.js nesting; nothing to ask
   // when the body is one shell)
-  const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen) : null;
+  const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen, shellBranched) : null;
   const V = nest ? nest.V : null; // (each shell's signed volume: nesting's, the one count)
   // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
   // the other way). A shell inside another is turned with its outer shell, never by its own sign:

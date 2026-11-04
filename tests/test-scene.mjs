@@ -300,6 +300,62 @@ test('a board inside a plain hollow case: the nearest pairs only, not every boar
   assert.ok(r.pairs < 2000, `${r.pairs} triangle pairs`);
   assert.ok(ms < 3000, `${ms.toFixed(0)} ms`);
 });
+// a pin (r 5) in a bore (a tube, inner r 5.1), both 100 long and tessellated as CAD does (side
+// slivers, fan caps), their end faces coplanar; turned: the axis along (1,1,1)
+function pinInBore(n, turned) {
+  const L = 100, P = [], I = [];
+  const b0 = P.length / 3;
+  for (let k = 0; k < n; k++) { const a = 2 * Math.PI * k / n; P.push(5 * Math.cos(a), 5 * Math.sin(a), 0, 5 * Math.cos(a), 5 * Math.sin(a), L); }
+  const c0 = P.length / 3; P.push(0, 0, 0, 0, 0, L);
+  for (let k = 0; k < n; k++) {
+    const k2 = (k + 1) % n, a0 = b0 + 2 * k, a1 = a0 + 1, q0 = b0 + 2 * k2, q1 = q0 + 1;
+    I.push(a0, q0, q1, a0, q1, a1, c0, q0, a0, c0 + 1, a1, q1);
+  }
+  const nA = I.length / 3, b = P.length / 3;
+  for (let k = 0; k < n; k++) { const a = 2 * Math.PI * k / n, c = Math.cos(a), s = Math.sin(a); P.push(10 * c, 10 * s, 0, 10 * c, 10 * s, L, 5.1 * c, 5.1 * s, 0, 5.1 * c, 5.1 * s, L); }
+  for (let k = 0; k < n; k++) {
+    const k2 = (k + 1) % n, o0 = b + 4 * k, o1 = o0 + 1, i0 = o0 + 2, i1 = o0 + 3, p0 = b + 4 * k2, p1 = p0 + 1, j0 = p0 + 2, j1 = p0 + 3;
+    I.push(o0, p0, p1, o0, p1, o1, i0, j1, j0, i0, i1, j1, o0, j0, p0, o0, i0, j0, o1, p1, j1, o1, j1, i1);
+  }
+  let pos = Float32Array.from(P);
+  if (turned) {
+    const z = [1, 1, 1].map((x) => x / Math.sqrt(3)), x = [1, -1, 0].map((v) => v / Math.SQRT2), y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+    const Q = new Float32Array(P.length);
+    for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) Q[i + k] = P[i] * x[k] + P[i + 1] * y[k] + P[i + 2] * z[k];
+    pos = Q;
+  }
+  return { pos, idx: Uint32Array.from(I), nA, nB: I.length / 3 - nA };
+}
+test('a pin in its bore, the two turned off the axes: 0.1 mm, not 0 by float noise in the parallel test, and the slivers pruned by their planes (r31 Q1: 0.0000 after 1 pair; Q2: 904,553 pairs)', () => {
+  for (const [n, cap] of [[64, 4000], [256, 20000]]) {
+    for (const turned of [false, true]) {
+      const { pos, idx, nA, nB } = pinInBore(n, turned);
+      const r = clearance(pos, idx, [[0, nA]], [[nA, nB]], { solidA: [[0, nA]], solidB: [[nA, nB]] });
+      const d = Math.round(r.distance * 1000) / 1000;
+      assert.ok(Math.abs(d - 0.1) <= 0.001 && !r.inside, `${n} segments, ${turned ? 'turned' : 'along z'}: ${r.distance}`);
+      assert.ok(r.pairs < cap, `${n} segments, ${turned ? 'turned' : 'along z'}: ${r.pairs} pairs`);
+    }
+  }
+});
+test('a board inside its case, the two turned 30 degrees about z and 20 about x: the nearest pairs still, by the triangles\' planes (r31 Q2: 3.7 M pairs, 6.6 s on a real board)', () => {
+  const kase = file('case', [[['outer', [-10, -10, -10], [110, 110, 40]], ['cavity', [-5, -5, -5], [105, 105, 35], 'in']]]);
+  const parts = [];
+  for (let i = 0; i < 50; i++) for (let j = 0; j < 50; j++) parts.push([`p${i}-${j}`, [i * 2, j * 2, -2], [i * 2 + 1, j * 2 + 1, 0]]);
+  const s = mergeModels([{ base: kase, name: 'case.stp' }, { base: file('board', [parts]), name: 'board.stp' }]);
+  const cz = Math.cos(Math.PI / 6), sz = Math.sin(Math.PI / 6), cx = Math.cos(Math.PI / 9), sx = Math.sin(Math.PI / 9);
+  const pos = new Float32Array(s.position.length);
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = s.position[i], y = s.position[i + 1], z = s.position[i + 2];
+    const x1 = x * cz - y * sz, y1 = x * sz + y * cz;
+    pos[i] = x1; pos[i + 1] = y1 * cx - z * sx; pos[i + 2] = y1 * sx + z * cx;
+  }
+  const t0 = performance.now();
+  const r = clearance(pos, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]) });
+  const ms = performance.now() - t0;
+  assert.equal(Math.round(r.distance * 1e3) / 1e3, 3);
+  assert.ok(r.pairs < 5000, `${r.pairs} triangle pairs`);
+  assert.ok(ms < 3000, `${ms.toFixed(0)} ms`);
+});
 test('containment does not trust the winding but the normals: a block wound inside out, or with one side reversed, its normals out, still holds the pin; with no normals its winding is its facing (r30 A2: one rule)', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);

@@ -36,16 +36,24 @@ function nth(order, cen, a, lo, hi, k) {
   }
 }
 
+// (typed throughout: the tree of 9.6 M triangles in JS arrays held 873 MB of script heap; boxes in
+// the positions' own precision. A leaf holds 2 to 4 triangles -- a split of 5 or more leaves 2 at
+// least each side -- so there are at most n nodes)
 function buildIter(n, ids, box, cen, order) {
-  const nb = [], first = [], count = [], left = [], right = [];
+  const cap = Math.max(1, n);
+  const F = box.constructor, nb = new F(6 * cap), first = new Uint32Array(cap), count = new Uint32Array(cap);
+  const left = new Int32Array(cap).fill(-1), right = new Int32Array(cap).fill(-1);
+  let nn = 0;
   const node = (lo, hi) => {
-    const id = first.length;
-    const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    const id = nn++, o6 = 6 * id;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (let i = lo; i < hi; i++) {
       const o = order[i] * 6;
-      for (let a = 0; a < 3; a++) { if (box[o + a] < b[a]) b[a] = box[o + a]; if (box[o + 3 + a] > b[3 + a]) b[3 + a] = box[o + 3 + a]; }
+      if (box[o] < x0) x0 = box[o]; if (box[o + 1] < y0) y0 = box[o + 1]; if (box[o + 2] < z0) z0 = box[o + 2];
+      if (box[o + 3] > x1) x1 = box[o + 3]; if (box[o + 4] > y1) y1 = box[o + 4]; if (box[o + 5] > z1) z1 = box[o + 5];
     }
-    nb.push(...b); first.push(lo); count.push(hi - lo); left.push(-1); right.push(-1);
+    nb[o6] = x0; nb[o6 + 1] = y0; nb[o6 + 2] = z0; nb[o6 + 3] = x1; nb[o6 + 4] = y1; nb[o6 + 5] = z1;
+    first[id] = lo; count[id] = hi - lo;
     return id;
   };
   const root = n ? node(0, n) : -1;
@@ -54,8 +62,8 @@ function buildIter(n, ids, box, cen, order) {
     const id = stack.pop();
     const lo = first[id], hi = lo + count[id];
     if (hi - lo <= LEAF) continue;
-    const b = nb.slice(id * 6, id * 6 + 6);
-    const a = [0, 1, 2].reduce((m, x) => (b[3 + x] - b[x] > b[3 + m] - b[m] ? x : m), 0);
+    const o6 = 6 * id, ex = nb[o6 + 3] - nb[o6], ey = nb[o6 + 4] - nb[o6 + 1], ez = nb[o6 + 5] - nb[o6 + 2];
+    const a = ex >= ey ? (ex >= ez ? 0 : 2) : (ey >= ez ? 1 : 2);
     const mid = (lo + hi) >> 1;
     nth(order, cen, a, lo, hi - 1, mid);
     left[id] = node(lo, mid);
@@ -65,9 +73,9 @@ function buildIter(n, ids, box, cen, order) {
   // (each triangle's own box, in the tree's order: a pair pruned by them before it is measured -- a
   // leaf's box can be far looser than its triangles', a case's floor and wall together spanning the
   // cavity, and unpruned it was paired with every triangle of a board inside, 7.1 M pairs and 9.4 s)
-  const tbox = new Float64Array(6 * n);
-  for (let i = 0; i < n; i++) tbox.set(box.subarray(order[i] * 6, order[i] * 6 + 6), 6 * i);
-  return { box: Float64Array.from(nb), first, count, left, right, tri: Uint32Array.from(order, (i) => ids[i]), tbox, root };
+  const tbox = new F(6 * n), tri = new Uint32Array(n);
+  for (let i = 0; i < n; i++) { tbox.set(box.subarray(order[i] * 6, order[i] * 6 + 6), 6 * i); tri[i] = ids[order[i]]; }
+  return { box: nb.subarray(0, 6 * nn), first, count, left, right, tri, tbox, root };
 }
 
 // squared distance between two boxes (0 when they overlap)
@@ -124,13 +132,34 @@ export function closestSegments(p1, q1, p2, q2) {
 function segmentHits(p, q, a, b, c) {
   const d = sub(q, p), e1 = sub(b, a), e2 = sub(c, a);
   const h = cross(d, e2), det = dot(e1, h);
-  if (Math.abs(det) < 1e-18) return null;
+  // (parallel by the edges' own size, not an absolute 1e-18: two coplanar faces turned off the
+  // axes leave float noise of 4e-16 there, and u, v, t of the noise read a crossing -- a pin 0.1 mm
+  // in its bore read 0, the two triangles named 2.4 mm apart; a parallel edge goes to the distances)
+  if (!(Math.abs(det) > 1e-9 * Math.sqrt(dot(d, d) * dot(e1, e1) * dot(e2, e2)))) return null;
   const inv = 1 / det, s = sub(p, a), u = dot(s, h) * inv;
   if (u < 0 || u > 1) return null;
   const qv = cross(s, e1), v = dot(d, qv) * inv;
   if (v < 0 || u + v > 1) return null;
   const t = dot(e2, qv) * inv;
   return t >= 0 && t <= 1 ? madd(p, d, t) : null;
+}
+
+// a triangle's unit normal, or null when it has no area
+function unitNormal(T) {
+  const n = cross(sub(T[1], T[0]), sub(T[2], T[0])), l = Math.hypot(n[0], n[1], n[2]);
+  return l > 0 ? [n[0] / l, n[1] / l, n[2] / l] : null;
+}
+// whether every corner of Y lies on one side of X's plane (unit normal n) at d or farther: then no
+// point of Y is nearer X than d
+function beyond(n, X, Y, d) {
+  if (!n) return false;
+  let mn = Infinity, mx = -Infinity;
+  for (const p of Y) {
+    const s = (p[0] - X[0][0]) * n[0] + (p[1] - X[0][1]) * n[1] + (p[2] - X[0][2]) * n[2];
+    if (s < mn) mn = s;
+    if (s > mx) mx = s;
+  }
+  return mn >= d || mx <= -d;
 }
 
 // distance² and the nearest points of two triangles
@@ -282,12 +311,20 @@ function clearanceOfSurfaces(pos, index, trisA, trisB) {
     if (la && lb) {
       for (let i = TA.first[a]; i < TA.first[a] + TA.count[a]; i++) {
         if (boxDist2(TA.tbox, i, TB.box, b) >= best.d2) continue;
-        const ta = TA.tri[i], A = tri(ta);
+        const ta = TA.tri[i], A = tri(ta), nA = unitNormal(A);
         for (let j = TB.first[b]; j < TB.first[b] + TB.count[b]; j++) {
           if (boxDist2(TA.tbox, i, TB.tbox, j) >= best.d2) continue;
-          const tb = TB.tri[j];
+          const tb = TB.tri[j], Bt = tri(tb);
+          // (and a pair one of whose triangles lies wholly beyond the other's plane by the best
+          // distance or more: the boxes of a case's wall and a cylinder's slivers turned off the
+          // axes span the cavity again -- a board in its case turned 30 and 20 degrees was 3.7 M
+          // pairs, 6.6 s)
+          if (best.d2 < Infinity) {
+            const bd = Math.sqrt(best.d2);
+            if (beyond(nA, A, Bt, bd) || beyond(unitNormal(Bt), Bt, A, bd)) continue;
+          }
           pairs++;
-          const r = triangleDistance(A, tri(tb));
+          const r = triangleDistance(A, Bt);
           if (r.d2 < best.d2) best = { ...r, triA: ta, triB: tb };
           if (best.d2 === 0) return done(best, pairs);
         }
@@ -315,7 +352,9 @@ function prep(pos, index, tris) {
   const ids = new Uint32Array(n);
   let k = 0;
   for (const [s, c] of tris) for (let t = s; t < s + c; t++) ids[k++] = t;
-  const box = new Float64Array(n * 6), cen = new Float64Array(n * 3);
+  // (float32 boxes are exact for float32 positions; any other array kept in float64)
+  const F = pos instanceof Float32Array ? Float32Array : Float64Array;
+  const box = new F(n * 6), cen = new F(n * 3);
   for (let i = 0; i < n; i++) {
     const t = ids[i];
     for (let a = 0; a < 3; a++) {

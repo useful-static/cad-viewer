@@ -45,8 +45,10 @@
 //          triangles as snorm16x4 x 2 (w = 0): the edges inside curved faces,
 //          drawn where they are on the outline. Absent when there were more
 //          than SILHOUETTE_CAP (the header's silhouettesOmitted says how many).
-// Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³] }, one
-// entry per mesh; volume is |signed volume|, meaningful for closed bodies.
+// Header facts (with edges): { closed:[bool], area:[mm²], volume:[mm³], net?:[bool] }, one
+// entry per mesh; volume is the material's (js/edges.js materialVolume), meaningful for closed
+// bodies; net, present when any is true: that body's shells overlap and its volume is their
+// signed sum.
 //
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
@@ -491,6 +493,7 @@ function validateHeader(h) {
     if (!f || !list(f.closed, (x) => typeof x === 'boolean') || !list(f.area, num) || !list(f.volume, num)) {
       bad('facts are not one closed / area / volume per mesh');
     }
+    if (f.net !== undefined && !list(f.net, (x) => typeof x === 'boolean')) bad('facts\' net is not one flag per mesh');
   }
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
   if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');
@@ -550,7 +553,7 @@ function validateHeader(h) {
 
 // seven significant digits: a float32's worth, in a short JSON number
 const sig7 = (x) => Number(x.toPrecision(7));
-const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7) });
+const roundFacts = (f) => ({ closed: f.closed, area: f.area.map(sig7), volume: f.volume.map(sig7), ...(f.net && f.net.some(Boolean) ? { net: f.net } : {}) });
 
 export function computeNormals(positions, indices) {
   const n = new Float32Array(positions.length);
