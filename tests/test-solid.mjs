@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { buildEdges, shellTurns, FACTS_RULE, factsCurrent } from '../js/edges.js';
+import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
 import { surfaceTree, treeDistance } from '../js/tri-distance.js';
@@ -309,13 +309,31 @@ test('at the budget\'s edge: given the steps the meeting pair takes, the body is
   // (a call never runs past its limit: one step short it stops -- the limit tested only at the
   // next node pair let it finish inside a leaf pair, distance 0, stopped false, past its limit)
   const short = treeDistance(P, I, TA, TB, steps - 1);
-  assert.deepEqual([short.stopped, short.work <= steps - 1 + 1], [true, true], JSON.stringify({ steps, work: short.work }));
+  assert.deepEqual([short.stopped, short.work], [true, steps], 'stopped at the step past its limit, no further');
   const at = (budget) => {
     const { facts: f } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } }] }, { overlapBudget: budget });
     return [f.net[0], f.unchecked[0]];
   };
   assert.deepEqual(at(steps), [true, false], `${steps} steps`);
   assert.deepEqual(at(steps - 1), [false, true]);
+});
+test('two cavities crossing each other in a cube: no region below 0, the volume a valid fact (net) and the file read back; an optional number fact carried by build and merge (r36 A1 high, A4)', () => {
+  // (two large cavities overlapping each other: their volumes together past the cube's)
+  const T = [...cubeT([0, 0, 0], [10, 10, 10]), ...cubeT([0.5, 0.5, 0.5], [9, 9, 9], true), ...cubeT([1, 1, 1], [9.5, 9.5, 9.5], true)];
+  const { P, I } = meshOf(T);
+  const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'two cavities', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });
+  const d = decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  assert.ok(d.header.facts.volume[0] >= 0, `volume ${d.header.facts.volume[0]} (-228.25: refused by the decoder)`);
+  assert.deepEqual(d.header.facts.net, [true]);
+  // a number fact not always written, added to the one list: built (0 where a body has none),
+  // merged, and not a TypeError
+  BODY_FACTS.push({ key: 'extra', kind: 'number' });
+  try {
+    const m = (Q) => { const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: Q.P, normals: null, colors: null, indices: Q.I }], root: { name: 'm', meshes: [0], children: [] } }); return decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength)); };
+    const a = m(meshOf(cubeT([0, 0, 0], [1, 1, 1]))), b = m(meshOf(cubeT([0, 0, 0], [2, 2, 2])));
+    const s = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }]);
+    assert.deepEqual(s.header.facts.extra, [0, 0]);
+  } finally { BODY_FACTS.pop(); }
 });
 test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
   const n = 300000;

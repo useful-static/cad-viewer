@@ -1,6 +1,7 @@
-// The edge list and body facts (js/edges.js) for a .cadmesh that does not
-// carry them, or carries facts of another rule (js/edges.js factsCurrent),
-// and for a scene whose models are not all so equipped, off the main thread. The
+// The edge list and body facts (js/edges.js) for one model whose .cadmesh does
+// not carry them, or carries facts of another rule (js/scene.js edgesUsable),
+// off the main thread (a scene's are merged from its models', each built here on
+// its own: main.js sceneEdges). The
 // page sends COPIES of the model's position and index arrays, never the
 // buffers it draws from, and gets the result back transferred.
 

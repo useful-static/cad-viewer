@@ -409,7 +409,7 @@ await test('Clearance off the page (main.js clearanceOffPage, with a stand-in wo
     assert.deepEqual([app.clearanceRun, made.length, made[0]?.ended], [null, 1, true], 'the run cleared, its worker ended');
   }
 });
-test('a scene\'s silhouettes past the cap are left out and counted, as one model\'s are; a move keeps the scene\'s built edges and facts, a different scene does not; a scene\'s built ones split back onto each model (r34 Q1, A3, Q5, Q6)', () => {
+test('a scene\'s silhouettes past the cap are left out and counted, as one model\'s are; under it, each model\'s silhouettes and their normals carried at their stride (r34 Q1, r35 A6)', () => {
   const a = file('a', [['a', [0, 0, 0], [1, 1, 1]]]), b = file('b', [['b', [5, 0, 0], [6, 1, 1]]]);
   for (const m of [a, b]) { m.silhouettes = Uint32Array.from([0, 1, 1, 2, 2, 3]); m.silhouetteNormals = new Int16Array(3 * 8); }
   const under = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }], { silhouetteCap: 6 });
@@ -454,36 +454,83 @@ test('a scene\'s edges and facts are its models\' own, each built unmoved: a mod
 await test('the edges worker\'s copies that do not fit: said, the worker ended, the facts not left "computing…" (r34 A2)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'"); };
-  const body = cut('function workerJob(file, make) {') + cut('function edgesOf(base) {');
-  const app = { status: 'ready' }, made = [], said = [];
-  class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
-  const edgesOf = new Function('app', 'silhouetteCapHere', 'factsCurrent', 'Worker', 'setStatus', `${body}; return edgesOf;`)(
-    app, () => 2e6, () => false, Worker, (s, t) => said.push(t));
+  const body = cut('function workerJob(file, make) {') + cut('function edgesOf(base) {') + cut('function stopEdgeJobs(keep, why) {');
+  const make = () => {
+    const app = { status: 'ready', edgeJobs: new Map() }, made = [], said = [];
+    class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
+    const [edgesOf, stopEdgeJobs] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'Worker', 'setStatus', `${body}; return [edgesOf, stopEdgeJobs];`)(
+      app, () => 2e6, () => false, (n, c) => n > c, Worker, (s, t) => said.push(t));
+    return { app, made, said, edgesOf, stopEdgeJobs };
+  };
+  const { app, made, said, edgesOf } = make();
   const base = { edgeInfo: { value: null }, position: { slice() { throw new RangeError('Array buffer allocation failed'); } }, index: new Uint32Array(3), header: { meshes: [] } };
   app.baseMesh = base;
   const r = await Promise.race([edgesOf(base).catch((e) => `rejected ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 1000))]);
-  assert.deepEqual([r, made[0]?.ended, app.stopEdges, /no room/.test(base.edgeInfo.error), said.length], [null, true, null, true, 1]);
+  assert.deepEqual([r, made[0]?.ended, app.edgeJobs.size, /no room/.test(base.edgeInfo.error), said.length], [null, true, 0, true, 1]);
+  // one build a model: asked again while it runs, the same build (one worker); a scene keeping the
+  // model leaves it running; a stop takes it out at once, so the next ask starts its own and a
+  // stopped one never clears it (r36 A2, Q1)
+  {
+    const t = make(), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
+    const p1 = t.edgesOf(b), p2 = t.edgesOf(b);
+    assert.deepEqual([p1 === p2, t.made.length], [true, 1], 'asked twice: one build');
+    t.stopEdgeJobs(new Set([b]), 'stopped: the scene changed');
+    assert.deepEqual([t.made[0].ended, t.app.edgeJobs.size], [undefined, 1], 'a scene that keeps it: still running');
+    t.stopEdgeJobs(new Set(), 'stopped: another model was opened');
+    const p3 = t.edgesOf(b);
+    assert.deepEqual([t.made[0].ended, t.made.length, p3 !== p1], [true, 2, true], 'stopped, then asked again: a build of its own');
+    assert.equal(await p1, null);
+    assert.deepEqual([t.app.edgeJobs.size, t.app.edgeJobs.get(b)?.promise === p3], [1, true], 'the stopped one settled and left the newer one in place');
+  }
 });
 await test('a scene\'s edges: only its stale models built, each kept, then the scene merged from them; a failed build stops it and is said, the panel saying why there is no volume (r35 Q1, A3)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const body = cut('async function sceneEdges(merged, models) {') + line('const pendingVolume = ');
-  const run = async (fail) => {
-    const built = [], kept = [];
+  const run = async (fail, why = 'the worker failed: out of memory') => {
+    const built = [], kept = [], said = [], caps = [];
     const stale = [{ name: 'b', base: { header: {} } }];
     const models = [{ name: 'a', base: { header: {} } }, ...stale];
     const merged = { edgeInfo: { value: null }, header: {} };
-    const edgesOf = async (base) => { built.push(base === merged ? 'scene' : 'model'); if (fail && base !== merged) { base.edgeInfo.error = 'stopped: the scene changed'; return null; } return { source: base === merged ? 'file' : 'worker' }; };
-    const [sceneEdges, pendingVolume] = new Function('edgesOf', 'keepEdges', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', `${body}; return [sceneEdges, pendingVolume];`)(
-      edgesOf, (b) => kept.push(b), () => stale, () => built.push('merged'), () => 2e6);
+    const app = { baseMesh: merged, status: 'ready' };
+    const edgesOf = async (base) => { built.push(base === merged ? 'scene' : 'model'); if (fail && base !== merged) { base.edgeInfo.error = why; return null; } return { source: base === merged ? 'file' : 'worker' }; };
+    const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'keepEdges', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', `${body}; return [sceneEdges, pendingVolume];`)(
+      app, edgesOf, (b) => kept.push(b), () => stale, (m, ms, opts) => { built.push('merged'); caps.push(opts?.silhouetteCap); }, () => 5e5, (s, t) => said.push(t));
     const v = await sceneEdges(merged, models);
-    return { v, built, kept: kept.length, panel: pendingVolume(merged.edgeInfo), error: merged.edgeInfo.error };
+    return { v, built, kept: kept.length, panel: pendingVolume(merged.edgeInfo), said, caps };
   };
   const ok = await run(false);
-  assert.deepEqual([ok.built, ok.kept, ok.v?.source], [['model', 'merged', 'scene'], 1, 'file'], 'the stale model built and kept, the scene merged, then its own from the merge');
+  assert.deepEqual([ok.built, ok.kept, ok.v?.source, ok.caps], [['model', 'merged', 'scene'], 1, 'file', [5e5]], 'the stale model built and kept, the scene merged under the device\'s cap, then its own from the merge');
   const bad = await run(true);
-  assert.deepEqual([bad.v, bad.built, bad.kept, bad.panel], [null, ['model'], 0, 'not computed: stopped: the scene changed']);
+  assert.deepEqual([bad.v, bad.built, bad.kept, bad.panel, bad.said], [null, ['model'], 0, 'not computed: the worker failed: out of memory', ['no edges for this scene: the worker failed: out of memory']]);
+  // (a stop is the scene changing: not said on the status line, which the next scene owns)
+  const stopped = await run(true, 'stopped: the scene changed');
+  assert.deepEqual([stopped.panel, stopped.said], ['not computed: stopped: the scene changed', []]);
+});
+test('keepEdges keeps a build on its model as a file\'s would be: edges, silhouettes, their count left out, the facts and today\'s rule (r36 A5)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function keepEdges(base, v) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const keepEdges = new Function('FACTS_RULE', `${body}; return keepEdges;`)(FACTS_RULE);
+  const base = { header: {} }, v = { edges: new Uint32Array(2), silhouettes: null, silhouetteNormals: null, silhouettesOmitted: 7, facts: { closed: [true] } };
+  keepEdges(base, v);
+  assert.deepEqual([base.edges, base.silhouettes, base.silhouetteNormals, base.header.silhouettesOmitted, base.header.facts, base.header.factsRule],
+    [v.edges, null, null, 7, v.facts, FACTS_RULE]);
+});
+await test('the edges worker itself says it has started, then a failed build as { ok: false, error } (r36 Q3)', async () => {
+  const posted = [];
+  const saved = { postMessage: globalThis.postMessage, onmessage: globalThis.onmessage };
+  globalThis.postMessage = (m) => { posted.push(m); };
+  globalThis.onmessage = null;
+  try {
+    await import(`../js/edges-worker.js?t=${Date.now()}`);
+    assert.deepEqual(posted[0], { started: true });
+    globalThis.onmessage({ data: { position: null, index: null, meshes: null } });
+    assert.deepEqual([posted[1].ok, typeof posted[1].error], [false, 'string']);
+  } finally {
+    globalThis.postMessage = saved.postMessage;
+    globalThis.onmessage = saved.onmessage;
+  }
 });
 await test('the Clearance worker itself says it has started, then a failed run as { ok: false, error } (r33 A6: only the page\'s half was tested)', async () => {
   const posted = [];

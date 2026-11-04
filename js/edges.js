@@ -120,9 +120,9 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   for (const m of meshes) {
     const r = body(position, bits, index, m, edges, sil, silN, overlapBudget);
     silCount += r.sil;
-    for (const f of BODY_FACTS) facts[f.key].push(f.kind === 'flag' ? !!r[f.key] : r[f.key]);
+    for (const f of BODY_FACTS) facts[f.key].push(factValue(f, r[f.key]));
   }
-  const omitted = silCount > silhouetteCap ? silCount : 0;
+  const omitted = overSilhouetteCap(silCount, silhouetteCap) ? silCount : 0;
   if (omitted) { sil = null; silN = null; }
   return {
     edges: Uint32Array.from(edges),
@@ -133,8 +133,15 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   };
 }
 
+// The silhouette cap's one rule: past it a model's (or a scene's) silhouettes are all left out and
+// counted (buildEdges, js/scene.js sceneEdgesFacts, main.js edgesOf for a file's)
+export const overSilhouetteCap = (count, cap) => count > cap;
+
+// a per-body fact's value as written: a flag true or false, a number (0 where a body has none)
+export const factValue = (f, v) => (f.kind === 'flag' ? !!v : (Number.isFinite(v) ? v : 0));
+
 // The per-body facts, one list for every place that builds, writes, reads, checks or merges them
-// (js/cadmesh.js roundFacts and the decoder's checks, js/scene.js mergeModels): a fact added here
+// (js/cadmesh.js roundFacts and the decoder's checks, js/scene.js sceneEdgesFacts): a fact added here
 // is carried by all (one named in seven places was dropped by a merge that then called the
 // scene's facts current). always: written for every model; else written only when one body has it.
 // net: the body's shells touch or cross -- or one is branched, or a part lies in two outer shells
@@ -331,7 +338,9 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   };
   for (let s = 0; s < ns; s++) { wOf(s); if (parent[s] >= 0) inner[parent[s]] += Math.abs(Vs[s]); }
   let vol = 0;
-  for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.abs(Vs[s]) - inner[s];
+  // (a region's share never below 0: two cavities crossing each other are both taken from their
+  // holder, and the body read -228 mm3 -- a file its own decoder refused; such a body is net)
+  for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.max(0, Math.abs(Vs[s]) - inner[s]);
   return { volume: vol, net, unchecked: !net && unchecked };
 }
 

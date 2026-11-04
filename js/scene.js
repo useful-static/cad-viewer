@@ -8,7 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, idToBytes } from './cadmesh.js';
-import { SILHOUETTE_CAP, factsCurrent, BODY_FACTS } from './edges.js';
+import { SILHOUETTE_CAP, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 
@@ -130,11 +130,11 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
     }
     if (facts) {
       // (appended one by one: a spread of a model's 300,000 bodies into push ran out of stack; a
-      // fact a model does not write is false for each of its bodies)
+      // fact a model does not write is false, or 0, for each of its bodies: js/edges.js factValue)
       const f = base.header.facts, nb = base.header.meshes.length;
-      for (const { key, kind } of BODY_FACTS) {
-        const src = f[key], dst = facts[key];
-        for (let i = 0; i < nb; i++) dst.push(kind === 'flag' ? !!src?.[i] : src[i]);
+      for (const fact of BODY_FACTS) {
+        const src = f[fact.key], dst = facts[fact.key];
+        for (let i = 0; i < nb; i++) dst.push(factValue(fact, src?.[i]));
       }
     }
     v0 += base.header.vertexCount;
@@ -145,7 +145,7 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
     const rules = new Set(models.map((m) => m.base.header.factsRule));
     if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
   }
-  if (out.silhouettes && out.silhouettes.length / 2 > silhouetteCap) {
+  if (out.silhouettes && overSilhouetteCap(out.silhouettes.length / 2, silhouetteCap)) {
     omitted += out.silhouettes.length / 2;
     out.silhouettes = null; out.silhouetteNormals = null;
   }
@@ -153,8 +153,12 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
   return out;
 }
 
+// Whether a model's edges and facts can be used as they are (its file's, or kept from a build):
+// the one test, main.js edgesOf's and the scene's
+export const edgesUsable = (base) => !!base.edges && factsCurrent(base.header);
+
 // The models of a scene whose edges and facts are not today's: built each on its own, unmoved
-export const staleModels = (models) => models.filter((m) => !(m.base.edges && factsCurrent(m.base.header)));
+export const staleModels = (models) => models.filter((m) => !edgesUsable(m.base));
 
 // a tree node with every mesh index moved by k
 function shiftNode(node, k) {
