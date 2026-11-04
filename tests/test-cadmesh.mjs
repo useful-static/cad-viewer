@@ -339,6 +339,22 @@ test('encode builds the edge sections and facts; decode validates them', () => {
   assert.throws(() => decodeCadmesh(buf), /edges entry 0 names vertex 99 of 4/);
   assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh({ meshes: [quad('a', 0)] }), '"closed":[false]', '"closed":[0]    ')),
     /facts' closed is not one flag per mesh/);
+  // (each refusal by the fact's kind: a negative volume -- round 36's -228 -- a flag that is no
+  // flag, a rule that is no whole number: r38 Q4)
+  // (a file whose header is changed as given, written as the encoder lays it out, not checked)
+  const rewrite = (change) => {
+    const b = encodeCadmesh({ meshes: [quad('a', 0)] }), dv = new DataView(b), jlen = dv.getUint32(8, true);
+    const h = JSON.parse(new TextDecoder().decode(new Uint8Array(b, 12, jlen))), data = new Uint8Array(b.slice((12 + jlen + 7) & ~7));
+    change(h);
+    const json = new TextEncoder().encode(JSON.stringify(h)), start = (12 + json.byteLength + 7) & ~7, out = new ArrayBuffer(start + data.byteLength), ov = new DataView(out);
+    ov.setUint32(0, dv.getUint32(0, true), true); ov.setUint32(4, dv.getUint32(4, true), true); ov.setUint32(8, json.byteLength, true);
+    new Uint8Array(out, 12, json.byteLength).set(json); new Uint8Array(out, start).set(data);
+    return out;
+  };
+  assert.doesNotThrow(() => decodeCadmesh(rewrite(() => {})), 'the rewrite alone reads back');
+  assert.throws(() => decodeCadmesh(rewrite((h) => { h.facts.volume = [-1]; })), /facts' volume is not one number at least 0 per mesh/);
+  assert.throws(() => decodeCadmesh(rewrite((h) => { h.facts.net = [1]; })), /facts' net is not one flag per mesh/);
+  assert.throws(() => decodeCadmesh(rewrite((h) => { h.factsRule = 4.5; })), /factsRule is not a whole number/);
 });
 
 test('occt mapping: refuses a failed import', () => {

@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
-import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS } from '../js/edges.js';
+import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS, flagCounts } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
 import { surfaceTree, treeDistance } from '../js/tri-distance.js';
@@ -343,6 +343,12 @@ test('facts written under rule 3 (no clamp: crossing cavities read 771.75 for 10
   assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: 3 }), false, 'rule 3: rebuilt');
   assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: FACTS_RULE }), true);
   for (const f of BODY_FACTS) if (f.kind === 'flag' && !f.always) assert.equal(typeof f.said, 'string', `${f.key} has its words`);
+});
+test('flagCounts: each flag with its words counted over the closed bodies asked, the one count the panel and stp2mesh say (r38 A5, Q5)', () => {
+  const facts = { closed: [true, true, false, true], net: [true, false, true, true], unchecked: [false, true, false, false] };
+  assert.deepEqual(flagCounts(facts, [0, 1, 2, 3]).map(({ fact, n }) => [fact.key, n]), [['net', 2], ['unchecked', 1]], 'an open body\'s flag not counted');
+  assert.deepEqual(flagCounts(facts, [1]).map(({ fact, n }) => [fact.key, n]), [['unchecked', 1]], 'only the bodies asked');
+  assert.deepEqual(flagCounts({ closed: [true] }, [0]), [], 'no flags written: none');
 });
 test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
   const n = 300000;

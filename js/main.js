@@ -20,7 +20,7 @@ import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT
 import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
-import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, BODY_FACTS } from './edges.js';
+import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagCounts, factsCurrent } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
@@ -3672,8 +3672,7 @@ function dropModel(msg) {
 // The 3D model gone from the UI and the GPU (a failed load; a DXF opened)
 function clearModel() {
   app.mesh = null;
-  leaveShown();
-  app.baseMesh = null;
+  showBase(null, [], 'stopped: another model was opened');
   app.scene = null;
   app.overrides = new Map();
   app.modelKey = '';
@@ -3710,9 +3709,7 @@ function clearModel() {
   app.viewGen++;
   app.lastStepBuffer = null;
   app.unmeshedFaces = 0;
-  // and what loadBuffer set for it: no link to a model not shown, no edge
-  // worker running on for it
-  stopEdgeJobs(new Set(), 'stopped: another model was opened');
+  // and what loadBuffer set for it: no link to a model not shown (its edge builds stopped above)
   app.sourceUrl = null;
   app.stats = null;
   syncModelList();
@@ -3802,13 +3799,11 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     handBack(mesh);
     return;
   }
-  // the edge worker of the model this one replaces has no one to answer
-  stopEdgeJobs(new Set([base]), 'stopped: another model was opened');
   if (app.clearanceRun) app.clearanceRun.stop(); // (and a clearance run of the scene before)
   leave2D(); // a 3D model replaces a drawing shown
   app.mesh = mesh;
-  leaveShown();
-  app.baseMesh = base;
+  // (the edge builds of the model or scene this one replaces have no one to answer)
+  showBase(base, [base], 'stopped: another model was opened');
   app.overrides = overrides;
   app.faceOverrides = new Map();
   if (app.paintFaces) setPaint(false);
@@ -3879,10 +3874,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   applyListEntry(); // its step, page, author, license, style from the model list
   touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
+  // (a build keeps its own on the model, edgesOf: a scene it joins merges them, a move builds nothing)
   base.edgeInfo.ready = edgesOf(base).then((v) => {
-    // (built by the worker: kept on the model as a file's would be, so a scene it joins merges them
-    // and a move rebuilds nothing -- every Add model and typed move built the whole scene's again)
-    if (v && v.source === 'worker') keepEdges(base, v);
     if (app.baseMesh === base) { pushState(); showInfo(); } // (the facts: volume, area, mass)
     refreshEdges();
     return v;
@@ -3973,7 +3966,7 @@ async function showScene(models, { newTree = false } = {}) {
   endTour();
   const merged = mergeModels(models, { silhouetteCap: silhouetteCapHere() });
   merged.edgeInfo = { value: null, ready: null };
-  // (gone: settles with GONE once another model or scene replaces this one -- leaveShown)
+  // (gone: settles with GONE once another model or scene replaces this one -- showBase)
   merged.edgeInfo.gone = new Promise((res) => { merged.edgeInfo.leave = () => res(GONE); });
   const mesh = inScheme(merged, app.overrides);
   checkFits(app.renderer, mesh);
@@ -3985,8 +3978,6 @@ async function showScene(models, { newTree = false } = {}) {
     throw e;
   }
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
-  // (the builds of models this scene still holds go on: a move changes none of them)
-  stopEdgeJobs(new Set(models.map((m) => m.base)), 'stopped: the scene changed');
   if (app.clearanceRun) app.clearanceRun.stop();
   app.scene = models;
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
@@ -3999,8 +3990,8 @@ async function showScene(models, { newTree = false } = {}) {
   if (models.length > 1) app.meshSource = null;
   syncUnitParam(); // (the first model's unit stays in the address: readUnit)
   app.mesh = mesh;
-  leaveShown();
-  app.baseMesh = merged;
+  // (the builds of models this scene still holds go on: a move changes none of them)
+  showBase(merged, models.map((m) => m.base), 'stopped: the scene changed');
   app.header = mesh.header;
   // (part colours are kept by index: the first model's stay its own; a
   // scene's are not saved, so its later indices never land on that model)
@@ -4051,32 +4042,43 @@ async function sceneEdges(merged, models) {
   const stale = staleModels(models);
   for (const m of stale) {
     m.base.edgeInfo ||= { value: null, ready: null, error: null };
-    const tried = m.base.edgeInfo.failedRule === FACTS_RULE; // (a failure already said)
     // (a scene replaced while it waits ends here, merging nothing: each move typed during a
     // build kept the whole scene before it, about 85 MB a move, until the build ended)
     const v = await Promise.race([edgesOf(m.base), merged.edgeInfo.gone]);
     if (v === GONE) return null;
-    if (!v) {
-      merged.edgeInfo.error = m.base.edgeInfo.error; merged.edgeInfo.value = null;
-      // (said on the status line too, as for one model, once: not for a stop, which the next scene
-      // owns, nor again for a failure remembered)
-      if (app.baseMesh === merged && app.status === 'ready' && !m.base.edgeInfo.stopped && !tried) setStatus('ready', `no edges for this scene: ${merged.edgeInfo.error}`);
-      return null;
+    // (a build keeps its own on its model: edgesOf)
+    if (!v?.facts) {
+      const info = m.base.edgeInfo;
+      merged.edgeInfo.error = info.error; merged.edgeInfo.failed = info.failed; // (the panel reads the scene's)
+      // (said on the status line, once for the model: not for a stop, which the next scene owns,
+      // nor if it was said already -- a failure met while the status was not ready went unsaid)
+      if (app.baseMesh === merged && app.status === 'ready' && !info.stopped && !info.said) { setStatus('ready', `no edges for this scene: ${info.error}`); info.said = true; }
+      // (the scene's edges still drawn when every model carries its own: only the facts are missing)
+      sceneEdgesFacts(merged, models, { silhouetteCap: silhouetteCapHere() });
+      merged.edgeInfo.value = merged.edges ? { edges: merged.edges, silhouettes: merged.silhouettes, silhouetteNormals: merged.silhouetteNormals,
+        silhouettesOmitted: merged.header.silhouettesOmitted || 0, facts: null, source: 'file', ms: 0 } : null;
+      return merged.edgeInfo.value;
     }
-    keepEdges(m.base, v);
   }
   // (merged again only when a model's were built here: mergeModels merged them already)
   if (stale.length) sceneEdgesFacts(merged, models, { silhouetteCap: silhouetteCapHere() });
   return edgesOf(merged);
 }
 
-// the shown model or scene replaced: a scene's sceneEdges still waiting on a build ends (GONE)
+// The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
+// of every model not kept stopped (why: the reason said), the scene shown before ended -- its
+// sceneEdges still waiting on a build settles GONE -- then `next` shown. (Written out at three
+// places in two orders, each one line a mutant could drop unseen.)
 const GONE = Symbol('gone');
-function leaveShown() { app.baseMesh?.edgeInfo?.leave?.(); }
+function showBase(next, keep, why) {
+  stopEdgeJobs(new Set(keep), why);
+  app.baseMesh?.edgeInfo?.leave?.();
+  app.baseMesh = next;
+}
 
 // the info panel's volume while there are no facts: a build that failed or was stopped said, not
 // "computing…" for good
-const pendingVolume = (info) => (info?.error ? `not computed: ${info.error}` : 'computing…');
+const pendingVolume = (info) => (info?.error ? `not computed: ${info.error}${info.failed ? ' (open the file again to try again)' : ''}` : 'computing…');
 
 // the device's silhouette cap: a coarse-pointer device's smaller one, else edges.js's
 const silhouetteCapHere = () => (coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP);
@@ -4168,13 +4170,13 @@ function workerJob(file, make) {
     };
     w.onerror = (e) => {
       e.preventDefault?.();
-      finish(started ? { error: `the worker failed: ${e.message || 'out of memory?'}` } : { noWorker: e.message || 'could not start' });
+      finish(started ? { error: `the worker failed: ${e.message || 'out of memory?'}`, transient: true } : { noWorker: e.message || 'could not start' });
     };
     try {
       const [msg, transfer] = make();
       w.postMessage(msg, transfer);
     } catch (e) {
-      finish({ error: `no room for the model's copy: ${e?.message || e}` });
+      finish({ error: `no room for the model's copy: ${e?.message || e}`, transient: true });
     }
   });
   return { promise, stop: (why) => stopIt(why) };
@@ -4276,16 +4278,21 @@ const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia(
 function edgesOf(base) {
   const info = base.edgeInfo;
   const cap = silhouetteCapHere();
-  // (the file's facts only when built by today's rule: an older file's or kept conversion's
-  // volume was the signed sum, unflagged)
-  if (edgesUsable(base)) {
+  // the file's edges, under the device's cap, and its facts only when built by today's rule (an
+  // older file's or kept conversion's volume was the signed sum, unflagged): its edges are shown
+  // either way -- a build of the facts that failed dropped the edges the file carries too
+  const fromFile = () => {
     const over = !!base.silhouettes && overSilhouetteCap(base.silhouettes.length / 2, cap);
-    info.value = { edges: base.edges, silhouettes: over ? null : base.silhouettes,
+    return { edges: base.edges, silhouettes: over ? null : base.silhouettes,
       silhouetteNormals: over ? null : base.silhouetteNormals,
       silhouettesOmitted: over ? base.silhouettes.length / 2 : (base.header.silhouettesOmitted || 0),
-      facts: base.header.facts, source: 'file', ms: 0 };
+      facts: factsCurrent(base.header) ? base.header.facts : null, source: 'file', ms: 0 };
+  };
+  if (edgesUsable(base)) {
+    info.value = fromFile();
     return Promise.resolve(info.value);
   }
+  if (base.edges && !info.value) info.value = fromFile(); // (the edges now; the facts built below)
   // (built by the worker on copies: the model's own buffers stay with the page and the GPU upload;
   // with no module worker there are none -- not built on the page, where a big model's would hold
   // the tab -- and the volume, the cut fill and Clearance's part-inside test go without, said)
@@ -4293,9 +4300,11 @@ function edgesOf(base) {
   // every move restarted a stale model's from nothing)
   const going = app.edgeJobs.get(base);
   if (going) return going.promise;
-  // (a build that failed under today's rule is not tried again for this model -- every move
-  // started a worker that failed the same way and said so again; a reload or a new rule tries)
-  if (info.failedRule === FACTS_RULE) return Promise.resolve(null);
+  // (a build that failed for the model itself -- the worker's own refusal, no module worker -- is
+  // not tried again for it: every move started a worker that failed the same way and said so
+  // again; opening the file again tries. A failure of the moment -- no room for the copy, a worker
+  // that died -- is tried again at the next ask)
+  if (info.failed) return Promise.resolve(info.value);
   info.error = null; info.stopped = false; // (a build before that was stopped: this one says its own)
   const job = workerJob('./edges-worker.js', () => {
     const position = base.position.slice(), index = base.index.slice();
@@ -4312,18 +4321,24 @@ function edgesOf(base) {
     const value = v.ok ? { ...v.ok.result, source: 'worker', ms: Math.round(v.ok.ms) } : null;
     // (only the model's current build writes its state: a stopped one settling after the next had
     // begun left "not computed: stopped…" over it, and kept it after that one succeeded)
-    if (info.job !== entry) return value;
+    if (info.job !== entry) return value || info.value;
     info.job = null;
-    if (!value) {
-      info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
-      // (a stop is no failure -- the one test of it, sceneEdges' too; a failure is remembered)
-      info.stopped = !!v.stopped;
-      if (!v.stopped) info.failedRule = FACTS_RULE;
+    if (value) {
+      // (kept on the model as a file's would be, here where every build ends: a model opened alone
+      // and then added to a scene built nothing again)
+      keepEdges(base, value);
+      info.value = value;
+      return value;
     }
-    info.value = value;
-    // said where it shows, or the edge styles silently draw none (and the info panel says it too)
-    if (!value && !info.stopped && app.baseMesh === base && app.status === 'ready') setStatus('ready', `no edges for this model: ${info.error}`);
-    return value;
+    info.error = v.stopped || v.error || `no module worker: ${v.noWorker}`;
+    // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
+    // is remembered, one of the moment not)
+    info.stopped = !!v.stopped;
+    if (!v.stopped && !v.transient) info.failed = true;
+    // said where it shows, or the edge styles silently draw none (and the info panel says it too);
+    // `said` marks it, so a scene says it once and only if it was not said here
+    if (!info.stopped && app.baseMesh === base && app.status === 'ready') { setStatus('ready', `no edges for this model: ${info.error}`); info.said = true; }
+    return info.value; // (the file's edges, when it carries them; else null)
   });
   info.job = entry;
   app.edgeJobs.set(base, entry);
@@ -5832,24 +5847,22 @@ function fillInfo(el) {
     app.factsNow = null;
     add('volume', pendingVolume(app.baseMesh?.edgeInfo));
   } else {
-    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, net = 0, unchecked = 0;
+    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0;
     for (const id of which) {
       const i = id - 1, kind = app.header.meshes[i].kind;
       area += facts.area[i] || 0;
       if (facts.closed[i]) {
         vol += facts.volume[i] || 0; closed++;
         if (kind === 'capped') capped++;
-        if (facts.net?.[i]) net++; else if (facts.unchecked?.[i]) unchecked++;
       } else if (kind === 'sheet') sheets++; else open++;
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
-    // (a body whose shells touch or cross, or whose one shell is branched: its volume may not be its
-    // material's -- said, as what it is)
-    const said = (key) => BODY_FACTS.find((f) => f.key === key).said; // (the one wording, js/edges.js)
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${net ? ` · ${fmtInt(net)} ${said('net')}` : ''}`
-      + `${unchecked ? ` · ${fmtInt(unchecked)} ${said('unchecked')}` : ''}`);
+    // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
+    // check -- said, as what it is: each flag's count and words, js/edges.js flagCounts, as stp2mesh)
+    const flags = flagCounts(facts, which.map((id) => id - 1)).map(({ fact, n }) => ` · ${fmtInt(n)} ${fact.said}`).join('');
+    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${flags}`);
     add('area', `≈ ${fmtArea(area, u)}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };

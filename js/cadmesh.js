@@ -56,7 +56,7 @@
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
 
-import { buildEdges, FACTS_RULE, BODY_FACTS } from './edges.js';
+import { buildEdges, FACTS_RULE, BODY_FACTS, KINDS } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -493,13 +493,12 @@ function validateHeader(h) {
   if (h.facts !== undefined) {
     const f = h.facts;
     const list = (a, test) => Array.isArray(a) && a.length === (h.meshes || []).length && a.every(test);
-    const num = (x) => Number.isFinite(x) && x >= 0, flag = (x) => typeof x === 'boolean';
     if (!f || typeof f !== 'object') bad('facts are not an object');
-    // (each per-body fact by its kind, js/edges.js BODY_FACTS: the ones always written required;
-    // the refusal names the fact and its kind -- a number at least 0, a flag)
+    // (each per-body fact by its kind, js/edges.js BODY_FACTS and KINDS: the ones always written
+    // required; the refusal names the fact and its kind)
     for (const { key, kind, always } of BODY_FACTS) {
       if (f[key] === undefined && !always) continue;
-      if (!list(f[key], kind === 'flag' ? flag : num)) bad(`facts' ${key} is not one ${kind === 'flag' ? 'flag' : 'number at least 0'} per mesh`);
+      if (!list(f[key], KINDS[kind].test)) bad(`facts' ${key} is not one ${KINDS[kind].named} per mesh`);
     }
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }
@@ -563,7 +562,7 @@ function validateHeader(h) {
 const sig7 = (x) => Number(x.toPrecision(7));
 // (numbers to 7 significant figures; a fact not always written only when one body has it)
 const roundFacts = (f) => Object.fromEntries(BODY_FACTS.filter(({ key, always }) => always || (f[key] && f[key].some(Boolean)))
-  .map(({ key, kind }) => [key, kind === 'number' ? f[key].map(sig7) : f[key]]));
+  .map(({ key, kind }) => [key, KINDS[kind].rounded ? f[key].map(sig7) : f[key]]));
 
 export function computeNormals(positions, indices) {
   const n = new Float32Array(positions.length);

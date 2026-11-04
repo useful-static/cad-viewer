@@ -139,7 +139,27 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
 export const overSilhouetteCap = (count, cap) => count > cap;
 
 // a per-body fact's value as written: a flag true or false, a number (0 where a body has none)
-export const factValue = (f, v) => (f.kind === 'flag' ? !!v : (Number.isFinite(v) ? v : 0));
+export const factValue = (f, v) => KINDS[f.kind].value(v);
+
+// A fact's kind, the one table every reader and writer asks (buildEdges and the merge: value;
+// js/cadmesh.js's decoder: test and named; its writer: rounded): a third kind is added here
+export const KINDS = {
+  flag: { test: (x) => typeof x === 'boolean', value: (v) => !!v, named: 'flag', rounded: false },
+  number: { test: (x) => Number.isFinite(x) && x >= 0, value: (v) => (Number.isFinite(v) ? v : 0), named: 'number at least 0', rounded: true },
+};
+
+// Each flag fact that has its words (`said`) counted over the given bodies that are closed -- the
+// one count the info panel and stp2mesh say: [{ fact, n }] for the flags set on any of them
+export function flagCounts(facts, bodies) {
+  const out = [];
+  for (const f of BODY_FACTS) {
+    if (f.kind !== 'flag' || !f.said || !facts[f.key]) continue;
+    let n = 0;
+    for (const i of bodies) if (facts.closed[i] && facts[f.key][i]) n++;
+    if (n) out.push({ fact: f, n });
+  }
+  return out;
+}
 
 // The per-body facts, one list for every place that builds, writes, reads, checks or merges them
 // (js/cadmesh.js roundFacts and the decoder's checks, js/scene.js sceneEdgesFacts): a fact added here
