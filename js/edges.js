@@ -397,11 +397,9 @@ export function shellTurns(position, index) {
   // (two parts face to face: no one outside), one an open shell's box holds (no answer: a part's
   // cavity under an outer surface with a gap, and a cube in a lidless tray was turned upright and
   // not upside down), and a shell whose outer shells do not agree (a part in the overlap of one
-  // wound in and one wound out: its answer turned on the order of the file), and one whose place
-  // was not found (more candidate holders than nesting asks).
+  // wound in and one wound out: its answer turned on the order of the file).
   const outerTurn = (r) => !shellOpen[r] && !shellBranched[r] && V[r] < 0 && !nest.inOpen[r];
   for (const s of closedShells) {
-    if (nest.unsure(s)) continue;
     const rs = nest.roots(s), turn = outerTurn(rs[0]);
     if (rs.some((r) => outerTurn(r) !== turn)) continue;
     if (turn) { flipShell[s] = 1; any = true; }

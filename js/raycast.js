@@ -51,6 +51,16 @@ export function seesInside(P, N, I, t, o, d) {
   return s > 0;
 }
 
+// Whether the triangle of vertices a, b, c (numbers into P, float xyz, and N, snorm16 x4) is wound
+// against its vertex normals (their sum): the normals are its outside to the view, so a writer and
+// a test of material turn such a triangle round (js/export-mesh.js bodyOf, js/clearance.js)
+export function windsAgainstNormals(P, N, a, b, c) {
+  const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
+  const vx = P[3 * c] - P[3 * a], vy = P[3 * c + 1] - P[3 * a + 1], vz = P[3 * c + 2] - P[3 * a + 2];
+  const sx = N[4 * a] + N[4 * b] + N[4 * c], sy = N[4 * a + 1] + N[4 * b + 1] + N[4 * c + 1], sz = N[4 * a + 2] + N[4 * b + 2] + N[4 * c + 2];
+  return (uy * vz - uz * vy) * sx + (uz * vx - ux * vz) * sy + (ux * vy - uy * vx) * sz < 0;
+}
+
 // slab test: the entry t of a box, or Infinity
 function hitBox(lo, hi, o, inv, tmax) {
   let t0 = 0, t1 = tmax;

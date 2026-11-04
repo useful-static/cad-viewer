@@ -225,7 +225,10 @@ export function weld(b) {
   // 800,000 separate cubes. Output vertices in the order their first corner meets them.
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
   const cols = b.col ? colKept : null;
-  const shells = new Set(shell).size > 1;
+  // (more than one shell: a scan for the first that differs, not a Set of them -- 612 ms and
+  // 121 MB of script heap at 2.4 M shells for one boolean)
+  let shells = false;
+  for (let t = 1; t < kept && !shells; t++) if (shell[t] !== shell[0]) shells = true;
   const keyed = !!cols || shells;
   const tkey = keyed ? new Float64Array(kept) : null; // (colour and shell, one number)
   const tcol = cols ? new Uint8Array(3 * kept) : null;

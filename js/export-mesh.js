@@ -14,6 +14,7 @@
 
 import { crc32 } from './crc32.js';
 import { orientBasis } from './orient.js';
+import { windsAgainstNormals } from './raycast.js';
 
 const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 
@@ -33,10 +34,7 @@ function bodyOf(model, id, basis, scale) {
   const idx = new Uint32Array(m.idxCount);
   for (let t = 0; t < m.idxCount; t += 3) {
     const a = model.index[m.idxStart + t], b = model.index[m.idxStart + t + 1], c = model.index[m.idxStart + t + 2];
-    const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
-    const vx = P[3 * c] - P[3 * a], vy = P[3 * c + 1] - P[3 * a + 1], vz = P[3 * c + 2] - P[3 * a + 2];
-    const sx = N[4 * a] + N[4 * b] + N[4 * c], sy = N[4 * a + 1] + N[4 * b + 1] + N[4 * c + 1], sz = N[4 * a + 2] + N[4 * b + 2] + N[4 * c + 2];
-    const turn = (uy * vz - uz * vy) * sx + (uz * vx - ux * vz) * sy + (ux * vy - uy * vx) * sz < 0;
+    const turn = windsAgainstNormals(P, N, a, b, c);
     idx[t] = a - m.vtxStart;
     idx[t + 1] = (turn ? c : b) - m.vtxStart;
     idx[t + 2] = (turn ? b : c) - m.vtxStart;

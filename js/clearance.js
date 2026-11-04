@@ -16,8 +16,9 @@
 // Pure ES module, no DOM.
 
 import { cross, dot, sub } from './vec3.js';
-import { nesting } from './solid.js';
+import { solidIndex, windingAt } from './solid.js';
 import { bodyShells } from './edges.js';
+import { windsAgainstNormals } from './raycast.js';
 
 const LEAF = 4;
 
@@ -61,7 +62,12 @@ function buildIter(n, ids, box, cen, order) {
     right[id] = node(mid, hi);
     stack.push(left[id], right[id]);
   }
-  return { box: Float64Array.from(nb), first, count, left, right, tri: Uint32Array.from(order, (i) => ids[i]), root };
+  // (each triangle's own box, in the tree's order: a pair pruned by them before it is measured -- a
+  // leaf's box can be far looser than its triangles', a case's floor and wall together spanning the
+  // cavity, and unpruned it was paired with every triangle of a board inside, 7.1 M pairs and 9.4 s)
+  const tbox = new Float64Array(6 * n);
+  for (let i = 0; i < n; i++) tbox.set(box.subarray(order[i] * 6, order[i] * 6 + 6), 6 * i);
+  return { box: Float64Array.from(nb), first, count, left, right, tri: Uint32Array.from(order, (i) => ids[i]), tbox, root };
 }
 
 // squared distance between two boxes (0 when they overlap)
@@ -158,17 +164,18 @@ export function triangleDistance(A, B) {
 export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
-  // Each solid on its own, by its box first, then the viewer's one point-in-solid test
-  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells, a shell that
-  // holds the point counting +1 or, a cavity, -1). A solid is closed by its b-rep's word, so every
-  // shell of it may hold another, a cracked one too (a crack in a cavity, or in the outer wall,
-  // read a pin in the cavity as inside). With opts.normal (the model's snorm16 x4 vertex normals),
-  // each triangle is first turned to face as its normals do -- the outside the view shades, cuts
-  // and fills by (js/export-mesh.js bodyOf's rule) -- and a shell counts by its own winding: two
-  // parts face to face wound inward, which the view leaves unfilled, are no material here either.
-  // (A parity over the whole solid read a point in the overlap of two of its shells as outside.)
+  // Each solid on its own, by its box first, then the viewer's one test of material
+  // (js/solid.js windingAt: the solid's winding number about the point, by three rays, above 0).
+  // With opts.normal (the model's snorm16 x4 vertex normals) each triangle is first turned to face
+  // as its normals do (js/raycast.js windsAgainstNormals, export's rule too) -- the outside the
+  // view shades, cuts and fills by -- so the material is the view's: a cavity, a part embedded in
+  // another, an overlap, a body inside out by its winding alone, two parts face to face wound
+  // opposite ways (one shell by its shared face: one sign for both, by a count a shell). A solid is
+  // closed by its b-rep's word: a crack in a wall misses a ray or two, the majority answers.
   // A part is asked at a point of each of its shells, not one corner: a part of many shells (an
-  // STL board is one body) read its pin's answer by the order of its triangles.
+  // STL board is one body) read its pin's answer by the order of its triangles; and a point on
+  // the solid's surface is no answer, the shell's next corner asked (a pin in a cavity far from
+  // the origin read 0 by a touch on the cavity's wall).
   // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
   // The answer names the part and the solid that holds it (the nearest surfaces' pair named two
   // others)
@@ -184,22 +191,18 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
     }
     if (turn && N) {
       for (let t = 0; t < c; t++) {
-        const a = index[3 * (t0 + t)], b = index[3 * (t0 + t) + 1], d = index[3 * (t0 + t) + 2];
-        const ux = pos[3 * b] - pos[3 * a], uy = pos[3 * b + 1] - pos[3 * a + 1], uz = pos[3 * b + 2] - pos[3 * a + 2];
-        const vx = pos[3 * d] - pos[3 * a], vy = pos[3 * d + 1] - pos[3 * a + 1], vz = pos[3 * d + 2] - pos[3 * a + 2];
-        const sx = N[4 * a] + N[4 * b] + N[4 * d], sy = N[4 * a + 1] + N[4 * b + 1] + N[4 * d + 1], sz = N[4 * a + 2] + N[4 * b + 2] + N[4 * d + 2];
-        if ((uy * vz - uz * vy) * sx + (uz * vx - ux * vz) * sy + (ux * vy - uy * vx) * sz < 0) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
+        if (windsAgainstNormals(pos, N, index[3 * (t0 + t)], index[3 * (t0 + t) + 1], index[3 * (t0 + t) + 2])) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
       }
     }
     return { P: Float32Array.from(Pa), I };
   };
   const within = (parts, solids, aFirst) => {
     if (!solids || !solids.length) return null;
-    const idx = solids.map(() => null); // (each solid's test, built when a part's point is in its box)
+    const idx = solids.map(() => null); // (each solid's index, built when a part's point is in its box)
     const solidOf = (s) => {
       if (idx[s]) return idx[s];
-      const { P, I } = localOf(solids[s], true), b = bodyShells(P, I);
-      return (idx[s] = nesting(P, I, b.shell, b.shellOpen.length));
+      const { P, I } = localOf(solids[s], true);
+      return (idx[s] = solidIndex(P, I, Uint32Array.from({ length: I.length / 3 }, (_, t) => t)));
     };
     const boxes = solids.map(([t0, c]) => {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -208,18 +211,33 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
     });
     for (const part of parts) {
       if (!(part[1] > 0)) continue;
-      // a point of each of the part's shells: a corner of its first triangle
+      // a point of each of the part's shells: the corners of its first triangles, the next asked
+      // while one lies on the solid's surface
       const { P, I } = localOf(part, false), b = bodyShells(P, I);
-      const firstOf = new Map();
-      for (let t = 0; t < part[1]; t++) if (b.shell[t] >= 0 && !firstOf.has(b.shell[t])) firstOf.set(b.shell[t], t);
-      for (const t of firstOf.values()) {
-        const p = [P[3 * I[3 * t]], P[3 * I[3 * t] + 1], P[3 * I[3 * t] + 2]];
+      const ofShell = new Map(); // (shell -> its first few triangles)
+      for (let t = 0; t < part[1]; t++) {
+        const sh = b.shell[t];
+        if (sh < 0) continue;
+        const l = ofShell.get(sh) || [];
+        if (l.length < 3) { l.push(t); ofShell.set(sh, l); }
+      }
+      for (const ts of ofShell.values()) {
         for (let s = 0; s < solids.length; s++) {
           const bx = boxes[s];
-          if ([0, 1, 2].some((k) => p[k] < bx.lo[k] || p[k] > bx.hi[k])) continue;
-          if (solidOf(s).inside(p, !!N)) {
-            const named = solids[s][0], mine = part[0] + t; // (a triangle of each: they name the bodies)
-            return aFirst ? { triA: mine, triB: named, pa: p, pb: p } : { triA: named, triB: mine, pa: p, pb: p };
+          for (const t of ts) {
+            let answered = false;
+            for (let c = 0; c < 3 && !answered; c++) {
+              const v = I[3 * t + c], p = [P[3 * v], P[3 * v + 1], P[3 * v + 2]];
+              if ([0, 1, 2].some((k) => p[k] < bx.lo[k] || p[k] > bx.hi[k])) { answered = true; break; }
+              const w = windingAt(solidOf(s), p);
+              if (w.touch) continue;
+              answered = true;
+              if (w.inside) {
+                const named = solids[s][0], mine = part[0] + t; // (a triangle of each: they name the bodies)
+                return aFirst ? { triA: mine, triB: named, pa: p, pb: p } : { triA: named, triB: mine, pa: p, pb: p };
+              }
+            }
+            if (answered) break;
           }
         }
       }
@@ -263,8 +281,10 @@ function clearanceOfSurfaces(pos, index, trisA, trisB) {
     const la = TA.left[a] < 0, lb = TB.left[b] < 0;
     if (la && lb) {
       for (let i = TA.first[a]; i < TA.first[a] + TA.count[a]; i++) {
+        if (boxDist2(TA.tbox, i, TB.box, b) >= best.d2) continue;
         const ta = TA.tri[i], A = tri(ta);
         for (let j = TB.first[b]; j < TB.first[b] + TB.count[b]; j++) {
+          if (boxDist2(TA.tbox, i, TB.tbox, j) >= best.d2) continue;
           const tb = TB.tri[j];
           pairs++;
           const r = triangleDistance(A, tri(tb));

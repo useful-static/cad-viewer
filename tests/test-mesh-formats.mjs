@@ -409,6 +409,17 @@ await test('the weld joins positions equal in float32, as the facts do: a corner
   const m = weld({ name: 'c', pos, tri });
   assert.equal(m.positions.length / 3, 24, 'the crease\'s 24 corners: none split by the hair (the float64 text keys made 25)');
 });
+await test('two parts touching at one corner keep their own normals there: the corner groups split by shell (r30 Q4)', async () => {
+  // the cube [0,10]^3 and a tetrahedron hanging below the plane z = 10 from the cube's corner
+  // (10, 10, 10), no edge shared: its top face and the cube's both face +z at that corner, so one
+  // crease group would join them without the shell in its key
+  const pos = [], tri = [];
+  for (const t of TRIS) for (const v of t) { tri.push(pos.length / 3); pos.push(...C[v]); }
+  const q = [[10, 10, 10], [20, 10, 10], [10, 20, 10], [14, 14, 5]];
+  for (const t of [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]]) for (const v of t) { tri.push(pos.length / 3); pos.push(...q[v]); }
+  const m = weld({ name: 'two', pos, tri });
+  assert.equal(m.positions.length / 3, 36, 'the cube\'s 24 corners and the tetrahedron\'s 12 (one group across the two made 35)');
+});
 await test('STL ASCII: the solid name', async () => {
   const m = cube(await parseMesh('stl', stlAscii(), 'cube.stl'));
   assert.equal(m.name, 'cube');

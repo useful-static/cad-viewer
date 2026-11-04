@@ -264,21 +264,54 @@ test('Clearance\'s solid as the view shows it: a crack in a cavity or the outer 
   assert.deepEqual(got, [4, false], `inward: ${got}`);
   got = ask(file('voxels', [[['a', [0, 0, 0], [10, 10, 10]], ['b', [10, 0, 0], [20, 10, 10]]]]));
   assert.deepEqual(got, [0, true], `outward: ${got}`);
+  // a cube wound out face to face with a box wound in (one shell by their shared face): a pin in the
+  // inward box is no material, as the view leaves it unfilled (r30 A1: one sign for the merged shell)
+  got = ask(file('pair', [[['a', [-10, 0, 0], [0, 10, 10]], ['b', [0, 0, 0], [10, 10, 10], 'in']]]));
+  assert.deepEqual(got, [4, false], `face to face, the pin's box wound in: ${got}`);
+  // a pin in a cavity far from the origin (100,000 mm), 0.05 mm from its walls: its gap, not 0 by a
+  // touch on the cavity's wall (r30 Q3)
+  const D = 1e5, far = file('far', [[['outer', [D, D, D], [D + 10, D + 10, D + 10]], ['cavity', [D + 3.95, D + 3.95, D + 3.95], [D + 6.05, D + 6.05, D + 6.05], 'in']]]);
+  got = ask(far, file('pin', [['pin', [D + 4, D + 4, D + 4], [D + 6, D + 6, D + 6]]]));
+  assert.ok(got[0] > 0.04 && got[0] < 0.06 && !got[1], `far from the origin: ${got}`);
   // the pin as the second shell of a part whose first is a cube outside the block: still inside
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const two = file('two', [[['far', [30, 0, 0], [31, 1, 1]], ['pin', [4, 4, 4], [6, 6, 6]]]]);
   assert.deepEqual(ask(block, two), [0, true], 'the pin asked as its own shell (one corner of the part read 4 mm)');
+  // a pin 0.000005 mm in from the block's face (under the touch tolerance, yet a gap above 0, so
+  // asked), its other end deep inside: a corner on the face is no answer, the next corner asked
+  // (a touch read as outside left it outside the block)
+  const e = 5e-6;
+  for (const [lo, hi] of [[[e, 4, 4], [2, 6, 6]], [[8, 4, 4], [10 - e, 6, 6]], [[4, 4, e], [6, 6, 2]], [[4, 4, 8], [6, 6, 10 - e]]]) {
+    const g = ask(block, file('flush', [['pin', lo, hi]]));
+    assert.deepEqual(g, [0, true], `flush at ${lo}: ${g}`);
+  }
 });
-test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin (its normals out, as the view shows it; and with no normals given)', () => {
+test('a board inside a plain hollow case: the nearest pairs only, not every board triangle against the case\'s loose leaves (r30 Q1: 7.1 M pairs, 9.4 s)', () => {
+  // a case of 24 triangles (a box with a cavity) around a grid of 2,500 small boxes 3 mm off its floor
+  const kase = file('case', [[['outer', [-10, -10, -10], [110, 110, 40]], ['cavity', [-5, -5, -5], [105, 105, 35], 'in']]]);
+  const parts = [];
+  for (let i = 0; i < 50; i++) for (let j = 0; j < 50; j++) parts.push([`p${i}-${j}`, [i * 2, j * 2, -2], [i * 2 + 1, j * 2 + 1, 0]]);
+  const board = file('board', [parts]);
+  const s = mergeModels([{ base: kase, name: 'case.stp' }, { base: board, name: 'board.stp' }]);
+  const t0 = performance.now();
+  const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]), normal: s.normal });
+  const ms = performance.now() - t0;
+  assert.equal(Math.round(r.distance * 1e3) / 1e3, 3);
+  assert.ok(r.pairs < 2000, `${r.pairs} triangle pairs`);
+  assert.ok(ms < 3000, `${ms.toFixed(0)} ms`);
+});
+test('containment does not trust the winding but the normals: a block wound inside out, or with one side reversed, its normals out, still holds the pin; with no normals its winding is its facing (r30 A2: one rule)', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
-  for (const flip of ['all', 'one side']) for (const withNormals of [true, false]) {
+  const ask = (flip, withNormals) => {
     const s = mergeModels([{ base: block, name: 'block.stp' }, { base: pin, name: 'pin.stp' }]);
     const [[t0, c]] = trisOf(s, [1]);
     for (let t = t0; t < t0 + (flip === 'all' ? c : 2); t++) { const x = s.index[3 * t + 1]; s.index[3 * t + 1] = s.index[3 * t + 2]; s.index[3 * t + 2] = x; }
     const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]), ...(withNormals ? { normal: s.normal } : {}) });
-    assert.deepEqual([r.distance, r.inside], [0, true], `${flip}${withNormals ? ', normals given' : ''}`);
-  }
+    return [r.distance, !!r.inside];
+  };
+  for (const flip of ['all', 'one side']) assert.deepEqual(ask(flip, true), [0, true], `${flip}, normals out`);
+  assert.deepEqual(ask('all', false), [4, false], 'wound inside out, no normals: no material');
 });
 
 done();

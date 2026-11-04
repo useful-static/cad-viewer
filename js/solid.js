@@ -13,21 +13,21 @@
 //     the surface counts it twice: 266 of 981 points read outside along a face's diagonal), and
 //     touch, whether p lies on the surface (within float32's reach of the shell's size and of
 //     its distance from the origin: no answer)
+//   windingAt(index, p) -> { inside, touch }: whether p is in a solid's material by its winding
+//     number (each crossing +1 or -1 by the facing of the triangle crossed, above 0, by the
+//     majority of the three rays), the index of every triangle of the solid, wound as its
+//     material faces: Clearance's question (js/clearance.js turns the triangles to their normals
+//     first). Two overlapping shells hold their overlap, a cavity's inside is outside, a part
+//     embedded in another is material, two parts face to face wound opposite ways are each what
+//     they are: as the facts' volume and the view's cut fill take them
 //   nesting(P, I, shell, ns, open) -> for a body's shells (shell: per triangle, -1 for none; open:
-//     per shell, 1 when it is open and may hold nothing -- the weld's rule, js/edges.js
-//     shellTurns: by one ray an open tray held a cube upright and not upside down; Clearance
-//     passes none, its solids closed by their b-rep's word, a cracked wall still holding its
-//     cavity), each shell's nearest holder (parent: the smallest shell that WHOLLY holds it -- its
-//     box within the other's, and most of up to three points on it, the centroids of its largest
-//     triangles, inside it; a point on the other's surface passed over for the next), its outer
-//     shell (root), the outer shells of all that hold it (roots), whether an open shell's box
-//     holds it (inOpen), whether its place was not found (unknown: more holders than are asked;
-//     unsure(s): anywhere on its chain), each shell's signed volume (V), and inside(p, absolute):
-//     whether p is in the body's material -- the shells holding p, each +1 when it is wound as
-//     its outer shell is (absolute: as material is, its winding already the normals') and -1
-//     when against it (a cavity), summed, above 0. Two overlapping shells hold their overlap; a
-//     cavity's inside is outside; a part embedded in another, wound as it is, is material, as the
-//     facts' volume and the view's cut fill take it.
+//     per shell, 1 when it is open and may hold nothing -- by one ray an open tray held a cube
+//     upright and not upside down), each shell's nearest holder (parent: the smallest shell that
+//     WHOLLY holds it -- its box within the other's, and most of up to three points on it, the
+//     centroids of its largest triangles, inside it; a point on the other's surface passed over
+//     for the next), its outer shell (root), the outer shells of all that hold it (roots),
+//     whether an open shell's box holds it (inOpen) and each shell's signed volume (V): the
+//     weld's question, js/edges.js shellTurns
 
 import { boxTree, itemsAt } from './box-tree.js';
 
@@ -69,19 +69,24 @@ export function solidIndex(P, I, tris) {
   return { P, I, tris, lo, hi, trees };
 }
 
-export function crossingsAt(index, p) {
+// The touch tolerance for a point against a surface: float32's reach and a margin, of the larger of
+// the surface's size and the coordinates' size (float32's error grows with the distance from the
+// origin -- a plate resting on a cube 1,000 mm out read nested in 11 of 200 turns)
+const epsFor = (lo, hi, p) => {
+  const span = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+  let far = 0;
+  for (let k = 0; k < 3; k++) far = Math.max(far, Math.abs(lo[k]), Math.abs(hi[k]), Math.abs(p[k]));
+  return Math.max(span, far) * TOUCH;
+};
+
+// The one walk of the three rays from p against an index (solidIndex): every hit beyond p visited,
+// visit(ray, k: the triangle's place in the index's list, facing: +1 where the surface faces along
+// the ray -- leaving it, for an outward winding -- or -1); a hit at p itself (within epsOfK(k))
+// reported, touchedK(k), the walk going on.
+function walkRays(index, p, visit, touchedK, epsOfK) {
   const { P, I, tris } = index;
-  // (against the coordinates' size as well as the shell's: float32's error grows with the distance
-  // from the origin -- a plate resting on a cube 1,000 mm out read nested in 11 of 200 turns)
-  const span = Math.hypot(index.hi[0] - index.lo[0], index.hi[1] - index.lo[1], index.hi[2] - index.lo[2]) || 1;
-  const far = Math.max(...index.lo.map(Math.abs), ...index.hi.map(Math.abs), ...p.map(Math.abs));
-  const eps = Math.max(span, far) * TOUCH;
-  let odd = 0, touch = false;
   for (let r = 0; r < 3; r++) {
-    // (two rays that agree are the majority: the third not cast)
-    if (r === 2 && (odd === 0 || odd === 2)) break;
     const { d: [dx, dy, dz], U, W } = RAYS[r];
-    let n = 0;
     const pu = p[0] * U[0] + p[1] * U[1] + p[2] * U[2], pw = p[0] * W[0] + p[1] * W[1] + p[2] * W[2];
     itemsAt(index.trees[r], [pu, pw], (k) => {
       const t = tris[k], a = 3 * I[3 * t], b = 3 * I[3 * t + 1], c = 3 * I[3 * t + 2];
@@ -97,13 +102,32 @@ export function crossingsAt(index, p) {
       const v = (dx * qx + dy * qy + dz * qz) / det;
       if (v < 0 || u + v > 1) return;
       const tt = (e2x * qx + e2y * qy + e2z * qz) / det;
-      if (Math.abs(tt) <= eps) { touch = true; return; }
-      if (tt > 0) n++;
+      if (Math.abs(tt) <= epsOfK(k)) { touchedK(k); return; }
+      // (det = -(the triangle's normal . the ray): negative where the surface faces along it)
+      if (tt > 0) visit(r, k, det < 0 ? 1 : -1);
     });
-    if (touch) return { inside: false, touch };
-    if (n % 2 === 1) odd++;
   }
-  return { inside: odd >= 2, touch };
+}
+
+export function crossingsAt(index, p) {
+  const n = [0, 0, 0], eps = epsFor(index.lo, index.hi, p);
+  let touch = false;
+  walkRays(index, p, (r) => { n[r]++; }, () => { touch = true; }, () => eps);
+  return { inside: !touch && (n[0] % 2) + (n[1] % 2) + (n[2] % 2) >= 2, touch };
+}
+
+// Whether p is in a solid's material by its winding number (index: a solidIndex of every triangle
+// of the solid, wound as its material faces -- js/clearance.js turns them to their normals): each
+// ray's crossings counted +1 where the surface faces along the ray and -1 against, above 0
+// inside, by the majority of the three. One count for the whole solid, so it agrees with the view
+// wherever the solid is (two parts face to face, wound opposite ways, read as one shell with one
+// sign; an overlap of two shells is 2, a cavity 1 - 1). -> { inside, touch } (touch: p on the
+// surface, no answer)
+export function windingAt(index, p) {
+  const w = [0, 0, 0], eps = epsFor(index.lo, index.hi, p);
+  let touch = false;
+  walkRays(index, p, (r, k, s) => { w[r] += s; }, () => { touch = true; }, () => eps);
+  return { inside: !touch && (w[0] > 0) + (w[1] > 0) + (w[2] > 0) >= 2, touch };
 }
 
 export function nesting(P, I, shell, ns, open = new Uint8Array(ns)) {
@@ -173,15 +197,57 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns)) {
   const B = new Float64Array(6 * ns);
   for (let s = 0; s < ns; s++) for (let k = 0; k < 3; k++) { B[6 * s + k] = lo[3 * s + k]; B[6 * s + 3 + k] = hi[3 * s + k]; }
   const tree = boxTree(B, Uint32Array.from({ length: ns }, (_, s) => s), 3);
-  const parent = new Int32Array(ns).fill(-1), inOpen = new Uint8Array(ns), unknown = new Uint8Array(ns);
+  const parent = new Int32Array(ns).fill(-1), inOpen = new Uint8Array(ns);
   const others = new Array(ns); // (holders that are no ancestor of the parent: a second outer shell)
+  // every candidate's answer for shell s at once: up to three points on s (a point on a
+  // candidate's surface passed over for that candidate), each cast once against the whole body,
+  // the crossings counted by shell -- a candidate holds s when most of the points asked of it are
+  // inside it (odd crossings, by the majority of the three rays)
+  let body = null, shellOfK = null;
+  const holdersOf = (s, cands) => {
+    if (!body) {
+      body = solidIndex(P, I, list);
+      shellOfK = new Int32Array(list.length);
+      for (let o = 0; o < ns; o++) for (let j = start[o]; j < start[o + 1]; j++) shellOfK[j] = o;
+    }
+    const want = new Set(cands), asked = new Map(), yes = new Map();
+    for (let j = 0; j < NB; j++) {
+      const t = big[NB * s + j];
+      if (t < 0) break;
+      const a = 3 * I[3 * t], b = 3 * I[3 * t + 1], c = 3 * I[3 * t + 2];
+      const p = [(P[a] + P[b] + P[c]) / 3, (P[a + 1] + P[b + 1] + P[c + 1]) / 3, (P[a + 2] + P[b + 2] + P[c + 2]) / 3];
+      const n = [new Map(), new Map(), new Map()], touched = new Set();
+      // (a touch on one shell is that shell's no answer; the cast goes on for the others)
+      const cast = (k) => { const o = shellOfK[k]; if (want.has(o)) touched.add(o); };
+      // (each hit's touch measured against its own shell, as crossingsAt measures one)
+      const epsOf = new Map();
+      const epsOfK = (k) => {
+        const o = shellOfK[k];
+        let e = epsOf.get(o);
+        if (e === undefined) { e = epsFor(lo.subarray(3 * o, 3 * o + 3), hi.subarray(3 * o, 3 * o + 3), p); epsOf.set(o, e); }
+        return e;
+      };
+      walkRays(body, p, (r, k) => { const o = shellOfK[k]; if (want.has(o)) n[r].set(o, (n[r].get(o) || 0) + 1); }, cast, epsOfK);
+      let done = true;
+      for (const o of cands) {
+        if ((asked.get(o) || 0) >= 3) continue;
+        if (touched.has(o)) { done = false; continue; }
+        asked.set(o, (asked.get(o) || 0) + 1);
+        const odd = ((n[0].get(o) || 0) % 2) + ((n[1].get(o) || 0) % 2) + ((n[2].get(o) || 0) % 2);
+        if (odd >= 2) yes.set(o, (yes.get(o) || 0) + 1);
+        if ((asked.get(o) || 0) < 3) done = false;
+      }
+      if (done) break;
+    }
+    return cands.filter((o) => (asked.get(o) || 0) > 0 && (yes.get(o) || 0) * 2 > asked.get(o));
+  };
   if (ns > 1) {
     // The shells placed largest box first, so a shell's holders are placed before it and its
     // parent's ancestors known: a holder is skipped only when it is on the parent's chain (by its
-    // box holding the parent's, a second outer shell was missed). At most ASK holders asked a
-    // shell; one with more left unasked is unknown, kept as written (2,000 concentric rings, none
-    // holding another, asked each against each, every candidate rescanned a pick: 30 s).
-    const ASK = 64;
+    // box holding the parent's, a second outer shell was missed). The smallest candidate asked
+    // first (concentric shells: it holds); when it does not, every candidate answered by one cast
+    // a point (2,000 concentric rings, none holding another, asked each against each: 30 s; at
+    // most 64 asked, a mirrored file of 300 rings left 235 inside out).
     const order = Uint32Array.from({ length: ns }, (_, s) => s).sort((x, y) => boxVol(y) - boxVol(x));
     const stamp = new Int32Array(ns).fill(-1);
     const c = [0, 0, 0];
@@ -197,28 +263,30 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns)) {
       if (cands.length) cands = [];
       itemsAt(tree, c, take);
       if (!cands.length) continue;
-      // the nearest holder first, by its box's volume: the smallest found by a scan and asked
-      // first (concentric shells: it holds, and no sort is made), the rest sorted only when not
+      // the nearest holder first, by its box's volume: the smallest, found by a scan, asked alone
       let m = 0;
       for (let k = 1; k < cands.length; k++) if (boxVol(cands[k]) < boxVol(cands[m])) m = k;
-      [cands[0], cands[m]] = [cands[m], cands[0]];
-      if (!within(s, cands[0])) {
-        const rest = cands.slice(1).sort((x, y) => boxVol(x) - boxVol(y));
-        cands = [cands[0], ...rest];
-      } else parent[s] = cands[0];
-      let asked = 1, j = 1;
-      if (parent[s] < 0) {
-        for (; j < cands.length && asked < ASK; j++) { asked++; if (within(s, cands[j])) { parent[s] = cands[j]; j++; break; } }
+      let rest;
+      if (within(s, cands[m])) {
+        parent[s] = cands[m];
+        rest = cands.filter((_, k) => k !== m);
+      } else {
+        // (no: every other candidate answered at once, the nearest holder the smallest of them)
+        const hs = cands.length > 1 ? holdersOf(s, cands.filter((_, k) => k !== m)) : [];
+        if (!hs.length) continue;
+        let h = hs[0];
+        for (const o of hs) if (boxVol(o) < boxVol(h)) h = o;
+        parent[s] = h;
+        for (let x = parent[s], g = 0; x >= 0 && g <= ns; x = parent[x], g++) stamp[x] = s;
+        for (const o of hs) if (stamp[o] !== s) (others[s] ||= []).push(o);
+        continue;
       }
-      if (parent[s] < 0) { if (j < cands.length) unknown[s] = 1; continue; }
-      // (then the others that hold it but are no ancestor of its parent: a second outer shell)
+      // (then the others that hold it but are no ancestor of its parent: a second outer shell;
+      // more than a few answered at once)
       for (let x = parent[s], g = 0; x >= 0 && g <= ns; x = parent[x], g++) stamp[x] = s;
-      for (; j < cands.length; j++) {
-        const o = cands[j];
-        if (stamp[o] === s) continue;
-        if (asked++ >= ASK) { unknown[s] = 1; break; }
-        if (within(s, o)) (others[s] ||= []).push(o);
-      }
+      rest = rest.filter((o) => stamp[o] !== s);
+      const hs = rest.length > 8 ? holdersOf(s, rest) : rest.filter((o) => within(s, o));
+      if (hs.length) others[s] = hs;
     }
   }
   // each shell's outer shell (root) by its parents, and every outer shell of the shells it lies in
@@ -234,18 +302,5 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns)) {
   };
   for (let s = 0; s < ns; s++) rootOf(s);
   const roots = (s) => [...new Set([root[s], ...(others[s] || []).map((o) => root[o])])];
-  // whether anything on a shell's chain is unknown (no answer: kept as written)
-  const unsure = (s) => { for (let x = s, g = 0; x >= 0 && g <= ns; x = parent[x], g++) if (unknown[x]) return true; return false; };
-  // inside(p): the shells holding p, each +1 or -1 -- by its winding against its outer shell's,
-  // or with absolute, by its own (a body's winding already turned to its normals: js/clearance.js)
-  const inside = (p, absolute = false) => {
-    let sum = 0;
-    itemsAt(tree, p, (o) => {
-      if (p[0] < lo[3 * o] || p[0] > hi[3 * o] || p[1] < lo[3 * o + 1] || p[1] > hi[3 * o + 1] || p[2] < lo[3 * o + 2] || p[2] > hi[3 * o + 2]) return;
-      if (!crossingsAt(solidOf(o), p).inside) return;
-      sum += (absolute ? Math.sign(V[o]) : Math.sign(V[o]) * (Math.sign(V[root[o]]) || 1)) || 1;
-    });
-    return sum > 0;
-  };
-  return { parent, root, roots, inOpen, unknown, unsure, V, inside };
+  return { parent, root, roots, inOpen, V };
 }

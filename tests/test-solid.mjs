@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // The one point-in-solid test (js/solid.js) and the box tree it stands on (js/box-tree.js):
 // crossings along the three rays (through an edge, through a corner, on the surface), which shells
-// wholly hold which (nesting), a body's material (inside), the weld's turning by it
+// wholly hold which (by the weld's turning, js/edges.js shellTurns), a solid's material (windingAt)
 // (js/edges.js shellTurns), and its cost.   node tests/test-solid.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { crossingsAt, nesting, solidIndex } from '../js/solid.js';
-import { bodyShells, shellTurns } from '../js/edges.js';
+import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
+import { shellTurns } from '../js/edges.js';
 import { box } from './brep-model.mjs';
 
 import { test, done } from './harness.mjs';
@@ -85,6 +85,27 @@ test('2,000 concentric rings, none holding another: under 4 s (r29 Q5: 29.9 s, e
     }
     return T;
   };
+  // (and 100 of them written mirrored, all wound inward: every one an outer shell, every one turned
+  // -- at most 64 holders asked a shell, the rest unknown and kept, 35 of 100 stayed inside out, r30 Q2)
+  const M = [];
+  for (let k = 0; k < 100; k++) M.push(...rev(ring(10 + k, 0.5, 1)));
+  {
+    const { P, I } = meshOf(M), { flip } = shellTurns(P, I);
+    assert.ok(flip && flip.every((x) => x === 1), `turned: ${flip ? flip.reduce((a, x) => a + x, 0) : 0} of ${M.length} triangles`);
+  }
+  // (and the one holder last of 301 candidates: 300 rings wound out round a box wound in, in the
+  // box a cube wound out in the hole of a small ring -- the ring the cube's smallest candidate, no
+  // holder, so every other one asked; the box, written last, the 301st: at most 64 asked, the cube
+  // was left as written. The box turned with the ring and the cube in it, the 300 rings not)
+  {
+    const H = [];
+    for (let k = 0; k < 300; k++) H.push(...ring(100 + k, 0.5, 1));
+    const n0 = H.length;
+    H.push(...cubeT([-50, -50, -5], [50, 50, 6], true), ...cubeT([-1, -1, 0.2], [1, 1, 0.8]), ...ring(5, 0.5, 1));
+    const { P, I } = meshOf(H), { flip } = shellTurns(P, I);
+    const turned = (a, b) => (flip ? flip.subarray(a, b).reduce((s, x) => s + x, 0) : 0);
+    assert.deepEqual([turned(0, n0), turned(n0, n0 + 12), turned(n0 + 12, n0 + 24), turned(n0 + 24, H.length)], [0, 12, 12, 32], 'rings, box, cube, small ring');
+  }
   const T = [];
   for (let k = 0; k < 2000; k++) T.push(...ring(10 + k, 0.5, 1));
   assert.ok(vol(ring(10, 0.5, 1)) > 0, 'wound out');
@@ -94,17 +115,22 @@ test('2,000 concentric rings, none holding another: under 4 s (r29 Q5: 29.9 s, e
   const ms = performance.now() - t0;
   assert.ok(ms < 4000, `${ms.toFixed(0)} ms`);
 });
-test('a part in a body: a cavity (wound in) is outside the material, a part embedded (wound out) inside, an overlap of two shells inside, a body inside out still holds (r28 A1)', () => {
+test('a solid\'s material by its winding number: a cavity (wound in) outside, a part embedded (wound out) inside, an overlap inside, parts face to face each by its own facing, a body inside out none (r28 A1, r30 A1)', () => {
   const insideOf = (T, p) => {
-    const { P, I } = meshOf(T), b = bodyShells(P, I);
-    return nesting(P, I, b.shell, b.shellOpen.length, b.shellOpen).inside(p);
+    const { P, I } = meshOf(T);
+    return windingAt(solidIndex(P, I, Array.from({ length: I.length / 3 }, (_, t) => t)), p).inside;
   };
+  // two boxes face to face (their shared face one triangulation: one shell), the one wound out and
+  // the other in: each region what its own facing says (one sign for the merged shell read both alike)
+  const pair = [...cubeT([0, 0, 0], [10, 10, 10]), ...cubeT([10, 0, 0], [15, 10, 10], true)];
+  assert.equal(insideOf(pair, [5, 5, 5]), true, 'the outward box');
+  assert.equal(insideOf(pair, [12, 5, 5]), false, 'the inward box');
   const outer = cubeT([0, 0, 0], [10, 10, 10]);
   assert.equal(insideOf([...outer, ...cubeT([3, 3, 3], [7, 7, 7], true)], [5, 5, 5]), false, 'in a cavity');
   assert.equal(insideOf([...outer, ...cubeT([3, 3, 3], [7, 7, 7], true)], [1, 1, 1]), true, 'in the material round it');
   assert.equal(insideOf([...outer, ...cubeT([3, 3, 3], [7, 7, 7])], [5, 5, 5]), true, 'in an embedded part');
   assert.equal(insideOf([...outer, ...cubeT([5, 5, 5], [15, 15, 15])], [7, 7, 7]), true, 'in the overlap');
-  assert.equal(insideOf(rev(outer), [5, 5, 5]), true, 'a body wound inside out');
+  assert.equal(insideOf(rev(outer), [5, 5, 5]), false, 'a body wound inside out: none, by its winding (Clearance turns it to its normals first)');
 });
 test('an open shell holds nothing, and a part under one keeps its winding, the same upright and upside down (r28 Q1)', () => {
   // a tray (a box without its lid), and an inward cube in it
