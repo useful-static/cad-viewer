@@ -111,28 +111,43 @@ const NORMAL_EPS = 1e-4;
 
 const pow2 = (n) => { let s = 16; while (s < n) s *= 2; return s; };
 
+// A typed list that grows by doubling: the edges and silhouettes collect here, not in a plain array,
+// which V8 cannot grow past about 112.8 M entries (a 9.9 M-triangle PLY's 14 M silhouette
+// candidates, all to be left out by the cap, threw "Invalid array length" and the file was refused)
+export function typedList(T, size = 1024) {
+  const list = { a: new T(size), n: 0,
+    room(k) { if (list.n + k > list.a.length) { const b = new T(Math.max(list.a.length * 2, list.n + k)); b.set(list.a.subarray(0, list.n)); list.a = b; } },
+    done: () => list.a.slice(0, list.n) };
+  return list;
+}
+
 export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOUETTE_CAP, overlapBudget = OVERLAP_BUDGET } = {}) {
   const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
-  const edges = [];
-  let sil = [];
-  let silN = [];
+  const edges = typedList(Uint32Array);
+  // (the candidates collected only up to the cap -- past it they are all left out, so only counted)
+  const sil = { pairs: typedList(Uint32Array), normals: typedList(Int16Array), cap: silhouetteCap };
   let silCount = 0;
   const facts = Object.fromEntries(BODY_FACTS.map((f) => [f.key, []]));
   for (const m of meshes) {
-    const r = body(position, bits, index, m, edges, sil, silN, overlapBudget);
+    const r = body(position, bits, index, m, edges, sil, overlapBudget);
     silCount += r.sil;
     for (const f of BODY_FACTS) facts[f.key].push(factValue(f, r[f.key]));
   }
   const omitted = overSilhouetteCap(silCount, silhouetteCap) ? silCount : 0;
-  if (omitted) { sil = null; silN = null; }
   return {
-    edges: Uint32Array.from(edges),
-    silhouettes: sil ? Uint32Array.from(sil) : null,
-    silhouetteNormals: silN ? Int16Array.from(silN) : null,
+    edges: edges.done(),
+    silhouettes: omitted ? null : sil.pairs.done(),
+    silhouetteNormals: omitted ? null : sil.normals.done(),
     silhouettesOmitted: omitted,
     facts,
   };
 }
+
+// The one rule for a build's failure that depends on the moment, tried again (js/edges-worker.js
+// says it `transient`): an allocation the memory of the moment could not give. Every other
+// RangeError -- a Map past its size, an array past its length, a deep recursion -- fails the same
+// way on every try and is the model's own.
+export const momentaryFailure = (e) => e instanceof RangeError && /allocation failed/i.test(e.message);
 
 // The silhouette cap's one rule: past it a model's (or a scene's) silhouettes are all left out and
 // counted (buildEdges, js/scene.js sceneEdgesFacts, main.js edgesOf for a file's)
@@ -181,7 +196,7 @@ export const BODY_FACTS = [
   { key: 'unchecked', kind: 'flag', said: 'too large to check for overlapping shells' },
 ];
 
-function body(pos, bits, index, m, edges, sil, silN, budget) {
+function body(pos, bits, index, m, edges, sil, budget) {
   const nt = m.idxCount / 3;
   const t0 = m.idxStart / 3;
   const v0 = m.vtxStart;
@@ -246,10 +261,13 @@ function body(pos, bits, index, m, edges, sil, silN, budget) {
         const n1x = tn[t1 * 3], n1y = tn[t1 * 3 + 1], n1z = tn[t1 * 3 + 2];
         if (Math.abs(n1x - n2x) <= NORMAL_EPS && Math.abs(n1y - n2y) <= NORMAL_EPS && Math.abs(n1z - n2z) <= NORMAL_EPS) continue;
         nsil++;
-        if (sil) {
-          sil.push(a, b);
-          silN.push(Math.round(n1x * 32767), Math.round(n1y * 32767), Math.round(n1z * 32767), 0,
-            Math.round(n2x * 32767), Math.round(n2y * 32767), Math.round(n2z * 32767), 0);
+        const P = sil.pairs;
+        if (P.n / 2 < sil.cap) {
+          P.room(2); P.a[P.n++] = a; P.a[P.n++] = b;
+          const N = sil.normals;
+          N.room(8);
+          N.a[N.n++] = Math.round(n1x * 32767); N.a[N.n++] = Math.round(n1y * 32767); N.a[N.n++] = Math.round(n1z * 32767); N.a[N.n++] = 0;
+          N.a[N.n++] = Math.round(n2x * 32767); N.a[N.n++] = Math.round(n2y * 32767); N.a[N.n++] = Math.round(n2z * 32767); N.a[N.n++] = 0;
         }
         continue;
       }
@@ -261,7 +279,7 @@ function body(pos, bits, index, m, edges, sil, silN, budget) {
       while (bA[g] >= 0 && !(bA[g] === p && bB[g] === q)) g = (g + 1) & (bsize - 1);
       if (bA[g] >= 0) continue; // the other face's copy: already kept
       bA[g] = p; bB[g] = q;
-      edges.push(a, b);
+      edges.room(2); edges.a[edges.n++] = a; edges.a[edges.n++] = b;
     }
   }
 

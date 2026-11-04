@@ -192,7 +192,7 @@ async function main() {
   if (h.facts) {
     process.stdout.write(`edges: ${sec('edges')} boundary, ${h.silhouettesOmitted ? `${h.silhouettesOmitted} silhouette candidates left out (over the cap)` : `${sec('silhouettes')} silhouette candidates`}`
       + `; ${h.facts.closed.filter(Boolean).length} of ${h.facts.closed.length} bodies closed`
-      // (each flag fact a closed body may have, counted and worded as the panel does: js/edges.js flagCounts)
+      // (each flag fact a closed body may have, counted and worded as the panel does: js/edges.js flagsSaid)
       + flagsSaid(h.facts, h.facts.closed.map((_, i) => i), ', ')
       + '\n');
   }

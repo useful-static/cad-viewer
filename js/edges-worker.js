@@ -5,7 +5,7 @@
 // page sends COPIES of the model's position and index arrays, never the
 // buffers it draws from, and gets the result back transferred.
 
-import { buildEdges } from './edges.js';
+import { buildEdges, momentaryFailure } from './edges.js';
 
 // (said once it has loaded, as js/clearance-worker.js: main.js workerJob's handshake)
 postMessage({ started: true });
@@ -19,8 +19,8 @@ onmessage = (ev) => {
     const transfer = [r.edges.buffer, r.silhouettes?.buffer, r.silhouetteNormals?.buffer].filter(Boolean);
     postMessage({ ok: true, result: r, ms }, transfer);
   } catch (e) {
-    // (an allocation that failed -- a RangeError: no room for an array -- is a failure of the
-    // moment, tried again as the page's own copy failing is; anything else the model's own)
-    postMessage({ ok: false, error: String(e && e.message ? e.message : e), ...(e instanceof RangeError ? { transient: true } : {}) });
+    // (a failure of the moment -- js/edges.js momentaryFailure, the one rule -- is tried again, as
+    // the page's own copy failing is; anything else, a Map or an array past its size too, the model's)
+    postMessage({ ok: false, error: String(e && e.message ? e.message : e), ...(momentaryFailure(e) ? { transient: true } : {}) });
   }
 };

@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { EDGE_STRIDE, SIL_STRIDE, bodyTable, buildEdges, edgeInstances, silhouetteInstances } from '../js/edges.js';
+import { EDGE_STRIDE, SIL_STRIDE, bodyTable, buildEdges, edgeInstances, silhouetteInstances, typedList } from '../js/edges.js';
 import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
 
 import { test, done } from './harness.mjs';
@@ -131,6 +131,22 @@ test('past the cap the candidates are left out and counted', () => {
   assert.equal(r.silhouettes, null);
   assert.equal(r.silhouettesOmitted, 7);
   assert.equal(r.edges.length / 2, 18, 'boundary edges are kept');
+  // exactly at the cap: all kept, the same as with no cap
+  const at = buildEdges(model([tube(8)]), { silhouetteCap: 7 }), all = buildEdges(model([tube(8)]));
+  assert.deepEqual([at.silhouettesOmitted, [...at.silhouettes], [...at.silhouetteNormals]], [0, [...all.silhouettes], [...all.silhouetteNormals]]);
+});
+test('the edges and silhouettes collect in typed lists, the candidates only up to the cap: no plain array, which V8 cannot grow past 112.8 M entries (a 9.9 M-triangle PLY refused, r40 Q1)', () => {
+  const l = typedList(Uint32Array, 2);
+  for (let i = 0; i < 9; i++) { l.room(1); l.a[l.n++] = i; }
+  assert.deepEqual([[...l.done()], l.done() instanceof Uint32Array], [[0, 1, 2, 3, 4, 5, 6, 7, 8], true]);
+  // (the elements a plain array was asked to hold while building: per body only its facts)
+  const m = model([tube(64)]), push = Array.prototype.push;
+  let pushed = 0;
+  Array.prototype.push = function (...xs) { pushed += xs.length; return push.apply(this, xs); };
+  let r;
+  try { r = buildEdges(m, { silhouetteCap: 3 }); } finally { Array.prototype.push = push; }
+  assert.deepEqual([r.silhouettesOmitted, r.edges.length / 2], [63, 2 * 64 + 2]);
+  assert.ok(pushed <= 32, `elements pushed into plain arrays: ${pushed}`);
 });
 
 test('edge instances: both ends, the body id and the kept face\'s colour, 32 bytes each', () => {
