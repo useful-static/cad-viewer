@@ -4114,7 +4114,7 @@ async function runClearance() {
   if (stopped()) return;
   const t0 = performance.now();
   const solids = (ids) => tris(ids.filter((id) => closedOf(base, id - 1)));
-  const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B) });
+  const r = clearance(base.position, base.index, tris(A), tris(B), { solidA: solids(A), solidB: solids(B), normal: base.normal });
   if (stopped()) return;
   // (a set with no triangle -- a selected body with none: clearance() has nothing; it was left at
   // "checking …")

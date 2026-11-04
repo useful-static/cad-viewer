@@ -25,12 +25,21 @@ function boxMesh(name, lo, hi) {
   const faces = new Uint32Array([0, 2, 2, 2, 4, 2, 6, 2, 8, 2, 10, 2]);
   return { name, color: [0.5, 0.5, 0.5], positions, normals: null, colors: null, indices, faces };
 }
-// (a box given 'in' fourth is wound inward: a cavity, as OpenCascade writes one)
+// (a box given 'in' fourth is wound inward: a cavity, as OpenCascade writes one; 'crack' fifth
+// leaves its last triangle out: a tessellation with a gap; [[n, lo, hi, in], ...] as a box: one
+// body of those boxes)
+function oneBox([n, lo, hi, inward, crack]) {
+  const m = boxMesh(n, lo, hi);
+  if (inward === 'in') for (let t = 0; t < m.indices.length; t += 3) { const x = m.indices[t + 1]; m.indices[t + 1] = m.indices[t + 2]; m.indices[t + 2] = x; }
+  if (crack === 'crack') { m.indices = m.indices.slice(0, -3); m.faces = Uint32Array.of(0, 2, 2, 2, 4, 2, 6, 2, 8, 2, 10, 1); }
+  return m;
+}
 function file(name, boxes) {
-  const meshes = boxes.map(([n, lo, hi, inward]) => {
-    const m = boxMesh(n, lo, hi);
-    if (inward === 'in') for (let t = 0; t < m.indices.length; t += 3) { const x = m.indices[t + 1]; m.indices[t + 1] = m.indices[t + 2]; m.indices[t + 2] = x; }
-    return m;
+  const meshes = boxes.map((b) => {
+    if (!Array.isArray(b[0])) return oneBox(b);
+    const parts = b.map(oneBox), positions = [], indices = [];
+    for (const p of parts) { const o = positions.length / 3; positions.push(...p.positions); indices.push(...Array.from(p.indices, (v) => v + o)); }
+    return { name: parts[0].name, color: [0.5, 0.5, 0.5], positions: Float32Array.from(positions), normals: null, colors: null, indices: Uint32Array.from(indices) };
   });
   const raw = encodeCadmesh({ units: 'mm', meshes, root: { name, meshes: meshes.map((_, i) => i), children: [] }, sourceUnits: 'mm' });
   return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
@@ -235,15 +244,40 @@ test('one solid of two overlapping shells (an STL never booleaned) holds a pin i
     assert.deepEqual([r.distance, !!r.inside], [0, true], `pin at ${lo}: ${JSON.stringify(r)}`);
   }
 });
-test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin', () => {
+test('Clearance\'s solid as the view shows it: a crack in a cavity or the outer wall is no material, parts wound inward are none, a part of many shells is asked at each (r29 A1, A2, A3, Q3)', () => {
+  const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
+  const ask = (solid, part = pin) => {
+    const s = mergeModels([{ base: solid, name: 's.stp' }, { base: part, name: 'p.stp' }]);
+    const n = solid.header.meshes.length, own = Array.from({ length: n }, (_, i) => i + 1), its = Array.from({ length: part.header.meshes.length }, (_, i) => n + i + 1);
+    const r = clearance(s.position, s.index, trisOf(s, its), trisOf(s, own), { solidA: trisOf(s, its), solidB: trisOf(s, own), normal: s.normal });
+    return [Math.round(r.distance * 1e3) / 1e3, !!r.inside];
+  };
+  // a block with a cavity (one body), the pin in the cavity: 1.5 mm from its wall whether a wall has a gap or not
+  for (const [what, outerCrack, cavityCrack] of [['closed', '', ''], ['a cracked cavity', '', 'crack'], ['a cracked outer wall', 'crack', '']]) {
+    const hollow = file('hollow', [[['outer', [0, 0, 0], [10, 10, 10], '', outerCrack], ['cavity', [2.5, 2.5, 2.5], [7.5, 7.5, 7.5], 'in', cavityCrack]]]);
+    const got = ask(hollow);
+    assert.deepEqual(got, [1.5, false], `${what}: ${got}`);
+  }
+  // two cubes face to face, both wound inward (normals inward too): the view leaves them unfilled,
+  // and the pin in one is no part of their material; wound out, it is
+  let got = ask(file('voxels', [[['a', [0, 0, 0], [10, 10, 10], 'in'], ['b', [10, 0, 0], [20, 10, 10], 'in']]]));
+  assert.deepEqual(got, [4, false], `inward: ${got}`);
+  got = ask(file('voxels', [[['a', [0, 0, 0], [10, 10, 10]], ['b', [10, 0, 0], [20, 10, 10]]]]));
+  assert.deepEqual(got, [0, true], `outward: ${got}`);
+  // the pin as the second shell of a part whose first is a cube outside the block: still inside
+  const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
+  const two = file('two', [[['far', [30, 0, 0], [31, 1, 1]], ['pin', [4, 4, 4], [6, 6, 6]]]]);
+  assert.deepEqual(ask(block, two), [0, true], 'the pin asked as its own shell (one corner of the part read 4 mm)');
+});
+test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin (its normals out, as the view shows it; and with no normals given)', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
-  for (const flip of ['all', 'one side']) {
+  for (const flip of ['all', 'one side']) for (const withNormals of [true, false]) {
     const s = mergeModels([{ base: block, name: 'block.stp' }, { base: pin, name: 'pin.stp' }]);
     const [[t0, c]] = trisOf(s, [1]);
     for (let t = t0; t < t0 + (flip === 'all' ? c : 2); t++) { const x = s.index[3 * t + 1]; s.index[3 * t + 1] = s.index[3 * t + 2]; s.index[3 * t + 2] = x; }
-    const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]) });
-    assert.deepEqual([r.distance, r.inside], [0, true], flip);
+    const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]), ...(withNormals ? { normal: s.normal } : {}) });
+    assert.deepEqual([r.distance, r.inside], [0, true], `${flip}${withNormals ? ', normals given' : ''}`);
   }
 });
 

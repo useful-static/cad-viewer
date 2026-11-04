@@ -43,16 +43,56 @@ test('a plate resting on a cube, the pair turned off the axes, is no part of the
   let seed = 12345;
   const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32);
   const cube = cubeT([-5, -5, -5], [5, 5, 5]), plate = cubeT([-2, -2, 5], [2, 2, 5.5]);
-  let bad = 0;
-  for (let r = 0; r < 60; r++) {
-    let q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, rnd() - 0.5]; const l = Math.hypot(...q); q = q.map((x) => x / l);
-    const [w, x, y, z] = q;
-    const M = [[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]];
-    const rot = (p) => M.map((row) => row[0] * p[0] + row[1] * p[1] + row[2] * p[2]);
-    const T = [...cube, ...rev(plate)].map((t) => t.map(rot));
-    if (!(turnedVol(T, 12, 24) > 0)) bad++;
+  // (and the pair 1,000 mm out: float32's error grows with the distance from the origin, and a
+  // tolerance by the shell's size alone left the plate inside out in 11 of 200, r29 Q1)
+  for (const D of [0, 1000]) {
+    let bad = 0;
+    for (let r = 0; r < 60; r++) {
+      let q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, rnd() - 0.5]; const l = Math.hypot(...q); q = q.map((x) => x / l);
+      const [w, x, y, z] = q;
+      const M = [[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]];
+      const rot = (p) => M.map((row) => row[0] * p[0] + row[1] * p[1] + row[2] * p[2] + D);
+      const T = [...cube, ...rev(plate)].map((t) => t.map(rot));
+      if (!(turnedVol(T, 12, 24) > 0)) bad++;
+    }
+    assert.equal(bad, 0, `${D} mm out: ${bad} of 60 rotations left the plate inside out`);
   }
-  assert.equal(bad, 0, `${bad} of 60 rotations left the plate inside out`);
+});
+test('a second outer shell whose box holds the parent\'s but which does not hold it is still found: the outer shells disagree, the part kept (r29 Q4)', () => {
+  // A a cube wound in; B a tetrahedron wound out, its base just under z 8.8 over A and one base
+  // corner far off and low, so its box holds A's though it holds only A's top; C a slab wound out
+  // in both (z 9..9.8)
+  const A = cubeT([0, 0, 0], [10, 10, 10], true);
+  const q0 = [-50, -50, 8.8], q1 = [60, -50, 8.8], q2 = [5, 3000, -5], ap = [5, 5, 100];
+  let B = [[q0, q2, q1], [q0, q1, ap], [q1, q2, ap], [q2, q0, ap]];
+  if (vol(B) < 0) B = rev(B);
+  const C = cubeT([6, 6, 9], [9, 9, 9.8]), cv = vol(C);
+  assert.equal(turnedVol([...A, ...B, ...C], 16, 28).toFixed(2), cv.toFixed(2), 'C kept as written (by the box test alone, turned with A)');
+  assert.equal(turnedVol([...B, ...A, ...C], 16, 28).toFixed(2), cv.toFixed(2));
+});
+test('2,000 concentric rings, none holding another: under 4 s (r29 Q5: 29.9 s, every candidate rescanned a pick)', () => {
+  // square annular prisms (one closed shell each) of half-width R, wall 0.5, 1 high: every ring's
+  // box holds the smaller rings', and none holds another (each smaller one lies in its hole)
+  const ring = (R, w, h) => {
+    const r = R - w, T = [];
+    const o = [[-R, -R], [R, -R], [R, R], [-R, R]], i = [[-r, -r], [r, -r], [r, r], [-r, r]];
+    const q = (a, b, c, d) => { T.push([a, b, c], [a, c, d]); };
+    for (let k = 0; k < 4; k++) {
+      const k2 = (k + 1) % 4;
+      const O0 = [...o[k], 0], O1 = [...o[k2], 0], I0 = [...i[k], 0], I1 = [...i[k2], 0];
+      const O0t = [...o[k], h], O1t = [...o[k2], h], I0t = [...i[k], h], I1t = [...i[k2], h];
+      q(O0, O1, O1t, O0t); q(I1, I0, I0t, I1t); q(O0t, O1t, I1t, I0t); q(O1, O0, I0, I1);
+    }
+    return T;
+  };
+  const T = [];
+  for (let k = 0; k < 2000; k++) T.push(...ring(10 + k, 0.5, 1));
+  assert.ok(vol(ring(10, 0.5, 1)) > 0, 'wound out');
+  const { P, I } = meshOf(T);
+  const t0 = performance.now();
+  shellTurns(P, I);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 4000, `${ms.toFixed(0)} ms`);
 });
 test('a part in a body: a cavity (wound in) is outside the material, a part embedded (wound out) inside, an overlap of two shells inside, a body inside out still holds (r28 A1)', () => {
   const insideOf = (T, p) => {

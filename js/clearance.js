@@ -153,36 +153,53 @@ export function triangleDistance(A, B) {
 // pairs, inside } (pairs: triangle pairs tested), or null when a set is empty. opts.solidA /
 // solidB: the triangle ranges of that set's closed bodies -- then a gap above 0 is tested for a
 // part of one set lying wholly in a solid of the other (a pin inside a block read "1 mm from the
-// pin to the block"): distance 0, inside: true
+// pin to the block"): distance 0, inside: true. opts.normal: the model's vertex normals (snorm16 x4),
+// so a solid's material is the one the view shows (below)
 export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
   // Each solid on its own, by its box first, then the viewer's one point-in-solid test
-  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells; a shell that
-  // holds the point counts +1 when it is wound as its outer shell is, -1 against it, a cavity --
-  // the winding the facts' volume and the view's cut fill read, so a part embedded in another is
-  // material to all three). (A
-  // parity over the whole solid read a point in the overlap of two of its shells as outside; by
-  // the first wall's facing, a solid wound inside out read a part 4 mm inside it as 4 mm away.)
+  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells, a shell that
+  // holds the point counting +1 or, a cavity, -1). A solid is closed by its b-rep's word, so every
+  // shell of it may hold another, a cracked one too (a crack in a cavity, or in the outer wall,
+  // read a pin in the cavity as inside). With opts.normal (the model's snorm16 x4 vertex normals),
+  // each triangle is first turned to face as its normals do -- the outside the view shades, cuts
+  // and fills by (js/export-mesh.js bodyOf's rule) -- and a shell counts by its own winding: two
+  // parts face to face wound inward, which the view leaves unfilled, are no material here either.
+  // (A parity over the whole solid read a point in the overlap of two of its shells as outside.)
+  // A part is asked at a point of each of its shells, not one corner: a part of many shells (an
+  // STL board is one body) read its pin's answer by the order of its triangles.
   // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
   // The answer names the part and the solid that holds it (the nearest surfaces' pair named two
   // others)
-  const vertexOf = ([t0]) => { const i = index[t0 * 3] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; };
+  const N = opts.normal || null;
+  // a range of triangles as a body of their own (vertices numbered from 0), turned to its normals
+  const localOf = ([t0, c], turn) => {
+    const local = new Map(), I = new Uint32Array(3 * c), Pa = [];
+    for (let k = 0; k < 3 * c; k++) {
+      const v = index[3 * t0 + k];
+      let l = local.get(v);
+      if (l === undefined) { l = Pa.length / 3; local.set(v, l); Pa.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
+      I[k] = l;
+    }
+    if (turn && N) {
+      for (let t = 0; t < c; t++) {
+        const a = index[3 * (t0 + t)], b = index[3 * (t0 + t) + 1], d = index[3 * (t0 + t) + 2];
+        const ux = pos[3 * b] - pos[3 * a], uy = pos[3 * b + 1] - pos[3 * a + 1], uz = pos[3 * b + 2] - pos[3 * a + 2];
+        const vx = pos[3 * d] - pos[3 * a], vy = pos[3 * d + 1] - pos[3 * a + 1], vz = pos[3 * d + 2] - pos[3 * a + 2];
+        const sx = N[4 * a] + N[4 * b] + N[4 * d], sy = N[4 * a + 1] + N[4 * b + 1] + N[4 * d + 1], sz = N[4 * a + 2] + N[4 * b + 2] + N[4 * d + 2];
+        if ((uy * vz - uz * vy) * sx + (uz * vx - ux * vz) * sy + (ux * vy - uy * vx) * sz < 0) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
+      }
+    }
+    return { P: Float32Array.from(Pa), I };
+  };
   const within = (parts, solids, aFirst) => {
     if (!solids || !solids.length) return null;
     const idx = solids.map(() => null); // (each solid's test, built when a part's point is in its box)
     const solidOf = (s) => {
       if (idx[s]) return idx[s];
-      // (the solid's triangles as a body of their own: its vertices numbered from 0)
-      const [t0, c] = solids[s], local = new Map(), I = new Uint32Array(3 * c), P = [];
-      for (let k = 0; k < 3 * c; k++) {
-        const v = index[3 * t0 + k];
-        let l = local.get(v);
-        if (l === undefined) { l = P.length / 3; local.set(v, l); P.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
-        I[k] = l;
-      }
-      const Pf = Float32Array.from(P), b = bodyShells(Pf, I);
-      return (idx[s] = nesting(Pf, I, b.shell, b.shellOpen.length, b.shellOpen));
+      const { P, I } = localOf(solids[s], true), b = bodyShells(P, I);
+      return (idx[s] = nesting(P, I, b.shell, b.shellOpen.length));
     };
     const boxes = solids.map(([t0, c]) => {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -191,13 +208,19 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
     });
     for (const part of parts) {
       if (!(part[1] > 0)) continue;
-      const p = vertexOf(part);
-      for (let s = 0; s < solids.length; s++) {
-        const b = boxes[s];
-        if ([0, 1, 2].some((k) => p[k] < b.lo[k] || p[k] > b.hi[k])) continue;
-        if (solidOf(s).inside(p)) {
-          const named = solids[s][0]; // (a triangle of the solid: it names the body)
-          return aFirst ? { triA: part[0], triB: named, pa: p, pb: p } : { triA: named, triB: part[0], pa: p, pb: p };
+      // a point of each of the part's shells: a corner of its first triangle
+      const { P, I } = localOf(part, false), b = bodyShells(P, I);
+      const firstOf = new Map();
+      for (let t = 0; t < part[1]; t++) if (b.shell[t] >= 0 && !firstOf.has(b.shell[t])) firstOf.set(b.shell[t], t);
+      for (const t of firstOf.values()) {
+        const p = [P[3 * I[3 * t]], P[3 * I[3 * t] + 1], P[3 * I[3 * t] + 2]];
+        for (let s = 0; s < solids.length; s++) {
+          const bx = boxes[s];
+          if ([0, 1, 2].some((k) => p[k] < bx.lo[k] || p[k] > bx.hi[k])) continue;
+          if (solidOf(s).inside(p, !!N)) {
+            const named = solids[s][0], mine = part[0] + t; // (a triangle of each: they name the bodies)
+            return aFirst ? { triA: mine, triB: named, pa: p, pb: p } : { triA: named, triB: mine, pa: p, pb: p };
+          }
         }
       }
     }

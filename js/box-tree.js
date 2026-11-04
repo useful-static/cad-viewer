@@ -1,7 +1,6 @@
 // One spatial index design for the viewer's "which items are near or around this point"
 // questions, in 2 or 3 dimensions: the 2D view's snaps, lines and texts (js/dxf-view.js), the
-// shells a shell may lie in and a solid's triangles along a ray (js/solid.js, js/edges.js). Pure,
-// no DOM. (The 2D view had a 2-d tree beside a box tree; the shells an index on x alone, which a
+// shells a shell may lie in and a shell's triangles along a ray (js/solid.js). Pure, no DOM. (The 2D view had a 2-d tree beside a box tree; the shells an index on x alone, which a
 // stack along y, or one wide board under its parts, made quadratic again: 7.0 s for 20,000 cubes.)
 //
 // boxTree(B, ids, D = 2, points = false): B, a Float64Array of two opposite corners per item (D
@@ -84,8 +83,7 @@ export function boxTree(B, ids, D = 2, points = false) {
 // The item of the trees nearest q ([x, y] or [x, y, z]) by dist(id) (a squared distance;
 // Infinity: not a hit), at most r away, that accept(id) takes, or -1; of equal distances the
 // lowest id (as a scan in order finds it). Each tree walked nearest box first, past every box
-// farther than the best. (An accept that always says no visits every item whose leaf is within
-// r: itemsAt.)
+// farther than the best.
 export function nearestItem(trees, q, r, dist, accept = () => true) {
   let best = -1, bd = r * r;
   const stack = new Int32Array(128); // (a complete tree's depth is under 32: a node pushes 2 at most)

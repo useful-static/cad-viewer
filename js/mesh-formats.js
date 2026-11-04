@@ -181,12 +181,10 @@ export function weld(b) {
   const P = Float32Array.from(b.pos);
   const nv0 = P.length / 3, rep = weldBits(new Uint32Array(P.buffer), 0, nv0);
   const wid = new Uint32Array(nv0), first = new Int32Array(nv0).fill(-1);
-  const wp = [];
-  for (let v = 0; v < nv0; v++) {
-    const r = rep[v];
-    if (first[r] < 0) { first[r] = wp.length / 3; wp.push(P[r * 3], P[r * 3 + 1], P[r * 3 + 2]); }
-    wid[v] = first[r];
-  }
+  let nw = 0;
+  for (let v = 0; v < nv0; v++) { const r = rep[v]; if (first[r] < 0) first[r] = nw++; wid[v] = first[r]; }
+  const wp = new Float32Array(3 * nw);
+  for (let v = 0; v < nv0; v++) if (first[v] >= 0) { const w = first[v]; wp[3 * w] = P[3 * v]; wp[3 * w + 1] = P[3 * v + 1]; wp[3 * w + 2] = P[3 * v + 2]; }
   const nt = T.length / 3;
   const fn = new Float64Array(nt * 3); // area-weighted (unnormalised) face normals
   const tri = new Uint32Array(T.length);
@@ -208,7 +206,7 @@ export function weld(b) {
   // another is never turned by its own winding (a cavity and a part embedded in another look
   // alike). Decided on the float32 positions written, by the facts' own test (js/edges.js
   // shellTurns): the weld's own float64 rule called bodies open that the facts call closed.
-  const { shell, flip } = shellTurns(Float32Array.from(wp), tri.subarray(0, kept * 3));
+  const { shell, flip } = shellTurns(wp, tri.subarray(0, kept * 3));
   if (flip) {
     for (let t = 0; t < kept; t++) {
       if (!flip[t]) continue;
@@ -216,58 +214,112 @@ export function weld(b) {
       for (let k = 0; k < 3; k++) fn[t * 3 + k] = -fn[t * 3 + k];
     }
   }
-  // (the crease groups are kept apart by shell too: two parts touching at a vertex share it, and
-  // one's normals are no part of the other's)
-  const shells = new Set(shell).size > 1;
+  // Each welded vertex split into crease groups: at a vertex, its corners in triangle order, each
+  // joins the first group (of its colour and shell) whose seed normal is within the crease angle
+  // of its triangle's, else opens one; a triangle with no normal (distinct corners on one line:
+  // zero area, or one not finite) joins the vertex's one no-normal group, out of the crease search
+  // (a fan of N such triangles about a vertex was quadratic: 60 k, 11.2 s). The groups apart by
+  // colour (a triangle's bytes) and by shell (two parts touching at a vertex share it, and one's
+  // normals are no part of the other's). Typed throughout, outside the script heap: an object a
+  // group, a Map a vertex and a string key a triangle ran a 4 GB heap out at 9.6 M triangles of
+  // 800,000 separate cubes. Output vertices in the order their first corner meets them.
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
-  const unit = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
-  // per welded vertex: its groups [{ n: unit seed, out }] (and .noNormal, its no-normal group), with colours kept apart by a Map
-  // colour -> groups (a linear search over every colour at a vertex was quadratic: a fan of
-  // 60 k triangles, each its own colour, about one centre took 13.5 s)
-  const groups = new Array(wp.length / 3);
-  const corner = new Uint32Array(kept * 3); // the group (output vertex) each corner uses
-  const outPos = [], outNrmSum = [], outCol = [];
   const cols = b.col ? colKept : null;
-  // A triangle with no normal (distinct corners on one line: zero area, or one not finite) matches
-  // no group, so it opened a new one at each corner, each searched by every later triangle there:
-  // a fan of N such triangles about one vertex was quadratic (60 k: 11.2 s). Those triangles share
-  // one no-normal group per vertex (and colour) instead, kept out of the crease search.
-  for (let t = 0; t < kept; t++) {
-    const fx = fn[t * 3], fy = fn[t * 3 + 1], fz = fn[t * 3 + 2];
-    const fl = Math.hypot(fx, fy, fz);
-    const flat = !(fl > 0 && Number.isFinite(fl));
-    const n = flat ? null : [fx / fl, fy / fl, fz / fl];
-    const ck = `${cols ? cols[t].join(',') : ''}${shells ? `/${shell[t]}` : ''}`;
-    for (let c = 0; c < 3; c++) {
-      const w = tri[t * 3 + c];
-      let gs;
-      if (cols || shells) {
-        const byCol = groups[w] || (groups[w] = new Map());
-        gs = byCol.get(ck);
-        if (!gs) { gs = []; byCol.set(ck, gs); }
-      } else gs = groups[w] || (groups[w] = []);
-      // (a property of the array, not "flat": that is Array.prototype.flat, a function)
-      let g = flat ? gs.noNormal : gs.find((x) => x.n[0] * n[0] + x.n[1] * n[1] + x.n[2] * n[2] >= cosC);
-      if (!g) {
-        g = { n, out: outPos.length / 3 };
-        if (flat) gs.noNormal = g; else gs.push(g);
-        outPos.push(wp[w * 3], wp[w * 3 + 1], wp[w * 3 + 2]);
-        outNrmSum.push(0, 0, 0);
-        if (cols) outCol.push(toByte(cols[t][0]), toByte(cols[t][1]), toByte(cols[t][2]), 255);
-      }
-      if (!flat) { outNrmSum[g.out * 3] += fx; outNrmSum[g.out * 3 + 1] += fy; outNrmSum[g.out * 3 + 2] += fz; }
-      corner[t * 3 + c] = g.out;
+  const shells = new Set(shell).size > 1;
+  const keyed = !!cols || shells;
+  const tkey = keyed ? new Float64Array(kept) : null; // (colour and shell, one number)
+  const tcol = cols ? new Uint8Array(3 * kept) : null;
+  if (keyed) {
+    // (a colour by its float32 values, each distinct one an id: the first triangle of it, by the
+    // bits weld; not by its bytes, which join colours the file keeps apart)
+    let cid = null;
+    if (cols) {
+      const cf = new Float32Array(3 * kept);
+      for (let t = 0; t < kept; t++) for (let k = 0; k < 3; k++) { cf[3 * t + k] = cols[t][k]; tcol[3 * t + k] = toByte(cols[t][k]); }
+      cid = weldBits(new Uint32Array(cf.buffer), 0, kept);
     }
+    for (let t = 0; t < kept; t++) tkey[t] = (cid ? cid[t] : 0) * 33554432 + (shells ? shell[t] + 1 : 0); // (shell + 1 under 2^25: the cap is 10 M)
   }
-  const positions = new Float32Array(outPos);
-  const nv = outPos.length / 3;
-  const normals = new Float32Array(nv * 3);
+  const un = new Float32Array(3 * kept), flat = new Uint8Array(kept);
+  for (let t = 0; t < kept; t++) {
+    const fx = fn[t * 3], fy = fn[t * 3 + 1], fz = fn[t * 3 + 2], fl = Math.hypot(fx, fy, fz);
+    if (!(fl > 0 && Number.isFinite(fl))) { flat[t] = 1; continue; }
+    un[3 * t] = fx / fl; un[3 * t + 1] = fy / fl; un[3 * t + 2] = fz / fl;
+  }
+  // the corners by welded vertex, in triangle order (counted, then filled)
+  const nc = 3 * kept, off = new Uint32Array(nw + 1), list = new Uint32Array(nc);
+  for (let k = 0; k < nc; k++) off[tri[k] + 1]++;
+  for (let w = 0; w < nw; w++) off[w + 1] += off[w];
+  const fill = off.slice(0, nw);
+  for (let k = 0; k < nc; k++) list[fill[tri[k]]++] = k;
+  // each corner's group (numbered as made), and each group's vertex
+  const cg = new Int32Array(nc), gw = new Uint32Array(nc);
+  let G = 0;
+  let seedN = new Float32Array(48), seedG = new Int32Array(16);
+  const bucket = (from, to, w) => { // (corners list[from, to), one colour and shell, in triangle order)
+    let ns = 0, flatG = -1;
+    for (let j = from; j < to; j++) {
+      const k = list[j], t = (k / 3) | 0;
+      if (flat[t]) {
+        if (flatG < 0) { flatG = G; gw[G++] = w; }
+        cg[k] = flatG;
+        continue;
+      }
+      const nx = un[3 * t], ny = un[3 * t + 1], nz = un[3 * t + 2];
+      let g = -1;
+      for (let s = 0; s < ns; s++) if (seedN[3 * s] * nx + seedN[3 * s + 1] * ny + seedN[3 * s + 2] * nz >= cosC) { g = seedG[s]; break; }
+      if (g < 0) {
+        if (ns === seedG.length) { const a = new Float32Array(6 * ns); a.set(seedN); seedN = a; const c = new Int32Array(2 * ns); c.set(seedG); seedG = c; }
+        seedN[3 * ns] = nx; seedN[3 * ns + 1] = ny; seedN[3 * ns + 2] = nz;
+        g = G; gw[G++] = w; seedG[ns++] = g;
+      }
+      cg[k] = g;
+    }
+  };
+  for (let w = 0; w < nw; w++) {
+    const lo = off[w], hi = off[w + 1];
+    if (hi === lo) continue;
+    if (keyed) {
+      // (by colour and shell, each run in triangle order: a stable sort, the usual one key at once)
+      let one = true;
+      for (let j = lo + 1; j < hi && one; j++) if (tkey[(list[j] / 3) | 0] !== tkey[(list[lo] / 3) | 0]) one = false;
+      if (!one) {
+        const part = Array.from(list.subarray(lo, hi)).sort((x, y) => tkey[(x / 3) | 0] - tkey[(y / 3) | 0] || x - y);
+        list.set(part, lo);
+        for (let j = lo; j < hi;) {
+          let e = j + 1;
+          while (e < hi && tkey[(list[e] / 3) | 0] === tkey[(list[j] / 3) | 0]) e++;
+          bucket(j, e, w);
+          j = e;
+        }
+        continue;
+      }
+    }
+    bucket(lo, hi, w);
+  }
+  // the output vertices in the order the corners meet them; positions, colours (the first
+  // triangle's), normals (the area-weighted sum of the group's triangles)
+  const outId = new Int32Array(G).fill(-1), corner = new Uint32Array(nc);
+  const positions = new Float32Array(3 * G), sum = new Float32Array(3 * G), colors = cols ? new Uint8Array(4 * G) : null;
+  let nv = 0;
+  for (let k = 0; k < nc; k++) {
+    const g = cg[k], t = (k / 3) | 0;
+    let o = outId[g];
+    if (o < 0) {
+      o = outId[g] = nv++;
+      const w = gw[g];
+      positions[3 * o] = wp[3 * w]; positions[3 * o + 1] = wp[3 * w + 1]; positions[3 * o + 2] = wp[3 * w + 2];
+      if (colors) { colors[4 * o] = tcol[3 * t]; colors[4 * o + 1] = tcol[3 * t + 1]; colors[4 * o + 2] = tcol[3 * t + 2]; colors[4 * o + 3] = 255; }
+    }
+    corner[k] = o;
+    if (!flat[t]) { sum[3 * o] += fn[3 * t]; sum[3 * o + 1] += fn[3 * t + 1]; sum[3 * o + 2] += fn[3 * t + 2]; }
+  }
+  const normals = new Float32Array(3 * nv);
   for (let v = 0; v < nv; v++) {
-    const [x, y, z] = unit(outNrmSum[v * 3], outNrmSum[v * 3 + 1], outNrmSum[v * 3 + 2]);
-    normals[v * 3] = x; normals[v * 3 + 1] = y; normals[v * 3 + 2] = z;
+    const x = sum[3 * v], y = sum[3 * v + 1], z = sum[3 * v + 2], l = Math.hypot(x, y, z) || 1;
+    normals[3 * v] = x / l; normals[3 * v + 1] = y / l; normals[3 * v + 2] = z / l;
   }
-  return { name: b.name, color: b.color || null, positions, normals,
-    colors: cols ? new Uint8Array(outCol) : null, indices: corner };
+  return { name: b.name, color: b.color || null, positions, normals, colors, indices: corner };
 }
 
 // ---------- STL ----------

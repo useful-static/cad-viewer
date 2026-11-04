@@ -30,6 +30,7 @@ export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.cei
 
 import { cross, dot, len, sub, unit } from './vec3.js';
 import { bodyAngle } from './cadmesh.js';
+import { weldBits } from './edges.js';
 
 // Newell's normal and the centroid of a closed polygon
 function newell(pts) {
@@ -171,11 +172,6 @@ function faceLoops(I, t0, nt, span = 2 ** 26) {
   return loops;
 }
 
-const bitsKey = (P, v) => {
-  const x = P[v * 3] || 0, y = P[v * 3 + 1] || 0, z = P[v * 3 + 2] || 0; // -0 made +0
-  return `${x},${y},${z}`;
-};
-
 // One body's measurable geometry:
 // { faces: [{ tri0, ntri, plane|null, circles: [{centre, normal, radius}] }],
 //   corners: [[x,y,z]], edges: [[[x,y,z], ...]] (b-rep edges as polylines),
@@ -200,20 +196,19 @@ export function bodyGeometry(model, meshIndex) {
       faces.push({ tri0: model.faces[2 * f], ntri: model.faces[2 * f + 1] });
     }
   } else faces.push({ tri0, ntri, whole: true });
-  // welded boundary graph across the body's faces: a node per position (its bits), numbered, with
+  // welded boundary graph across the body's faces: a node per position (its bits, by the facts' own
+  // weld, js/edges.js weldBits -- a second key, a string a corner, was kept here), numbered, with
   // its neighbours' numbers; a segment a number too. (Keyed by the positions' strings, every
   // segment built and compared strings: 1.2 s of a 6,400-hole plate's 3.9 s)
   const nodeP = [], nodeNb = [];
-  // (a vertex's node, by its place in the body's own vertices: -1 until met)
+  // (a vertex's node, by the first vertex of the body with its bits: -1 until met)
   const v0 = m.vtxStart;
-  const idOfKey = new Map(), idOfVertex = new Int32Array(Math.max(1, m.vtxCount)).fill(-1);
+  const weld = weldBits(new Uint32Array(P.buffer, P.byteOffset, P.length), v0, m.vtxCount);
+  const idOfRep = new Int32Array(Math.max(1, m.vtxCount)).fill(-1);
   const idOf = (v) => {
-    let id = idOfVertex[v - v0];
-    if (id >= 0) return id;
-    const k = bitsKey(P, v);
-    id = idOfKey.get(k);
-    if (id === undefined) { id = nodeP.length; idOfKey.set(k, id); nodeP.push([P[3 * v], P[3 * v + 1], P[3 * v + 2]]); nodeNb.push(new Set()); }
-    idOfVertex[v - v0] = id;
+    const r = weld[v - v0];
+    let id = idOfRep[r];
+    if (id < 0) { id = idOfRep[r] = nodeP.length; nodeP.push([P[3 * v], P[3 * v + 1], P[3 * v + 2]]); nodeNb.push(new Set()); }
     return id;
   };
   const SEG = 2 ** 26;

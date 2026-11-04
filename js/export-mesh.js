@@ -250,10 +250,6 @@ export function toGLB(model, ids0, basis, names0 = []) {
   return out;
 }
 
-// The export formats, one row each: the file's MIME type, which way is up in it ('z' the
-// printing convention, 'y' glTF's own), and its writer, all called alike:
-// write(model, ids, basis, { names, base }) -> bytes (or a promise of them). main.js File >
-// Export builds its buttons from these rows: a new format is a row here.
 // The axes an export takes, as model-frame unit vectors [x, y, z], for the model's orientation
 // (js/orient.js, "+z-y") and the file's up ('z': the printing convention, STL and 3MF; 'y':
 // glTF's): the page's File > Export and cadmesh-export.mjs alike
@@ -262,6 +258,10 @@ export function exportBasis(orient, up) {
   return up === 'z' ? [b.right, b.front.map((v) => -v), b.up] : [b.right, b.up, b.front];
 }
 
+// The export formats, one row each: the file's MIME type, which way is up in it ('z' the
+// printing convention, 'y' glTF's own), and its writer, all called alike:
+// write(model, ids, basis, { names, base }) -> bytes (or a promise of them). main.js File >
+// Export builds its buttons from these rows: a new format is a row here.
 // (about: what the file holds, for its button's title)
 export const EXPORTS = {
   stl: { label: 'STL', about: 'triangles, no colour', type: 'model/stl', up: 'z', write: (m, ids, b, { base }) => toSTL(m, ids, b, base) },

@@ -246,13 +246,12 @@ export function weldBits(bits, v0, nv) {
 
 // per triangle: its unit normal (tn), whether it is degenerate (no area against the body's
 // diagonal: such a triangle has no normal and no silhouette; the closed test counts it unless its
-// corners collapse, shellsOf), its signed-volume
-// term (vol); and the body's area and signed volume (float64, centred on the body's box bb).
-// normals false: tn left out (the weld's turn reads none: 120 MB at the 10 M-triangle cap)
-function triangleFacts(pos, index, t0, nt, bb, normals = true) {
+// corners collapse, shellsOf), its signed-volume term (vol); and the body's area and signed
+// volume (float64, centred on the body's box bb)
+function triangleFacts(pos, index, t0, nt, bb) {
   const cx = (bb.min[0] + bb.max[0]) / 2, cy = (bb.min[1] + bb.max[1]) / 2, cz = (bb.min[2] + bb.max[2]) / 2;
   const diag2 = (bb.max[0] - bb.min[0]) ** 2 + (bb.max[1] - bb.min[1]) ** 2 + (bb.max[2] - bb.min[2]) ** 2;
-  const tn = normals ? new Float32Array(nt * 3) : null;
+  const tn = new Float32Array(nt * 3);
   const degenerate = new Uint8Array(nt);
   const vol = new Float64Array(nt);
   let A = 0;
@@ -271,7 +270,7 @@ function triangleFacts(pos, index, t0, nt, bb, normals = true) {
     vol[t] = (ax * (by * qz - bz * qy) + ay * (bz * qx - bx * qz) + az * (bx * qy - by * qx)) / 6;
     V += vol[t];
     if (len <= diag2 * 1e-14) { degenerate[t] = 1; continue; }
-    if (tn) { tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len; }
+    tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len;
   }
   return { tn, degenerate, vol, A, V };
 }
@@ -360,20 +359,12 @@ function shellsOf(index, t0, nt, weld, v0, nv) {
 }
 
 // One body's shells (position: float32 xyz; index: corner ids into it, its own), welded on the
-// position bits as the facts are: shellsOf's { closed, shell, shellOpen, shellBranched }, and with
-// volumes, each triangle's signed-volume term (vol). Clearance asks it of a solid (js/clearance.js).
-export function bodyShells(position, index, volumes = false) {
+// position bits as the facts are: shellsOf's { closed, shell, shellOpen, shellBranched }.
+// Clearance asks it of a solid and of a part (js/clearance.js).
+export function bodyShells(position, index) {
   const nt = index.length / 3, nv = position.length / 3;
   const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
-  const r = shellsOf(index, 0, nt, weldBits(bits, 0, nv), 0, nv);
-  if (!volumes) return r;
-  // (the box of the vertices the triangles use, as the stored body's)
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < index.length; i++) {
-    const v = index[i] * 3;
-    for (let k = 0; k < 3; k++) { const p = position[v + k]; if (p < min[k]) min[k] = p; if (p > max[k]) max[k] = p; }
-  }
-  return { ...r, vol: triangleFacts(position, index, 0, nt, { min, max }, false).vol };
+  return shellsOf(index, 0, nt, weldBits(bits, 0, nv), 0, nv);
 }
 
 // The shells of one body (position: float32 xyz; index: corner ids into it, its own), by the
@@ -388,17 +379,16 @@ export function bodyShells(position, index, volumes = false) {
 export function shellTurns(position, index) {
   const nt = index.length / 3;
   if (!nt) return { shell: new Int32Array(0), flip: null };
-  const { shell, shellOpen, shellBranched, vol } = bodyShells(position, index, true);
+  const { shell, shellOpen, shellBranched } = bodyShells(position, index);
   const ns = shellOpen.length;
-  const V = new Float64Array(ns);
-  for (let t = 0; t < nt; t++) if (shell[t] >= 0) V[shell[t]] += vol[t];
   const closedShells = [];
   for (let s = 0; s < ns; s++) if (!shellOpen[s]) closedShells.push(s);
   const flipShell = new Uint8Array(ns);
   let any = false;
   // (each closed shell's outer shell, by its nearest holder, js/solid.js nesting; nothing to ask
   // when the body is one shell)
-  const nest = closedShells.length && ns > 1 ? nesting(position, index, shell, ns, shellOpen) : null;
+  const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen) : null;
+  const V = nest ? nest.V : null; // (each shell's signed volume: nesting's, the one count)
   // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
   // the other way). A shell inside another is turned with its outer shell, never by its own sign:
   // a cavity is wound inward and a part embedded in another (a pin in a connector's body) outward,
@@ -407,10 +397,11 @@ export function shellTurns(position, index) {
   // (two parts face to face: no one outside), one an open shell's box holds (no answer: a part's
   // cavity under an outer surface with a gap, and a cube in a lidless tray was turned upright and
   // not upside down), and a shell whose outer shells do not agree (a part in the overlap of one
-  // wound in and one wound out: its answer turned on the order of the file).
-  const outerTurn = (r) => !shellOpen[r] && !shellBranched[r] && V[r] < 0 && !(nest && nest.inOpen[r]);
+  // wound in and one wound out: its answer turned on the order of the file), and one whose place
+  // was not found (more candidate holders than nesting asks).
+  const outerTurn = (r) => !shellOpen[r] && !shellBranched[r] && V[r] < 0 && !nest.inOpen[r];
   for (const s of closedShells) {
-    if (!nest) { if (outerTurn(s)) { flipShell[s] = 1; any = true; } continue; }
+    if (nest.unsure(s)) continue;
     const rs = nest.roots(s), turn = outerTurn(rs[0]);
     if (rs.some((r) => outerTurn(r) !== turn)) continue;
     if (turn) { flipShell[s] = 1; any = true; }

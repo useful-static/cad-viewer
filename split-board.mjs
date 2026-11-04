@@ -25,7 +25,7 @@ import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, modelFactsOf } from './js/cadmesh.js';
 import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 
-const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report]
+const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report] [--sliver MM]
 
   Cuts the body holding the board (the one with the largest flat face) into
   the board and its parts; other bodies pass through unchanged.
