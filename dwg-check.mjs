@@ -7,21 +7,20 @@ import { writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
-import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 // (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
-// name -- a --dxf with no value, or given twice, is a usage error, on stderr as the others')
-const usageError = (msg) => { console.error(`dwg-check: ${msg}\n${USAGE}`); process.exit(2); };
-let parsed;
-try { parsed = parseCli(process.argv.slice(2), { values: ['--dxf'], flags: ['--json'] }); } catch (e) { if (e instanceof CliError) usageError(e.message); throw e; }
-if (parsed.help) { console.log(USAGE); process.exit(0); }
-const json = !!parsed.opts['--json'];
-const dxfOut = parsed.opts['--dxf'] || null;
-const files = parsed.pos;
-// (no drawing given, and --dxf with more than one -- each overwrote the one file -- are usage errors)
-if (!files.length) usageError('no DWG file given');
-if (dxfOut && files.length > 1) usageError('--dxf writes one file: give one DWG');
+// name -- a --dxf with no value, or given twice, is a usage error; it and help said by runCli)
+function parseArgs(argv) {
+  const parsed = parseCli(argv, { values: ['--dxf'], flags: ['--json'] });
+  if (parsed.help) throw new CliHelp();
+  const a = { json: !!parsed.opts['--json'], dxfOut: parsed.opts['--dxf'] || null, files: parsed.pos };
+  // (no drawing given, and --dxf with more than one -- each overwrote the one file -- are usage errors)
+  if (!a.files.length) throw new CliError('no DWG file given');
+  if (a.dxfOut && a.files.length > 1) throw new CliError('--dxf writes one file: give one DWG');
+  return a;
+}
 
 // One drawing's report, its pairs (for --dxf; null when it could not be read) and, when it could
 // not, the reader's message (the row's words, not "Error: ...")
@@ -70,6 +69,7 @@ async function check(f) {
 // the end); a failure of the tool itself -- the --dxf it cannot write -- is said by runCli in the
 // five tools' one shape, "dwg-check: ...", one line, exit 1.
 async function main() {
+  const { json, dxfOut, files } = parseArgs(process.argv.slice(2));
   if (dxfOut) await checkOutput(dxfOut);
   let bad = 0;
   const reports = [];
@@ -87,4 +87,4 @@ async function main() {
   if (json) console.log(JSON.stringify(reports, null, 1));
   process.exit(bad ? 1 : 0);
 }
-await runCli('dwg-check', main);
+await runCli('dwg-check', main, USAGE);

@@ -14,6 +14,7 @@
 import { onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unitWord } from './units.js';
+import { boxTree, nearestItem } from './box-tree.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
 const SELECTED = PAPER_EDGES.selected[0];
@@ -21,122 +22,31 @@ const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
 
-// One index design for the 2D view's one question, "the nearest item to (x, y) within r that
-// accept() takes": a box tree over the items' boxes (boxTree), walked nearest box first
-// (nearestItem). The snaps are points (boxes of no size), the hover's lines segments, its texts
-// their drawn quads. (The snaps had a 2-d tree of their own beside the lines' box tree, a second
-// design a fix to one did not reach; the texts had none: every one tested on a hover over empty
-// sheet, 360 ms a move on a million.)
-//
-// boxTree(B, ids): B, a Float64Array of two opposite corners per item (x0 y0 x1 y1, in either
-// order: a segment's two ends are its box's); ids, the items to hold (finite ones). The items sorted along a Morton curve of their boxes' centres, LEAF a leaf, the leaves
-// the bottom row of a complete binary tree (node i's children 2i + 1, 2i + 2), each node's box
-// (float32, widened a little so rounding never shrinks it) holding its children's. The curve
-// follows the drawing's density: a uniform grid sized from the extents put 95.6 % of a real
-// drawing's 1.75 million segments in one cell, 30-40 ms a hover.
-const LEAF = 16;
-export function boxTree(B, ids) {
-  const m = ids.length;
-  let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
-  for (let k = 0; k < m; k++) {
-    const t = ids[k];
-    const cx = (B[4 * t] + B[4 * t + 2]) / 2, cy = (B[4 * t + 1] + B[4 * t + 3]) / 2;
-    if (cx < lx) lx = cx; if (cx > hx) hx = cx; if (cy < ly) ly = cy; if (cy > hy) hy = cy;
-  }
-  const sx = hx > lx ? 65535 / (hx - lx) : 0, sy = hy > ly ? 65535 / (hy - ly) : 0;
-  const spread = (v) => { v = (v | (v << 8)) & 0x00ff00ff; v = (v | (v << 4)) & 0x0f0f0f0f; v = (v | (v << 2)) & 0x33333333; return (v | (v << 1)) & 0x55555555; };
-  const code = new Uint32Array(m);
-  for (let k = 0; k < m; k++) {
-    const t = ids[k];
-    const qx = Math.floor(((B[4 * t] + B[4 * t + 2]) / 2 - lx) * sx), qy = Math.floor(((B[4 * t + 1] + B[4 * t + 3]) / 2 - ly) * sy);
-    code[k] = (spread(qx) | (spread(qy) << 1)) >>> 0;
-  }
-  // (a radix sort by the code, 8 bits a pass, stable)
-  let order = ids.slice(), keys = code, o2 = new Uint32Array(m), k2 = new Uint32Array(m);
-  const count = new Uint32Array(257);
-  for (let shift = 0; shift < 32; shift += 8) {
-    count.fill(0);
-    for (let k = 0; k < m; k++) count[((keys[k] >>> shift) & 255) + 1]++;
-    for (let b = 0; b < 256; b++) count[b + 1] += count[b];
-    for (let k = 0; k < m; k++) { const p = count[(keys[k] >>> shift) & 255]++; o2[p] = order[k]; k2[p] = keys[k]; }
-    [order, o2] = [o2, order]; [keys, k2] = [k2, keys];
-  }
-  const leaves = Math.max(1, Math.ceil(m / LEAF));
-  let P = 1;
-  while (P < leaves) P *= 2;
-  const box = new Float32Array(4 * (2 * P - 1)).fill(NaN);
-  const set = (i, x0, y0, x1, y1) => {
-    // (float32, widened by a few of its own steps: never smaller than the float64 box)
-    const pad = (v) => Math.abs(v) * 4e-7 + 1e-30;
-    box[4 * i] = x0 - pad(x0); box[4 * i + 1] = y0 - pad(y0); box[4 * i + 2] = x1 + pad(x1); box[4 * i + 3] = y1 + pad(y1);
-  };
-  for (let j = 0; j < leaves; j++) {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
-      const t = order[k], ax = B[4 * t], ay = B[4 * t + 1], bx = B[4 * t + 2], by = B[4 * t + 3];
-      x0 = Math.min(x0, ax, bx); y0 = Math.min(y0, ay, by); x1 = Math.max(x1, ax, bx); y1 = Math.max(y1, ay, by);
-    }
-    if (x0 <= x1) set(P - 1 + j, x0, y0, x1, y1);
-  }
-  for (let i = P - 2; i >= 0; i--) {
-    const a = 2 * i + 1, b = 2 * i + 2;
-    const has = (c) => box[4 * c] === box[4 * c]; // (not NaN: a box)
-    if (!has(a) && !has(b)) continue;
-    const pick = (k, f) => (has(a) && has(b) ? f(box[4 * a + k], box[4 * b + k]) : box[4 * (has(a) ? a : b) + k]);
-    box[4 * i] = pick(0, Math.min); box[4 * i + 1] = pick(1, Math.min); box[4 * i + 2] = pick(2, Math.max); box[4 * i + 3] = pick(3, Math.max);
-  }
-  return { order, m, P, box };
-}
+// The 2D view's one question, "the nearest item to (x, y) within r that accept() takes", by the
+// viewer's one box tree (js/box-tree.js, two-dimensional here): the snaps are points (boxes of no
+// size), the hover's lines segments, its texts their drawn quads. (The snaps had a 2-d tree of
+// their own beside the lines' box tree; the texts had none: every one tested on a hover over
+// empty sheet, 360 ms a move on a million.)
 
-// The item of the trees nearest (x, y) by dist(id) (a squared distance; Infinity: not a hit), at
-// most r away, that accept(id) takes, or -1; of equal distances the lowest id (as a scan in
-// order finds it). Each tree walked nearest box first, past every box farther than the best.
-export function nearestItem(trees, x, y, r, dist, accept = () => true) {
-  let best = -1, bd = r * r;
-  const stack = new Int32Array(128); // (a complete tree's depth is under 32: a node pushes 2 at most)
-  for (const { order, m, P, box } of trees) {
-    if (!m) continue;
-    const away = (i) => {
-      if (box[4 * i] !== box[4 * i]) return Infinity; // (an empty leaf)
-      const dx = Math.max(box[4 * i] - x, 0, x - box[4 * i + 2]), dy = Math.max(box[4 * i + 1] - y, 0, y - box[4 * i + 3]);
-      return dx * dx + dy * dy;
-    };
-    let sp = 0;
-    stack[sp++] = 0;
-    while (sp) {
-      const i = stack[--sp];
-      if (away(i) > bd) continue;
-      if (i >= P - 1) {
-        const j = i - (P - 1);
-        for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
-          const t = order[k], d = dist(t);
-          if ((d < bd || (d === bd && (best < 0 || t < best))) && accept(t)) { bd = d; best = t; }
-        }
-        continue;
-      }
-      const a = 2 * i + 1, b = 2 * i + 2, da = away(a), db = away(b);
-      // (the nearer pushed last: walked first)
-      if (da <= db) { if (db <= bd) stack[sp++] = b; if (da <= bd) stack[sp++] = a; } else { if (da <= bd) stack[sp++] = a; if (db <= bd) stack[sp++] = b; }
-    }
-  }
-  return best;
-}
-
-// The snaps: the nearest point within r that accept(point) takes. pts: [[x, y, ...], ...]
+// The snaps: the nearest point within r that accept(point) takes. pts: [[x, y, ...], ...], or
+// snapPoints' typed set ({ n, xy, at(i) -> the point as an array })
 // (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
 export function pointTree(pts) {
-  const n = pts.length, B = new Float64Array(4 * n), ids = [];
+  const n = Array.isArray(pts) ? pts.length : pts.n;
+  const xy = Array.isArray(pts) ? Float64Array.from(pts.flatMap((p) => [p[0], p[1]])) : pts.xy;
+  const at = Array.isArray(pts) ? (i) => pts[i] : pts.at;
+  const B = new Float64Array(4 * n), ids = [];
   for (let i = 0; i < n; i++) {
-    const x = pts[i][0], y = pts[i][1];
+    const x = xy[2 * i], y = xy[2 * i + 1];
     B[4 * i] = B[4 * i + 2] = x; B[4 * i + 1] = B[4 * i + 3] = y;
     if (Number.isFinite(x + y)) ids.push(i);
   }
-  return { pts, tree: boxTree(B, Uint32Array.from(ids)) };
+  return { xy, at, tree: boxTree(B, Uint32Array.from(ids)) };
 }
 export function nearestPoint(index, x, y, r, accept = () => true) {
-  const { pts } = index;
-  const i = nearestItem([index.tree], x, y, r, (k) => (pts[k][0] - x) ** 2 + (pts[k][1] - y) ** 2, (k) => accept(pts[k]));
-  return i < 0 ? null : pts[i];
+  const { xy, at } = index;
+  const i = nearestItem([index.tree], [x, y], r, (k) => (xy[2 * k] - x) ** 2 + (xy[2 * k + 1] - y) ** 2, (k) => accept(at(k)));
+  return i < 0 ? null : at(i);
 }
 
 // The hover's texts: the first text (in the drawing's order) whose drawn quad holds (x, y) and
@@ -172,7 +82,7 @@ export function textAt(index, x, y, accept = () => true) {
     }
     return !(pos && neg) ? 0 : Infinity;
   };
-  return nearestItem([index.tree], x, y, 0, inside, accept);
+  return nearestItem([index.tree], [x, y], 0, inside, accept);
 }
 
 // A drawing's line segments indexed for the nearest line within r (the hover, a click's layer):
@@ -221,7 +131,7 @@ export function nearestSegment(index, x, y, r, accept = () => true) {
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
     return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
   };
-  const s = nearestItem([index.longTree, index.tree], x, y, r, dist, (k) => accept(pathOf[k]));
+  const s = nearestItem([index.longTree, index.tree], [x, y], r, dist, (k) => accept(pathOf[k]));
   return s < 0 ? -1 : pathOf[s];
 }
 
@@ -239,32 +149,53 @@ export function addedReversed(p) {
 // -- a closed path's closing side too, the side segmentIndex draws and hovers back to its first
 // point (a 3DFACE, a closed 3D polyline: 58,632 such paths in the dozens had none there) -- and
 // the centre of each closed path that is a circle (its points all within 1 % of one distance from
-// their mean). -> [[x, y, kind, layer, radius?]]
+// their mean). -> a typed set { n, xy, kind, path, r, at(i) -> [x, y, kind, layer, radius?] }
+// (a JS array a snap held 808 MB for 9 M of them, built at every open: the view builds the set
+// when Measure is first turned on)
+const SNAP_KINDS = ['end', 'middle', 'centre'];
 export function snapPoints(paths, o) {
-  const snaps = [];
+  let cap = 0;
+  for (const p of paths) if (!p.outline) cap += p.pts.length + 1; // (at most 2 a point and a centre)
+  const xy = new Float64Array(2 * cap), kind = new Uint8Array(cap), path = new Uint32Array(cap), rad = new Float64Array(cap);
+  let n = 0;
+  const put = (x, y, k, pi, r = 0) => { xy[2 * n] = x - o[0]; xy[2 * n + 1] = y - o[1]; kind[n] = k; path[n] = pi; rad[n] = r; n++; };
   // (a closed path's last point often repeats its first: counted once)
   const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
-  for (const p of paths) {
-    if (p.outline) continue; // (a wide polyline's outline: its corners are not its ends)
-    const n = p.pts.length / 2;
-    const mid = (i, j) => snaps.push([(p.pts[i * 2] + p.pts[j * 2]) / 2 - o[0], (p.pts[i * 2 + 1] + p.pts[j * 2 + 1]) / 2 - o[1], 'middle', p.layer]);
-    for (let i = 0; i < n; i++) {
-      snaps.push([p.pts[i * 2] - o[0], p.pts[i * 2 + 1] - o[1], 'end', p.layer]);
-      if (i + 1 < n) mid(i, i + 1);
+  paths.forEach((p, pi) => {
+    if (p.outline) return; // (a wide polyline's outline: its corners are not its ends)
+    const n2 = p.pts.length / 2, q = p.pts;
+    const mid = (i, j) => put((q[i * 2] + q[j * 2]) / 2, (q[i * 2 + 1] + q[j * 2 + 1]) / 2, 1, pi);
+    for (let i = 0; i < n2; i++) {
+      put(q[i * 2], q[i * 2 + 1], 0, pi);
+      if (i + 1 < n2) mid(i, i + 1);
     }
-    const m = n > 1 && same(p.pts[0], p.pts[(n - 1) * 2]) && same(p.pts[1], p.pts[(n - 1) * 2 + 1]) ? n - 1 : n;
-    if (p.closed && m === n && n > 2) mid(n - 1, 0);
+    const m = n2 > 1 && same(q[0], q[(n2 - 1) * 2]) && same(q[1], q[(n2 - 1) * 2 + 1]) ? n2 - 1 : n2;
+    if (p.closed && m === n2 && n2 > 2) mid(n2 - 1, 0);
     if (p.closed && m >= 12) {
       let cx = 0, cy = 0;
-      for (let i = 0; i < m; i++) { cx += p.pts[i * 2]; cy += p.pts[i * 2 + 1]; }
+      for (let i = 0; i < m; i++) { cx += q[i * 2]; cy += q[i * 2 + 1]; }
       cx /= m; cy /= m;
-      const ds = [];
-      for (let i = 0; i < m; i++) ds.push(Math.hypot(p.pts[i * 2] - cx, p.pts[i * 2 + 1] - cy));
-      const r = ds.reduce((a, x) => a + x, 0) / m;
-      if (r > 0 && ds.every((x) => Math.abs(x - r) < 0.01 * r)) snaps.push([cx - o[0], cy - o[1], 'centre', p.layer, r]);
+      let r = 0;
+      for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - cx, q[i * 2 + 1] - cy);
+      r /= m;
+      let round = r > 0;
+      for (let i = 0; round && i < m; i++) if (!(Math.abs(Math.hypot(q[i * 2] - cx, q[i * 2 + 1] - cy) - r) < 0.01 * r)) round = false;
+      if (round) put(cx, cy, 2, pi, r);
     }
-  }
-  return snaps;
+  });
+  // (the same array for the same snap, so a hover that stays on it is no change: those made kept,
+  // a few thousand at most)
+  const made = new Map();
+  const at = (i) => {
+    let s = made.get(i);
+    if (!s) {
+      if (made.size > 4096) made.clear();
+      s = [xy[2 * i], xy[2 * i + 1], SNAP_KINDS[kind[i]], paths[path[i]].layer, ...(kind[i] === 2 ? [rad[i]] : [])];
+      made.set(i, s);
+    }
+    return s;
+  };
+  return { n, xy: xy.subarray(0, 2 * n), kind: kind.subarray(0, n), path: path.subarray(0, n), r: rad.subarray(0, n), at };
 }
 
 export function createDxfView(canvas, drawing, cb = {}) {
@@ -273,7 +204,6 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const o = [(ext.min[0] + ext.max[0]) / 2, (ext.min[1] + ext.max[1]) / 2];
   const st = { s: 1, c: [0, 0], selected: null, hover: null, off: new Set(drawing.layers.filter((l) => !l.on).map((l) => l.name)),
     measure: false, pending: null, results: [], snap: null };
-  const snaps = snapPoints(drawing.paths, o);
   // the drawing's unit as written for a reader ("µm"), as the info panel writes it
   const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
@@ -454,10 +384,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
   }
 
   // the snap point nearest css px (x, y) within 10 px, else none: by the one box tree over the
-  // points (pointTree), built when Measure is turned on, not on its first move
+  // points (pointTree), the points and the tree built when Measure is turned on, not on its first
+  // move and not at every open
   let tree = null;
   const SNAP_PX = 10;
-  const snapTree = () => tree || (tree = pointTree(snaps));
+  const snapTree = () => tree || (tree = pointTree(snapPoints(drawing.paths, o)));
   function snapAt(px, py) {
     const [ux, uy] = toUnits(px, py);
     return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !st.off.has(s[3]));

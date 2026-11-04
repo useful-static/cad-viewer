@@ -4,7 +4,8 @@
 // name, the Open… and Add model… pickers), check.html (js/list-check.js) and the converter CLI
 // (stp2mesh.mjs). manifest.webmanifest's file_handlers is checked against it
 // (tests/test-formats.mjs). A new format is a row here, its sniff below if it has one, and its
-// loader in js/main.js.
+// reader by kind: a mesh format a case in js/mesh-formats.js parseMesh, a 2D one in
+// js/read-file.js readDrawing, a CAD one OpenCascade's reader named by `cad`.
 //
 // Pure ES module, no DOM.
 

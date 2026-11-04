@@ -16,7 +16,8 @@
 // Pure ES module, no DOM.
 
 import { cross, dot, sub } from './vec3.js';
-import { makeCaster } from './raycast.js';
+import { nesting } from './solid.js';
+import { bodyShells } from './edges.js';
 
 const LEAF = 4;
 
@@ -156,40 +157,45 @@ export function triangleDistance(A, B) {
 export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
-  // Each solid on its own (counted together, a part inside two overlapping solids read outside),
-  // by its box first, then a ray through the caster's tree, its crossings counted (odd: inside; an
-  // inner cavity adds two). (By the first wall's facing, a solid wound inside out, or with one side
-  // reversed, read a part 4 mm inside it as 4 mm away.)
+  // Each solid on its own, by its box first, then the viewer's one point-in-solid test
+  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells; a point in an
+  // odd number of a shell's crossings is in that shell, which counts +1 or, a cavity, -1). (A
+  // parity over the whole solid read a point in the overlap of two of its shells as outside; by
+  // the first wall's facing, a solid wound inside out read a part 4 mm inside it as 4 mm away.)
   // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
   // The answer names the part and the solid that holds it (the nearest surfaces' pair named two
   // others)
   const vertexOf = ([t0]) => { const i = index[t0 * 3] * 3; return [pos[i], pos[i + 1], pos[i + 2]]; };
   const within = (parts, solids, aFirst) => {
     if (!solids || !solids.length) return null;
+    const idx = solids.map(() => null); // (each solid's test, built when a part's point is in its box)
+    const solidOf = (s) => {
+      if (idx[s]) return idx[s];
+      // (the solid's triangles as a body of their own: its vertices numbered from 0)
+      const [t0, c] = solids[s], local = new Map(), I = new Uint32Array(3 * c), P = [];
+      for (let k = 0; k < 3 * c; k++) {
+        const v = index[3 * t0 + k];
+        let l = local.get(v);
+        if (l === undefined) { l = P.length / 3; local.set(v, l); P.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); }
+        I[k] = l;
+      }
+      const Pf = Float32Array.from(P), b = bodyShells(Pf, I);
+      return (idx[s] = nesting(Pf, I, b.shell, b.shellOpen.length));
+    };
     const boxes = solids.map(([t0, c]) => {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
       for (let t = t0; t < t0 + c; t++) for (let j = 0; j < 3; j++) { const i = index[t * 3 + j] * 3; for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], pos[i + k]); hi[k] = Math.max(hi[k], pos[i + k]); } }
       return { lo, hi };
     });
-    let caster = null;
-    const d = [0.5773, 0.5774, 0.5775];
     for (const part of parts) {
       if (!(part[1] > 0)) continue;
       const p = vertexOf(part);
       for (let s = 0; s < solids.length; s++) {
         const b = boxes[s];
         if ([0, 1, 2].some((k) => p[k] < b.lo[k] || p[k] > b.hi[k])) continue;
-        if (!caster) caster = makeCaster({ position: pos, index, header: { meshes: solids.map(([t0, c]) => ({ idxStart: t0 * 3, idxCount: c * 3 })) } });
-        // the ray's crossings of this solid, counted: odd is inside, however it is wound
-        const step = 1e-7 * (Math.hypot(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) + Math.hypot(...p));
-        let o = p, first = null, n = 0;
-        for (let h = caster.cast([s], o, d); h && n < 100000; h = caster.cast([s], o, d)) {
-          if (!first) first = h;
-          n++;
-          o = [0, 1, 2].map((k) => o[k] + d[k] * (h.t + step));
-        }
-        if (n % 2 === 1) {
-          return aFirst ? { triA: part[0], triB: first.tri, pa: p, pb: p } : { triA: first.tri, triB: part[0], pa: p, pb: p };
+        if (solidOf(s).inside(p)) {
+          const named = solids[s][0]; // (a triangle of the solid: it names the body)
+          return aFirst ? { triA: part[0], triB: named, pa: p, pb: p } : { triA: named, triB: part[0], pa: p, pb: p };
         }
       }
     }

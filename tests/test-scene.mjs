@@ -213,6 +213,16 @@ test('a pin in a hollow block\'s cavity is not inside it: its gap to the cavity 
   const r = clearance(s.position, s.index, trisOf(s, [3]), trisOf(s, [1, 2]), { solidA: trisOf(s, [3]), solidB: [[t0, c1 + c2]] });
   assert.deepEqual([Math.round(r.distance * 1e6) / 1e6, !!r.inside], [2, false], JSON.stringify(r));
 });
+test('one solid of two overlapping shells (an STL never booleaned) holds a pin in their overlap, and in either alone (r27 A2)', () => {
+  const two = file('two', [['a', [0, 0, 0], [10, 10, 10]], ['b', [5, 5, 5], [15, 15, 15]]]);
+  for (const [lo, hi] of [[[6, 6, 6], [7, 7, 7]], [[2, 2, 2], [3, 3, 3]], [[12, 12, 12], [13, 13, 13]]]) {
+    const pin = file('pin', [['pin', lo, hi]]);
+    const s = mergeModels([{ base: two, name: 'two.stp' }, { base: pin, name: 'pin.stp' }]);
+    const [[t0, c1], [, c2]] = trisOf(s, [1, 2]);
+    const r = clearance(s.position, s.index, trisOf(s, [3]), trisOf(s, [1, 2]), { solidA: trisOf(s, [3]), solidB: [[t0, c1 + c2]] });
+    assert.deepEqual([r.distance, !!r.inside], [0, true], `pin at ${lo}: ${JSON.stringify(r)}`);
+  }
+});
 test('containment does not trust the winding: a block wound inside out, or with one side reversed, still holds the pin', () => {
   const block = file('block', [['block', [0, 0, 0], [10, 10, 10]]]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);

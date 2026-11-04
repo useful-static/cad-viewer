@@ -200,13 +200,22 @@ await test('the weld turns a shell by the facts\' own closed test, each shell by
     return { name: 'p', pos, tri };
   };
   const factsClosed = (m) => decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'p', meshes: [0], children: [] } })).header.facts.closed[0];
-  // (a) an inward cube with a triangle of no area against the body (corners on an edge, the middle
-  // one 1e-13 off it: degenerate by the facts' relative test, not zero): the facts skip it
-  // (closed), so the weld turns the cube (the old rule counted its edges: open, not turned)
-  const sliver = join(cubeAt(0, 10, true), { pos: [0, 0, 0, 5, 1e-13, 0, 10, 0, 0], tri: [0, 1, 2] });
-  let m = weld(sliver);
+  // (a) an inward cube whose top is split at a corner on its front edge (5, 0, 10), the front side
+  // not: a T-junction, closed by a triangle of no area along that edge (a polygon fan-triangulated
+  // through a collinear corner). The facts count it (closed), so the weld turns the cube; skipped,
+  // the cube read open and stayed inward (r27 Q5)
+  const A = [0, 0, 10], Bc = [10, 0, 10], Cc = [10, 10, 10], Dc = [0, 10, 10], M = [5, 0, 10];
+  const tj = cubeAt(0, 10, false);
+  tj.tri.splice(6, 6); // (the top's two triangles, TRIS 2 and 3: their corners left unused)
+  for (const t of [[A, M, Dc], [M, Bc, Cc], [M, Cc, Dc], [A, Bc, M]]) for (const p of t) { tj.tri.push(tj.pos.length / 3); tj.pos.push(...p); }
+  for (let t = 0; t < tj.tri.length; t += 3) { const x = tj.tri[t + 1]; tj.tri[t + 1] = tj.tri[t + 2]; tj.tri[t + 2] = x; } // (wound inward)
+  let m = weld({ name: 'p', ...tj });
   assert.equal(factsClosed(m), true);
-  assert.equal(facing(m, [5, 5, 5], 0, 12), 36, 'the cube with a sliver: every corner faces out');
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 36, 'the T-junction cube: every corner faces out');
+  // and with a triangle of no area hanging off an edge (closing nothing): open, by the facts and the weld alike
+  m = weld(join(cubeAt(0, 10, true), { pos: [0, 0, 0, 5, 1e-13, 0, 10, 0, 0], tri: [0, 1, 2] }));
+  assert.equal(factsClosed(m), false);
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 0, 'open: kept as wound');
   // (b) an inward cube with one corner written twice, apart in float64 by 1e-12, one in float32
   const split = cubeAt(0, 10, true);
   const v = split.tri.find((i) => split.pos[i * 3 + 2] === 10);
@@ -279,10 +288,28 @@ await test('a cavity faces into itself, a part in a cavity out, and parts touchi
   m = weld(join(cubeAt([0, 0, 0], 10, true), cubeAt([3, 3, 3], 4, false)));
   assert.equal(facing(m, [5, 5, 5], 0, 12), 36);
   assert.equal(facing(m, [5, 5, 5], 12, 24), 0);
-  // a part inside the cavity (a die in a box): nested twice, it faces out
-  m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 2], 6, true), cubeAt([4, 4, 4], 2, true)));
-  assert.equal(facing(m, [5, 5, 5], 24, 36), 36, 'the part in the cavity, wound in, is turned to face out');
+  // a part inside the cavity (a die in a box), wound out: kept; and the whole nest written the
+  // other way round: all three turned with their outer shell
+  m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 2], 6, true), cubeAt([4, 4, 4], 2, false)));
+  assert.equal(facing(m, [5, 5, 5], 24, 36), 36, 'the part in the cavity faces out');
   assert.equal(facing(m, [5, 5, 5], 12, 24), 0, 'the cavity kept');
+  m = weld(join(cubeAt([0, 0, 0], 10, true), cubeAt([2, 2, 2], 6, false), cubeAt([4, 4, 4], 2, true)));
+  assert.deepEqual([facing(m, [5, 5, 5], 0, 12), facing(m, [5, 5, 5], 12, 24), facing(m, [5, 5, 5], 24, 36)], [36, 0, 36], 'the mirrored nest: all turned');
+  // a part embedded in another (a pin wholly inside a connector's body), both wound out: kept --
+  // by its own sign and its depth it read as a cavity, and a board's STL read back turned its pins
+  m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([4, 4, 4], 2, false)));
+  assert.equal(facing(m, [5, 5, 5], 12, 24), 36, 'the embedded part kept');
+  // two cubes passing through each other (an STL never booleaned), both wound out: neither turned (r27 A1)
+  m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 2], 10, false)));
+  assert.equal(facing(m, [5, 5, 5], 0, 12) + facing(m, [7, 7, 7], 12, 24), 72, 'neither turned');
+  // a box resting on a plate, in either order (r27 Q1)
+  for (const parts of [[cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 10], 3, false)], [cubeAt([2, 2, 10], 3, false), cubeAt([0, 0, 0], 10, false)]]) {
+    m = weld(join(...parts));
+    assert.equal(facing(m, [5, 5, 5], 0, 24) + 0, facing(m, [5, 5, 5], 0, 24), 'no error');
+    assert.equal(m.indices.length / 3, 24);
+    const f = decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'p', meshes: [0], children: [] } })).header.facts;
+    assert.equal(Math.round(f.volume[0]), 1027, 'the plate and the box, neither turned: 1000 + 27');
+  }
   // two cubes touching at a corner (1, 1, 1), the one wound out and the other in, both sizes round:
   // each its own shell (joined at a vertex, one was turned by their summed volume)
   for (const [sa, sb] of [[1, 2], [2, 1]]) {
@@ -308,6 +335,59 @@ await test('20,000 separate cubes on whole-number corners in one body: shells an
   assert.equal(new Set(shell).size, n);
   assert.equal(flip, null, 'every cube wound out: none turned');
   assert.ok(ms < 1500, `${ms.toFixed(0)} ms`);
+});
+await test('nesting stays fast: 20,000 cubes stacked along y with one wide slab under them, and 2,000 parts in a 200 k-triangle hollow enclosure (r27 A4, Q2, Q3)', async () => {
+  const q4 = (a, b, c, d) => [a, b, c, a, c, d];
+  const T = [...q4(0, 2, 3, 1), ...q4(4, 5, 7, 6), ...q4(0, 1, 5, 4), ...q4(2, 6, 7, 3), ...q4(0, 4, 6, 2), ...q4(1, 3, 7, 5)];
+  const boxes = (list) => {
+    const pos = new Float32Array(list.length * 24), idx = new Uint32Array(list.length * 36);
+    list.forEach(([o, s], c) => {
+      for (let i = 0; i < 8; i++) for (let k = 0; k < 3; k++) pos[c * 24 + i * 3 + k] = o[k] + ((i >> k) & 1) * s[k];
+      for (let k = 0; k < 36; k++) idx[c * 36 + k] = c * 8 + T[k];
+    });
+    return { pos, idx };
+  };
+  // (an index on x alone: 7.0 s for the column, and a wide slab under a grid of parts each against each again)
+  const col = Array.from({ length: 20000 }, (_, i) => [[0, 3 * i, 0], [1, 1, 1]]);
+  col.push([[-5, -5, -3], [10, 60010, 1]]);
+  let b = boxes(col);
+  let t0 = performance.now();
+  let r = shellTurns(b.pos, b.idx);
+  assert.equal(r.flip, null);
+  assert.ok(performance.now() - t0 < 1500, `the column: ${(performance.now() - t0).toFixed(0)} ms`);
+  // a hollow sphere of two UV spheres, 100 k triangles each, around 2,000 cubes: every part's points
+  // against every triangle of the enclosure was 149.6 s for 2.02 M triangles
+  const sphere = (r0, inward) => {
+    const U = 250, V = 200, pos = [], idx = [];
+    for (let i = 0; i <= V; i++) for (let j = 0; j < U; j++) { const th = (Math.PI * i) / V, ph = (2 * Math.PI * j) / U; pos.push(r0 * Math.sin(th) * Math.cos(ph), r0 * Math.sin(th) * Math.sin(ph), r0 * Math.cos(th)); }
+    const at = (i, j) => i * U + (j % U);
+    for (let i = 0; i < V; i++) for (let j = 0; j < U; j++) {
+      const a = at(i, j), bb = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+      const tri = [[a, bb, c], [a, c, d]];
+      for (const t of tri) idx.push(...(inward ? [t[0], t[2], t[1]] : t));
+    }
+    return { pos, idx };
+  };
+  const inner = boxes(Array.from({ length: 2000 }, (_, i) => [[(i % 20) * 2 - 20, Math.floor(i / 20) % 10 * 2 - 10, Math.floor(i / 200) * 2 - 10], [1, 1, 1]]));
+  const parts = [sphere(60, false), sphere(58, true), { pos: Array.from(inner.pos), idx: Array.from(inner.idx) }];
+  const pos = [], idx = [];
+  for (const p of parts) { const o = pos.length / 3; for (const x of p.pos) pos.push(x); for (const v of p.idx) idx.push(v + o); }
+  t0 = performance.now();
+  r = shellTurns(Float32Array.from(pos), Uint32Array.from(idx));
+  const ms = performance.now() - t0;
+  assert.equal(r.flip, null, 'all wound as they lie: none turned');
+  assert.ok(ms < 5000, `the enclosure: ${ms.toFixed(0)} ms`);
+});
+await test('parts face to face (edges used four times) are one branched shell, never turned (r27 Q4)', async () => {
+  // three cubes in a row sharing whole faces, each wound out: a branched shell kept as written
+  const pos = [], tri = [];
+  for (let k = 0; k < 3; k++) for (const t of TRIS) for (const v of t) { tri.push(pos.length / 3); pos.push(C[v][0] + 10 * k, C[v][1], C[v][2]); }
+  const m = weld({ name: 'row', pos, tri });
+  const rev = (a) => { const out = a.slice(); for (let t = 0; t < out.length; t += 3) { const x = out[t + 1]; out[t + 1] = out[t + 2]; out[t + 2] = x; } return out; };
+  const P32 = Float32Array.from(pos);
+  assert.equal(shellTurns(P32, Uint32Array.from(tri)).flip, null, 'wound out: kept');
+  assert.equal(shellTurns(P32, Uint32Array.from(rev(tri))).flip, null, 'wound in: kept too (its 36 triangles split into closed pieces, 4 of them turned)');
+  assert.equal(m.indices.length / 3, 36);
 });
 await test('a closed cylinder with fan caps (a hub vertex of 64 edges, past the short-list sort) is closed (r26 Q2)', async () => {
   // 64 segments; each cap a fan about its centre: the centre's edge list is 128 long

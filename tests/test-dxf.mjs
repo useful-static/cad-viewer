@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, boxTree, nearestItem, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
+import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
+import { boxTree, nearestItem } from '../js/box-tree.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
@@ -802,10 +803,14 @@ test('2D Measure snaps the middle of a closed path\'s closing side, once (r26 Q3
   // a 3DFACE-like square that does not repeat its first point, and one that does
   const open = { layer: 'A', closed: true, pts: Float64Array.of(0, 0, 4, 0, 4, 4, 0, 4) };
   const rep = { layer: 'A', closed: true, pts: Float64Array.of(0, 0, 4, 0, 4, 4, 0, 4, 0, 0) };
-  const mids = (p) => snapPoints([p], [0, 0]).filter((s) => s[2] === 'middle').map((s) => `${s[0]},${s[1]}`).sort();
+  const mids = (p) => { const s = snapPoints([p], [0, 0]); return Array.from({ length: s.n }, (_, i) => s.at(i)).filter((x) => x[2] === 'middle').map((x) => `${x[0]},${x[1]}`).sort(); };
   assert.deepEqual(mids(open), ['0,2', '2,0', '2,4', '4,2'], 'its four sides');
   assert.deepEqual(mids(rep), ['0,2', '2,0', '2,4', '4,2'], 'the same four, the repeated point no fifth');
   assert.deepEqual(mids({ ...open, closed: false }), ['2,0', '2,4', '4,2'], 'an open path has no closing side');
+  // (held typed, not an array a snap: 808 MB for 9 M snaps; the view builds them when Measure turns on, r27 A5)
+  const s = snapPoints([open], [0, 0]);
+  assert.ok(s.xy instanceof Float64Array && s.kind instanceof Uint8Array && s.path instanceof Uint32Array, 'typed');
+  assert.equal(s.at(3), s.at(3), 'one array for one snap');
 });
 test('the box tree: a hit at exactly r is within r, and the nearer child is walked first (r26 Q6)', () => {
   // points on a line, 1 apart: from 0.5 off the line at x 3, at r = 0.5 the point (3, 0) is exactly r away
@@ -818,7 +823,7 @@ test('the box tree: a hit at exactly r is within r, and the nearer child is walk
   pts.forEach(([x, y], i) => B.set([x, y, x, y], 4 * i));
   const tree = boxTree(B, Uint32Array.from(pts.keys()));
   let visited = 0;
-  const id = nearestItem([tree], 0.2, 0, 50, (i) => { visited++; return (pts[i][0] - 0.2) ** 2; });
+  const id = nearestItem([tree], [0.2, 0], 50, (i) => { visited++; return (pts[i][0] - 0.2) ** 2; });
   assert.equal(id, 0);
   assert.ok(visited <= 32, `${visited} items tested (the far side first: every leaf within 50)`);
 });

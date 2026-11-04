@@ -23,7 +23,7 @@ import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, modelFactsOf } from './js/cadmesh.js';
-import { CliError, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report]
 
@@ -229,9 +229,10 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
 
 async function main() {
   let a;
-  try { a = args(process.argv.slice(2)); } catch (e) { if (!(e instanceof CliError)) throw e; process.stderr.write(`split-board: ${e.message}\n${USAGE}`); process.exit(2); }
-  if (a.help) { process.stdout.write(USAGE); process.exit(0); }
-  if (!a.in || !a.out) { process.stderr.write(`split-board: ${a.in ? 'no -o output' : 'no input file'}\n${USAGE}`); process.exit(2); }
+  // (a usage error and help thrown, said by runCli as in every tool)
+  a = args(process.argv.slice(2));
+  if (a.help) throw new CliHelp();
+  if (!a.in || !a.out) throw new CliError(a.in ? 'no -o output' : 'no input file');
   // (the input read and the output checked in the five tools' one wording, before the split)
   let raw = await readInput(a.in);
   await checkOutput(a.out);
@@ -259,4 +260,4 @@ async function main() {
 }
 
 // run as a command (a path with a space or through a symlink included)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('split-board', main);
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('split-board', main, USAGE);

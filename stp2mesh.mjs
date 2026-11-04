@@ -13,7 +13,7 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, no
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
-import { CliError, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 import { circleMinPoints } from './js/measure-geom.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,17 +82,14 @@ function sniffFile(path) {
 }
 
 async function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (e) {
-    if (!(e instanceof CliError)) throw e;
-    // (a usage error named for the tool, as the other four say theirs)
-    process.stderr.write(`stp2mesh: ${e.message}\n${USAGE}`);
-    return 2;
+  // (a usage error, help and a refusal each thrown, said by runCli)
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) throw new CliHelp();
+  if (!args.input) throw new CliError('no input file');
+  // (an angle no circle test passes: said before the conversion, which it does not depend on)
+  if (circleMinPoints(args.params.angularDeflection) === Infinity) {
+    process.stderr.write(`stp2mesh: WARNING: --angular ${args.params.angularDeflection} is 2π/9 (0.698) or more: no circle can be found in the result (List holes, a drawing's circles)\n`);
   }
-  if (args.help) { process.stdout.write(USAGE); return 0; }
-  if (!args.input) { process.stderr.write(`stp2mesh: no input file\n${USAGE}`); return 2; }
   // a gzipped file (part.stp.gz) is opened as the one inside it, as the
   // viewer does (review r18)
   const gz = /\.gz$/i.test(args.input);
@@ -119,7 +116,7 @@ async function main() {
   const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');
   if (!existsSync(occtJs)) {
-    process.stderr.write(`occt-import-js not found at ${occtJs}: run ${join(HERE, 'fetch-deps.sh')}\n`);
+    process.stderr.write(`stp2mesh: occt-import-js not found at ${occtJs}: run ${join(HERE, 'fetch-deps.sh')}\n`);
     return 3;
   }
   // --progress: print OpenCascade's progress (our occt-progress build only;
@@ -169,11 +166,7 @@ async function main() {
   const statuses = result.meshes.map((m) => (typeof m.brep_kind === 'string' && m.brep_kind) || null);
   const unknown = [...new Set(statuses.filter((k) => k && !BODY_KINDS.includes(k)))];
   if (unknown.length) {
-    process.stderr.write(`WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
-  }
-  // (an angle no circle test passes: List holes and the drawing's circles find none, said here)
-  if (circleMinPoints(args.params.angularDeflection) === Infinity) {
-    process.stderr.write(`WARNING: --angular ${args.params.angularDeflection} is 2π/9 (0.698) or more: no circle can be found in the result (List holes, a drawing's circles)\n`);
+    process.stderr.write(`stp2mesh: WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
   const buf = encodeCadmesh(model, { edges: !args.noEdges });
@@ -182,7 +175,7 @@ async function main() {
   let h;
   try { h = decodeCadmesh(buf).header; } catch (e) { throw new Error(`${args.input}: ${e.message}`); } // (one line, not node's stack)
   if (model.unmeshedFaces) {
-    process.stderr.write(`WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
+    process.stderr.write(`stp2mesh: WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }
   const file = args.raw ? Buffer.from(buf) : gzipSync(Buffer.from(buf), { level: 6 });
   try { writeFileSync(out, file); } catch (e) { throw new Error(`could not write ${out}: ${e.message}`); }
@@ -214,4 +207,4 @@ async function main() {
 
 // (a refused input or a failed write: one line, exit 1, by runCli as the other tools -- the stack
 // trace was printed whole)
-await runCli('stp2mesh', async () => process.exit(await main()));
+await runCli('stp2mesh', async () => process.exit(await main()), USAGE);

@@ -18,7 +18,7 @@ import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, splitCadmesh, withHeader } from './js/cadmesh.js';
-import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -64,10 +64,10 @@ export function setColours(raw, colours, by, { again = false } = {}) {
 async function main() {
   // (the tools' one argument rule, js/cli-args.js: --agian was taken as a third file and ignored,
   // the file written without --again; and a missing --by is a usage error, as a missing -o is)
-  const usage = (msg) => { process.stderr.write(`set-colours: ${msg}\n${USAGE}`); process.exit(2); };
-  let r;
-  try { r = parseCli(process.argv.slice(2), { values: ['-o', '--by'], flags: ['--again', '--show'], max: 2 }); } catch (e) { if (e instanceof CliError) usage(e.message); throw e; }
-  if (r.help) { process.stdout.write(USAGE); process.exit(0); }
+  // (a usage error and help thrown, said by runCli as in every tool)
+  const usage = (msg) => { throw new CliError(msg); };
+  const r = parseCli(process.argv.slice(2), { values: ['-o', '--by'], flags: ['--again', '--show'], max: 2 });
+  if (r.help) throw new CliHelp();
   const a = { in: r.pos[0], colours: r.pos[1], out: r.opts['-o'], by: r.opts['--by'], again: !!r.opts['--again'], show: !!r.opts['--show'] };
   if (!a.in) usage('no input file');
   // (--show writes nothing: with what a write needs it silently did not write, exit 0)
@@ -91,4 +91,4 @@ async function main() {
 
 // run as a command (a path with a space or through a symlink included: the plain "file://"
 // + argv[1] test was false there, and the tool exited 0 doing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('set-colours', main);
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('set-colours', main, USAGE);

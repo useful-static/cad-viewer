@@ -13,7 +13,7 @@
 // given twice; more than `max`
 // positional words. `--opt=value` is the same as `--opt value`. A lone "-" is a positional word.
 //
-//   runCli('split-board', main)
+//   runCli('split-board', main, USAGE)
 //     the rule's other half: an input the tool cannot read (main throws an Error) is said in one
 //     line on stderr, exit 1 -- not node's stack trace; a usage error, "<tool>: <what>" and the
 //     usage, exit 2, in each tool
@@ -74,19 +74,32 @@ export async function readInput(path) {
 // An output a tool will write, checked before the work: its directory there, the path no
 // directory (stp2mesh converted, split-board split, before a failed write said so)
 export async function checkOutput(path) {
-  const { statSync } = await import('node:fs');
+  const { accessSync, constants, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
-  const dir = st(dirname(resolve(path)));
+  const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
+  const d = dirname(resolve(path)), dir = st(d), file = st(path);
   if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${dirname(path)}`);
-  if (st(path)?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
+  if (file?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
+  // (a directory or file it may not write: refused before the work too -- two tools ran it, then
+  // printed node's "EACCES: ...")
+  if (file ? !writable(path) : !writable(d)) throw new Error(`could not write ${path}: permission denied`);
 }
 
-// A tool's main (sync or async) run: a thrown Error is a refused input, one line, exit 1
-export async function runCli(name, main) {
+// -h / --help asked: thrown by a tool's main, the usage printed on stdout, exit 0
+export class CliHelp extends Error {}
+
+// A tool's main (sync or async) run, the one place the three outcomes are said: a CliError is a
+// usage error ("<tool>: <what>" and the usage, on stderr, exit 2); a CliHelp the usage on stdout,
+// exit 0; any other Error a refused input or a failed write, one line, exit 1. (Each tool wrote
+// the usage half by hand, five copies of one shape.)
+export async function runCli(name, main, usage = '') {
+  const tail = usage && !usage.endsWith('\n') ? `${usage}\n` : usage;
   try {
     await main();
   } catch (e) {
+    if (e instanceof CliHelp) { process.stdout.write(tail); process.exit(0); }
+    if (e instanceof CliError) { process.stderr.write(`${name}: ${e.message}\n${tail}`); process.exit(2); }
     process.stderr.write(`${name}: ${e && e.message ? e.message : e}\n`);
     process.exit(1);
   }

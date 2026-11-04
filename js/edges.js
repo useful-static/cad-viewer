@@ -1,8 +1,9 @@
 // The edge list and the body facts, from a decoded model's global arrays, in
 // one pass per body. Pure, no DOM: run by the converter (js/cadmesh.js, so a
-// new .cadmesh carries them) and by a worker for an older .cadmesh; its closed
-// test (shellsOf) also by the mesh readers' weld, to turn a shell wound the
-// wrong way (shellTurns, js/mesh-formats.js).
+// new .cadmesh carries them) and by a worker for an older .cadmesh. Its closed
+// test (shellsOf) is also the mesh readers': js/mesh-formats.js weld calls
+// shellTurns, here, to turn a shell wound the wrong way, and Clearance asks
+// bodyShells for a solid's shells (js/clearance.js).
 //
 // OpenCascade meshes every b-rep face with its own vertices and never splits
 // a face at its seam, so within a body:
@@ -30,6 +31,8 @@
 // null, silhouetteNormals: Int16Array (nx ny nz 0) x 2 per candidate | null,
 // silhouettesOmitted: count left out over the cap (0), facts: { closed,
 // area, volume } arrays per body }.
+
+import { nesting } from './solid.js';
 
 export const SILHOUETTE_CAP = 2_000_000;
 
@@ -207,8 +210,11 @@ function body(pos, bits, index, m, edges, sil, silN) {
     }
   }
 
-  return { sil: nsil, closed: m.kind ? null : shellsOf(index, t0, nt, weld, v0, nv, degenerate).closed, area: A, volume: Math.abs(V) };
+  return { sil: nsil, closed: m.kind ? null : shellsOf(index, t0, nt, weld, v0, nv).closed, area: A, volume: Math.abs(V) };
 }
+
+// a 32-bit finishing mix (MurmurHash3's)
+const mix32 = (v) => { v ^= v >>> 16; v = Math.imul(v, 0x85ebca6b); v ^= v >>> 13; v = Math.imul(v, 0xc2b2ae35); return v ^ (v >>> 16); };
 
 // weld: each vertex of a body (v0, nv; bits: the positions' float32 bits) -> the first vertex of
 // the body with the same bits (-0 and +0 are one position)
@@ -220,12 +226,13 @@ function weldBits(bits, v0, nv) {
   for (let v = 0; v < nv; v++) {
     const o = (v0 + v) * 3;
     const x = bit(o), y = bit(o + 1), z = bit(o + 2);
-    // (mixed to the low bits: a float on a whole number has its low mantissa bits all 0, and the
-    // products alone clustered a grid of such points into long probe runs -- 20,000 unit cubes on
-    // whole-number corners took 7.5 s to weld)
-    let h = Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791);
-    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
-    h &= wsize - 1;
+    // (each coordinate mixed into the low bits in turn: a float on a whole number has its low
+    // mantissa bits all 0, and products of the three clustered a grid of such points into long
+    // probe runs -- 20,000 unit cubes on whole-number corners took 7.5 s to weld; one mix of the
+    // products, 31.8 M extra probes for a million grid points against 0.46 M)
+    let h = mix32(x);
+    h = mix32(h ^ Math.imul(y, 0x9e3779b1));
+    h = mix32(h ^ Math.imul(z, 0x7feb352d)) & (wsize - 1);
     for (;;) {
       const w = wtab[h];
       if (w < 0) { wtab[h] = v; weld[v] = v; break; }
@@ -239,11 +246,12 @@ function weldBits(bits, v0, nv) {
 
 // per triangle: its unit normal (tn), whether it is degenerate (no area against the body's
 // diagonal: such a triangle has no normal, no silhouette and no say in closed), its signed-volume
-// term (vol); and the body's area and signed volume (float64, centred on the body's box bb)
-function triangleFacts(pos, index, t0, nt, bb) {
+// term (vol); and the body's area and signed volume (float64, centred on the body's box bb).
+// normals false: tn left out (the weld's turn reads none: 120 MB at the 10 M-triangle cap)
+function triangleFacts(pos, index, t0, nt, bb, normals = true) {
   const cx = (bb.min[0] + bb.max[0]) / 2, cy = (bb.min[1] + bb.max[1]) / 2, cz = (bb.min[2] + bb.max[2]) / 2;
   const diag2 = (bb.max[0] - bb.min[0]) ** 2 + (bb.max[1] - bb.min[1]) ** 2 + (bb.max[2] - bb.min[2]) ** 2;
-  const tn = new Float32Array(nt * 3);
+  const tn = normals ? new Float32Array(nt * 3) : null;
   const degenerate = new Uint8Array(nt);
   const vol = new Float64Array(nt);
   let A = 0;
@@ -262,34 +270,43 @@ function triangleFacts(pos, index, t0, nt, bb) {
     vol[t] = (ax * (by * qz - bz * qy) + ay * (bz * qx - bx * qz) + az * (bx * qy - by * qx)) / 6;
     V += vol[t];
     if (len <= diag2 * 1e-14) { degenerate[t] = 1; continue; }
-    tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len;
+    if (tn) { tn[t * 3] = nx / len; tn[t * 3 + 1] = ny / len; tn[t * 3 + 2] = nz / len; }
   }
   return { tn, degenerate, vol, A, V };
 }
 
 // The one test of "is this mesh closed" (the facts' closed, and the weld's turning of a shell
-// wound inward): over the non-degenerate triangles, on the welded vertices, every edge used at
-// least twice (more than twice is non-manifold, not open). Per shell too: the shells are those
-// triangles joined across an edge used by exactly two of them -- not across a shared vertex, which
-// made two parts touching at a corner one shell, turned by their summed volume. Returns { closed,
-// shell: Int32Array, a triangle's shell (-1: degenerate), shellOpen: Uint8Array per shell }.
-// Typed tables throughout: a Map of edges at the 10 M-triangle cap was 8.7 s and 683 MB.
-function shellsOf(index, t0, nt, weld, v0, nv, degenerate) {
+// wound the wrong way): on the welded vertices, every edge used at least twice (more than twice
+// is non-manifold, not open). A triangle whose welded corners are not three is no part of it; one
+// of three distinct corners on a line is (a polygon fan-triangulated through a collinear corner
+// closes a T-junction with one: skipped, a closed cube read open). Per shell too: the shells are
+// the triangles joined across shared edges -- not across a shared vertex, which made two parts
+// touching at a corner one shell, turned by their summed volume. A shell with an edge used more
+// than twice (two parts face to face) is branched: its outside is no one answer. Returns {
+// closed, shell: Int32Array, a triangle's shell (-1: its corners collapsed), shellOpen and
+// shellBranched: Uint8Array per shell }. Typed tables throughout: a Map of edges at the 10 M-
+// triangle cap was 8.7 s and 683 MB.
+function shellsOf(index, t0, nt, weld, v0, nv) {
   const parent = new Int32Array(nt);
   for (let t = 0; t < nt; t++) parent[t] = t;
   const find = (t) => { while (parent[t] !== t) { parent[t] = parent[parent[t]]; t = parent[t]; } return t; };
+  const collapsed = new Uint8Array(nt);
+  for (let t = 0; t < nt; t++) {
+    const i = (t0 + t) * 3, a = weld[index[i] - v0], b = weld[index[i + 1] - v0], c = weld[index[i + 2] - v0];
+    if (a === b || b === c || a === c) collapsed[t] = 1;
+  }
   // the edges as lists per lower welded vertex (counted, then filled): each entry the other end
   // and the triangle, one number (other * nt + triangle: under 2^53 at every cap), each list
-  // sorted in place and read by runs -- a run one long is an edge used once (open), two long the
-  // edge joining its two triangles' shells
+  // sorted in place and read by runs -- a run one long is an edge used once (open), two or more
+  // the edge joining its triangles' shells
   const off = new Uint32Array(nv + 1);
   const each = (fn) => {
     for (let t = 0; t < nt; t++) {
-      if (degenerate[t]) continue;
+      if (collapsed[t]) continue;
       const i = (t0 + t) * 3;
       for (let k = 0; k < 3; k++) {
         const a = weld[index[i + k] - v0], b = weld[index[i + (k + 1) % 3] - v0];
-        if (a !== b) fn(a < b ? a : b, a < b ? b : a, t);
+        fn(a < b ? a : b, a < b ? b : a, t);
       }
     }
   };
@@ -298,7 +315,7 @@ function shellsOf(index, t0, nt, weld, v0, nv, degenerate) {
   const fill = off.slice(0, nv);
   const nb = new Float64Array(off[nv]);
   each((p, q, t) => { nb[fill[p]++] = q * nt + t; });
-  const openTri = new Uint8Array(nt);
+  const openTri = new Uint8Array(nt), branchTri = new Uint8Array(nt);
   let closed = true;
   for (let p = 0; p < nv; p++) {
     const lo = off[p], hi = off[p + 1];
@@ -317,49 +334,60 @@ function shellsOf(index, t0, nt, weld, v0, nv, degenerate) {
       let e = j + 1;
       while (e < hi && Math.floor(nb[e] / nt) === q) e++;
       if (e - j === 1) { closed = false; openTri[nb[j] - q * nt] = 1; }
-      else if (e - j === 2) { const a = find(nb[j] - q * nt), b = find(nb[j + 1] - q * nt); if (a !== b) parent[b] = a; }
+      else {
+        const first = nb[j] - q * nt;
+        for (let z = j + 1; z < e; z++) { const a = find(first), b = find(nb[z] - q * nt); if (a !== b) parent[b] = a; }
+        if (e - j > 2) branchTri[first] = 1;
+      }
       j = e;
     }
   }
   const sid = new Int32Array(nt).fill(-1), shell = new Int32Array(nt).fill(-1);
   let ns = 0;
   for (let t = 0; t < nt; t++) {
-    if (degenerate[t]) continue;
+    if (collapsed[t]) continue;
     const r = find(t);
     if (sid[r] < 0) sid[r] = ns++;
     shell[t] = sid[r];
   }
-  const shellOpen = new Uint8Array(ns);
-  for (let t = 0; t < nt; t++) if (openTri[t]) shellOpen[shell[t]] = 1;
-  return { closed, shell, shellOpen };
+  const shellOpen = new Uint8Array(ns), shellBranched = new Uint8Array(ns);
+  for (let t = 0; t < nt; t++) {
+    if (openTri[t]) shellOpen[shell[t]] = 1;
+    if (branchTri[t]) shellBranched[shell[t]] = 1;
+  }
+  return { closed, shell, shellOpen, shellBranched };
 }
 
-// A fixed direction no CAD axis or face lies along, for the nesting rays
-const RAY = (() => { const d = [0.3141592, 0.5772156, 0.7536422], l = Math.hypot(...d); return d.map((x) => x / l); })();
-
-// The shells of one body (position: float32 xyz; index: corner ids into it, its own), by the
-// facts' own test (shellsOf) on the float32 positions the body is stored with, and the triangles
-// of each CLOSED shell wound the wrong way for where it lies: a shell inside an even number of
-// the body's other closed shells (none: an outer surface) faces out, its signed volume positive;
-// inside an odd number (a cavity, wound inward on purpose) its volume is negative. Nesting is
-// counted by a ray's crossings of each other closed shell from three points on the shell (a
-// majority: a point on a touching part's face is no answer). One body may hold a part wound out
-// beside one wound in, a solid with a cavity, a part in a cavity. Returns { shell, flip: a
-// Uint8Array per triangle, or null when none is turned }.
-export function shellTurns(position, index) {
-  const nt = index.length / 3;
-  if (!nt) return { shell: new Int32Array(0), flip: null };
-  const nv = position.length / 3;
+// One body's shells (position: float32 xyz; index: corner ids into it, its own), welded on the
+// position bits as the facts are: shellsOf's { closed, shell, shellOpen, shellBranched }, and with
+// volumes, each triangle's signed-volume term (vol). Clearance asks it of a solid (js/clearance.js).
+export function bodyShells(position, index, volumes = false) {
+  const nt = index.length / 3, nv = position.length / 3;
+  const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
+  const r = shellsOf(index, 0, nt, weldBits(bits, 0, nv), 0, nv);
+  if (!volumes) return r;
   // (the box of the vertices the triangles use, as the stored body's)
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < index.length; i++) {
     const v = index[i] * 3;
     for (let k = 0; k < 3; k++) { const p = position[v + k]; if (p < min[k]) min[k] = p; if (p > max[k]) max[k] = p; }
   }
-  const bits = new Uint32Array(position.buffer, position.byteOffset, position.length);
-  const weld = weldBits(bits, 0, nv);
-  const { degenerate, vol } = triangleFacts(position, index, 0, nt, { min, max });
-  const { shell, shellOpen } = shellsOf(index, 0, nt, weld, 0, nv, degenerate);
+  return { ...r, vol: triangleFacts(position, index, 0, nt, { min, max }, false).vol };
+}
+
+// The shells of one body (position: float32 xyz; index: corner ids into it, its own), by the
+// facts' own test (shellsOf) on the float32 positions the body is stored with, and the triangles
+// of each closed, unbranched shell wound the wrong way: an outer shell (WHOLLY inside none of the
+// body's other closed shells) whose signed volume is negative, and every shell wholly inside it
+// with it (below). Wholly inside, by js/solid.js nesting (its box within the other's, and most
+// of three points on it inside the other). (A shell counted as nested whenever a ray from it
+// crossed another an odd number of times turned one of two cubes passing through each other, and
+// a box resting on a plate.) Returns { shell, flip: a Uint8Array per triangle, or null when none
+// is turned }.
+export function shellTurns(position, index) {
+  const nt = index.length / 3;
+  if (!nt) return { shell: new Int32Array(0), flip: null };
+  const { shell, shellOpen, shellBranched, vol } = bodyShells(position, index, true);
   const ns = shellOpen.length;
   const V = new Float64Array(ns);
   for (let t = 0; t < nt; t++) if (shell[t] >= 0) V[shell[t]] += vol[t];
@@ -367,88 +395,21 @@ export function shellTurns(position, index) {
   for (let s = 0; s < ns; s++) if (!shellOpen[s]) closedShells.push(s);
   const flipShell = new Uint8Array(ns);
   let any = false;
-  if (closedShells.length === 1) {
-    // (one closed shell: nested in nothing, an outer surface)
-    const s = closedShells[0];
-    if (V[s] < 0) { flipShell[s] = 1; any = true; }
-  } else if (closedShells.length > 1) {
-    const P = position;
-    // per shell: its box, its triangles (a typed list, grouped by shell), its three largest triangles
-    const lo = new Float64Array(3 * ns).fill(Infinity), hi = new Float64Array(3 * ns).fill(-Infinity);
-    const start = new Uint32Array(ns + 1);
-    for (let t = 0; t < nt; t++) if (shell[t] >= 0) start[shell[t] + 1]++;
-    for (let s = 0; s < ns; s++) start[s + 1] += start[s];
-    const at = start.slice(0, ns), list = new Uint32Array(start[ns]);
-    const big = new Int32Array(3 * ns).fill(-1), bigA = new Float64Array(3 * ns);
-    for (let t = 0; t < nt; t++) {
-      const s = shell[t];
-      if (s < 0) continue;
-      list[at[s]++] = t;
-      const a = 3 * index[3 * t], b = 3 * index[3 * t + 1], c = 3 * index[3 * t + 2];
-      for (const v of [a, b, c]) for (let k = 0; k < 3; k++) { const x = P[v + k]; if (x < lo[3 * s + k]) lo[3 * s + k] = x; if (x > hi[3 * s + k]) hi[3 * s + k] = x; }
-      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], wx = P[c] - P[a], wy = P[c + 1] - P[a + 1], wz = P[c + 2] - P[a + 2];
-      const area = Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
-      // (kept in order, largest first)
-      for (let j = 0; j < 3; j++) {
-        if (big[3 * s + j] < 0 || area > bigA[3 * s + j]) {
-          for (let m = 2; m > j; m--) { big[3 * s + m] = big[3 * s + m - 1]; bigA[3 * s + m] = bigA[3 * s + m - 1]; }
-          big[3 * s + j] = t; bigA[3 * s + j] = area;
-          break;
-        }
-      }
-    }
-    // the crossings of the ray from (px, py, pz) along RAY with shell o's triangles (Moeller-Trumbore)
-    const [dx, dy, dz] = RAY;
-    const crossings = (px, py, pz, o) => {
-      let n = 0;
-      for (let j = start[o]; j < start[o + 1]; j++) {
-        const t = list[j], a = 3 * index[3 * t], b = 3 * index[3 * t + 1], c = 3 * index[3 * t + 2];
-        const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
-        const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
-        const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
-        const det = e1x * hx + e1y * hy + e1z * hz;
-        if (det === 0) continue;
-        const sx = px - P[a], sy = py - P[a + 1], sz = pz - P[a + 2];
-        const u = (sx * hx + sy * hy + sz * hz) / det;
-        if (u < 0 || u > 1) continue;
-        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
-        const w = (dx * qx + dy * qy + dz * qz) / det;
-        if (w < 0 || u + w > 1) continue;
-        if ((e2x * qx + e2y * qy + e2z * qz) / det > 0) n++;
-      }
-      return n;
-    };
-    // the shells whose box holds a point, without a pass over every shell (each against each was
-    // 10.7 s for 20,000 cubes): the closed shells by their box's low x, with the highest high x so
-    // far, walked back from the last that starts at or before the point while one can reach it
-    const byLo = closedShells.slice().sort((a, b) => lo[3 * a] - lo[3 * b]);
-    const reach = new Float64Array(byLo.length);
-    byLo.forEach((o, k) => { reach[k] = Math.max(k ? reach[k - 1] : -Infinity, hi[3 * o]); });
-    const holding = (px, py, pz, fn) => {
-      let a = 0, b = byLo.length;
-      while (a < b) { const m = (a + b) >> 1; if (lo[3 * byLo[m]] <= px) a = m + 1; else b = m; }
-      for (let k = a - 1; k >= 0 && reach[k] >= px; k--) {
-        const o = byLo[k];
-        if (px <= hi[3 * o] && py >= lo[3 * o + 1] && py <= hi[3 * o + 1] && pz >= lo[3 * o + 2] && pz <= hi[3 * o + 2]) fn(o);
-      }
-    };
-    for (const s of closedShells) {
-      // three points on the shell, the centroids of its largest triangles; a point nested an odd
-      // number of times lies in a cavity, by the majority of the three
-      let odd = 0, pts = 0;
-      for (let j = 0; j < 3; j++) {
-        const t = big[3 * s + j];
-        if (t < 0) continue;
-        pts++;
-        const a = 3 * index[3 * t], b = 3 * index[3 * t + 1], c = 3 * index[3 * t + 2];
-        const px = (P[a] + P[b] + P[c]) / 3, py = (P[a + 1] + P[b + 1] + P[c + 1]) / 3, pz = (P[a + 2] + P[b + 2] + P[c + 2]) / 3;
-        let depth = 0;
-        holding(px, py, pz, (o) => { if (o !== s && crossings(px, py, pz, o) % 2 === 1) depth++; });
-        if (depth % 2 === 1) odd++;
-      }
-      const cavity = odd * 2 > pts;
-      if (cavity ? V[s] > 0 : V[s] < 0) { flipShell[s] = 1; any = true; }
-    }
+  // (each shell's depth: the others -- open ones too, a part whose surface has a gap -- that
+  // wholly hold it, js/solid.js nesting; none asked when no shell is closed)
+  const { depth, holders } = closedShells.length ? nesting(position, index, shell, ns) : { depth: new Uint32Array(ns), holders: [] };
+  // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
+  // the other way). A shell inside another is turned with its outer shell, never by its own sign:
+  // a cavity is wound inward and a part embedded in another (a pin in a connector's body) outward,
+  // and once in one body the two cannot be told apart -- by its own sign and its depth, a board's
+  // STL read back turned five of its parts inside out. (An open outer shell is turned by nothing,
+  // and nothing in it: a part's cavity inside an outer surface with a gap.)
+  const outerTurn = (s) => !shellOpen[s] && !shellBranched[s] && V[s] < 0;
+  // (a branched outer shell -- two parts face to face -- has no one outside to turn to: kept, and
+  // all in it)
+  for (const s of closedShells) {
+    const outer = depth[s] ? holders[s].find((o) => depth[o] === 0) : s;
+    if (outer !== undefined && outerTurn(outer)) { flipShell[s] = 1; any = true; }
   }
   if (!any) return { shell, flip: null };
   const flip = new Uint8Array(nt);

@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,6 +116,17 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     const lines = r.err.trim().split('\n');
     if (r.rc !== 1 || lines.length !== 1 || !lines[0].startsWith(`${tool.replace('.mjs', '')}: could not write `) || !want.test(lines[0]) || /\n\s+at /.test(r.err)) {
       bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 300))}`);
+    }
+  }
+  // a directory it may not write: refused before the work, in the same words (r27 Q6: two tools
+  // split and coloured, then printed node's "EACCES"); not as root, which may write anywhere
+  if (process.getuid?.() !== 0) {
+    const ro = join(dir, 'ro');
+    mkdirSync(ro, { mode: 0o555 });
+    for (const [tool, args] of [['split-board.mjs', ['box.cadmesh', '-o', join(ro, 'x.cadmesh')]], ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', join(ro, 'x.cadmesh'), '--by', 't']],
+      ['cadmesh-export.mjs', ['box.cadmesh', '--to', 'stl', '--out', join(ro, 'x')]], ['stp2mesh.mjs', ['x.stp', '-o', join(ro, 'x.cadmesh')]], ['dwg-check.mjs', [notCad, '--dxf', join(ro, 'x.dxf')]]]) {
+      const r = run(tool, args);
+      if (r.rc !== 1 || r.err !== `${tool.replace('.mjs', '')}: could not write ${args[args.indexOf(args.find((a) => a.startsWith(ro)))]}${tool === 'cadmesh-export.mjs' ? '.stl' : ''}: permission denied\n`) bad.push(`${tool} read-only: rc ${r.rc}, ${JSON.stringify(r.err)}`);
     }
   }
   // an input that is not there: one wording in all five ("ENOENT: ..." in two, both in a third)

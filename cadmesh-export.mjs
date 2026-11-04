@@ -24,7 +24,7 @@ import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
-import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -33,12 +33,9 @@ const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
 const KINDS = Object.keys(EXPORTS);
 const KIND_WORDS = `(${KINDS.join(', ')})`;
 
-// (help on stdout, exit 0, as the other tools; a usage error on stderr, exit 2)
-function usage(msg, code = 2) {
-  if (msg) console.error(`cadmesh-export: ${msg}`);
-  (code ? console.error : console.log)(`usage: node cadmesh-export.mjs <in.cadmesh[.gz]> [--to ${KINDS.join(',')}] [--out <base>] [--orient <up,front> | --model-up y|z] [--skip <regex>]`);
-  process.exit(code);
-}
+// (help on stdout, exit 0; a usage error on stderr, exit 2: both said by runCli, as in every tool)
+const USAGE = `usage: cadmesh-export.mjs <in.cadmesh[.gz]> [--to ${KINDS.join(',')}] [--out <base>] [--orient <up,front> | --model-up y|z] [--skip <regex>]`;
+const usage = (msg) => { throw new CliError(msg); };
 
 // orient: the model's orientation ("+z-y"); modelUp ('z' | 'y') names one, for callers before orient
 export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp = 'z', orient = MODEL_UP[modelUp], skip = null, base = 'model' } = {}) {
@@ -66,8 +63,8 @@ async function main() {
   // (the tools' one argument rule, js/cli-args.js: an unknown or repeated option, a value that is
   // an option, a second input -- each a usage error)
   let r;
-  try { r = parseCli(process.argv.slice(2), { values: ['--to', '--out', '--orient', '--model-up', '--skip'], max: 1 }); } catch (e) { if (e instanceof CliError) usage(e.message); throw e; }
-  if (r.help) usage(null, 0); // (help is not an error, as the other CLIs)
+  r = parseCli(process.argv.slice(2), { values: ['--to', '--out', '--orient', '--model-up', '--skip'], max: 1 });
+  if (r.help) throw new CliHelp(); // (help is not an error, as the other CLIs)
   const opt = (k) => r.opts[k];
   const inp = r.pos[0];
   if (!inp) usage('no input file');
@@ -107,4 +104,4 @@ async function main() {
 
 // run as a command (a path with a space, or through a symlink, included: the plain
 // "file://" + argv[1] test was false there, and the tool exited 0 writing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('cadmesh-export', main);
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('cadmesh-export', main, USAGE);
