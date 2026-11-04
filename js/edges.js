@@ -23,9 +23,9 @@
 // Body facts: area, and |signed volume| (float64, centred on the body, abs so
 // a mirrored instance is positive). Closed comes from the header's kind (the
 // converter takes it from the b-rep); only a body without kind falls back to
-// the mesh: welded edges, degenerate triangles skipped (no area against the
-// body's size: |cross| <= 1e-14 of its diagonal squared), open where an edge
-// is used once.
+// the mesh: welded edges, a triangle whose welded corners collapse skipped (one
+// of three distinct corners on a line counts: it closes a T-junction), open
+// where an edge is used once (shellsOf).
 //
 // Returns { edges: Uint32Array (a, b) pairs, silhouettes: Uint32Array pairs |
 // null, silhouetteNormals: Int16Array (nx ny nz 0) x 2 per candidate | null,
@@ -218,7 +218,7 @@ const mix32 = (v) => { v ^= v >>> 16; v = Math.imul(v, 0x85ebca6b); v ^= v >>> 1
 
 // weld: each vertex of a body (v0, nv; bits: the positions' float32 bits) -> the first vertex of
 // the body with the same bits (-0 and +0 are one position)
-function weldBits(bits, v0, nv) {
+export function weldBits(bits, v0, nv) {
   const wsize = pow2(nv * 2);
   const wtab = new Int32Array(wsize).fill(-1);
   const weld = new Uint32Array(nv);
@@ -245,7 +245,8 @@ function weldBits(bits, v0, nv) {
 }
 
 // per triangle: its unit normal (tn), whether it is degenerate (no area against the body's
-// diagonal: such a triangle has no normal, no silhouette and no say in closed), its signed-volume
+// diagonal: such a triangle has no normal and no silhouette; the closed test counts it unless its
+// corners collapse, shellsOf), its signed-volume
 // term (vol); and the body's area and signed volume (float64, centred on the body's box bb).
 // normals false: tn left out (the weld's turn reads none: 120 MB at the 10 M-triangle cap)
 function triangleFacts(pos, index, t0, nt, bb, normals = true) {
@@ -395,21 +396,24 @@ export function shellTurns(position, index) {
   for (let s = 0; s < ns; s++) if (!shellOpen[s]) closedShells.push(s);
   const flipShell = new Uint8Array(ns);
   let any = false;
-  // (each shell's depth: the others -- open ones too, a part whose surface has a gap -- that
-  // wholly hold it, js/solid.js nesting; none asked when no shell is closed)
-  const { depth, holders } = closedShells.length ? nesting(position, index, shell, ns) : { depth: new Uint32Array(ns), holders: [] };
+  // (each closed shell's outer shell, by its nearest holder, js/solid.js nesting; nothing to ask
+  // when the body is one shell)
+  const nest = closedShells.length && ns > 1 ? nesting(position, index, shell, ns, shellOpen) : null;
   // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
   // the other way). A shell inside another is turned with its outer shell, never by its own sign:
   // a cavity is wound inward and a part embedded in another (a pin in a connector's body) outward,
   // and once in one body the two cannot be told apart -- by its own sign and its depth, a board's
-  // STL read back turned five of its parts inside out. (An open outer shell is turned by nothing,
-  // and nothing in it: a part's cavity inside an outer surface with a gap.)
-  const outerTurn = (s) => !shellOpen[s] && !shellBranched[s] && V[s] < 0;
-  // (a branched outer shell -- two parts face to face -- has no one outside to turn to: kept, and
-  // all in it)
+  // STL read back turned five of its parts inside out. Kept as written: a branched outer shell
+  // (two parts face to face: no one outside), one an open shell's box holds (no answer: a part's
+  // cavity under an outer surface with a gap, and a cube in a lidless tray was turned upright and
+  // not upside down), and a shell whose outer shells do not agree (a part in the overlap of one
+  // wound in and one wound out: its answer turned on the order of the file).
+  const outerTurn = (r) => !shellOpen[r] && !shellBranched[r] && V[r] < 0 && !(nest && nest.inOpen[r]);
   for (const s of closedShells) {
-    const outer = depth[s] ? holders[s].find((o) => depth[o] === 0) : s;
-    if (outer !== undefined && outerTurn(outer)) { flipShell[s] = 1; any = true; }
+    if (!nest) { if (outerTurn(s)) { flipShell[s] = 1; any = true; } continue; }
+    const rs = nest.roots(s), turn = outerTurn(rs[0]);
+    if (rs.some((r) => outerTurn(r) !== turn)) continue;
+    if (turn) { flipShell[s] = 1; any = true; }
   }
   if (!any) return { shell, flip: null };
   const flip = new Uint8Array(nt);

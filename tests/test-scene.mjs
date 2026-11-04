@@ -25,8 +25,13 @@ function boxMesh(name, lo, hi) {
   const faces = new Uint32Array([0, 2, 2, 2, 4, 2, 6, 2, 8, 2, 10, 2]);
   return { name, color: [0.5, 0.5, 0.5], positions, normals: null, colors: null, indices, faces };
 }
+// (a box given 'in' fourth is wound inward: a cavity, as OpenCascade writes one)
 function file(name, boxes) {
-  const meshes = boxes.map(([n, lo, hi]) => boxMesh(n, lo, hi));
+  const meshes = boxes.map(([n, lo, hi, inward]) => {
+    const m = boxMesh(n, lo, hi);
+    if (inward === 'in') for (let t = 0; t < m.indices.length; t += 3) { const x = m.indices[t + 1]; m.indices[t + 1] = m.indices[t + 2]; m.indices[t + 2] = x; }
+    return m;
+  });
   const raw = encodeCadmesh({ units: 'mm', meshes, root: { name, meshes: meshes.map((_, i) => i), children: [] }, sourceUnits: 'mm' });
   return decodeCadmesh(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
 }
@@ -205,13 +210,20 @@ test('containment names the part and the solid that holds it; a part in two over
   assert.deepEqual([r2.distance, r2.inside], [0, true]);
 });
 test('a pin in a hollow block\'s cavity is not inside it: its gap to the cavity wall (the crossings counted, not just met)', () => {
-  // one solid: a block 0..10 with a cavity 2..8 (its outer and inner walls one triangle range)
-  const hollow = file('hollow', [['outer', [0, 0, 0], [10, 10, 10]], ['cavity', [2, 2, 2], [8, 8, 8]]]);
+  // one solid: a block 0..10 with a cavity 2..8 wound inward (its outer and inner walls one triangle range)
+  const hollow = file('hollow', [['outer', [0, 0, 0], [10, 10, 10]], ['cavity', [2, 2, 2], [8, 8, 8], 'in']]);
   const pin = file('pin', [['pin', [4, 4, 4], [6, 6, 6]]]);
   const s = mergeModels([{ base: hollow, name: 'hollow.stp' }, { base: pin, name: 'pin.stp' }]);
   const [[t0, c1], [, c2]] = trisOf(s, [1, 2]);
   const r = clearance(s.position, s.index, trisOf(s, [3]), trisOf(s, [1, 2]), { solidA: trisOf(s, [3]), solidB: [[t0, c1 + c2]] });
   assert.deepEqual([Math.round(r.distance * 1e6) / 1e6, !!r.inside], [2, false], JSON.stringify(r));
+  // the inner box wound OUT is a part embedded in the block, material as the facts' volume and the
+  // view's cut fill take it: the pin in it is inside (r28 A1: Clearance read it 0.9 mm away)
+  const solid = file('solid', [['outer', [0, 0, 0], [10, 10, 10]], ['embedded', [2, 2, 2], [8, 8, 8]]]);
+  const s2 = mergeModels([{ base: solid, name: 'solid.stp' }, { base: pin, name: 'pin.stp' }]);
+  const [[u0, d1], [, d2]] = trisOf(s2, [1, 2]);
+  const r2 = clearance(s2.position, s2.index, trisOf(s2, [3]), trisOf(s2, [1, 2]), { solidA: trisOf(s2, [3]), solidB: [[u0, d1 + d2]] });
+  assert.deepEqual([r2.distance, !!r2.inside], [0, true], JSON.stringify(r2));
 });
 test('one solid of two overlapping shells (an STL never booleaned) holds a pin in their overlap, and in either alone (r27 A2)', () => {
   const two = file('two', [['a', [0, 0, 0], [10, 10, 10]], ['b', [5, 5, 5], [15, 15, 15]]]);

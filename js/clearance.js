@@ -158,8 +158,10 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
   const r = clearanceOfSurfaces(pos, index, trisA, trisB);
   if (!r || r.distance === 0) return r;
   // Each solid on its own, by its box first, then the viewer's one point-in-solid test
-  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells; a point in an
-  // odd number of a shell's crossings is in that shell, which counts +1 or, a cavity, -1). (A
+  // (js/solid.js nesting: its shells by the facts' own split, js/edges.js bodyShells; a shell that
+  // holds the point counts +1 when it is wound as its outer shell is, -1 against it, a cavity --
+  // the winding the facts' volume and the view's cut fill read, so a part embedded in another is
+  // material to all three). (A
   // parity over the whole solid read a point in the overlap of two of its shells as outside; by
   // the first wall's facing, a solid wound inside out read a part 4 mm inside it as 4 mm away.)
   // Every part against every solid's every triangle froze the page: 2,000 parts in a case, 98 s.
@@ -180,7 +182,7 @@ export function clearance(pos, index, trisA, trisB, opts = {}) {
         I[k] = l;
       }
       const Pf = Float32Array.from(P), b = bodyShells(Pf, I);
-      return (idx[s] = nesting(Pf, I, b.shell, b.shellOpen.length));
+      return (idx[s] = nesting(Pf, I, b.shell, b.shellOpen.length, b.shellOpen));
     };
     const boxes = solids.map(([t0, c]) => {
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];

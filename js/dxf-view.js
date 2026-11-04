@@ -28,20 +28,15 @@ const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and n
 // their own beside the lines' box tree; the texts had none: every one tested on a hover over
 // empty sheet, 360 ms a move on a million.)
 
-// The snaps: the nearest point within r that accept(point) takes. pts: [[x, y, ...], ...], or
-// snapPoints' typed set ({ n, xy, at(i) -> the point as an array })
+// The snaps: the nearest point within r that accept(point) takes. pts: snapPoints' typed set
+// ({ n, xy, at(i) -> the point as an array }), the points held by the tree as they are
 // (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
 export function pointTree(pts) {
-  const n = Array.isArray(pts) ? pts.length : pts.n;
-  const xy = Array.isArray(pts) ? Float64Array.from(pts.flatMap((p) => [p[0], p[1]])) : pts.xy;
-  const at = Array.isArray(pts) ? (i) => pts[i] : pts.at;
-  const B = new Float64Array(4 * n), ids = [];
-  for (let i = 0; i < n; i++) {
-    const x = xy[2 * i], y = xy[2 * i + 1];
-    B[4 * i] = B[4 * i + 2] = x; B[4 * i + 1] = B[4 * i + 3] = y;
-    if (Number.isFinite(x + y)) ids.push(i);
-  }
-  return { xy, at, tree: boxTree(B, Uint32Array.from(ids)) };
+  const { n, xy, at } = pts;
+  const ids = new Uint32Array(n);
+  let m = 0;
+  for (let i = 0; i < n; i++) if (Number.isFinite(xy[2 * i] + xy[2 * i + 1])) ids[m++] = i;
+  return { xy, at, tree: boxTree(xy, ids.subarray(0, m), 2, true) };
 }
 export function nearestPoint(index, x, y, r, accept = () => true) {
   const { xy, at } = index;
@@ -156,9 +151,10 @@ const SNAP_KINDS = ['end', 'middle', 'centre'];
 export function snapPoints(paths, o) {
   let cap = 0;
   for (const p of paths) if (!p.outline) cap += p.pts.length + 1; // (at most 2 a point and a centre)
-  const xy = new Float64Array(2 * cap), kind = new Uint8Array(cap), path = new Uint32Array(cap), rad = new Float64Array(cap);
+  // (a radius only for a centre, a few of them: kept aside, not a number a snap)
+  const xy = new Float64Array(2 * cap), kind = new Uint8Array(cap), path = new Uint32Array(cap), rad = new Map();
   let n = 0;
-  const put = (x, y, k, pi, r = 0) => { xy[2 * n] = x - o[0]; xy[2 * n + 1] = y - o[1]; kind[n] = k; path[n] = pi; rad[n] = r; n++; };
+  const put = (x, y, k, pi, r = 0) => { xy[2 * n] = x - o[0]; xy[2 * n + 1] = y - o[1]; kind[n] = k; path[n] = pi; if (k === 2) rad.set(n, r); n++; };
   // (a closed path's last point often repeats its first: counted once)
   const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
   paths.forEach((p, pi) => {
@@ -190,12 +186,12 @@ export function snapPoints(paths, o) {
     let s = made.get(i);
     if (!s) {
       if (made.size > 4096) made.clear();
-      s = [xy[2 * i], xy[2 * i + 1], SNAP_KINDS[kind[i]], paths[path[i]].layer, ...(kind[i] === 2 ? [rad[i]] : [])];
+      s = [xy[2 * i], xy[2 * i + 1], SNAP_KINDS[kind[i]], paths[path[i]].layer, ...(kind[i] === 2 ? [rad.get(i)] : [])];
       made.set(i, s);
     }
     return s;
   };
-  return { n, xy: xy.subarray(0, 2 * n), kind: kind.subarray(0, n), path: path.subarray(0, n), r: rad.subarray(0, n), at };
+  return { n, xy: xy.subarray(0, 2 * n), kind: kind.subarray(0, n), path: path.subarray(0, n), r: rad, at };
 }
 
 export function createDxfView(canvas, drawing, cb = {}) {

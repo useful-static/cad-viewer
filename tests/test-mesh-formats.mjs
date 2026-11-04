@@ -305,7 +305,6 @@ await test('a cavity faces into itself, a part in a cavity out, and parts touchi
   // a box resting on a plate, in either order (r27 Q1)
   for (const parts of [[cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 10], 3, false)], [cubeAt([2, 2, 10], 3, false), cubeAt([0, 0, 0], 10, false)]]) {
     m = weld(join(...parts));
-    assert.equal(facing(m, [5, 5, 5], 0, 24) + 0, facing(m, [5, 5, 5], 0, 24), 'no error');
     assert.equal(m.indices.length / 3, 24);
     const f = decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'p', meshes: [0], children: [] } })).header.facts;
     assert.equal(Math.round(f.volume[0]), 1027, 'the plate and the box, neither turned: 1000 + 27');
@@ -402,6 +401,14 @@ await test('a closed cylinder with fan caps (a hub vertex of 64 edges, past the 
   assert.ok(Math.abs(f.volume[0] - Math.PI * 9 * 5) / (Math.PI * 45) < 0.01, `volume ${f.volume[0]}`);
 });
 
+await test('the weld joins positions equal in float32, as the facts do: a corner written twice 1e-12 apart is one corner (r28 A4)', async () => {
+  // a cube of own corners (8 corners, 24 after the crease), one corner written a hair off on one face
+  const pos = [], tri = [];
+  TRIS.forEach((t, i) => { for (const v of t) { tri.push(pos.length / 3); const p = [...C[v]]; if (i === 2 && v === 7) p[2] += 1e-12; pos.push(...p); } });
+  assert.notEqual(pos[3 * tri[6 + TRIS[2].indexOf(7)] + 2], 10, 'apart in float64');
+  const m = weld({ name: 'c', pos, tri });
+  assert.equal(m.positions.length / 3, 24, 'the crease\'s 24 corners: none split by the hair (the float64 text keys made 25)');
+});
 await test('STL ASCII: the solid name', async () => {
   const m = cube(await parseMesh('stl', stlAscii(), 'cube.stl'));
   assert.equal(m.name, 'cube');

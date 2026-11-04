@@ -17,7 +17,7 @@
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
 import { FORMATS, SNIFF_BYTES, extOf, sniffFormat } from './formats.js';
-import { shellTurns } from './edges.js';
+import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
@@ -169,19 +169,23 @@ function counter(who) {
 
 // Weld equal positions, then split each welded vertex by crease (and by
 // triangle colour, and by shell), normals area-weighted within each group;
-// each closed shell wound the wrong way for where it lies turned round first
-// (shellTurns, js/edges.js: the facts' own closed test, on the float32
-// positions written, a cavity by its nesting)
+// an outer shell wound inward turned round first, with every shell wholly in
+// it (shellTurns, js/edges.js: the facts' own closed test, on the float32
+// positions written)
 export function weld(b) {
-  const P = b.pos, T = b.tri;
-  const map = new Map();
-  const wid = new Uint32Array(P.length / 3);
+  const T = b.tri;
+  // welded on the float32 bits the body is stored with, by the facts' own weld (js/edges.js
+  // weldBits): keyed by the reader's float64 text, two points apart only past float32 stayed two
+  // -- 30 shading seams and 27 edge lines on a sphere the facts call closed -- and the string keys
+  // were most of the read at the cap
+  const P = Float32Array.from(b.pos);
+  const nv0 = P.length / 3, rep = weldBits(new Uint32Array(P.buffer), 0, nv0);
+  const wid = new Uint32Array(nv0), first = new Int32Array(nv0).fill(-1);
   const wp = [];
-  for (let v = 0; v < P.length / 3; v++) {
-    const k = `${P[v * 3]},${P[v * 3 + 1]},${P[v * 3 + 2]}`;
-    let w = map.get(k);
-    if (w === undefined) { w = wp.length / 3; map.set(k, w); wp.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); }
-    wid[v] = w;
+  for (let v = 0; v < nv0; v++) {
+    const r = rep[v];
+    if (first[r] < 0) { first[r] = wp.length / 3; wp.push(P[r * 3], P[r * 3 + 1], P[r * 3 + 2]); }
+    wid[v] = first[r];
   }
   const nt = T.length / 3;
   const fn = new Float64Array(nt * 3); // area-weighted (unnormalised) face normals
@@ -198,12 +202,12 @@ export function weld(b) {
     if (b.col) colKept.push(b.col[t]);
     kept++;
   }
-  // Each closed shell wound the wrong way for where it lies (an outer surface inward, a cavity
-  // outward) is turned round before the normals are made, so its winding and its normals look out
-  // of the material, as every reader of the body takes them (the view drew an STL wound inside out
-  // as all cut face under a section). Decided on the float32 positions written, by the facts' own
-  // test (js/edges.js shellTurns): the weld's own float64 rule called bodies open that the facts
-  // call closed, and one volume per shell turned a cavity inside out.
+  // An outer shell wound inward, and every shell wholly in it, is turned round before the normals
+  // are made, so its winding and its normals look out of the material, as every reader of the body
+  // takes them (the view drew an STL wound inside out as all cut face under a section). A shell in
+  // another is never turned by its own winding (a cavity and a part embedded in another look
+  // alike). Decided on the float32 positions written, by the facts' own test (js/edges.js
+  // shellTurns): the weld's own float64 rule called bodies open that the facts call closed.
   const { shell, flip } = shellTurns(Float32Array.from(wp), tri.subarray(0, kept * 3));
   if (flip) {
     for (let t = 0; t < kept; t++) {

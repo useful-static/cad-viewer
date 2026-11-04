@@ -681,12 +681,16 @@ test('the 2D snaps and the hover\'s line: the index finds what a scan of every o
   let s = 11;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   // clustered: most points in a small patch, some on cell-like edges (whole numbers)
-  const pts = [];
+  // (as the page builds them: one-point paths, each one end snap, through snapPoints' typed set, r28 Q6)
+  const one = [];
   for (let i = 0; i < 20000; i++) {
     const c = i % 4 === 0;
-    pts.push([c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5, c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5, 'end', i % 3 === 0 ? 'HID' : 'A']);
+    one.push({ layer: i % 3 === 0 ? 'HID' : 'A', closed: false, pts: Float64Array.of(c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5, c ? Math.round(rnd() * 100) : 50 + rnd() * 0.5) });
   }
-  const tree = pointTree(pts);
+  const set = snapPoints(one, [0, 0]);
+  const pts = Array.from({ length: set.n }, (_, i) => set.at(i));
+  assert.equal(pts.length, 20000);
+  const tree = pointTree(set);
   const ok = (p) => p[3] !== 'HID';
   for (let q = 0; q < 300; q++) {
     const x = rnd() * 100, y = rnd() * 100, r = [0.01, 0.3, 3, 40][q % 4];
@@ -815,8 +819,8 @@ test('2D Measure snaps the middle of a closed path\'s closing side, once (r26 Q3
 test('the box tree: a hit at exactly r is within r, and the nearer child is walked first (r26 Q6)', () => {
   // points on a line, 1 apart: from 0.5 off the line at x 3, at r = 0.5 the point (3, 0) is exactly r away
   const pts = Array.from({ length: 200 }, (_, i) => [i, 0]);
-  const index = pointTree(pts);
-  assert.deepEqual(nearestPoint(index, 3, 0.5, 0.5), [3, 0], 'inclusive radius');
+  const index = pointTree(snapPoints(pts.map(([x, y]) => ({ layer: 'A', closed: false, pts: Float64Array.of(x, y) })), [0, 0]));
+  assert.deepEqual(nearestPoint(index, 3, 0.5, 0.5).slice(0, 2), [3, 0], 'inclusive radius');
   assert.equal(nearestPoint(index, 3, 0.5, 0.4999), null);
   // the walk: a query near one end visits only a few items (the nearer child first prunes the rest)
   const B = new Float64Array(4 * pts.length);

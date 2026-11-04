@@ -59,9 +59,9 @@ async function check(f) {
     } catch (e) { rep.drawError = e.message; }
     return { rep, P, bad: !!(d.failures.length || rep.drawError), why: '' };
   } catch (err) {
-    rep.error = String(err.stack || err);
+    rep.error = err?.reason || (err && err.message ? err.message : String(err)); // (the reader's words, not node's stack, in --json too)
     // (the row names the file: readInput's words without the path)
-    return { rep, P: null, bad: true, why: err?.reason || (err && err.message ? err.message : String(err)) };
+    return { rep, P: null, bad: true, why: rep.error };
   }
 }
 

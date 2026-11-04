@@ -4,9 +4,9 @@
 // no DOM. (The 2D view had a 2-d tree beside a box tree; the shells an index on x alone, which a
 // stack along y, or one wide board under its parts, made quadratic again: 7.0 s for 20,000 cubes.)
 //
-// boxTree(B, ids, D = 2): B, a Float64Array of two opposite corners per item (D numbers, then D
-// more, in either order: a segment's two ends are its box's); ids, the items to hold (finite
-// ones). The items sorted along a Morton curve of their boxes' centres, LEAF a leaf, the leaves
+// boxTree(B, ids, D = 2, points = false): B, a Float64Array of two opposite corners per item (D
+// numbers, then D more, in either order: a segment's two ends are its box's), or with points one
+// point per item; ids, the items to hold (finite ones). The items sorted along a Morton curve of their boxes' centres, LEAF a leaf, the leaves
 // the bottom row of a complete binary tree (node i's children 2i + 1, 2i + 2), each node's box
 // (float32, widened a little so rounding never shrinks it) holding its children's. The curve
 // follows the items' density: a uniform grid sized from the extents put 95.6 % of a real
@@ -18,12 +18,14 @@ export const LEAF = 16;
 const spread2 = (v) => { v = (v | (v << 8)) & 0x00ff00ff; v = (v | (v << 4)) & 0x0f0f0f0f; v = (v | (v << 2)) & 0x33333333; return (v | (v << 1)) & 0x55555555; };
 const spread3 = (v) => { v &= 0x3ff; v = (v | (v << 16)) & 0x030000ff; v = (v | (v << 8)) & 0x0300f00f; v = (v | (v << 4)) & 0x030c30c3; return (v | (v << 2)) & 0x09249249; };
 
-export function boxTree(B, ids, D = 2) {
-  const m = ids.length, S = 2 * D;
+// (points: B holds one point an item, D numbers, its box of no size -- the 2D snaps, without a
+// box copy of them: 288 MB for 9 M)
+export function boxTree(B, ids, D = 2, points = false) {
+  const m = ids.length, S = 2 * D, IS = points ? D : S, H = points ? 0 : D;
   const lo = new Array(D).fill(Infinity), hi = new Array(D).fill(-Infinity);
   for (let k = 0; k < m; k++) {
     const t = ids[k];
-    for (let a = 0; a < D; a++) { const c = (B[S * t + a] + B[S * t + D + a]) / 2; if (c < lo[a]) lo[a] = c; if (c > hi[a]) hi[a] = c; }
+    for (let a = 0; a < D; a++) { const c = (B[IS * t + a] + B[IS * t + H + a]) / 2; if (c < lo[a]) lo[a] = c; if (c > hi[a]) hi[a] = c; }
   }
   const top = D === 2 ? 65535 : 1023;
   const sc = lo.map((l, a) => (hi[a] > l ? top / (hi[a] - l) : 0));
@@ -32,7 +34,7 @@ export function boxTree(B, ids, D = 2) {
     const t = ids[k];
     let c = 0;
     for (let a = 0; a < D; a++) {
-      const q = Math.floor(((B[S * t + a] + B[S * t + D + a]) / 2 - lo[a]) * sc[a]);
+      const q = Math.floor(((B[IS * t + a] + B[IS * t + H + a]) / 2 - lo[a]) * sc[a]);
       c |= (D === 2 ? spread2(q) : spread3(q)) << a;
     }
     code[k] = c >>> 0;
@@ -59,7 +61,7 @@ export function boxTree(B, ids, D = 2) {
     for (let k = j * LEAF; k < Math.min(m, (j + 1) * LEAF); k++) {
       const t = order[k];
       for (let a = 0; a < D; a++) {
-        const u = B[S * t + a], w = B[S * t + D + a];
+        const u = B[IS * t + a], w = B[IS * t + H + a];
         if (u < l[a]) l[a] = u; if (w < l[a]) l[a] = w; if (u > h[a]) h[a] = u; if (w > h[a]) h[a] = w;
       }
     }
@@ -118,7 +120,29 @@ export function nearestItem(trees, q, r, dist, accept = () => true) {
 }
 
 // Every item of the tree whose leaf's box holds q, visited (visit(id)); the caller tests the item
-// itself
+// itself. Its own walk, not nearestItem's: a containment test and no closure or stack made a call
+// (2.4 M calls by way of nearestItem were 12.9 s). The stacks are kept, one a depth of calls, as a
+// visit may ask another tree (a shell's holders, then a ray against each).
+const STACKS = [];
+let depthAt = 0;
 export function itemsAt(tree, q, visit) {
-  nearestItem([tree], q, 0, () => 0, (t) => { visit(t); return false; });
+  const { order, m, P, box, D } = tree;
+  if (!m) return;
+  const S = 2 * D;
+  const stack = STACKS[depthAt] || (STACKS[depthAt] = new Int32Array(128));
+  depthAt++;
+  try {
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp) {
+      const i = stack[--sp];
+      let inBox = box[S * i] === box[S * i]; // (not NaN: a box)
+      for (let a = 0; inBox && a < D; a++) if (q[a] < box[S * i + a] || q[a] > box[S * i + D + a]) inBox = false;
+      if (!inBox) continue;
+      if (i >= P - 1) {
+        const j = i - (P - 1);
+        for (let k = j * LEAF, e = Math.min(m, (j + 1) * LEAF); k < e; k++) visit(order[k]);
+      } else { stack[sp++] = 2 * i + 2; stack[sp++] = 2 * i + 1; }
+    }
+  } finally { depthAt--; }
 }

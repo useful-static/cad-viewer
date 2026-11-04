@@ -86,10 +86,6 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) throw new CliHelp();
   if (!args.input) throw new CliError('no input file');
-  // (an angle no circle test passes: said before the conversion, which it does not depend on)
-  if (circleMinPoints(args.params.angularDeflection) === Infinity) {
-    process.stderr.write(`stp2mesh: WARNING: --angular ${args.params.angularDeflection} is 2π/9 (0.698) or more: no circle can be found in the result (List holes, a drawing's circles)\n`);
-  }
   // a gzipped file (part.stp.gz) is opened as the one inside it, as the
   // viewer does (review r18)
   const gz = /\.gz$/i.test(args.input);
@@ -113,6 +109,11 @@ async function main() {
   const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
   // an output it cannot write (no such directory, or a directory) refused before the conversion
   await checkOutput(out);
+  // (an angle no circle test passes: said once the input and output are known good, before the
+  // conversion, which it does not depend on -- a run then refused printed it too)
+  if (circleMinPoints(args.params.angularDeflection) === Infinity) {
+    process.stderr.write(`stp2mesh: WARNING: --angular ${args.params.angularDeflection} is 2π/9 (0.698) or more: no circle can be found in the result (List holes, a drawing's circles)\n`);
+  }
   const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');
   if (!existsSync(occtJs)) {
