@@ -3,7 +3,7 @@
 // instantly. Same OpenCascade build (occt-import-js) and the same packing code
 // (js/cadmesh.js) as the in-browser import, so the two paths cannot disagree.
 
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -13,7 +13,8 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, hashName, no
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
-import { CliError, parseCli, positive, runCli } from './js/cli-args.js';
+import { CliError, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
+import { circleMinPoints } from './js/measure-geom.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // (the extensions from the viewer's format table, js/formats.js: written out here, .brp was missing)
@@ -86,11 +87,12 @@ async function main() {
     args = parseArgs(process.argv.slice(2));
   } catch (e) {
     if (!(e instanceof CliError)) throw e;
-    process.stderr.write(`${e.message}\n${USAGE}`);
+    // (a usage error named for the tool, as the other four say theirs)
+    process.stderr.write(`stp2mesh: ${e.message}\n${USAGE}`);
     return 2;
   }
   if (args.help) { process.stdout.write(USAGE); return 0; }
-  if (!args.input) { process.stderr.write(`no input file\n${USAGE}`); return 2; }
+  if (!args.input) { process.stderr.write(`stp2mesh: no input file\n${USAGE}`); return 2; }
   // a gzipped file (part.stp.gz) is opened as the one inside it, as the
   // viewer does (review r18)
   const gz = /\.gz$/i.test(args.input);
@@ -99,14 +101,9 @@ async function main() {
   const base = inner.split('/').pop();
   const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
   // a missing file or a directory said as such, not as an extension (r23)
-  let st = null;
-  try { st = statSync(args.input); } catch { /* reported below */ }
-  if (!st || !st.isFile()) {
-    // (an input that cannot be read is refused, exit 1, as cadmesh-export and dwg-check refuse it;
-    // 2 is for the options)
-    // (each refusal thrown, said by runCli in the one shape the five tools share: "stp2mesh: ...")
-    throw new Error(`${args.input}: ${st ? 'not a file' : 'no such file'}`);
-  }
+  // (an input that cannot be read is refused, exit 1, in the five tools' one wording (readInput),
+  // said by runCli: "stp2mesh: ..."; 2 is for the options)
+  const read = await readInput(args.input);
   // a name that says nothing: told by the bytes, as the viewer does (r22)
   const format = FORMATS[ext] || sniffFile(args.input);
   if (!format) {
@@ -117,10 +114,8 @@ async function main() {
   // (the extension dropped only when the name had a CAD one: a bare name in
   // a dotted directory kept its directory)
   const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
-  // an output whose directory is missing is refused before the conversion, not after it
-  let od = null;
-  try { od = statSync(dirname(resolve(out))); } catch { /* said below */ }
-  if (!od || !od.isDirectory()) throw new Error(`could not write ${out}: no such directory ${dirname(out)}`);
+  // an output it cannot write (no such directory, or a directory) refused before the conversion
+  await checkOutput(out);
   const occtDir = resolve(args.occt || join(HERE, 'vendor', 'occt-import-js', ...(args.threads ? ['mt'] : [])));
   const occtJs = join(occtDir, 'occt-import-js.js');
   if (!existsSync(occtJs)) {
@@ -147,7 +142,6 @@ async function main() {
   }
   const occt = await createRequire(import.meta.url)(occtJs)({ locateFile: (p) => join(occtDir, p), onProgress });
   const t0 = Date.now();
-  const read = readFileSync(args.input);
   const unpacked = read[0] === 0x1f && read[1] === 0x8b ? gunzipSync(read) : read;
   // a UTF-8 byte-order mark first (some exporters write one): OpenCascade
   // refuses it ("unexpected QUID, expecting STEP"), so it is dropped (r21)
@@ -176,6 +170,10 @@ async function main() {
   const unknown = [...new Set(statuses.filter((k) => k && !BODY_KINDS.includes(k)))];
   if (unknown.length) {
     process.stderr.write(`WARNING: b-rep status(es) not in BODY_KINDS, left out of the header: ${unknown.join(', ')}\n`);
+  }
+  // (an angle no circle test passes: List holes and the drawing's circles find none, said here)
+  if (circleMinPoints(args.params.angularDeflection) === Infinity) {
+    process.stderr.write(`WARNING: --angular ${args.params.angularDeflection} is 2π/9 (0.698) or more: no circle can be found in the result (List holes, a drawing's circles)\n`);
   }
   if (args.noKind) for (const m of model.meshes) m.kind = null;
   const buf = encodeCadmesh(model, { edges: !args.noEdges });

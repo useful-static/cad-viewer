@@ -15,9 +15,14 @@
 //
 //   runCli('split-board', main)
 //     the rule's other half: an input the tool cannot read (main throws an Error) is said in one
-//     line on stderr, exit 1 -- not node's stack trace
+//     line on stderr, exit 1 -- not node's stack trace; a usage error, "<tool>: <what>" and the
+//     usage, exit 2, in each tool
 //
-// Pure ES module; only runCli touches the process (stderr, exit), when it runs.
+//   await readInput(path), await checkOutput(path)
+//     the input read, and the output checked before the work, in the five tools' one wording
+//
+// Pure ES module; only runCli touches the process (stderr, exit), when it runs; readInput and
+// checkOutput load node:fs when called (the page never calls them).
 
 export class CliError extends Error {}
 
@@ -51,6 +56,30 @@ export function parseCli(argv, { values = [], flags = [], max = Infinity } = {})
   }
   if (pos.length > max) throw new CliError(max === 1 ? `one input file, not ${pos.length}` : `unexpected argument ${pos[max]}`);
   return { opts, pos };
+}
+
+// The input a tool reads, or an Error in the tools' one wording: "<path>: no such file" / "not a
+// file" (node's "ENOENT: ..." in two tools, both in a third). reason: the words without the path,
+// for a tool that names the file itself (dwg-check's rows).
+export async function readInput(path) {
+  const { readFileSync, statSync } = await import('node:fs');
+  let st = null;
+  try { st = statSync(path); } catch { /* said below */ }
+  if (!st || !st.isFile()) {
+    const reason = st ? 'not a file' : 'no such file';
+    throw Object.assign(new Error(`${path}: ${reason}`), { reason });
+  }
+  return readFileSync(path);
+}
+// An output a tool will write, checked before the work: its directory there, the path no
+// directory (stp2mesh converted, split-board split, before a failed write said so)
+export async function checkOutput(path) {
+  const { statSync } = await import('node:fs');
+  const { dirname, resolve } = await import('node:path');
+  const st = (p) => { try { return statSync(p); } catch { return null; } };
+  const dir = st(dirname(resolve(path)));
+  if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${dirname(path)}`);
+  if (st(path)?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
 }
 
 // A tool's main (sync or async) run: a thrown Error is a refused input, one line, exit 1

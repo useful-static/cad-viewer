@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { meshFormatOf, parseMesh, unzip, weld } from '../js/mesh-formats.js';
 import { MM, encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
+import { shellTurns } from '../js/edges.js';
 
 // (the shared harness; its name filter: node tests/test-mesh-formats.mjs <name-part>)
 import { test, done } from './harness.mjs';
@@ -230,7 +231,6 @@ await test('the weld turns a shell by the facts\' own closed test, each shell by
   assert.equal(facing(m, [5, 5, 5], 12, 22), 0, 'the open inward part: kept');
 });
 await test('the closed test counts edges in typed tables: a closed torus of 2 M triangles in under 1.5 s (r25 Q5)', async () => {
-  const { inwardTriangles } = await import('../js/edges.js');
   const N = 1000;
   const pos = new Float32Array(N * N * 3);
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
@@ -244,10 +244,82 @@ await test('the closed test counts edges in typed tables: a closed torus of 2 M 
     tri[p++] = a; tri[p++] = c; tri[p++] = b; tri[p++] = a; tri[p++] = d; tri[p++] = c; // wound in
   }
   const t0 = performance.now();
-  const flip = inwardTriangles(pos, tri);
+  const { flip } = shellTurns(pos, tri);
   const ms = performance.now() - t0;
   assert.ok(flip && flip.every((x) => x === 1), 'the inward torus is turned');
   assert.ok(ms < 1500, `${ms.toFixed(0)} ms`);
+});
+await test('a cavity faces into itself, a part in a cavity out, and parts touching at a corner are shells of their own (r26 A1, A2)', async () => {
+  const facing = (m, c, t0, t1) => {
+    let out = 0;
+    for (let t = t0; t < t1; t++) for (let k = 0; k < 3; k++) {
+      const v = m.indices[t * 3 + k];
+      out += [0, 1, 2].reduce((s, j) => s + (m.positions[v * 3 + j] - c[j]) * m.normals[v * 3 + j], 0) > 0 ? 1 : 0;
+    }
+    return out;
+  };
+  // a cube (side s from corner o) of 12 triangles, own corners, wound out or in
+  const cubeAt = (o, s, inward) => {
+    const pos = [], tri = [];
+    for (const t of TRIS) for (const v of inward ? [t[0], t[2], t[1]] : t) { tri.push(pos.length / 3); pos.push(o[0] + C[v][0] * s / S, o[1] + C[v][1] * s / S, o[2] + C[v][2] * s / S); }
+    return { pos, tri };
+  };
+  const join = (...bs) => {
+    const pos = [], tri = [];
+    for (const b of bs) { const o = pos.length / 3; pos.push(...b.pos); tri.push(...b.tri.map((i) => i + o)); }
+    return { name: 'p', pos, tri };
+  };
+  const facts = (m) => decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'p', meshes: [0], children: [] } })).header.facts;
+  // a 10 mm cube with a 4 mm cavity, both wound correctly (the cavity inward): kept as it is
+  let m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([3, 3, 3], 4, true)));
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 36, 'the outer surface faces out');
+  assert.equal(facing(m, [5, 5, 5], 12, 24), 0, 'the cavity faces into itself (toward its centre), not into the material');
+  assert.equal(Math.round(facts(m).volume[0]), 936, 'volume: 1000 - 64 (round 25 turned the cavity: 1064)');
+  // the same body written the other way round throughout (a mirrored placement): both turned
+  m = weld(join(cubeAt([0, 0, 0], 10, true), cubeAt([3, 3, 3], 4, false)));
+  assert.equal(facing(m, [5, 5, 5], 0, 12), 36);
+  assert.equal(facing(m, [5, 5, 5], 12, 24), 0);
+  // a part inside the cavity (a die in a box): nested twice, it faces out
+  m = weld(join(cubeAt([0, 0, 0], 10, false), cubeAt([2, 2, 2], 6, true), cubeAt([4, 4, 4], 2, true)));
+  assert.equal(facing(m, [5, 5, 5], 24, 36), 36, 'the part in the cavity, wound in, is turned to face out');
+  assert.equal(facing(m, [5, 5, 5], 12, 24), 0, 'the cavity kept');
+  // two cubes touching at a corner (1, 1, 1), the one wound out and the other in, both sizes round:
+  // each its own shell (joined at a vertex, one was turned by their summed volume)
+  for (const [sa, sb] of [[1, 2], [2, 1]]) {
+    m = weld(join(cubeAt([1 - sa, 1 - sa, 1 - sa], sa, false), cubeAt([1, 1, 1], sb, true)));
+    assert.equal(facing(m, [1 - sa / 2, 1 - sa / 2, 1 - sa / 2], 0, 12), 36, `outward ${sa} touching inward ${sb}: kept`);
+    assert.equal(facing(m, [1 + sb / 2, 1 + sb / 2, 1 + sb / 2], 12, 24), 36, `inward ${sb} touching outward ${sa}: turned`);
+  }
+});
+await test('20,000 separate cubes on whole-number corners in one body: shells and their nesting in under 1.5 s (r26)', async () => {
+  // (the weld's hash left whole-number floats' zero low bits unmixed: 7.5 s; each shell tested
+  // against every other for nesting: 10.7 s)
+  const n = 20000, pos = new Float32Array(n * 24), idx = new Uint32Array(n * 36);
+  const q4 = (a, b, c, d) => [a, b, c, a, c, d];
+  const T = [...q4(0, 2, 3, 1), ...q4(4, 5, 7, 6), ...q4(0, 1, 5, 4), ...q4(2, 6, 7, 3), ...q4(0, 4, 6, 2), ...q4(1, 3, 7, 5)];
+  for (let c = 0; c < n; c++) {
+    const ox = (c % 100) * 3, oy = Math.floor(c / 100) * 3;
+    for (let i = 0; i < 8; i++) { pos[c * 24 + i * 3] = ox + (i & 1); pos[c * 24 + i * 3 + 1] = oy + ((i & 2) >> 1); pos[c * 24 + i * 3 + 2] = (i & 4) >> 2; }
+    for (let k = 0; k < 36; k++) idx[c * 36 + k] = c * 8 + T[k];
+  }
+  const t0 = performance.now();
+  const { shell, flip } = shellTurns(pos, idx);
+  const ms = performance.now() - t0;
+  assert.equal(new Set(shell).size, n);
+  assert.equal(flip, null, 'every cube wound out: none turned');
+  assert.ok(ms < 1500, `${ms.toFixed(0)} ms`);
+});
+await test('a closed cylinder with fan caps (a hub vertex of 64 edges, past the short-list sort) is closed (r26 Q2)', async () => {
+  // 64 segments; each cap a fan about its centre: the centre's edge list is 128 long
+  const n = 64, pos = [0, 0, 0, 0, 0, 5], tri = [];
+  for (let i = 0; i < n; i++) { const a = (2 * Math.PI * i) / n; pos.push(3 * Math.cos(a), 3 * Math.sin(a), 0, 3 * Math.cos(a), 3 * Math.sin(a), 5); }
+  const b = (i) => 2 + 2 * (i % n), t = (i) => 3 + 2 * (i % n);
+  for (let i = 0; i < n; i++) tri.push(0, b(i + 1), b(i), 1, t(i), t(i + 1), b(i), b(i + 1), t(i + 1), b(i), t(i + 1), t(i));
+  // with the fan centres the same vertex for every triangle of a cap (one weld id)
+  const m = weld({ name: 'cyl', pos, tri });
+  const f = decodeCadmesh(encodeCadmesh({ units: MM, meshes: [m], root: { name: 'c', meshes: [0], children: [] } })).header.facts;
+  assert.equal(f.closed[0], true);
+  assert.ok(Math.abs(f.volume[0] - Math.PI * 9 * 5) / (Math.PI * 45) < 0.01, `volume ${f.volume[0]}`);
 });
 
 await test('STL ASCII: the solid name', async () => {

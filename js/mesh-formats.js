@@ -17,7 +17,7 @@
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
 import { FORMATS, SNIFF_BYTES, extOf, sniffFormat } from './formats.js';
-import { inwardTriangles } from './edges.js';
+import { shellTurns } from './edges.js';
 import { LENGTH_MM } from './units.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
@@ -168,9 +168,10 @@ function counter(who) {
 }
 
 // Weld equal positions, then split each welded vertex by crease (and by
-// triangle colour), normals area-weighted within each group; each closed
-// shell wound inward turned round (inwardTriangles, js/edges.js: the facts'
-// own closed test, on the float32 positions written)
+// triangle colour, and by shell), normals area-weighted within each group;
+// each closed shell wound the wrong way for where it lies turned round first
+// (shellTurns, js/edges.js: the facts' own closed test, on the float32
+// positions written, a cavity by its nesting)
 export function weld(b) {
   const P = b.pos, T = b.tri;
   const map = new Map();
@@ -197,6 +198,23 @@ export function weld(b) {
     if (b.col) colKept.push(b.col[t]);
     kept++;
   }
+  // Each closed shell wound the wrong way for where it lies (an outer surface inward, a cavity
+  // outward) is turned round before the normals are made, so its winding and its normals look out
+  // of the material, as every reader of the body takes them (the view drew an STL wound inside out
+  // as all cut face under a section). Decided on the float32 positions written, by the facts' own
+  // test (js/edges.js shellTurns): the weld's own float64 rule called bodies open that the facts
+  // call closed, and one volume per shell turned a cavity inside out.
+  const { shell, flip } = shellTurns(Float32Array.from(wp), tri.subarray(0, kept * 3));
+  if (flip) {
+    for (let t = 0; t < kept; t++) {
+      if (!flip[t]) continue;
+      const x = tri[t * 3 + 1]; tri[t * 3 + 1] = tri[t * 3 + 2]; tri[t * 3 + 2] = x;
+      for (let k = 0; k < 3; k++) fn[t * 3 + k] = -fn[t * 3 + k];
+    }
+  }
+  // (the crease groups are kept apart by shell too: two parts touching at a vertex share it, and
+  // one's normals are no part of the other's)
+  const shells = new Set(shell).size > 1;
   const cosC = Math.cos((CREASE_DEG * Math.PI) / 180);
   const unit = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
   // per welded vertex: its groups [{ n: unit seed, out }] (and .noNormal, its no-normal group), with colours kept apart by a Map
@@ -215,11 +233,11 @@ export function weld(b) {
     const fl = Math.hypot(fx, fy, fz);
     const flat = !(fl > 0 && Number.isFinite(fl));
     const n = flat ? null : [fx / fl, fy / fl, fz / fl];
-    const ck = cols ? cols[t].join(',') : '';
+    const ck = `${cols ? cols[t].join(',') : ''}${shells ? `/${shell[t]}` : ''}`;
     for (let c = 0; c < 3; c++) {
       const w = tri[t * 3 + c];
       let gs;
-      if (cols) {
+      if (cols || shells) {
         const byCol = groups[w] || (groups[w] = new Map());
         gs = byCol.get(ck);
         if (!gs) { gs = []; byCol.set(ck, gs); }
@@ -238,26 +256,6 @@ export function weld(b) {
     }
   }
   const positions = new Float32Array(outPos);
-  // Each closed shell wound inward is turned round, so its winding and the normals made from it look
-  // out, as every reader of the body takes them (the view drew an STL wound inside out as all cut
-  // face under a section). Decided on the float32 positions written, by the facts' own test: the
-  // weld's own float64 rule called bodies open that the facts call closed. The crease groups
-  // above stand: turning a shell negates every normal in it, and a group lies in one shell.
-  const flip = inwardTriangles(positions, corner);
-  if (flip) {
-    for (let t = 0; t < kept; t++) {
-      if (!flip[t]) continue;
-      const fx = fn[t * 3], fy = fn[t * 3 + 1], fz = fn[t * 3 + 2];
-      const fl = Math.hypot(fx, fy, fz);
-      if (fl > 0 && Number.isFinite(fl)) {
-        for (let c = 0; c < 3; c++) {
-          const o = corner[t * 3 + c] * 3;
-          outNrmSum[o] -= 2 * fx; outNrmSum[o + 1] -= 2 * fy; outNrmSum[o + 2] -= 2 * fz;
-        }
-      }
-      const x = corner[t * 3 + 1]; corner[t * 3 + 1] = corner[t * 3 + 2]; corner[t * 3 + 2] = x;
-    }
-  }
   const nv = outPos.length / 3;
   const normals = new Float32Array(nv * 3);
   for (let v = 0; v < nv; v++) {

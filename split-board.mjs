@@ -19,11 +19,11 @@
 // Works on .cadmesh files with the faces section (stp2mesh.mjs writes it):
 // a vertex belongs to exactly one b-rep face, so the cut never splits one.
 
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, modelFactsOf } from './js/cadmesh.js';
-import { CliError, parseCli, positive, runCli } from './js/cli-args.js';
+import { CliError, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report]
 
@@ -227,12 +227,14 @@ export function splitBoard(d, { sliver = 1.2 } = {}) {
   return { meshes: out, slab: [zb, zt], board: bm, parts: pieces.length };
 }
 
-function main() {
+async function main() {
   let a;
   try { a = args(process.argv.slice(2)); } catch (e) { if (!(e instanceof CliError)) throw e; process.stderr.write(`split-board: ${e.message}\n${USAGE}`); process.exit(2); }
   if (a.help) { process.stdout.write(USAGE); process.exit(0); }
   if (!a.in || !a.out) { process.stderr.write(`split-board: ${a.in ? 'no -o output' : 'no input file'}\n${USAGE}`); process.exit(2); }
-  let raw = readFileSync(a.in);
+  // (the input read and the output checked in the five tools' one wording, before the split)
+  let raw = await readInput(a.in);
+  await checkOutput(a.out);
   if (raw[0] === 0x1f && raw[1] === 0x8b) raw = gunzipSync(raw);
   const d = decodeCadmesh(toAB(raw));
   const s = splitBoard(d, { sliver: a.sliver });

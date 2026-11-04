@@ -41,9 +41,8 @@ export function drawingSVG(parts, right, up, { title = '', margin = 5 } = {}) {
       circles++;
     }
     const onCircle = (pts) => round.some((r) => pts.every(([x, y]) => Math.abs(Math.hypot(x - r.x, y - r.y) - r.r) <= 0.01 * r.r + 1e-4));
-    for (const e of part.geom.edges) {
-      const closed = e.length > 3 && e[0][0] === e[e.length - 1][0] && e[0][1] === e[e.length - 1][1] && e[0][2] === e[e.length - 1][2];
-      if (closed && !round.length) {
+    for (const [ei, e] of part.geom.edges.entries()) {
+      if (part.geom.edgeClosed[ei] && !round.length) {
         // a closed edge that is a circle seen face on (geometry without its
         // faces' circles): a true circle
         const c = circleOf(e.slice(0, -1), part.geom.a); // (the part's own: a scene's models differ)

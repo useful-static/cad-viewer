@@ -9,7 +9,7 @@
 export function model(bodies, angularDeflection = 0.5) {
   const pos = [], idx = [], faces = [], meshes = [];
   for (const b of bodies) {
-    const m = { name: b.name, idxStart: idx.length, faceStart: faces.length / 2, faceCount: b.faces.length };
+    const m = { name: b.name, vtxStart: pos.length / 3, idxStart: idx.length, faceStart: faces.length / 2, faceCount: b.faces.length };
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (const f of b.faces) {
       const map = new Map();
@@ -23,6 +23,7 @@ export function model(bodies, angularDeflection = 0.5) {
       }
     }
     m.idxCount = idx.length - m.idxStart;
+    m.vtxCount = pos.length / 3 - m.vtxStart;
     m.bbox = { min: lo, max: hi };
     meshes.push(m);
   }

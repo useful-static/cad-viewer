@@ -512,6 +512,9 @@ function validateHeader(h) {
     vtxEnd = m.vtxStart + m.vtxCount;
     if (m.vtxCount ? !box(m.bbox) : !(m.bbox === null || box(m.bbox))) bad(`mesh ${i} bounding box malformed`);
     if (m.name !== undefined && m.name !== null && typeof m.name !== 'string') bad(`mesh ${i} name is not text`);
+    // (one angle a file, the header's: a mesh's own, which no writer emits, went unchecked into the
+    // circle test -- "x", -1, 1e-6 on a mesh row each dropped a washer's circles to 0)
+    if (m.angularDeflection !== undefined) bad(`mesh ${i} has an angularDeflection of its own: a file has one, in its header`);
     if (m.kind !== undefined && m.kind !== null && !BODY_KINDS.includes(m.kind)) bad(`mesh ${i} kind "${m.kind}" is not one of ${BODY_KINDS.join(', ')}`);
     // the UI maps a body's colour to #rrggbb: anything else threw there
     if (m.color !== undefined && m.color !== null
@@ -679,3 +682,8 @@ export const DEFAULT_TESSELLATION = Object.freeze({
   linearDeflection: 0.001,
   angularDeflection: 0.5,
 });
+
+// The one rule for a body's angular deflection (its circle test, js/measure-geom.js): the one a
+// merged scene gave the body (js/scene.js: its own model's), else its file's header's, else the
+// converter's default (a file older than the field)
+export const bodyAngle = (header, mesh) => mesh.angularDeflection ?? header.angularDeflection ?? DEFAULT_TESSELLATION.angularDeflection;

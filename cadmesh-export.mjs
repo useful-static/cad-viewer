@@ -19,12 +19,12 @@
 // Prints one line per file written: name, bodies, bytes. Exit 0 = all written (or -h); 1 = the
 // input refused (damaged, or nothing to export); 2 = usage.
 // Test: tests/test-cadmesh-export.mjs.
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
-import { CliError, parseCli, runCli } from './js/cli-args.js';
+import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -86,9 +86,12 @@ async function main() {
   let skip = null;
   if (skipSrc) { try { skip = new RegExp(skipSrc); } catch (e) { usage(`--skip: ${e.message}`); } } // (an option's error, not the input's)
   const base = opt('--out') || inp.replace(/\.cadmesh(\.gz)?$/i, '');
+  // (the input read and each output checked in the five tools' one wording, before the work)
+  const bytes = await readInput(inp);
+  for (const k of to) await checkOutput(`${base}.${k}`);
   let files;
   try {
-    files = await exportCadmesh(readFileSync(inp), { to, orient, skip, base: base.split('/').pop() });
+    files = await exportCadmesh(bytes, { to, orient, skip, base: base.split('/').pop() });
   } catch (e) {
     // (a damaged or unreadable input is a refusal, exit 1 -- not a usage error, exit 2, which is for
     // the options -- said by runCli in the five tools' one shape, "cadmesh-export: ...")

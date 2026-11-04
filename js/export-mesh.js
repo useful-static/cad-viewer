@@ -253,7 +253,7 @@ export function toGLB(model, ids0, basis, names0 = []) {
 // The export formats, one row each: the file's MIME type, which way is up in it ('z' the
 // printing convention, 'y' glTF's own), and its writer, all called alike:
 // write(model, ids, basis, { names, base }) -> bytes (or a promise of them). main.js File >
-// Export reads this; a new format is a row here and its button.
+// Export builds its buttons from these rows: a new format is a row here.
 // The axes an export takes, as model-frame unit vectors [x, y, z], for the model's orientation
 // (js/orient.js, "+z-y") and the file's up ('z': the printing convention, STL and 3MF; 'y':
 // glTF's): the page's File > Export and cadmesh-export.mjs alike

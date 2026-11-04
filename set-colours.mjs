@@ -14,11 +14,11 @@
 // recoloured is refused (its colours are no longer the converter's), unless
 // --again.
 
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, splitCadmesh, withHeader } from './js/cadmesh.js';
-import { CliError, parseCli, runCli } from './js/cli-args.js';
+import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -61,7 +61,7 @@ export function setColours(raw, colours, by, { again = false } = {}) {
   return new Uint8Array(withHeader({ ...h, meshes, recolour: by.trim() }, data));
 }
 
-function main() {
+async function main() {
   // (the tools' one argument rule, js/cli-args.js: --agian was taken as a third file and ignored,
   // the file written without --again; and a missing --by is a usage error, as a missing -o is)
   const usage = (msg) => { process.stderr.write(`set-colours: ${msg}\n${USAGE}`); process.exit(2); };
@@ -75,14 +75,16 @@ function main() {
   if (!a.show && !a.colours) usage('no colours file');
   if (!a.show && !a.out) usage('no -o output');
   if (!a.show && !(a.by && a.by.trim())) usage('say what wrote the colours (--by)');
-  let raw = readFileSync(a.in);
+  // (the inputs read and the output checked in the five tools' one wording)
+  let raw = await readInput(a.in);
+  if (!a.show) await checkOutput(a.out);
   if (raw[0] === 0x1f && raw[1] === 0x8b) raw = gunzipSync(raw);
   if (a.show) {
     const h = decodeCadmesh(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)).header;
     console.log(JSON.stringify({ vertexCount: h.vertexCount, recolour: h.recolour || null }));
     return;
   }
-  const out = setColours(new Uint8Array(raw), new Uint8Array(readFileSync(a.colours)), a.by, { again: a.again });
+  const out = setColours(new Uint8Array(raw), new Uint8Array(await readInput(a.colours)), a.by, { again: a.again });
   writeFileSync(a.out, a.out.endsWith('.gz') ? gzipSync(out, { level: zc.Z_BEST_COMPRESSION }) : out);
   console.log(`${a.in}: colours of ${decodeCadmesh(out.buffer).header.vertexCount} vertices set (recolour: ${a.by.trim()}) -> ${a.out}`);
 }

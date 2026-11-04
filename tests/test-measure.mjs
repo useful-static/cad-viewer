@@ -141,6 +141,19 @@ test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off t
   }
   assert.deepEqual(bad, []);
 });
+test('each b-rep edge says whether it closes (the walk back at its start), the one test Measure and the drawing read (r26 A5)', () => {
+  const w = bodyGeometry(model([{ name: 'w', faces: washer(1.6, 4, 2, 24) }]), 0);
+  assert.equal(w.edges.length, w.edgeClosed.length);
+  assert.deepEqual(w.edgeClosed, w.edges.map(() => true), 'a washer\'s four rims each close');
+  const b = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 2, 3]) }]), 0);
+  assert.equal(b.edges.length, 12);
+  assert.ok(b.edgeClosed.every((c) => c === false), 'a box\'s twelve edges run corner to corner');
+});
+test('a model without vertex normals is a caller\'s error, said so (no winding-only second rule; r26 Q8)', () => {
+  const m = model([{ name: 'box', faces: box([0, 0, 0], [1, 1, 1]) }]);
+  delete m.normal;
+  assert.throws(() => bodyGeometry(m, 0), /no vertex normals/);
+});
 test('the cut test is the view\'s: the vertex normals interpolated at the hit, not their sum (r25 Q6)', () => {
   // one triangle of a smooth 12-segment cylinder (r 10, normals radial at 0 and 30 degrees), hit
   // near its 30-degree corner, barycentric (0.05, 0.05, 0.9), by rays grazing it at 5..25 degrees

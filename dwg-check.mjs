@@ -3,11 +3,11 @@
 // every format check the file carries (passed / failed), the object types, and
 // how many objects of the drawn types decoded. --dxf FILE writes the drawing as
 // DXF (one file only); --json prints the report as JSON.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
-import { CliError, parseCli, runCli } from './js/cli-args.js';
+import { CliError, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 // (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
@@ -25,12 +25,12 @@ if (dxfOut && files.length > 1) usageError('--dxf writes one file: give one DWG'
 
 // One drawing's report, its pairs (for --dxf; null when it could not be read) and, when it could
 // not, the reader's message (the row's words, not "Error: ...")
-function check(f) {
+async function check(f) {
   const rep = { file: f };
   try {
     const t0 = Date.now();
-    // (a .dwg.gz, as the page opens one)
-    let buf = readFileSync(f);
+    // (a .dwg.gz, as the page opens one; read in the five tools' one wording)
+    let buf = await readInput(f);
     if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf);
     const d = readDWG(buf);
     rep.ms = Date.now() - t0;
@@ -61,18 +61,20 @@ function check(f) {
     return { rep, P, bad: !!(d.failures.length || rep.drawError), why: '' };
   } catch (err) {
     rep.error = String(err.stack || err);
-    return { rep, P: null, bad: true, why: err && err.message ? err.message : String(err) };
+    // (the row names the file: readInput's words without the path)
+    return { rep, P: null, bad: true, why: err?.reason || (err && err.message ? err.message : String(err)) };
   }
 }
 
 // One row per drawing, its own verdict (a drawing it cannot read is that row's ERROR, exit 1 at
 // the end); a failure of the tool itself -- the --dxf it cannot write -- is said by runCli in the
 // five tools' one shape, "dwg-check: ...", one line, exit 1.
-function main() {
+async function main() {
+  if (dxfOut) await checkOutput(dxfOut);
   let bad = 0;
   const reports = [];
   for (const f of files) {
-    const { rep, P, bad: failed, why } = check(f);
+    const { rep, P, bad: failed, why } = await check(f);
     if (failed) bad++;
     reports.push(rep);
     if (dxfOut && P) {

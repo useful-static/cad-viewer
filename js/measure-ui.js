@@ -65,7 +65,7 @@ export function createMeasure(deps) {
     if (performance.now() > deadline) return null;
     const g = bodyGeometry(st.model, mi);
     // the b-rep edges' lengths and midpoints, once
-    g.mids = g.edges.map((e) => ({ p: polyMid(e), len: polyLength(e), closed: e.length > 2 && len(sub(e[0], e[e.length - 1])) === 0 }));
+    g.mids = g.edges.map((e, i) => ({ p: polyMid(e), len: polyLength(e), closed: g.edgeClosed[i] }));
     st.geom.set(mi, g);
     return g;
   }

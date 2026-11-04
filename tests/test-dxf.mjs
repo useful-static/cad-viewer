@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, textAt, textIndex } from '../js/dxf-view.js';
+import { addedReversed, boxTree, nearestItem, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
@@ -798,6 +798,30 @@ test('a path\'s segments: point to point, back to the first when closed, a one-p
   assert.equal(nearestSegment(index, 0.5, 0.6, 0.2), -1, 'an open path is not closed');
   assert.equal(nearestSegment(index, 5.5, 5.6, 0.2), 1, 'a closed one is');
 });
+test('2D Measure snaps the middle of a closed path\'s closing side, once (r26 Q3)', () => {
+  // a 3DFACE-like square that does not repeat its first point, and one that does
+  const open = { layer: 'A', closed: true, pts: Float64Array.of(0, 0, 4, 0, 4, 4, 0, 4) };
+  const rep = { layer: 'A', closed: true, pts: Float64Array.of(0, 0, 4, 0, 4, 4, 0, 4, 0, 0) };
+  const mids = (p) => snapPoints([p], [0, 0]).filter((s) => s[2] === 'middle').map((s) => `${s[0]},${s[1]}`).sort();
+  assert.deepEqual(mids(open), ['0,2', '2,0', '2,4', '4,2'], 'its four sides');
+  assert.deepEqual(mids(rep), ['0,2', '2,0', '2,4', '4,2'], 'the same four, the repeated point no fifth');
+  assert.deepEqual(mids({ ...open, closed: false }), ['2,0', '2,4', '4,2'], 'an open path has no closing side');
+});
+test('the box tree: a hit at exactly r is within r, and the nearer child is walked first (r26 Q6)', () => {
+  // points on a line, 1 apart: from 0.5 off the line at x 3, at r = 0.5 the point (3, 0) is exactly r away
+  const pts = Array.from({ length: 200 }, (_, i) => [i, 0]);
+  const index = pointTree(pts);
+  assert.deepEqual(nearestPoint(index, 3, 0.5, 0.5), [3, 0], 'inclusive radius');
+  assert.equal(nearestPoint(index, 3, 0.5, 0.4999), null);
+  // the walk: a query near one end visits only a few items (the nearer child first prunes the rest)
+  const B = new Float64Array(4 * pts.length);
+  pts.forEach(([x, y], i) => B.set([x, y, x, y], 4 * i));
+  const tree = boxTree(B, Uint32Array.from(pts.keys()));
+  let visited = 0;
+  const id = nearestItem([tree], 0.2, 0, 50, (i) => { visited++; return (pts[i][0] - 0.2) ** 2; });
+  assert.equal(id, 0);
+  assert.ok(visited <= 32, `${visited} items tested (the far side first: every leaf within 50)`);
+});
 test('the hover\'s texts are in the one box tree: the first text whose quad holds the point, as a scan finds it, fast over a million (r25 A5, A7)', () => {
   let s = 3;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -806,7 +830,8 @@ test('the hover\'s texts are in the one box tree: the first text whose quad hold
     const c = Math.cos(t.rot), sn = Math.sin(t.rot);
     return [[0, 0], [t.w, 0], [0, t.h], [t.w, t.h]].map(([u, v]) => [t.x + u * c - v * sn, t.y + u * sn + v * c]);
   };
-  const texts = Array.from({ length: 3000 }, (_, i) => ({ x: rnd() * 100, y: rnd() * 100, w: 1 + rnd() * 8, h: 0.5 + rnd() * 2, rot: rnd() * 6.3, layer: i % 4 ? 'A' : 'HID' }));
+  // (a third mirrored -- a backward text, its quad wound clockwise: r26 Q5)
+  const texts = Array.from({ length: 3000 }, (_, i) => ({ x: rnd() * 100, y: rnd() * 100, w: (i % 3 ? 1 : -1) * (1 + rnd() * 8), h: 0.5 + rnd() * 2, rot: rnd() * 6.3, layer: i % 4 ? 'A' : 'HID' }));
   const o = [3, 4];
   const index = textIndex(texts, quad, o);
   const ok = (i) => texts[i].layer !== 'HID';

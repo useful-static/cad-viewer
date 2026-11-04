@@ -7,7 +7,7 @@
 //
 // Pure ES module, no DOM.
 
-import { DEFAULT_TESSELLATION, idToBytes } from './cadmesh.js';
+import { bodyAngle, idToBytes } from './cadmesh.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 
@@ -89,7 +89,7 @@ export function mergeModels(models) {
       // (each body keeps its model's angular deflection: the circle test is the model's, and the
       // scene's one -- the smallest -- set every model's. A model that records none, a .cadmesh
       // older than the field, is the converter's default, never the angle of a model beside it.)
-      c.angularDeflection ??= h.angularDeflection ?? DEFAULT_TESSELLATION.angularDeflection;
+      c.angularDeflection = bodyAngle(h, m);
       if (m.bbox) c.bbox = { min: add3(m.bbox.min, offset), max: add3(m.bbox.max, offset) };
       if (base.faces && m.faceStart !== undefined) c.faceStart = m.faceStart + f0 / 2;
       else if (out.faces) { c.faceStart = f0 / 2; c.faceCount = 0; }

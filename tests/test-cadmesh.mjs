@@ -178,6 +178,11 @@ test('decode rejects a malformed bounding box (review r6)', () => {
   assert.throws(() => decodeCadmesh(patchHeader(buf, '"max"', '"mox"')), /bounding box malformed/);
 });
 
+test('decode rejects a mesh row with an angularDeflection of its own: a file has one, in its header (r26 A3, Q9)', () => {
+  // (a name of 25 letters made room for the field, in place: the same length)
+  const buf = encodeCadmesh({ meshes: [quad('x'.repeat(25), 0)] });
+  assert.throws(() => decodeCadmesh(patchHeader(buf, `"name":"${'x'.repeat(25)}"`, '"angularDeflection":0.1,"name":"x"')), /mesh 0 has an angularDeflection of its own/);
+});
 test('decode rejects a body colour that is not 3 or 4 numbers (review r14)', () => {
   const buf = encodeCadmesh({ meshes: [quad('a', 0)] });
   // null -> "rd": the UI mapped it to #rrggbb and threw once the body was selected

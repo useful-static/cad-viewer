@@ -101,22 +101,42 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
   writeFileSync(join(dir, 'x.stp'), 'ISO-10303-21;\n');
   const gone = join(dir, 'no-such-dir');
   const bad = [];
-  for (const [tool, args] of [
-    ['stp2mesh.mjs', ['x.stp', '-o', join(gone, 'x.cadmesh')]], // (refused before it converts)
-    ['cadmesh-export.mjs', ['box.cadmesh', '--to', 'stl', '--out', join(gone, 'x')]],
-    ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', join(gone, 'x.cadmesh'), '--by', 'test']],
+  // (each refused before its work: stp2mesh before it converts, split-board before it splits;
+  // an existing directory as the output too, r26 A4)
+  for (const [tool, args, want] of [
+    ['stp2mesh.mjs', ['x.stp', '-o', join(gone, 'x.cadmesh')], /no such directory/],
+    ['stp2mesh.mjs', ['x.stp', '-o', dir], /it is a directory/],
+    ['cadmesh-export.mjs', ['box.cadmesh', '--to', 'stl', '--out', join(gone, 'x')], /no such directory/],
+    ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', join(gone, 'x.cadmesh'), '--by', 'test'], /no such directory/],
+    ['split-board.mjs', ['box.cadmesh', '-o', join(gone, 'x.cadmesh')], /no such directory/],
+    ['split-board.mjs', ['box.cadmesh', '-o', dir], /it is a directory/],
+    ['dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')], /no such directory/],
   ]) {
     const r = run(tool, args);
     const lines = r.err.trim().split('\n');
-    if (r.rc !== 1 || lines.length !== 1 || !lines[0].startsWith(`${tool.replace('.mjs', '')}: `) || !/no-such-dir/.test(lines[0]) || /\n\s+at /.test(r.err)) {
-      bad.push(`${tool}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 300))}`);
+    if (r.rc !== 1 || lines.length !== 1 || !lines[0].startsWith(`${tool.replace('.mjs', '')}: could not write `) || !want.test(lines[0]) || /\n\s+at /.test(r.err)) {
+      bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 300))}`);
     }
+  }
+  // an input that is not there: one wording in all five ("ENOENT: ..." in two, both in a third)
+  for (const [tool, args] of [
+    ['stp2mesh.mjs', ['missing.stp']], ['cadmesh-export.mjs', ['missing.cadmesh']],
+    ['split-board.mjs', ['missing.cadmesh', '-o', 'o.cadmesh']], ['set-colours.mjs', ['missing.cadmesh', 'box.rgb', '-o', 'o.cadmesh', '--by', 'me']],
+  ]) {
+    const r = run(tool, args);
+    if (r.rc !== 1 || r.err !== `${tool.replace('.mjs', '')}: ${args[0]}: no such file\n`) bad.push(`${tool} ${args[0]}: rc ${r.rc}, stderr ${JSON.stringify(r.err)}`);
   }
   assert.deepEqual(bad, []);
   // dwg-check: a drawing it cannot read is its row, in the reader's words, not "Error: ..."
-  const r = run('dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')]);
+  const r = run('dwg-check.mjs', [notCad]);
   assert.equal(r.rc, 1);
   assert.match(r.out, /: \? ERROR (?!Error)/);
+  assert.equal(run('dwg-check.mjs', ['missing.dwg']).out, 'missing.dwg: ? ERROR no such file\n');
+  // a usage error named for the tool, in each (stp2mesh said "unknown option --bogus" alone)
+  for (const tool of ['stp2mesh.mjs', 'cadmesh-export.mjs', 'dwg-check.mjs', 'split-board.mjs', 'set-colours.mjs']) {
+    const u = run(tool, ['--bogus']);
+    assert.ok(u.rc === 2 && u.err.startsWith(`${tool.replace('.mjs', '')}: `), `${tool}: rc ${u.rc}, ${JSON.stringify(u.err.slice(0, 80))}`);
+  }
 });
 
 done();

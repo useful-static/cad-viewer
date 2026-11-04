@@ -29,7 +29,7 @@ const storedFloor = (far) => 8 * 2 ** -23 * far;
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
 import { cross, dot, len, sub, unit } from './vec3.js';
-import { DEFAULT_TESSELLATION } from './cadmesh.js';
+import { bodyAngle } from './cadmesh.js';
 
 // Newell's normal and the centroid of a closed polygon
 function newell(pts) {
@@ -179,6 +179,7 @@ const bitsKey = (P, v) => {
 // One body's measurable geometry:
 // { faces: [{ tri0, ntri, plane|null, circles: [{centre, normal, radius}] }],
 //   corners: [[x,y,z]], edges: [[[x,y,z], ...]] (b-rep edges as polylines),
+//   edgeClosed: [bool] (an edge back at its start: its last point is its first),
 //   circles: all the faces' circles }
 // model: { position, index, faces (Uint32Array pairs | null), header }.
 // Without a faces section a body is one face with no circles.
@@ -190,9 +191,8 @@ export function bodyGeometry(model, meshIndex) {
   if (!model.normal) throw new Error('bodyGeometry: the model has no vertex normals');
   // (the body's own model's angular deflection, where a scene merged models meshed differently:
   // the scene's smallest set every model's circle test, and a board beside a model meshed at 0.1
-  // listed 0 of its 125 holes). A merged scene gives every body one (js/scene.js); a model read
-  // alone has its own header's, or, recording none, the converter's default.
-  const a = m.angularDeflection ?? h.angularDeflection ?? DEFAULT_TESSELLATION.angularDeflection;
+  // listed 0 of its 125 holes): the one rule, js/cadmesh.js bodyAngle
+  const a = bodyAngle(h, m);
   const faces = [];
   const tri0 = m.idxStart / 3, ntri = m.idxCount / 3;
   if (model.faces && m.faceCount) {
@@ -205,8 +205,8 @@ export function bodyGeometry(model, meshIndex) {
   // segment built and compared strings: 1.2 s of a 6,400-hole plate's 3.9 s)
   const nodeP = [], nodeNb = [];
   // (a vertex's node, by its place in the body's own vertices: -1 until met)
-  const v0 = m.vtxStart || 0;
-  const idOfKey = new Map(), idOfVertex = new Int32Array(Math.max(1, m.vtxCount || P.length / 3)).fill(-1);
+  const v0 = m.vtxStart;
+  const idOfKey = new Map(), idOfVertex = new Int32Array(Math.max(1, m.vtxCount)).fill(-1);
   const idOf = (v) => {
     let id = idOfVertex[v - v0];
     if (id >= 0) return id;
@@ -256,7 +256,7 @@ export function bodyGeometry(model, meshIndex) {
   // b-rep edges: walk from each corner along unvisited segments to the next
   // corner; what is left over are closed edges (a full circle's rim)
   const seen = new Set();
-  const edges = [];
+  const edges = [], edgeClosed = [];
   const walk = (start, first) => {
     const line = [nodeP[start]];
     let prev = start, cur = first;
@@ -271,6 +271,9 @@ export function bodyGeometry(model, meshIndex) {
       cur = nx;
     }
     edges.push(line);
+    // (the walk knows when an edge closes: back at its start. Measure and the drawing each tested
+    // the ends' coordinates, by rules that differed for a 3-point loop)
+    edgeClosed.push(cur === start);
   };
   for (let k = 0; k < nodeP.length; k++) {
     if (!isCorner(k)) continue;
@@ -280,8 +283,9 @@ export function bodyGeometry(model, meshIndex) {
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; a: the angular
-  // deflection its circles were tested at, for the drawing's)
-  return { faces, corners, edges, circles, P, I, a };
+  // deflection its circles were tested at, for the drawing's; edgeClosed: per edge, whether it
+  // closes on itself)
+  return { faces, corners, edges, edgeClosed, circles, P, I, a };
 }
 
 // A face's plane turned to look the way its vertex normals do: the normals are what the view

@@ -235,26 +235,25 @@ export function addedReversed(p) {
   return a < 0;
 }
 
-export function createDxfView(canvas, drawing, cb = {}) {
-  const ctx = canvas.getContext('2d');
-  const ext = drawing.extents || { min: [0, 0], max: [1, 1] };
-  const o = [(ext.min[0] + ext.max[0]) / 2, (ext.min[1] + ext.max[1]) / 2];
-  const st = { s: 1, c: [0, 0], selected: null, hover: null, off: new Set(drawing.layers.filter((l) => !l.on).map((l) => l.name)),
-    measure: false, pending: null, results: [], snap: null };
-  // 2D Measure's snap points (drawing units, relative to o): every line end,
-  // every segment's middle, and the centre of each closed path that is a
-  // circle (its points all within 1 % of one distance from their mean)
+// 2D Measure's snap points (drawing units, relative to o): every line end, every segment's middle
+// -- a closed path's closing side too, the side segmentIndex draws and hovers back to its first
+// point (a 3DFACE, a closed 3D polyline: 58,632 such paths in the dozens had none there) -- and
+// the centre of each closed path that is a circle (its points all within 1 % of one distance from
+// their mean). -> [[x, y, kind, layer, radius?]]
+export function snapPoints(paths, o) {
   const snaps = [];
-  for (const p of drawing.paths) {
+  // (a closed path's last point often repeats its first: counted once)
+  const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
+  for (const p of paths) {
     if (p.outline) continue; // (a wide polyline's outline: its corners are not its ends)
     const n = p.pts.length / 2;
+    const mid = (i, j) => snaps.push([(p.pts[i * 2] + p.pts[j * 2]) / 2 - o[0], (p.pts[i * 2 + 1] + p.pts[j * 2 + 1]) / 2 - o[1], 'middle', p.layer]);
     for (let i = 0; i < n; i++) {
       snaps.push([p.pts[i * 2] - o[0], p.pts[i * 2 + 1] - o[1], 'end', p.layer]);
-      if (i + 1 < n) snaps.push([(p.pts[i * 2] + p.pts[i * 2 + 2]) / 2 - o[0], (p.pts[i * 2 + 1] + p.pts[i * 2 + 3]) / 2 - o[1], 'middle', p.layer]);
+      if (i + 1 < n) mid(i, i + 1);
     }
-    // (a closed path's last point often repeats its first: counted once)
-    const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
     const m = n > 1 && same(p.pts[0], p.pts[(n - 1) * 2]) && same(p.pts[1], p.pts[(n - 1) * 2 + 1]) ? n - 1 : n;
+    if (p.closed && m === n && n > 2) mid(n - 1, 0);
     if (p.closed && m >= 12) {
       let cx = 0, cy = 0;
       for (let i = 0; i < m; i++) { cx += p.pts[i * 2]; cy += p.pts[i * 2 + 1]; }
@@ -265,6 +264,16 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (r > 0 && ds.every((x) => Math.abs(x - r) < 0.01 * r)) snaps.push([cx - o[0], cy - o[1], 'centre', p.layer, r]);
     }
   }
+  return snaps;
+}
+
+export function createDxfView(canvas, drawing, cb = {}) {
+  const ctx = canvas.getContext('2d');
+  const ext = drawing.extents || { min: [0, 0], max: [1, 1] };
+  const o = [(ext.min[0] + ext.max[0]) / 2, (ext.min[1] + ext.max[1]) / 2];
+  const st = { s: 1, c: [0, 0], selected: null, hover: null, off: new Set(drawing.layers.filter((l) => !l.on).map((l) => l.name)),
+    measure: false, pending: null, results: [], snap: null };
+  const snaps = snapPoints(drawing.paths, o);
   // the drawing's unit as written for a reader ("µm"), as the info panel writes it
   const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
@@ -444,8 +453,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
     ctx.restore();
   }
 
-  // the snap point nearest css px (x, y) within 10 px, else none: by a 2-d tree over the points
-  // (pointTree), built when Measure is turned on, not on its first move
+  // the snap point nearest css px (x, y) within 10 px, else none: by the one box tree over the
+  // points (pointTree), built when Measure is turned on, not on its first move
   let tree = null;
   const SNAP_PX = 10;
   const snapTree = () => tree || (tree = pointTree(snaps));
