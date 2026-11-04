@@ -330,10 +330,19 @@ test('two cavities crossing each other in a cube: no region below 0, the volume 
   BODY_FACTS.push({ key: 'extra', kind: 'number' });
   try {
     const m = (Q) => { const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: Q.P, normals: null, colors: null, indices: Q.I }], root: { name: 'm', meshes: [0], children: [] } }); return decodeCadmesh(r instanceof ArrayBuffer ? r : r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength)); };
-    const a = m(meshOf(cubeT([0, 0, 0], [1, 1, 1]))), b = m(meshOf(cubeT([0, 0, 0], [2, 2, 2])));
+    // (the build itself writes 0, not undefined: r37 Q6 -- the merge alone would hide it)
+    const Q = meshOf(cubeT([0, 0, 0], [1, 1, 1]));
+    const own = buildEdges({ position: Q.P, index: Q.I, meshes: [{ idxStart: 0, idxCount: Q.I.length, vtxStart: 0, vtxCount: Q.P.length / 3, bbox: { min: [0, 0, 0], max: [1, 1, 1] } }] });
+    assert.deepEqual(own.facts.extra, [0]);
+    const a = m(Q), b = m(meshOf(cubeT([0, 0, 0], [2, 2, 2])));
     const s = mergeModels([{ base: a, name: 'a' }, { base: b, name: 'b' }]);
     assert.deepEqual(s.header.facts.extra, [0, 0]);
   } finally { BODY_FACTS.pop(); }
+});
+test('facts written under rule 3 (no clamp: crossing cavities read 771.75 for 1000) are not today\'s and are rebuilt; every flag fact has its words for the panel and stp2mesh (r37 Q1, A7)', () => {
+  assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: 3 }), false, 'rule 3: rebuilt');
+  assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: FACTS_RULE }), true);
+  for (const f of BODY_FACTS) if (f.kind === 'flag' && !f.always) assert.equal(typeof f.said, 'string', `${f.key} has its words`);
 });
 test('a merge of a model of 300,000 bodies: the facts appended, not spread onto the stack (r34 Q2: RangeError past about 120,000)', () => {
   const n = 300000;

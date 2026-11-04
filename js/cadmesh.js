@@ -494,11 +494,12 @@ function validateHeader(h) {
     const f = h.facts;
     const list = (a, test) => Array.isArray(a) && a.length === (h.meshes || []).length && a.every(test);
     const num = (x) => Number.isFinite(x) && x >= 0, flag = (x) => typeof x === 'boolean';
-    if (!f) bad('facts are not one closed / area / volume per mesh');
-    // (each per-body fact by its kind, js/edges.js BODY_FACTS: the ones always written required)
+    if (!f || typeof f !== 'object') bad('facts are not an object');
+    // (each per-body fact by its kind, js/edges.js BODY_FACTS: the ones always written required;
+    // the refusal names the fact and its kind -- a number at least 0, a flag)
     for (const { key, kind, always } of BODY_FACTS) {
       if (f[key] === undefined && !always) continue;
-      if (!list(f[key], kind === 'flag' ? flag : num)) bad(always ? 'facts are not one closed / area / volume per mesh' : `facts' ${key} is not one ${kind === 'flag' ? 'flag' : 'number'} per mesh`);
+      if (!list(f[key], kind === 'flag' ? flag : num)) bad(`facts' ${key} is not one ${kind === 'flag' ? 'flag' : 'number at least 0'} per mesh`);
     }
     if (h.factsRule !== undefined && !Number.isInteger(h.factsRule)) bad('factsRule is not a whole number');
   }

@@ -40,9 +40,10 @@ export const SILHOUETTE_CAP = 2_000_000;
 // The rule the body facts are built by, written beside them (js/cadmesh.js factsRule): bumped when
 // a fact changes meaning, so the viewer rebuilds the facts of a file or kept conversion made by
 // an older one (2: the volume by the material's rule, and `net`; before it, the signed sum. 3:
-// `unchecked` beside `net`, which no longer covers an overlap test past its budget). The facts
-// are versioned by this alone: a change of it needs no CACHE_VERSION bump (js/mesh-cache.js)
-export const FACTS_RULE = 3;
+// `unchecked` beside `net`, which no longer covers an overlap test past its budget. 4: no
+// region's share of the volume below 0 -- a body read 771.75 under 3 that today reads 1000). The
+// facts are versioned by this alone: a change of it needs no CACHE_VERSION bump (js/mesh-cache.js)
+export const FACTS_RULE = 4;
 // whether a header's facts can be shown as they are: present, and built by today's rule (main.js
 // rebuilds them otherwise: an older file's volume was the signed sum, unflagged)
 export const factsCurrent = (header) => !!header?.facts && header.factsRule === FACTS_RULE;
@@ -151,8 +152,9 @@ export const BODY_FACTS = [
   { key: 'closed', kind: 'flag', always: true },
   { key: 'area', kind: 'number', always: true },
   { key: 'volume', kind: 'number', always: true },
-  { key: 'net', kind: 'flag' },
-  { key: 'unchecked', kind: 'flag' },
+  // (said: what the info panel and stp2mesh say of a body with the flag, the one wording)
+  { key: 'net', kind: 'flag', said: 'with shells that touch or cross: the volume may be off there' },
+  { key: 'unchecked', kind: 'flag', said: 'too large to check for overlapping shells' },
 ];
 
 function body(pos, bits, index, m, edges, sil, silN, budget) {
@@ -259,7 +261,7 @@ const kindClosed = (kind) => kind === 'closed' || kind === 'capped';
 export const OVERLAP_BUDGET = 4_000_000;
 
 // A closed body's volume as its material is taken -- each region inside a shell and outside the
-// shells it holds counted when its winding is above 0, the winding of the region round it plus
+// shells it holds (never below 0) counted when its winding is above 0, the winding of the region round it plus
 // the shell's sign, each shell's sign taken against its outer shell's (the weld's rule: an outer
 // shell wound in is turned; a body wound inside out has its volume) -- from the nesting of its
 // shells. So a cavity is taken out once and a part embedded in another counted once (the signed
@@ -339,7 +341,8 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   for (let s = 0; s < ns; s++) { wOf(s); if (parent[s] >= 0) inner[parent[s]] += Math.abs(Vs[s]); }
   let vol = 0;
   // (a region's share never below 0: two cavities crossing each other are both taken from their
-  // holder, and the body read -228 mm3 -- a file its own decoder refused; such a body is net)
+  // holder, and the body read -228 mm3 -- a file its own decoder refused; such a body is net, or
+  // unchecked past the budget)
   for (let s = 0; s < ns; s++) if (w[s] > 0) vol += Math.max(0, Math.abs(Vs[s]) - inner[s]);
   return { volume: vol, net, unchecked: !net && unchecked };
 }

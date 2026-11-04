@@ -338,7 +338,7 @@ test('encode builds the edge sections and facts; decode validates them', () => {
   new Uint32Array(buf, align8(12 + new DataView(buf).getUint32(8, true)) + h.sections.edges.offset, 1)[0] = 99;
   assert.throws(() => decodeCadmesh(buf), /edges entry 0 names vertex 99 of 4/);
   assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh({ meshes: [quad('a', 0)] }), '"closed":[false]', '"closed":[0]    ')),
-    /facts are not one/);
+    /facts' closed is not one flag per mesh/);
 });
 
 test('occt mapping: refuses a failed import', () => {

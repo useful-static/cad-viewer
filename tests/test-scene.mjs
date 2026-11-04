@@ -432,8 +432,11 @@ test('a scene\'s edges and facts are its models\' own, each built unmoved: a mod
   };
   const c = own3([0, 0, 0], [1, 1, 1]), d = own3([0, 0, 0], [0.3, 0.3, 0.3]);
   const be = (m) => buildEdges({ position: m.position, index: m.index, meshes: m.header.meshes });
-  // (as the viewer keeps a model's built ones: js/main.js keepEdges)
-  const keep = (m) => { const v = be(m); m.edges = v.edges; m.silhouettes = v.silhouettes; m.silhouetteNormals = v.silhouetteNormals; m.header.facts = v.facts; m.header.factsRule = FACTS_RULE; return v; };
+  // (kept as the viewer keeps a model's built ones: js/main.js's own keepEdges, cut out)
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const kat = src.indexOf('function keepEdges(base, v) {');
+  const keepEdges = new Function('FACTS_RULE', `${src.slice(kat, src.indexOf('\n}\n', kat) + 2)}; return keepEdges;`)(FACTS_RULE);
+  const keep = (m) => { const v = be(m); keepEdges(m, v); return v; };
   const models = [{ base: c, name: 'c' }, { base: d, name: 'd', offset: [1e5, 1e5, 1e5] }];
   // a file's facts current, then one of an older rule: only that one is stale
   assert.deepEqual(staleModels(models).length, 0, 'both carry today\'s facts from their files');
@@ -455,11 +458,11 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'"); };
   const body = cut('function workerJob(file, make) {') + cut('function edgesOf(base) {') + cut('function stopEdgeJobs(keep, why) {');
-  const make = () => {
+  const make = (usable = false, cap = 2e6) => {
     const app = { status: 'ready', edgeJobs: new Map() }, made = [], said = [];
     class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
-    const [edgesOf, stopEdgeJobs] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'Worker', 'setStatus', `${body}; return [edgesOf, stopEdgeJobs];`)(
-      app, () => 2e6, () => false, (n, c) => n > c, Worker, (s, t) => said.push(t));
+    const [edgesOf, stopEdgeJobs] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'Worker', 'setStatus', 'FACTS_RULE', `${body}; return [edgesOf, stopEdgeJobs];`)(
+      app, () => cap, () => usable, (n, c) => n > c, Worker, (s, t) => said.push(t), FACTS_RULE);
     return { app, made, said, edgesOf, stopEdgeJobs };
   };
   const { app, made, said, edgesOf } = make();
@@ -481,6 +484,30 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     assert.deepEqual([t.made[0].ended, t.made.length, p3 !== p1], [true, 2, true], 'stopped, then asked again: a build of its own');
     assert.equal(await p1, null);
     assert.deepEqual([t.app.edgeJobs.size, t.app.edgeJobs.get(b)?.promise === p3], [1, true], 'the stopped one settled and left the newer one in place');
+    // (and wrote nothing over the newer one's state: not "not computed: stopped…" while it runs)
+    assert.deepEqual([b.edgeInfo.error, b.edgeInfo.stopped], [null, false], 'the running build\'s state its own (r37 Q2)');
+    // a stop of a model shown alone is not said on the status line (r37 Q6)
+    t.app.baseMesh = b;
+    t.stopEdgeJobs(new Set(), 'the scene changed');
+    assert.equal(await p3, null);
+    assert.deepEqual([t.said, b.edgeInfo.stopped, b.edgeInfo.failedRule], [[], true, undefined], 'a stop: said nowhere, no failure kept, whatever its wording');
+  }
+  // a build that fails is remembered: not tried again for the model, nor said again (r37 A3, Q3)
+  {
+    const t = make(), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
+    t.app.baseMesh = b;
+    const p = t.edgesOf(b);
+    t.made[0].onmessage({ data: { started: true } });
+    t.made[0].onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } });
+    assert.equal(await p, null);
+    assert.deepEqual([b.edgeInfo.failedRule, t.said.length], [FACTS_RULE, 1]);
+    assert.deepEqual([await t.edgesOf(b), t.made.length], [null, 1], 'asked again: no second worker');
+  }
+  // a file's silhouettes past the device's cap: left out and counted, as a build's are (r37 Q5)
+  {
+    const t = make(true, 2), b = { edgeInfo: { value: null }, edges: new Uint32Array(2), silhouettes: Uint32Array.of(0, 1, 1, 2, 2, 3), silhouetteNormals: new Int16Array(24), header: { meshes: [], facts: {} } };
+    const v = await t.edgesOf(b);
+    assert.deepEqual([v.source, v.silhouettes, v.silhouettesOmitted, t.made.length], ['file', null, 3, 0]);
   }
 });
 await test('a scene\'s edges: only its stale models built, each kept, then the scene merged from them; a failed build stops it and is said, the panel saying why there is no volume (r35 Q1, A3)', async () => {
@@ -488,25 +515,46 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const body = cut('async function sceneEdges(merged, models) {') + line('const pendingVolume = ');
-  const run = async (fail, why = 'the worker failed: out of memory') => {
+  const GONE = Symbol('gone');
+  // fail: 'failed' | 'stopped' | 'remembered' | 'never' (a build that never ends; the scene replaced)
+  const run = async (fail, { stale: nStale = 1 } = {}) => {
     const built = [], kept = [], said = [], caps = [];
-    const stale = [{ name: 'b', base: { header: {} } }];
+    const stale = Array.from({ length: nStale }, (_, i) => ({ name: `s${i}`, base: { header: {}, edgeInfo: fail === 'remembered' ? { failedRule: FACTS_RULE, error: 'Map maximum size exceeded' } : undefined } }));
     const models = [{ name: 'a', base: { header: {} } }, ...stale];
-    const merged = { edgeInfo: { value: null }, header: {} };
+    let leave;
+    const merged = { edgeInfo: { value: null, gone: new Promise((r) => { leave = () => r(GONE); }) }, header: {} };
     const app = { baseMesh: merged, status: 'ready' };
-    const edgesOf = async (base) => { built.push(base === merged ? 'scene' : 'model'); if (fail && base !== merged) { base.edgeInfo.error = why; return null; } return { source: base === merged ? 'file' : 'worker' }; };
-    const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'keepEdges', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', `${body}; return [sceneEdges, pendingVolume];`)(
-      app, edgesOf, (b) => kept.push(b), () => stale, (m, ms, opts) => { built.push('merged'); caps.push(opts?.silhouetteCap); }, () => 5e5, (s, t) => said.push(t));
-    const v = await sceneEdges(merged, models);
+    const edgesOf = (base) => {
+      built.push(base === merged ? 'scene' : 'model');
+      if (base === merged) return Promise.resolve({ source: 'file' });
+      if (fail === 'never') return new Promise(() => {});
+      if (fail === 'failed') { base.edgeInfo.error = 'the worker failed: out of memory'; base.edgeInfo.stopped = false; return Promise.resolve(null); }
+      if (fail === 'stopped') { base.edgeInfo.error = 'the scene changed'; base.edgeInfo.stopped = true; return Promise.resolve(null); }
+      if (fail === 'remembered') return Promise.resolve(null);
+      return Promise.resolve({ source: 'worker' });
+    };
+    const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'keepEdges', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', 'FACTS_RULE', 'GONE', `${body}; return [sceneEdges, pendingVolume];`)(
+      app, edgesOf, (b) => kept.push(b), () => stale, (m, ms, opts) => { built.push('merged'); caps.push(opts?.silhouetteCap); }, () => 5e5, (s, t) => said.push(t), FACTS_RULE, GONE);
+    const pending = sceneEdges(merged, models);
+    if (fail === 'never') leave(); // (another scene shown while this one waits)
+    const v = await Promise.race([pending, new Promise((r) => setTimeout(() => r('still waiting'), 500))]);
     return { v, built, kept: kept.length, panel: pendingVolume(merged.edgeInfo), said, caps };
   };
   const ok = await run(false);
   assert.deepEqual([ok.built, ok.kept, ok.v?.source, ok.caps], [['model', 'merged', 'scene'], 1, 'file', [5e5]], 'the stale model built and kept, the scene merged under the device\'s cap, then its own from the merge');
-  const bad = await run(true);
+  const none = await run(false, { stale: 0 });
+  assert.deepEqual(none.built, ['scene'], 'nothing built: not merged again (mergeModels merged it, r37 Q5)');
+  const bad = await run('failed');
   assert.deepEqual([bad.v, bad.built, bad.kept, bad.panel, bad.said], [null, ['model'], 0, 'not computed: the worker failed: out of memory', ['no edges for this scene: the worker failed: out of memory']]);
-  // (a stop is the scene changing: not said on the status line, which the next scene owns)
-  const stopped = await run(true, 'stopped: the scene changed');
-  assert.deepEqual([stopped.panel, stopped.said], ['not computed: stopped: the scene changed', []]);
+  // (a stop, whatever its wording, is not said on the status line, which the next scene owns: r37 A2)
+  const stopped = await run('stopped');
+  assert.deepEqual([stopped.panel, stopped.said], ['not computed: the scene changed', []]);
+  // (a failure remembered from before: the panel says it, the status line not again: r37 A3)
+  const again = await run('remembered');
+  assert.deepEqual([again.panel, again.said], ['not computed: Map maximum size exceeded', []]);
+  // (a scene replaced while its build runs ends at once, merging nothing: r37 A1)
+  const gone = await run('never');
+  assert.deepEqual([gone.v, gone.built], [null, ['model']], 'ended, not still waiting, no merge');
 });
 test('keepEdges keeps a build on its model as a file\'s would be: edges, silhouettes, their count left out, the facts and today\'s rule (r36 A5)', () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
