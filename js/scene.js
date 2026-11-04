@@ -95,7 +95,15 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   };
   if (!units.has('unknown')) header.sourceUnits = units.size === 1 ? [...units][0] : 'mixed';
   out.header = header;
-  sceneEdgesFacts(out, models, { silhouetteCap });
+  // (the edges and facts' merge failing -- an allocation refused -- leaves the scene shown without
+  // them, its error kept for the viewer to say, as the same failure after the builds is: it refused
+  // the whole Add model or move -- r42 A3)
+  try {
+    sceneEdgesFacts(out, models, { silhouetteCap });
+  } catch (e) {
+    out.edges = null; out.silhouettes = null; out.silhouetteNormals = null;
+    out.mergeError = e;
+  }
   return out;
 }
 
@@ -107,6 +115,10 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
 // when every model has them, the facts' rule only when every model's is the same one; with the
 // edges, the silhouettes any model has (one whose file left them out counts them omitted), left
 // out and counted past the cap (two models each under it merged past it: 2,454,650 drawn).
+// (Built into its own arrays and set on `out` only at the end: one that failed part way -- an
+// allocation refused -- left the shown scene's edges zero-filled, and drawn: r42 A2, Q1. The cap
+// asked of the count before the silhouettes are allocated: 10 models' were copied, ~456 MB a move,
+// then dropped: r42 A4.)
 export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   const header = out.header;
   let ec = 0, sc = 0, omitted = 0;
@@ -115,17 +127,19 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
     if (base.silhouettes && base.silhouetteNormals) sc += base.silhouettes.length;
     omitted += base.header.silhouettesOmitted || 0;
   }
-  out.edges = models.every((m) => m.base.edges) ? new Uint32Array(ec) : null;
-  const anySil = out.edges && models.some((m) => m.base.silhouettes && m.base.silhouetteNormals);
-  out.silhouettes = anySil ? new Uint32Array(sc) : null;
-  out.silhouetteNormals = anySil ? new Int16Array(sc * 4) : null;
+  const edges = models.every((m) => m.base.edges) ? new Uint32Array(ec) : null;
+  const anySil = !!edges && models.some((m) => m.base.silhouettes && m.base.silhouetteNormals);
+  const silOver = anySil && overSilhouetteCap(sc / 2, silhouetteCap);
+  if (silOver) omitted += sc / 2;
+  const silhouettes = anySil && !silOver ? new Uint32Array(sc) : null;
+  const silhouetteNormals = silhouettes ? new Int16Array(sc * 4) : null;
   const facts = models.every((m) => m.base.header.facts) ? Object.fromEntries(BODY_FACTS.map((f) => [f.key, []])) : null;
   let v0 = 0, e0 = 0, s0 = 0;
   for (const { base } of models) {
-    if (out.edges) { for (let i = 0; i < base.edges.length; i++) out.edges[e0 + i] = base.edges[i] + v0; e0 += base.edges.length; }
-    if (out.silhouettes && base.silhouettes && base.silhouetteNormals) {
-      for (let i = 0; i < base.silhouettes.length; i++) out.silhouettes[s0 + i] = base.silhouettes[i] + v0;
-      out.silhouetteNormals.set(base.silhouetteNormals, s0 * 4);
+    if (edges) { for (let i = 0; i < base.edges.length; i++) edges[e0 + i] = base.edges[i] + v0; e0 += base.edges.length; }
+    if (silhouettes && base.silhouettes && base.silhouetteNormals) {
+      for (let i = 0; i < base.silhouettes.length; i++) silhouettes[s0 + i] = base.silhouettes[i] + v0;
+      silhouetteNormals.set(base.silhouetteNormals, s0 * 4);
       s0 += base.silhouettes.length;
     }
     if (facts) {
@@ -139,15 +153,12 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
     }
     v0 += base.header.vertexCount;
   }
+  out.edges = edges; out.silhouettes = silhouettes; out.silhouetteNormals = silhouetteNormals;
   delete header.facts; delete header.factsRule; delete header.silhouettesOmitted;
   if (facts) {
     header.facts = facts;
     const rules = new Set(models.map((m) => m.base.header.factsRule));
     if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
-  }
-  if (out.silhouettes && overSilhouetteCap(out.silhouettes.length / 2, silhouetteCap)) {
-    omitted += out.silhouettes.length / 2;
-    out.silhouettes = null; out.silhouetteNormals = null;
   }
   if (omitted) header.silhouettesOmitted = omitted;
   return out;

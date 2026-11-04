@@ -5,14 +5,17 @@
 // Pure ES module, no DOM.
 
 import { parseMesh } from './mesh-formats.js';
-import { MAX_COORD, MAX_COORD_WORDS, encodeCadmesh } from './cadmesh.js';
+import { MAX_COORD, MAX_COORD_WORDS, encodeCadmesh, KEEP_WITHOUT_EDGES } from './cadmesh.js';
 import { MM_PER } from './units.js';
 import { parseDXF } from './dxf.js';
 import { readDWG, drawDWG } from './dwg.js';
 
 // A mesh file's bytes as a .cadmesh, in `unit` where the file stores none (STL, OBJ, PLY, OFF are
 // read as mm until the units row's "this file is in" says otherwise) -> { raw, unitless }
-export async function readMeshFile({ buf, format, name, extras, unit = 'mm' }) {
+// (a build of its edges and facts that throws keeps the file without them, shown, its edges worker
+// saying why: KEEP_WITHOUT_EDGES. edges: false for a reader that needs none, check-tour.
+// edgeOptions: passed to js/edges.js buildEdges, for a test.)
+export async function readMeshFile({ buf, format, name, extras, unit = 'mm', edges = true, edgeOptions = {} }) {
   const model = await parseMesh(format, buf, name, extras);
   const unitless = !model.sourceUnits;
   if (unitless && unit !== 'mm') {
@@ -23,7 +26,7 @@ export async function readMeshFile({ buf, format, name, extras, unit = 'mm' }) {
     for (const b of model.meshes) for (const x of b.positions) if (!Number.isFinite(x) || Math.abs(x) > MAX_COORD) throw new Error(`${name} is too large to show in ${unit} (a coordinate past ${MAX_COORD_WORDS})`);
   }
   if (unitless) model.sourceUnits = unit;
-  return { raw: encodeCadmesh(model), unitless };
+  return { raw: encodeCadmesh(model, { edges, onEdgesError: KEEP_WITHOUT_EDGES, edgeOptions }), unitless };
 }
 
 // A DXF's or DWG's bytes as a drawing: a DWG (js/dwg.js) is read into the group-code pairs a DXF

@@ -1,6 +1,7 @@
 // The edge list and the body facts, from a decoded model's global arrays, in
 // one pass per body. Pure, no DOM: run by the converter (js/cadmesh.js, so a
-// new .cadmesh carries them) and by a worker for an older .cadmesh. Its closed
+// new .cadmesh carries them) and by a worker for a .cadmesh without today's
+// (an older one, or one whose build failed when it was written). Its closed
 // test (shellsOf) is also the mesh readers': js/mesh-formats.js weld calls
 // shellTurns, here, to turn a shell wound the wrong way, and Clearance asks
 // bodyShells for a part's shells (js/clearance.js).
@@ -147,9 +148,11 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
 // The one rule for a build's failure that depends on the moment, tried again (js/edges-worker.js
 // says it `transient`; main.js remembers a model's after MOMENT_TRIES): every failure but a
 // size limit the model meets at every try -- a Map past its size, an array or string past its
-// length, a recursion too deep -- named here in each engine's words. (Naming the moment's instead
+// length, a recursion too deep -- named here in the words each engine was seen to use. (Naming the moment's instead
 // -- V8's "allocation failed" -- left Safari's "Out of memory" the model's own, never tried again.)
-const SIZE_LIMIT = /maximum (call stack )?size exceeded|invalid (typed )?array length|invalid string length|too much recursion/i;
+// (V8, SpiderMonkey and JavaScriptCore words, as each was seen: "Invalid array buffer length" and
+// Firefox's "allocation size overflow" too -- r42 A8, Q8)
+const SIZE_LIMIT = /maximum (call stack )?size exceeded|invalid (typed )?array( buffer)? length|invalid string length|too much recursion|allocation size overflow/i;
 export const momentaryFailure = (e) => !SIZE_LIMIT.test(String(e?.message ?? e));
 
 // The silhouette cap's one rule: past it a model's (or a scene's) silhouettes are all left out and

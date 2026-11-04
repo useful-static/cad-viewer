@@ -94,8 +94,13 @@ export function bytesToId(b0, b1, b2, b3) {
 // The faces section is written only when every mesh carries faces. The edge
 // list and the body facts are built here (opts.edges = false leaves them out).
 // (opts.overlapBudget: passed to the facts' overlap test, js/edges.js buildEdges)
+// What encodeCadmesh does when the edges' and facts' build throws (its onEdgesError): refuse, or
+// keep the file without them
+export const REFUSE_WITHOUT_EDGES = (e) => { throw e; };
+export const KEEP_WITHOUT_EDGES = () => {};
+
 // (edgeOptions: passed to js/edges.js buildEdges as they are -- its list maker, for a test)
-export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, onEdgesError = null, edgeOptions = {} } = {}) {
+export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, onEdgesError = REFUSE_WITHOUT_EDGES, edgeOptions = {} } = {}) {
   let vertexCount = 0;
   let indexCount = 0;
   let faceCount = 0;
@@ -175,14 +180,15 @@ export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, o
   const arrays = { position, normal, color, id, index, ...(faces ? { faces } : {}) };
   let edgeInfo = null;
   if (withEdges && vertexCount) {
-    // (a build that throws leaves the file without its edges and facts, not refused: the viewer's
-    // edges worker builds them for it and says why there are none -- a valid file the readers took
-    // was refused whole, "Invalid array length": r41 A3. onEdgesError: a caller that wants to know,
-    // or to refuse -- the CLIs, whose output promises its facts)
+    // (a build that throws: onEdgesError says what follows -- by default the encoding refused, as
+    // a CLI's or a generator's output promises its facts (a default that kept the file wrote one
+    // without facts under an "OK" line: r42 A7); the viewer's readers pass KEEP_WITHOUT_EDGES, the
+    // file then shown and its edges worker building them and saying why there are none -- a valid
+    // file the readers took was refused whole, "Invalid array length": r41 A3)
     try {
       edgeInfo = buildEdges({ position, index, meshes: metas }, { ...(overlapBudget !== undefined ? { overlapBudget } : {}), ...edgeOptions });
     } catch (e) {
-      if (onEdgesError) onEdgesError(e);
+      onEdgesError(e);
     }
   }
   if (edgeInfo) {

@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { encodeCadmesh, decodeCadmesh, bytesToId } from '../js/cadmesh.js';
-import { mergeModels, modelRanges, staleModels } from '../js/scene.js';
-import { buildEdges, FACTS_RULE, factsCurrent, momentaryFailure } from '../js/edges.js';
+import { mergeModels, modelRanges, staleModels, sceneEdgesFacts } from '../js/scene.js';
+import { buildEdges, FACTS_RULE, factsCurrent, momentaryFailure, overSilhouetteCap } from '../js/edges.js';
 import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
@@ -51,6 +51,16 @@ function file(name, boxes) {
 const board = file('board', [['pcb', [0, 0, 0], [10, 10, 1]], ['chip', [2, 2, 1], [4, 4, 2]]]);
 const lid = file('case', [['lid', [0, 0, 5], [10, 10, 6]]]);
 
+test('the edges and facts\' merge that fails part way leaves the scene as it was, not zero-filled; mergeModels keeps its error and the scene (r42 A2, A3, Q1)', () => {
+  const s = mergeModels([{ base: board, name: 'board' }, { base: lid, name: 'case' }]);
+  const edges = s.edges, sil = s.silhouettes, before = [...s.edges];
+  // (the second model's facts throw when read: after the first model's edges are written)
+  const bad = { ...lid, header: { ...lid.header, get facts() { throw new RangeError('Array buffer allocation failed'); } } };
+  assert.throws(() => sceneEdgesFacts(s, [{ base: board, name: 'board' }, { base: bad, name: 'case' }]), /allocation failed/);
+  assert.deepEqual([s.edges === edges, s.silhouettes === sil, [...s.edges]], [true, true, before], 'the scene\'s own, untouched');
+  const t = mergeModels([{ base: board, name: 'board' }, { base: bad, name: 'case' }]);
+  assert.deepEqual([t.header.meshes.length, t.edges, /allocation failed/.test(t.mergeError?.message)], [3, null, true], 'shown without them, the error kept');
+});
 test('merge: counts, ids, tree, moved bodies', () => {
   const s = mergeModels([{ base: board, name: 'board.stp' }, { base: lid, name: 'case.stp', offset: [0, 0, 1] }]);
   const h = s.header;
@@ -460,13 +470,13 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const body = cut('function workerJob(file, make) {') + cut('function edgesOf(base) {') + cut('function stopEdgeJobs(keep, why) {')
     + line('const GONE = Symbol(') + cut('function showBase(next, keep, why) {') + cut('function fileEdgesValue(base, cap) {')
-    + cut('function sayNoFacts(text) {') + cut('function takeBackNoFacts() {') + line('const MOMENT_TRIES = ') + cut('function readyText() {');
+    + cut('function sayNoFacts(text, announce = true) {') + cut('function takeBackNoFacts() {') + line('const MOMENT_TRIES = ') + cut('function readyText() {');
   const make = (usable = false, cap = 2e6, current = false) => {
     const app = { status: 'ready', edgeJobs: new Map() }, made = [], said = [], kept = [], drawn = [];
     class Worker { constructor() { made.push(this); } postMessage() {} terminate() { this.ended = true; } }
     const setStatus = (s, t) => { said.push(t); app.status = s; app.statusMsg = t; };
     const [edgesOf, stopEdgeJobs, showBase] = new Function('app', 'silhouetteCapHere', 'edgesUsable', 'overSilhouetteCap', 'factsCurrent', 'keepEdges', 'Worker', 'setStatus', 'refreshEdges', 'fmtInt', 'momentaryFailure', `${body}; return [edgesOf, stopEdgeJobs, showBase];`)(
-      app, () => cap, () => usable, (n, c) => n > c, () => current, (b, v) => kept.push([b, v]), Worker, setStatus, () => drawn.push(true), (n) => String(n), momentaryFailure);
+      app, () => cap, () => usable, overSilhouetteCap, () => current, (b, v) => kept.push([b, v]), Worker, setStatus, () => drawn.push(true), (n) => String(n), momentaryFailure);
     return { app, made, said, kept, drawn, edgesOf, stopEdgeJobs, showBase };
   };
   const { app, made, said, edgesOf } = make();
@@ -590,6 +600,17 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     await p;
     assert.deepEqual([t.said, t.app.noFacts?.text], [[], 'no edges for this scene: a: Map maximum size exceeded'], 'the scene\'s line kept');
   }
+  // a model alone whose build fails while another load is under way: not said, but the word kept, so
+  // the ready line the cancelled load writes carries it (it read "ready": r42 Q3)
+  {
+    const t = make(), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
+    t.app.baseMesh = b; t.app.status = 'loading';
+    const p = t.edgesOf(b);
+    t.made[0].onmessage({ data: { started: true } });
+    t.made[0].onmessage({ data: { ok: false, error: 'Map maximum size exceeded' } });
+    await p;
+    assert.deepEqual([t.said, b.edgeInfo.said, t.app.noFacts?.text], [[], false, 'no edges for this model: Map maximum size exceeded']);
+  }
   // the moment's rule: a RangeError of a size limit is the model's own, remembered; the page's copy
   // with no room is the moment's (r40 A3, Q2)
   {
@@ -637,7 +658,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const pv = src.indexOf('const pendingVolume = '), pvEnd = src.indexOf("'computing…');", pv) + "'computing…');".length;
   const body = cut('async function sceneEdges(merged, models) {') + src.slice(pv, pvEnd) + '\n' + cut('function fileEdgesValue(base, cap) {')
-    + cut('function sayNoFacts(text) {') + cut('function takeBackNoFacts() {') + cut('function sceneFailed(merged, failed, cap) {') + cut('function readyText() {');
+    + cut('function sayNoFacts(text, announce = true) {') + cut('function takeBackNoFacts() {') + cut('function sceneFailed(merged, failed, cap) {') + cut('function readyText() {');
   const GONE = Symbol('gone');
   // fail: 'failed' (for the moment) | 'stopped' | 'remembered' (failed and said before) | 'unsaid'
   // (failed while the status was not ready: said by nobody yet) | 'never' (a build that never ends;
@@ -646,15 +667,16 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   // edgesFirst: the scene's merge has them before any build; line: a "no …" word said before (shown:
   // the status line then shown, by default the ready line carrying it); mergeThrows: the merge's error
   // (mixed: s0 fails for the moment, s1 for itself; laterunsaid: s0's failure said before, s1's new)
-  const run = async (fail, { stale: nStale = 1, edged = false, edgesFirst = false, line = null, shown = null, mergeThrows = null } = {}) => {
+  // (mergedError: mergeModels' own merge failed, kept on the scene; status: the status when it ends)
+  const run = async (fail, { stale: nStale = 1, edged = false, edgesFirst = false, line = null, shown = null, mergeThrows = null, mergedError = null, status = 'ready' } = {}) => {
     const built = [], said = [], caps = [], drawn = [];
     const before = { remembered: { failed: true, said: true, error: 'Map maximum size exceeded' }, unsaid: { failed: true, said: false, error: 'Map maximum size exceeded' }, firstfails: { failed: true, said: true, error: 'Map maximum size exceeded' }, laterunsaid: { failed: true, said: true, error: 'Map maximum size exceeded' } }[fail];
     // (firstfails: the first stale model's failure remembered, the second would build)
     const stale = Array.from({ length: nStale }, (_, i) => ({ name: `s${i}`, base: { header: {}, edgeInfo: before && ((fail !== 'firstfails' && fail !== 'laterunsaid') || i === 0) ? { ...before } : undefined } }));
     const models = [{ name: 'a', base: { header: {} } }, ...stale];
     let leave;
-    const merged = { edgeInfo: { value: null, gone: new Promise((r) => { leave = () => r(GONE); }) }, header: {}, edges: edgesFirst ? new Uint32Array(2) : undefined };
-    const app = { baseMesh: merged, status: 'ready', scene: models, noFacts: line && { base: merged, text: line }, statusMsg: shown ?? (line && `ready · ${line}`) };
+    const merged = { edgeInfo: { value: null, gone: new Promise((r) => { leave = () => r(GONE); }) }, header: {}, edges: edgesFirst ? new Uint32Array(2) : undefined, mergeError: mergedError };
+    const app = { baseMesh: merged, status, scene: models, noFacts: line && { base: merged, text: line }, statusMsg: shown ?? (line && `ready · ${line}`) };
     const edgesOf = (base) => {
       built.push(base === merged ? 'scene' : 'model');
       if (base === merged) return Promise.resolve({ source: 'file', facts: {} });
@@ -672,7 +694,7 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
     };
     const setStatus = (s, t) => { said.push(t); app.status = s; app.statusMsg = t; };
     const [sceneEdges, pendingVolume] = new Function('app', 'edgesOf', 'staleModels', 'sceneEdgesFacts', 'silhouetteCapHere', 'setStatus', 'GONE', 'refreshEdges', 'fmtInt', 'overSilhouetteCap', 'factsCurrent', 'momentaryFailure', `${body}; return [sceneEdges, pendingVolume];`)(
-      app, edgesOf, () => stale, merge, () => 5e5, setStatus, GONE, () => drawn.push(merged.edgeInfo.value), (n) => String(n), (n, c) => n > c, () => false, momentaryFailure);
+      app, edgesOf, () => stale, merge, () => 5e5, setStatus, GONE, () => drawn.push(merged.edgeInfo.value), (n) => String(n), overSilhouetteCap, () => false, momentaryFailure);
     const pending = sceneEdges(merged, models).catch((e) => `rejected ${e.message}`);
     if (fail === 'never') leave(); // (another scene shown while this one waits)
     const v = await Promise.race([pending, new Promise((r) => setTimeout(() => r('still waiting'), 500))]);
@@ -723,6 +745,27 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   // rejection that left "computing…": r41 Q3)
   const mergeFails = await run(false, { mergeThrows: 'Array buffer allocation failed' });
   assert.deepEqual([mergeFails.v, mergeFails.panel, mergeFails.said], [null, 'not computed: the scene\'s merge: Array buffer allocation failed (move a model to try again)', ['ready · no edges for this scene: the scene\'s merge: Array buffer allocation failed']]);
+  // (one the same at every try: no advice -- r42 Q7)
+  const mergeLimit = await run(false, { mergeThrows: 'Invalid array length' });
+  assert.equal(mergeLimit.panel, 'not computed: the scene\'s merge: Invalid array length');
+  // (with a model's failure remembered: both, the scene remembered, no advice -- r42 A1, Q2)
+  const both = await run('remembered', { mergeThrows: 'Array buffer allocation failed' });
+  assert.deepEqual([both.panel, both.merged.edgeInfo.failed, both.said], ['not computed: s0: Map maximum size exceeded (and 1 more model)', true, ['ready · no edges for this scene: s0: Map maximum size exceeded (and 1 more model)']]);
+  // (mergeModels' own merge failed and no model is stale: the scene's failure, not a build of the
+  // whole scene -- r42 A3)
+  const firstMerge = await run(false, { stale: 0, mergedError: new RangeError('Array buffer allocation failed') });
+  assert.deepEqual([firstMerge.built, firstMerge.panel], [[], 'not computed: the scene\'s merge: Array buffer allocation failed (open the file again to try again)']);
+  // (a move with a failure said before: the word kept, and the bare ready line given it -- it read
+  // "ready"; one met while a load is under way: the word kept for the line to come -- r42 Q3)
+  const moved = await run('remembered', { shown: 'ready' });
+  assert.deepEqual([moved.said, moved.app.noFacts?.text], [['ready · no edges for this scene: s0: Map maximum size exceeded'], 'no edges for this scene: s0: Map maximum size exceeded']);
+  const busy = await run('failed', { status: 'loading' });
+  assert.deepEqual([busy.said, busy.app.noFacts?.text, busy.info.said], [[], 'no edges for this scene: s0: the worker failed: out of memory', undefined]);
+  // (every failure a stop: no word, the next scene owns it -- r42 Q7)
+  assert.equal(stopped.app.noFacts, null);
+  // (the take-back keeps what the line says after the word: r42 Q4)
+  const tail = await run(false, { line: 'no edges for this scene: s0: x', shown: 'ready · no edges for this scene: s0: x · Measure is off' });
+  assert.deepEqual(tail.said, ['ready · Measure is off']);
   // (a model's failure does not stop the others: the next stale model is built, the scene merged
   // once -- stopping at the first left a later model without its edges: r39 Q1)
   const later = await run('firstfails', { stale: 2 });
@@ -734,6 +777,25 @@ await test('a scene\'s edges: only its stale models built, each kept, then the s
   const pvAlone = new Function('app', `${src.slice(pv, pvEnd)}; return pendingVolume;`)({});
   assert.deepEqual([pvAlone({ error: 'the worker failed: x' }, false), pvAlone({ error: 'Map maximum size exceeded', failed: true }, false), pvAlone(null, false)],
     ['not computed: the worker failed: x (open the file again to try again)', 'not computed: Map maximum size exceeded', 'computing…']);
+});
+test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word, and the shown model\'s missing facts -- every writer of a ready line through readyText (r41 A4, r42 A5, A6, Q5)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function readyText() {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const app = { baseMesh: 'm', unmeshedFaces: 0, listNote: '', dxf: null, noFacts: null };
+  const readyText = new Function('app', 'fmtInt', `${body}; return readyText;`)(app, (n) => String(n));
+  assert.equal(readyText(), 'ready');
+  Object.assign(app, { unmeshedFaces: 3, listNote: 'model list x: HTTP 404', noFacts: { base: 'm', text: 'no volume for this model: y' } });
+  assert.equal(readyText(), 'ready · 3 faces could not be meshed and are missing · model list x: HTTP 404 · no volume for this model: y');
+  app.noFacts.base = 'another';
+  assert.equal(readyText(), 'ready · 3 faces could not be meshed and are missing · model list x: HTTP 404', 'another model\'s word not said');
+  Object.assign(app, { dxf: { drawing: { units: null } }, noFacts: null });
+  assert.equal(readyText(), 'ready · 2D drawing (its unit is not stored) · model list x: HTTP 404', 'a drawing\'s word with the list\'s note');
+  // (each status line said while ready starts with the ready text, but the export's progress -- its
+  // end writes the ready text back)
+  const writers = [...src.matchAll(/setStatus\(([^,]*'ready'[^,]*), (`[^`]*`|'[^']*'|[^)]*\))\)/g)].map((m) => m[2]);
+  const bare = writers.filter((w) => !/readyText\(\)/.test(w) && !/^`exporting /.test(w));
+  assert.ok(writers.length >= 12, `ready writers found: ${writers.length}`);
+  assert.deepEqual(bare, [], 'a ready line without the ready text');
 });
 await test('the edges drawn are the value\'s: a file\'s drawn while its facts build, then the build\'s uploaded in their place; the same arrays not uploaded again (r40 A1, Q9)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -800,8 +862,9 @@ await test('the edges worker itself says it has started, then a failed build as 
     // -- Safari's "Out of memory" the moment's, not the model's: r41 A1)
     assert.deepEqual([new RangeError('Array buffer allocation failed'), new RangeError('Out of memory'), new Error('out of memory'),
       new RangeError('Map maximum size exceeded'), new RangeError('Invalid array length'), new RangeError('Invalid typed array length: 9007199254740992'),
-      new RangeError('Maximum call stack size exceeded'), new Error('too much recursion'), new RangeError('Invalid string length')].map(momentaryFailure),
-    [true, true, true, false, false, false, false, false, false]);
+      new RangeError('Maximum call stack size exceeded'), new Error('too much recursion'), new RangeError('Invalid string length'),
+      new RangeError('Invalid array buffer length'), new Error('allocation size overflow')].map(momentaryFailure),
+    [true, true, true, false, false, false, false, false, false, false, false]);
   } finally {
     globalThis.postMessage = saved.postMessage;
     globalThis.onmessage = saved.onmessage;

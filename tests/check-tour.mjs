@@ -66,7 +66,8 @@ try {
   let raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const name = model.split(/[/\\]/).pop().replace(/\.gz$/i, '');
   const mesh = meshFormatOf(name, raw);
-  if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras: new Map(), unit: tour.unit || 'mm' })).raw;
+  // (no edges or facts: the tour's check reads the bodies only -- r42 Q10)
+  if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras: new Map(), unit: tour.unit || 'mm', edges: false })).raw;
   else if (sniffFormat(raw)?.kind === 'cad' || formatOfName(name)?.kind === 'cad') throw new Error('a STEP / IGES / BREP: convert it first (stp2mesh.mjs) and check against the .cadmesh');
   ({ header } = decodeCadmesh(raw));
 } catch (e) {

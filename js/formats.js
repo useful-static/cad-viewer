@@ -28,7 +28,9 @@ export const FORMATS = [
   { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true },
   { label: 'glTF', ext: ['gltf'], kind: 'mesh' },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
-  { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true },
+  // (range: the releases js/dwg.js reads, said in "opens"; tests/test-formats.mjs holds it to dwg.js
+  // VERSION_NAMES -- kept here, not imported, so this table does not load the DWG reader)
+  { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true, range: 'R13 to 2018' },
   { label: 'zip', ext: ['zip'], kind: 'zip', magic: true },
 ];
 // (as: a 3MF is a zip, and its start says only that)
@@ -125,7 +127,7 @@ export function opensText() {
   const of = (kind) => FORMATS.filter((f) => f.kind === kind);
   const cad = of('cad').map((f) => `${f.label} (${f.ext.map((e) => `.${e}`).join(', ')})`);
   const mesh = of('mesh').map((f) => f.label);
-  const twoD = of('2d').map((f) => (f.label === 'DWG' ? 'DWG (R13 to 2018)' : f.label));
+  const twoD = of('2d').map((f) => (f.range ? `${f.label} (${f.range})` : f.label));
   return `open a ${cad.slice(0, -1).join(', ')}, ${cad[cad.length - 1]} or .cadmesh file, a mesh (${mesh.join(', ')}), a 2D ${twoD.join(' or ')}, or a zip of one`;
 }
 

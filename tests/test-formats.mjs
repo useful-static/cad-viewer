@@ -31,6 +31,13 @@ await test('index.html carries no accept list of its own (main.js sets them from
     assert.ok(!/accept=/.test(tag), tag);
   }
 });
+await test('the DWG row\'s range is the releases js/dwg.js reads, first to last (r42 A11)', async () => {
+  const { VERSION_NAMES } = await import('../js/dwg.js');
+  const names = Object.values(VERSION_NAMES);
+  const range = `${names[0]} to ${names[names.length - 1].replace(/^R(?=\d{4})/, '')}`;
+  assert.equal(FORMATS.find((f) => f.label === 'DWG').range, range);
+  assert.match(opensText(), new RegExp(`DWG \\(${range}\\)`));
+});
 await test('a name says its format, through .gz and a query', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');
   assert.equal(formatOfName('board.cadmesh.gz').label, 'cadmesh');

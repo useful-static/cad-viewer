@@ -707,7 +707,7 @@ async function recoverRenderer(why) {
       setTimeout(() => { if (app.renderer === r && !isDead(r)) recoveries = 0; }, RECOVERY_QUIET_MS);
       // a load that started meanwhile owns the status line; do not paint over it
       if (app.status === 'recovering') {
-        setStatus(app.mesh ? 'ready' : 'idle', app.mesh ? `ready (recovered on ${app.backend})` : 'idle');
+        setStatus(app.mesh ? 'ready' : 'idle', app.mesh ? `${readyText()} · recovered on ${app.backend}` : 'idle');
       }
     }, (e) => {
       if (app.renderer !== r) return; // superseded by a further recovery
@@ -3609,7 +3609,7 @@ function recolour(announcement) {
     if (app.wanted !== view) return;
     app.mesh = before;
     app.wanted = before;
-    setStatus('ready', `could not recolour: ${e.message || e}`);
+    setStatus('ready', `${readyText()} · could not recolour: ${e.message || e}`);
   });
 }
 
@@ -4070,14 +4070,19 @@ async function sceneEdges(merged, models) {
   // (merged again only when a model's were built here: mergeModels merged them already; a merge
   // that fails -- it allocates the scene's arrays again -- is the scene's failure, said, not a
   // rejection nobody handles that left the panel at "computing…": r41 Q3)
+  // (mergeModels' own merge failing is the same failure: js/scene.js keeps its error on the scene)
+  let mergeError = merged.mergeError || null;
   if (stale.length) {
     try {
       sceneEdgesFacts(merged, models, { silhouetteCap: cap });
+      mergeError = null;
     } catch (e) {
-      const info = { error: String(e?.message || e), failed: !momentaryFailure(e), stopped: false, said: false };
-      return sceneFailed(merged, [{ name: 'the scene\'s merge', base: { edgeInfo: info } }], cap);
+      mergeError = e;
     }
   }
+  // (with the models that failed, not in their place: a model's failure remembered, then the merge's
+  // of the moment, advised a move that could never give the scene its facts -- r42 A1, Q2)
+  if (mergeError) failed.push({ name: 'the scene\'s merge', base: { edgeInfo: { error: String(mergeError?.message || mergeError), failed: !momentaryFailure(mergeError), stopped: false, said: false } } });
   if (!failed.length) {
     const v = await edgesOf(merged);
     if (app.baseMesh === merged) takeBackNoFacts(); // (the scene's own facts here: a line about them taken back)
@@ -4096,12 +4101,14 @@ function sceneFailed(merged, failed, cap) {
   Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${infos[0].error}${more}`, failed: infos.some((i) => i.failed), stopped: infos.every((i) => i.stopped) });
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
-  // (said on the status line while any failure not a stop -- the next scene owns a stop -- is unsaid,
-  // once; worded by what is missing -- the edges are drawn when only the facts are)
+  // (the word kept for the scene unless every failure is a stop -- the next scene owns a stop -- and
+  // said on the status line while any failure is unsaid, once; worded by what is missing -- the
+  // edges are drawn when only the facts are. A move with a failure said before kept no word, and
+  // its ready line read "ready": r42 Q3)
   const unsaid = infos.filter((i) => !i.stopped && !i.said);
-  if (app.baseMesh === merged && app.status === 'ready' && unsaid.length) {
-    sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`);
-    for (const i of unsaid) i.said = true;
+  if (app.baseMesh === merged && !merged.edgeInfo.stopped) {
+    const said = sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`, unsaid.length > 0);
+    if (said) for (const i of unsaid) i.said = true;
   }
   return merged.edgeInfo.value;
 }
@@ -4122,16 +4129,24 @@ function fileEdgesValue(base, cap) {
 // base the one shown) and so in every ready line (readyText), after the missing faces and the list's
 // note (r40 Q8); taken back only when that model's or scene's own facts arrive (any model's build
 // that succeeded took back any such line: a scene's failure said once was cleared by another
-// model's -- r40 A2, Q4), and the line rewritten only while it is still the ready one
-function sayNoFacts(text) {
+// model's -- r40 A2, Q4), and the line rewritten only while it is still the ready one (its own
+// words after it kept: a tour's note, "Measure is off" -- r42 Q4).
+// sayNoFacts: the word kept whatever the line says now (a failure met while a load was under way,
+// the load then cancelled, read "ready": r42 Q3); the line written now when `announce` and the
+// status is ready, or when it is the ready line without the word. Says whether it wrote the line.
+function sayNoFacts(text, announce = true) {
+  app.noFacts = null;
+  const plain = readyText();
   app.noFacts = { base: app.baseMesh, text };
+  if (app.status !== 'ready' || (!announce && app.statusMsg !== plain)) return false;
   setStatus('ready', readyText());
+  return true;
 }
 function takeBackNoFacts() {
   if (!app.noFacts || app.noFacts.base !== app.baseMesh) return;
   const was = readyText();
   app.noFacts = null;
-  if (app.status === 'ready' && app.statusMsg === was) setStatus('ready', readyText());
+  if (app.status === 'ready' && (app.statusMsg || '').startsWith(was)) setStatus('ready', readyText() + app.statusMsg.slice(was.length));
 }
 
 // The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
@@ -4215,7 +4230,7 @@ async function moveModel(i, k, v) {
     if (!(await showScene(models)) || mine !== moveSeq) return;
     announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
   } catch (e) {
-    setStatus('ready', `could not move ${models[i].name}: ${e.message || e}`);
+    setStatus('ready', `${readyText()} · could not move ${models[i].name}: ${e.message || e}`);
   }
 }
 
@@ -4419,7 +4434,7 @@ function edgesOf(base) {
     if (!v.stopped && (!v.transient || info.tries >= MOMENT_TRIES)) info.failed = true;
     // said where it shows (and the info panel says it too), worded by what is missing -- the file's
     // edges are drawn when only the facts failed; `said` marks it, so a scene says it once
-    if (!info.stopped && app.baseMesh === base && app.status === 'ready') { sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`); info.said = true; }
+    if (!info.stopped && app.baseMesh === base && sayNoFacts(`${info.value ? 'no volume' : 'no edges'} for this model: ${info.error}`)) info.said = true;
     return info.value; // (the file's edges, when it carries them; else null)
   });
   info.job = entry;
@@ -4439,8 +4454,11 @@ function stopEdgeJobs(keep, why) {
 // the shown model or scene has no facts and has said so, why (sayNoFacts) -- every writer of the
 // ready line keeps it (only sayNoFacts carried it, and an export's end, the model list's note or
 // the tour's dropped it with the facts still missing: r41 A4, Q2)
+// (a 2D drawing's word too: its own line, written apart, became plain "ready" when the model list
+// arrived, and dropped the list's note in the other order -- r42 A6)
 function readyText() {
-  return (app.unmeshedFaces
+  const d = app.dxf;
+  return (d ? `ready · 2D drawing${d.drawing.units ? '' : ' (its unit is not stored)'}` : app.unmeshedFaces
     ? `ready · ${fmtInt(app.unmeshedFaces)} face${app.unmeshedFaces > 1 ? 's' : ''} could not be meshed and ${app.unmeshedFaces > 1 ? 'are' : 'is'} missing`
     : 'ready') + (app.listNote ? ` · ${app.listNote}` : '')
     + (app.noFacts && app.noFacts.base === app.baseMesh ? ` · ${app.noFacts.text}` : '');
@@ -4803,7 +4821,7 @@ function show2D(drawing, name, url) {
   // (Save picture, Print and the picture options: updateButtons above sets them from app.dxf)
   syncMenuButtons();
   showInfo();
-  setStatus('ready', `ready · 2D drawing${drawing.units ? '' : ' (its unit is not stored)'}`);
+  setStatus('ready', readyText());
   announce(`${name} opened: a 2D drawing, ${drawing.layers.length} layers`);
 }
 
@@ -6670,7 +6688,7 @@ function wireInput() {
     try {
       bytes = isGzip(buf) || typeof CompressionStream !== 'function' ? buf : await deflateCadmesh(buf);
     } catch (e) {
-      setStatus(app.status, `could not save ${name}: ${e.message || e}`);
+      setStatus(app.status, `${app.status === 'ready' ? `${readyText()} · ` : ''}could not save ${name}: ${e.message || e}`);
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);

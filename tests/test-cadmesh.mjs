@@ -12,8 +12,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bytesToId, computeNormals, decodeCadmesh, deflateCadmesh, encodeCadmesh, firstSize, gunzip, idToBytes, inflate, inflateCadmesh,
-  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels,
+  isGzip, occtResultToModel, MM, MODEL_FACTS, modelFactsOf, splitCadmesh, withHeader, noSurfaces, bodyLabels, KEEP_WITHOUT_EDGES,
 } from '../js/cadmesh.js';
+import { readMeshFile } from '../js/read-file.js';
 import { deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
 import { test, skip, done } from './harness.mjs';
 
@@ -64,14 +65,20 @@ test('encode/decode preserves counts, offsets and the tree', () => {
   assert.equal(m.header.root.children[1].name, 'b');
 });
 
-test('an edge build that throws leaves the file without its edges and facts, not refused; a caller that asks is told (r41 A3)', () => {
+await test('an edge build that throws: refused by default (a CLI\'s, a generator\'s); kept without edges and facts by the viewer\'s readers, which show the file (r41 A3, r42 A7)', async () => {
   const list = () => { throw new RangeError('Invalid array length'); };
-  const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list } }));
+  assert.throws(() => encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list } }), /Invalid array length/, 'the default refuses');
+  const m = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: KEEP_WITHOUT_EDGES }));
   assert.deepEqual([m.header.meshes.length, m.edges ?? null, m.header.facts ?? null], [1, null, null], 'written, the viewer to build them');
   let told = null;
   encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: (e) => { told = e.message; } });
   assert.equal(told, 'Invalid array length');
-  assert.throws(() => encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: (e) => { throw e; } }), /Invalid array length/, 'a CLI refuses');
+  // (the read worker's path: a valid STL shown, not refused)
+  const stl = new TextEncoder().encode('solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n').buffer;
+  const r = await readMeshFile({ buf: stl, format: 'stl', name: 't.stl', extras: null, edgeOptions: { list } });
+  assert.equal(decodeCadmesh(r.raw).header.facts ?? null, null, 'read: kept without its facts');
+  // (and the STEP worker's: it asks to keep them too)
+  assert.match(readFileSync(join(HERE, '..', 'js', 'step-worker.js'), 'utf8'), /encodeCadmesh\(model, \{ onEdgesError: fmt\.KEEP_WITHOUT_EDGES \}\)/);
 });
 
 test('per-vertex id bytes carry mesh index + 1', () => {

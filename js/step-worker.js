@@ -53,7 +53,9 @@ onmessage = async (ev) => {
     const t1 = performance.now();
     post('packing mesh');
     const model = fmt.conversionModel(result, { sourceUnits: declared, angularDeflection: tess.angularDeflection });
-    const out = fmt.encodeCadmesh(model);
+    // (kept without edges and facts when their build throws: the page's edges worker builds them and
+    // says why there are none -- js/cadmesh.js KEEP_WITHOUT_EDGES)
+    const out = fmt.encodeCadmesh(model, { onEdgesError: fmt.KEEP_WITHOUT_EDGES });
     postMessage({ type: 'done', buffer: out, ms: Math.round(t1 - t0), unmeshedFaces: model.unmeshedFaces }, [out]);
   } catch (e) {
     postMessage({ type: 'error', message: String(e && e.message ? e.message : e) });
