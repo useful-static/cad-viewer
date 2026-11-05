@@ -136,22 +136,29 @@ export const posterAsked = (search) => search.get('embed') === '1' && !!search.g
 // A model list's or a tour's read: given up after 20 s, as the page and its early fetch both ask
 // (r53 A4: written out three times)
 export const READ_TIMEOUT_MS = 20000;
-export const timedFetch = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : {});
+// (check.html's list check reads lists and tours by it too: without it, a list that answers in 21 s
+// read 🟢 there and "no answer in time" on cad.place -- r54 A2)
+export const timedFetch = (u, init = {}) => fetch(u, typeof AbortSignal.timeout === 'function' ? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : init);
 export function modelUrlFrom(search, lists, entries, base) {
   const listed = lists.length > 0;
   if (listed && search.get('model')) return entryByName(entries, search.get('model'))?.url || null;
   const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
   if (listed && isPlace(place)) return entries?.[Number(place) - 1]?.url || null;
   const src = search.get('src');
-  if (listed && isRelative(src)) {
-    for (const l of lists) {
-      let url = null;
-      try { url = new URL(src, new URL(l, base)).href; } catch { /* not a URL */ }
-      const e = url && (entries || []).find((x) => x.url === url);
-      if (e) return e.url;
-    }
+  return (listed && listedUrlFrom(src, lists, entries, base)) || src || null;
+}
+// The entry a relative address names, read against each list's own URL as the list's files are; null
+// for none. For ?src= (above) and for each ?add= (js/main.js openStart: a relative ?add= the list
+// names was read from the page's address, and 404'd, the hint saying the list did not name it: r54 A6)
+export function listedUrlFrom(ref, lists, entries, base) {
+  if (!isRelative(ref)) return null;
+  for (const l of lists) {
+    let url = null;
+    try { url = new URL(ref, new URL(l, base)).href; } catch { /* not a URL */ }
+    const e = url && (entries || []).find((x) => x.url === url);
+    if (e) return e.url;
   }
-  return src || null;
+  return null;
 }
 // What an address names by its list, which must be read before it opens: "model le-potato",
 // "index 3", a relative src the list may name; null when it names an absolute URL or nothing

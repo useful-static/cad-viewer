@@ -69,14 +69,18 @@ await test('a reader that could not be downloaded is said in plain words, and tr
   const m = src('main.js');
   const at = m.indexOf('const once = (load, what) => {');
   const logged = [];
-  const once = new Function('console', `${m.slice(at, m.indexOf('\n};\n', at) + 4)}; return once;`)({ error: (e) => logged.push(e) });
+  const df = m.indexOf('const DOWNLOAD_FAILED = '), dfLine = df < 0 ? '' : m.slice(df, m.indexOf('\n', df) + 1);
+  const once = new Function('console', `${dfLine}${m.slice(at, m.indexOf('\n};\n', at) + 4)}; return once;`)({ error: (e) => logged.push(e) });
   // (a module that does not run is not a connection: said as itself, its cause logged -- r53 A6, Q7)
   const broken = once(async () => { throw new SyntaxError('Unexpected token'); }, '2D drawings');
   await assert.rejects(broken(), { message: 'the viewer\'s reader for 2D drawings did not load: Unexpected token' });
   assert.equal(logged.length, 1);
   let tries = 0;
   const reader = once(async () => { tries++; if (tries === 1) throw new TypeError('Failed to fetch dynamically imported module: https://x.test/js/mesh-formats.js'); return { ok: 1 }; }, 'meshes and zips');
-  await assert.rejects(reader(), { message: 'the viewer\'s reader for meshes and zips could not be downloaded: check the connection, then open the file again' });
+  await assert.rejects(reader(), { message: 'the viewer\'s reader for meshes and zips could not be downloaded: check the connection, then try again' });
+  // (a TypeError that is no download -- the reader downloaded, then threw: said as itself -- r54 A9, Q9)
+  const threw = once(async () => { throw new TypeError('x is not a function'); }, 'meshes and zips');
+  await assert.rejects(threw(), { message: 'the viewer\'s reader for meshes and zips did not load: x is not a function' });
   assert.deepEqual(await reader(), { ok: 1 }, 'the next file tries again');
   assert.equal(await reader(), await reader(), 'fetched once after that');
   assert.equal(tries, 2);

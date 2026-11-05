@@ -88,7 +88,14 @@ export function meshFormatOf(name, buf) {
 // up by this one rule, and the map's own keys are read by it too, so a map keyed by bare name (a
 // drop: js/main.js keys by File.name) and one keyed by path both match.
 export const companionKey = (ref) => String(ref).split(/[/\\]/).pop().toLowerCase();
+// ...but by its path first, where the map has paths (a zip's companions, named by their path from the
+// model's folder: js/main.js zipCompanions): a glTF's "textures/wood.png" is that file, not a
+// wood.png beside the model, and "buffers/chair.bin" the one under the model's own folder (by name
+// alone, another folder's took its place -- r54 A3, Q1). \ is read as /, a leading ./ dropped.
+const pathKey = (ref) => String(ref).replace(/\\/g, '/').replace(/^(\.\/)+/, '').toLowerCase();
 function companion(files, ref) {
+  const p = pathKey(ref);
+  for (const [n, f] of files) if (pathKey(n) === p) return f;
   const k = companionKey(ref);
   if (files.has(k)) return files.get(k);
   for (const [n, f] of files) if (companionKey(n) === k) return f;

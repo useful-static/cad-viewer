@@ -20,15 +20,17 @@ const src = params.get('src');
 if (lists.length) {
   const read = fetchModelLists(lists, location.href, timedFetch);
   setEarlyLists(lists, read);
-  if (src && !modelNameFrom(params, lists)) {
+  // (what the address names by the list: main.js's own test, modelNameFrom -- this module kept its
+  // own, and an empty ?model= beside a ?tour= fetched the list's first for no one: r54 A4)
+  const place = modelNameFrom(params, lists);
+  if (src && !place) {
     // a full-URL ?src= beside a list: not a name the list must be read for, fetched at once (it was
     // fetched after the list, when main.js had asked for it already: two downloads -- r53 A1)
     fetchModel(src);
   } else {
-    // the list's first model where main.js opens it: for a name the list lacks, or with nothing
-    // named and no ?tour= (a tour with its own model opens that one)
-    const named = params.has('src') || params.has('model') || params.has('index');
-    read.then((r) => { fetchModel(modelUrlFrom(params, lists, r.entries, location.href) || (named || !params.has('tour') ? r.entries[0]?.url : null)); },
+    // the model a name gives, or the list's first (for a name the list lacks); with nothing named,
+    // the list's first where main.js opens it -- not beside a ?tour=, whose own model opens first
+    read.then((r) => { fetchModel(place ? modelUrlFrom(params, lists, r.entries, location.href) || r.entries[0]?.url : !params.get('tour') ? r.entries[0]?.url : null); },
       () => { /* a read that failed outright: main.js reads the lists itself (readLists) */ });
   }
 } else {

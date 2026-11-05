@@ -7,7 +7,7 @@
 // tried. Pure apart from fetch, which the caller passes (tests pass a fake):
 // tests/test-list-check.mjs.
 
-import { fetchModelLists, readCapped } from './model-list.js';
+import { READ_TIMEOUT_MS, fetchModelLists, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, SNIFF_BYTES, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
@@ -75,6 +75,8 @@ const mb = (n) => (n / 1e6).toFixed(n < 1e6 ? 2 : 1);
 
 // What a failed fetch means, as cad.place would meet it
 function refused(e) {
+  // (given up after cad.place's own time: said as it says it -- r54 A2)
+  if (e && e.name === 'TimeoutError') return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
   return `not fetched: the site sent no CORS header for it, or did not answer (${e && e.message ? e.message : e})`;
 }
 
@@ -158,7 +160,8 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
 }
 
 // One tour: read, parsed as cad.place parses it
-export async function checkTour(url, fetchFn = fetch) {
+// (read with cad.place's own timeout, as cad.place reads a tour: timedFetch)
+export async function checkTour(url, fetchFn = timedFetch) {
   let res;
   try {
     res = await fetchFn(url, { cache: 'no-store' });
@@ -191,7 +194,10 @@ async function pool(fns, n) {
 // -> { lists: [{ url, error }], entries: [{ name, url, id, checks: [{ what, level, detail, url }] }] }
 // onEntry(entry, i, n), when given, hears each entry as it is checked.
 export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, parallel = 4 } = {}) {
-  const r = await fetchModelLists(urls, base, fetchFn);
+  // (the lists and their tours read as cad.place reads them, given up after its time: timedFetch;
+  // a model file's check is not, as cad.place's own download of it is not)
+  const readFn = fetchFn === fetch ? timedFetch : fetchFn;
+  const r = await fetchModelLists(urls, base, readFn);
   const lists = urls.map((u) => {
     let abs = u;
     try { abs = new URL(u, base).href; } catch { /* as given */ }
@@ -212,7 +218,7 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
     await add('model', e.url, () => checkFile(e.url, { fetchFn, sniff: true }));
     if (e.image) await add('picture', e.image, () => checkFile(e.image, { fetchFn, method: 'HEAD' }));
     if (e.step) await add('STEP', e.step, () => checkFile(e.step, { fetchFn, method: 'HEAD', download: true }));
-    for (const t of e.tours || []) await add(`tour "${t.name}"`, t.url, () => checkTour(t.url, fetchFn));
+    for (const t of e.tours || []) await add(`tour "${t.name}"`, t.url, () => checkTour(t.url, readFn));
     const out = { name: e.name, url: e.url, id: e.id || null, checks };
     if (onEntry) onEntry(out, i, n);
     return out;

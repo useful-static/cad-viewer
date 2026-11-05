@@ -208,4 +208,23 @@ await test('list-not-read', async () => {
   assert.match(summary(r), /1 list not read/);
 });
 
+await test('the list and its tours are read as cad.place reads them: given up after its 20 s, said as it says it (r54 A2)', async () => {
+  const { checkTour } = await import('../js/list-check.js');
+  const real = globalThis.fetch;
+  const inits = [];
+  globalThis.fetch = async (u, init = {}) => {
+    inits.push([String(u), !!init.signal]);
+    if (String(u).endsWith('slow.cadtour.json')) { const e = new Error('signal timed out'); e.name = 'TimeoutError'; throw e; }
+    return new Response(String(u).endsWith('.json') ? JSON.stringify({ 'a.cadmesh': 'A' }) : 'x', { status: 200 });
+  };
+  try {
+    // (checkLists with no fetch of its own given: the page's)
+    await checkLists(['https://example.com/l.json'], 'https://example.com/');
+    assert.deepEqual(inits.filter(([u]) => u.endsWith('l.json')), [['https://example.com/l.json', true]], 'the list read with a time limit');
+    const t = await checkTour('https://example.com/slow.cadtour.json');
+    assert.equal(t.level, 'bad');
+    assert.match(t.detail, /^no answer in time \(20 s, as cad\.place waits\)/);
+  } finally { globalThis.fetch = real; }
+});
+
 done();

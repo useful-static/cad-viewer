@@ -1075,6 +1075,13 @@ await test('r7-1 companion files by one rule: a name with a space, a directory (
     const model = await parseMesh('gltf', j(uri), 'a.gltf', new Map([[key, pos]]));
     assert.equal(triCount(model), 1, uri);
   }
+  // (by its path first, where the map has paths -- a zip's, named from the model's folder: the
+  // reference's own file, not a same-named one beside the model -- r54 A3, Q1)
+  const blue = enc('newmtl red\nKd 0 0 1\n');
+  assert.ok(near(await (async () => (await parseMesh('obj', objq('mtllib mtl/a.mtl'), 'a.obj', new Map([['a.mtl', blue], ['mtl/a.mtl', red]]))).meshes[0].color)(), [1, 0, 0]),
+    'mtllib mtl/a.mtl: mtl/a.mtl, not a.mtl');
+  assert.ok(near(await (async () => (await parseMesh('obj', objq('mtllib .\\Mtl\\A.mtl'), 'a.obj', new Map([['a.mtl', blue], ['mtl/a.mtl', red]]))).meshes[0].color)(), [1, 0, 0]),
+    'the same with \\, ./ and upper case');
 });
 await test('r7-2 glTF extensionsRequired: one the reader does not read is refused by name; EXT_mesh_gpu_instancing places every instance; Draco keeps its words', async () => {
   await refusedFast(() => openJ({ ...gltfOf({ positions: TRI1 }), extensionsRequired: ['KHR_future_thing'] }, 'f.gltf'),
