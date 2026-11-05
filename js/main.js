@@ -235,18 +235,33 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // (the page's error only when nothing is shown and nothing runs: an error up -- a load's own, on the
 // card -- is kept, the new failure told beside it, and a recovery is left to end: the card lost why
 // the model failed, and a recovery ended on an error with a working renderer -- r49 Q3, Q4, A5)
+// (an embed's poster counts as shown: its card hidden behind the poster, the error was heard only and
+// then replaced unseen by View in 3D -- r50 Q5)
 function failApart(msg) {
-  if (somethingShown() || app.status !== 'idle') tellReady(msg);
+  if (somethingShown() || posterUp() || app.status !== 'idle') tellReady(msg);
   else { setStatus('error', msg); announce(msg); }
 }
+// an embed's poster up: its picture stands in for the model until View in 3D
+const posterUp = () => !!app.embed && !!$('poster') && !$('poster').hidden;
 
 // The GPU recovery's start: the page 'recovering' -- but a load under way keeps its state, its card
 // and its question, and the loss is told (written over it, a load's "convert it?" question was
 // hidden and the load hung: r49 Q1)
+// (an error up kept too, as failApart keeps it: a failed ?src's 404 went recovering, then idle, and
+// the card lost it -- r50 A3, Q4)
 function recoveryStarts(why) {
   const text = `GPU context lost (${why}); recovering`;
-  if (PROGRESS_STATES.has(app.status)) tell(text, 6000);
+  if (PROGRESS_STATES.has(app.status) || app.status === 'error') tell(text, 6000);
   else setStatus('recovering', text);
+}
+// The recovery's end on a renderer that cannot hold the shown model: the page's error -- but under a
+// load, which keeps its state, told, and noted (app.gpuLacks) so that a Cancel, which leaves the old
+// model shown, says it is not drawn rather than "ready" over an empty view (r50 A4, Q2: a third
+// copy of the rule, untested; Cancel then wrote "ready" over a model the renderer did not hold)
+function cannotHold() {
+  const msg = `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`;
+  if (PROGRESS_STATES.has(app.status)) { app.gpuLacks = { mesh: app.mesh, msg }; tell(msg, 6000); }
+  else setStatus('error', msg);
 }
 // The GPU recovery's end: back to ready, or idle when nothing is shown, and "recovered on …" told
 // (it was written into the undrawn line, and with nothing shown the line read the bare word
@@ -791,9 +806,7 @@ async function recoverRenderer(why) {
       app.error = String(e.message || e);
       // the renderer is live; it is the model that does not fit (e.g. after
       // falling back to a smaller backend)
-      // (by the one rule: a load begun meanwhile keeps its state -- r49 Q1)
-      if (PROGRESS_STATES.has(app.status)) tell(`recovered on ${app.backend}, but it cannot hold this model: ${app.error}`, 6000);
-      else setStatus('error', `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`);
+      cannotHold();
     });
   }
   if (lossPending !== null) {
@@ -1649,11 +1662,17 @@ async function shareView() {
   // (copied only when the clipboard took it: a refusal, or a prompt the visitor cancelled, read
   // "View link copied" -- r47 A5; with the box shown it says the link itself, and a note after it
   // came once the box had closed -- what the box does not say is told: r48 Q11)
-  // (its clauses a list, joined: "View link copied:  (with the first 20…" -- r49 A6, Q6)
-  const clauses = [app.sourceUrl ? '' : 'it holds the view, not the file (opened from this device)',
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes);
+  if (said) tell(said, copied ? 3000 : 4000);
+}
+// What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
+// ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
+// '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
+function linkToldText(copied, hasUrl, nNotes) {
+  const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : ''].filter(Boolean);
-  if (copied) tell(`View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`, 3000);
-  else if (clauses.length) tell(`The view link: ${clauses.join('; ')}`, 4000);
+  if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
+  return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
 
 // ---------- tours (js/tour.js) ----------
@@ -3997,6 +4016,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
     convertPhases: conversion?.phases ?? null };
   showModelName();
   showInfo();
+  app.gpuLacks = null; // (this model is on the GPU: cannotHold's note of the one before goes)
   setStatus('ready', readyText()); // announced with the change into ready
   applyListEntry(); // its step, page, author, license, style from the model list
   touchHintOnce();
@@ -5446,15 +5466,20 @@ function pickModelFile(files) {
   return f;
 }
 
+// A file over the size, refused before anything starts -- for Open…, a drop and Add model… alike
+// (Add model… called loadFile, whose own check came after beginLoad: an over-size file added
+// cancelled a running conversion, and over a model made the page's error -- r50 A1). Says whether.
+function refusedForSize(f) {
+  if (f.size <= MAX_FILE_BYTES) return false;
+  failApart(`${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+  return true;
+}
+
 // A file from the device (Open…, a drop). One too big is refused before
 // anything starts: in loadFile the refusal came after the running load was
 // cancelled, so it also killed a conversion in progress (review r21)
 function openFile(f) {
-  if (f.size > MAX_FILE_BYTES) {
-    const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
-    failApart(msg); // (a model or drawing shown, or a load under way: told; else the page's error)
-    return;
-  }
+  if (refusedForSize(f)) return;
   startLoad(() => loadFile(f));
 }
 
@@ -6625,7 +6650,7 @@ function wireInput() {
   $('addmodel').addEventListener('change', () => {
     const files = [...$('addmodel').files];
     $('addmodel').value = '';
-    if (files.length && app.scene) { const f = pickModelFile(files); startAdd(() => loadFile(f)); }
+    if (files.length && app.scene) { const f = pickModelFile(files); if (!refusedForSize(f)) startAdd(() => loadFile(f)); }
   });
   $('clearbtn').onclick = () => runClearance();
   $('paintbtn').onclick = () => setPaint(!app.paintFaces);
@@ -6653,7 +6678,10 @@ function wireInput() {
   $('pcancel').onclick = () => {
     beginLoad();
     announce('loading cancelled');
-    if (somethingShown()) setStatus('ready', readyText());
+    // (a model the renderer could not hold after a recovery under this load is not drawn: said,
+    // not "ready" over an empty view -- r50 Q2)
+    if (somethingShown() && app.gpuLacks && app.gpuLacks.mesh === app.mesh) setStatus('error', app.gpuLacks.msg);
+    else if (somethingShown()) setStatus('ready', readyText());
     else setStatus('idle', IDLE_MSG);
   };
   window.addEventListener('drop', (e) => {
@@ -7001,7 +7029,9 @@ async function main() {
   const drop = (e) => { e.preventDefault(); keep(droppedFile(e)); };
   window.addEventListener('dragover', over);
   window.addEventListener('drop', drop);
-  $('open').onchange = (e) => { keep(e.target.files[0]); e.target.value = ''; };
+  // (as every other picker and drop: the model file of those picked, its companions kept -- the first
+  // file was taken, an .obj picked with its .mtl opened the .mtl: r50 A2)
+  $('open').onchange = (e) => { const files = [...e.target.files]; keep(files.length ? pickModelFile(files) : null); e.target.value = ''; };
   // (Open… from the keyboard too, as wireInput makes it: r22)
   const openKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('open').click(); } };
   const openLbl = $('open').parentElement;
@@ -7059,6 +7089,7 @@ async function main() {
     } finally {
       app.readingList = false;
       $('pcancel').hidden = false;
+      showEmpty(); // (the card again, with a list's error on it: it stayed hidden -- r50 Q1)
     }
     src = modelUrlIn(params) || app.listEntries?.[0]?.url || null;
     if (src && !modelUrlIn(params)) tell(`the model list has no model ${place}: its first opens`, 6000); // (told: r49 A4)
@@ -7104,7 +7135,13 @@ async function main() {
     $('posterload').onclick = () => {
       $('poster').hidden = true;
       setEmbedActive(true);
-      loadListed(src);
+      // (a ?tour= read while the poster was up plays once its model is shown: it was told "open its
+      // 3D model" and never played, urlTourPending left set -- r50 Q3)
+      Promise.resolve(loadListed(src)).then(() => {
+        const w = app.tourWaiting;
+        app.tourWaiting = null;
+        if (w && app.header) { startTourIn(w.tour, w.url, w.step); app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
+      });
     };
   } else if (src) opening = loadListed(src);
   // ?add=<url> (repeatable, each with an optional ?addat=x,y,z in mm, in the
@@ -7138,7 +7175,10 @@ async function main() {
   if (touring && !src && !poster) {
     opening = touring.then((r) => (r.tour && r.tour.model && app.loadSeq === seq0 ? loadListed(r.tour.model) : null));
   }
-  if (!src) setStatus('idle', lists.length ? 'reading the model list…' : tourUrl ? 'reading the tour…' : IDLE_MSG);
+  // (not over an error: a list read above and failed left the page's error, which this wrote over --
+  // "reading the model list…" for good, the card with no error: r50 Q1. The page is still 'init'
+  // here otherwise, "starting GPU", and this is what moves it on.)
+  if (!src && app.status !== 'error') setStatus('idle', lists.length && !place ? 'reading the model list…' : tourUrl ? 'reading the tour…' : IDLE_MSG);
   // (already read when ?src was a place in it)
   listed = listed || (lists.length ? readLists(lists, () => !src && app.loadSeq === seq0 && !touring) : null);
   // the file the user chose while the GPU started: the newest ask, so it
@@ -7153,10 +7193,13 @@ async function main() {
       // list's first model, as without a tour
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
       if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
+      // (behind an embed's poster: kept for View in 3D, nothing said -- r50 Q3)
+      else if (poster) app.tourWaiting = { tour: r.tour, url: tourUrl, step: params.get('step') };
       // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
       // nothing was said -- r48 A1, A2; not after its own model failed to open, whose error stands --
-      // r49 Q5)
-      else if (app.status !== 'error') tell(`the tour is ready: open its 3D model${somethingShown() ? '' : ` (${IDLE_MSG})`}`, 6000);
+      // r49 Q5 -- but over another failure, a list's, it is: r50 A5; never the open-a-file words in
+      // an embed, whose visitor chose nothing to open)
+      else if (!(r.tour.model && app.status === 'error')) tell(`the tour is ready: open its 3D model${somethingShown() || app.embed ? '' : ` (${IDLE_MSG})`}`, 6000);
     }
     // (the next model picked from the list plays its own tour)
     if (app.header) { app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
@@ -7179,11 +7222,14 @@ async function readLists(lists, openFirst) {
 function listsRead(r, openFirst) {
   const note = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
   app.listNote = '';
+  const before = readyText(), msg = app.statusMsg || '';
   if (note && !r.entries.length) failApart(note);
   else if (note) tell(note, 6000);
   app.listNote = note; // (after failApart: its ready line already says it once)
   if (openFirst && r.entries.length) return true;
-  if (app.status === 'ready' && !(note && !r.entries.length)) setStatus('ready', readyText());
+  // (the note written into a ready line in place, the words others added after it kept -- the line
+  // was rewritten whole: r50 A6)
+  if (app.status === 'ready' && note && r.entries.length && msg.startsWith(before)) setStatus('ready', readyText() + msg.slice(before.length));
   return false;
 }
 
