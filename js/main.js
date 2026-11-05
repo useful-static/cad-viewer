@@ -3337,10 +3337,15 @@ function applyListEntry() {
       // over the scene -- showScene --, and the entry's tour started, then was ended at once by the
       // ?add= it was opened with: r60, the differential against the real page)
       const adds = app.addsPending && app.addsChain ? app.addsChain : null;
+      // (and still this open's: an older open's wait, ending once Back had opened the model again,
+      // started its tour over the new open, under its ?add= -- r62)
+      const open = app.openCount;
       // (and held back, when it would start, by a link's view landed meanwhile -- a #view= edited in
       // during the ?add=s landed, then the tour took the camera: r61 Q2)
       Promise.all([readTour(t.url), adds]).then(([r]) => {
-        if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour && !linkViewOver()) startTourIn(r.tour, t.url);
+        // (nor while the visitor's pick downloads: the model shown is on its way out -- the tour
+        // started over it, waiting for an ?add= the pick had cancelled: r62)
+        if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour && !linkViewOver() && !app.pickPending && app.openCount === open) startTourIn(r.tour, t.url);
       });
     }
   }
@@ -3477,8 +3482,11 @@ let listPick = 0;
 // refocus: a keyboard pick made inside the narrow layout's File menu gives
 // the focus to File's button as the menu closes (it fell to the page)
 function openListed(url, refocus = false, keepMenu = false) {
-  const before = location.href;
-  const u = new URL(before);
+  // (the steps a pick makes are a chain, taken back to the address before its first if it fails;
+  // a pick made while another still downloads continues that chain -- its "before" was the other's
+  // entry, and a failure landed there, the address naming a model not shown: r62 A2)
+  const chain = app.pickPending && app.pickChain ? app.pickChain : null;
+  const u = new URL(location.href);
   // (the pick opens its model alone: the address it pushes names that model, with the page's lists,
   // not the first entry's ?add=s and ?tour=, which a reload of it then opened and played, nor its
   // view -- a view of the last model is not a view of this one: r59 A4, Q1; dropAddressModel)
@@ -3487,10 +3495,14 @@ function openListed(url, refocus = false, keepMenu = false) {
   // a pick is a step in the history: Back opens the model before it again
   // (feature review item 21; it replaced the entry, so Back left the page)
   const pick = ++listPick;
-  // (the entries the pick makes, its own and any a #view= edit adds during the download: all taken
-  // back if it fails -- r61 A2, Q3)
-  app.pickEntries = 0;
-  if (u.href !== before) { history.pushState({ cadvPick: pick }, '', u); app.entrySearch = u.search; app.pickEntries = 1; }
+  const c = chain || { id: pick, before: location.href, at: 0 };
+  app.pickChain = c;
+  // (each entry the chain makes stamped with its depth in it, so a failure steps back as deep as the
+  // entry shown -- counted by events, a Back across an edit counted one more: r62 A1, Q1)
+  // (by what the address says, not its spelling: "lists/l.json" and "lists%2Fl.json" are one list --
+  // a pick of the model the address already names pushed an entry of the same address: r62)
+  const spelled = (h) => { const x = new URL(h); x.search = new URLSearchParams(x.search).toString(); return x.href; };
+  if (spelled(u.href) !== spelled(location.href)) { c.at++; history.pushState({ cadvPick: c.id, depth: c.at }, '', u); app.entrySearch = u.search; }
   app.pickPending = pick;
   setPendingView(null, ''); // (a view of the last model is not a view of this one)
   // (the visitor's pick ends the address's tour: the model picked plays its own -- picked while the
@@ -3499,29 +3511,38 @@ function openListed(url, refocus = false, keepMenu = false) {
   if (!app.addressUrl) app.visitorFirst = true; // (before any of the address's was shown: addressModel)
   if (!keepMenu) closeMenus(refocus); // the narrow layout's File menu: the pick is made
   loadListed(url).then(async () => {
-    if (app.pickPending === pick) app.pickPending = 0;
-    // failed or cancelled, and no newer pick: the address and the drop-down
-    // name the model still shown, so the pick can be made again (and the
-    // steps it made are taken back, so neither Back nor Forward lands on them)
-    if (pick !== listPick || app.sourceUrl === url) return;
-    await unwindPick(app.pickEntries, before);
+    if (pick !== listPick) return; // (a newer pick, or Back: theirs to end)
+    app.pickPending = 0;
+    if (app.sourceUrl === url) { app.pickChain = null; return; }
+    // failed or cancelled: the address and the drop-down name the model
+    // still shown, so the pick can be made again (and the steps it made are
+    // taken back, so neither Back nor Forward lands on them)
+    await unwindPick(c);
+    app.pickChain = null;
+    // (back on the page as first opened, its ?add=s cancelled by the pick: opened again with them --
+    // the address named them, the scene had the first model alone: r62 Q3)
+    const adds = params.getAll('add').length;
+    if (history.state && history.state.cadvFirst && adds && (app.scene || []).length < 1 + adds && addressModel()) openStart(addressModel());
     syncModelList();
   });
 }
-// A failed pick's entries taken back: each, from the newest, made the address before the pick, then
-// left -- Back from a #view= edit made during the download re-opened the failed model, and a plain
-// back left the pick's entry for Forward to (r61 A2, Q3; by the exact href it pushed: r60 Q4). The
-// entries ahead are copies of the address before, which popstate passes by (app.entrySearch).
-async function unwindPick(n, before) {
-  for (let i = 0; i < n; i++) {
-    history.replaceState(history.state, '', before);
-    const left = new Promise((res) => window.addEventListener('popstate', res, { once: true }));
+// A failed pick's chain taken back: as many steps back as the entry shown is deep in it (its stamp),
+// to the entry before its first; then the chain's entries ahead dropped -- an entry pushed there
+// truncates them, a copy of the address before, and is left at once (Forward onto it, the same
+// address, is passed by). Counted by events, a Back across an edit made one step too many, past the
+// page's first entry and off the page (r62 A1, Q1); entries ahead were left for Forward to open the
+// failed model again (r61 A2, Q3).
+async function unwindPick(c) {
+  const step = (go) => new Promise((res) => {
+    window.addEventListener('popstate', res, { once: true });
     app.skipPop = true;
-    history.back();
-    await left;
-  }
-  history.replaceState(history.state, '', before);
-  app.entrySearch = new URL(before).search;
+    go();
+  });
+  const k = history.state && history.state.cadvPick === c.id ? history.state.depth : 0;
+  if (k > 0) await step(() => history.go(-k));
+  history.pushState(history.state, '', c.before);
+  await step(() => history.back());
+  app.entrySearch = new URL(c.before).search;
 }
 
 // Back / Forward between list picks: the entry's model opened again (and its #view=, applied when it
@@ -3536,6 +3557,7 @@ function wireHistory() {
   // syncUnitParam moves ?unit= while its model loads, forgetAddressModel drops its model --, and a
   // Back compared by its text found the first entry no longer and reopened its model alone: r61 A1)
   history.replaceState({ ...(history.state || {}), cadvFirst: true }, '', location.href);
+  const startHref = location.href;
   window.addEventListener('popstate', () => {
     if (app.skipPop) { app.skipPop = false; return; }
     if (location.search === app.entrySearch) return; // (the fragment alone: hashchange's)
@@ -3556,6 +3578,7 @@ function wireHistory() {
     if (src === app.sourceUrl && whole && PROGRESS_STATES.has(app.status)) {
       listPick++;
       app.pickPending = 0;
+      app.pickChain = null;
       beginLoad();
       setStatus('ready', readyText());
       syncModelList();
@@ -3566,18 +3589,31 @@ function wireHistory() {
     setPendingView(search, location.hash);
     listPick++;
     app.pickPending = 0; // (a pick downloading is no longer the step shown: its entries are not unwound)
+    app.pickChain = null;
     // (the page as first opened: its model with the address's ?add=s, as its start opened it -- Back
     // reopened the model alone, and the entry's view went onto a partial scene: r59 A3, Q1)
-    if (first) openStart(src);
-    else loadListed(src);
+    // (and its entry the start's address again: a device file's rewrite had dropped its model and
+    // ?add=s from it, so the scene Back opened was one the address no longer named -- r62 Q4)
+    if (first) {
+      history.replaceState(history.state, '', startHref);
+      app.entrySearch = new URL(startHref).search;
+      openStart(src);
+    } else loadListed(src);
   });
   // (a #view= edited in: the view the address now names, waiting for its model as the start's does
   // -- applied at once, an edit made while the ?add=s loaded was then overwritten by the start's
   // older view: r59 A2, Q3)
   // (a #view= taken out: no view waits -- the start's still landed: r60 A4)
   window.addEventListener('hashchange', () => {
-    // (an edit made while a pick downloads is one more of its entries: unwindPick)
-    if (app.pickPending) app.pickEntries++;
+    // (while a pick downloads: an entry with the chain's stamp is a step Back or Forward among its
+    // own -- its depth is where the page now is; one with none is an edit made now, one deeper,
+    // stamped so: unwindPick)
+    const c = app.pickPending && app.pickChain;
+    if (c) {
+      const s = history.state;
+      if (s && s.cadvPick === c.id) c.at = s.depth;
+      else { c.at++; history.replaceState({ ...(s || {}), cadvPick: c.id, depth: c.at }, '', location.href); }
+    }
     setPendingView(new URLSearchParams(location.search), location.hash);
     if (!PROGRESS_STATES.has(app.status)) landPendingView();
   });
@@ -4975,6 +5011,10 @@ function syncUnitParam() {
   const u = new URL(location.href);
   const want = readUnit() !== 'mm' && app.sourceUrl ? readUnit() : null;
   if ((u.searchParams.get('unit') || null) === want) return;
+  // (a ?unit= is the named model's, by addressUnit's rule: the address names the model shown when it
+  // names none -- the list's first, a tour's own --, or a reload read it in mm and dropped the unit:
+  // r62 Q2)
+  if (want && !modelUrlIn(u.searchParams)) setModelParam(u, app.sourceUrl);
   if (want) u.searchParams.set('unit', want); else u.searchParams.delete('unit');
   history.replaceState(history.state, '', u);
   app.entrySearch = u.search; // (the entry shown, rewritten, as forgetAddressModel keeps it: r60 Q7)
@@ -5569,7 +5609,7 @@ async function loadUrl(url) {
   const seq = beginLoad();
   // (a model opened again: its list's tour plays again, once, and its list's hide is applied again
   // -- applyListEntry; not for a model added beside it, which left the first's keys reset)
-  if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; app.viewLinkedFor = null; }
+  if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; app.viewLinkedFor = null; app.openCount = (app.openCount || 0) + 1; }
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load

@@ -10,8 +10,9 @@
 // - main() itself: its GPU start is a few ticks; an act's moment comes once it is past them;
 // - the load's own work (fakeLoad): numbered, "loading", then the model shown, a failure thrown; a
 //   device file shown with no URL (sourceUrl null), as main.js shows it; nothing drawn;
-// - the browser's history and address: a stack of entries, Back firing popstate and, with the
-//   fragment changed, hashchange, as a browser does; a #view= edit a new entry, firing both;
+// - the browser's history and address: a stack of entries, Back / Forward / go(n) firing popstate
+//   and, when the fragment alone changed (the rest of the address the same), hashchange, as Chromium
+//   does; a #view= edit a new entry, firing both;
 // - a view (decodeView / applyView): the fragment's text itself, so which view landed is seen;
 // - the DOM: elements that take what is set; the parts tree and the renderer not at all.
 //
@@ -52,13 +53,15 @@ const MISSING = [];
 const miss = (head, optional) => { if (!optional) MISSING.push(head); return ''; };
 const cutIf = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n}\n', at) + 2); };
 const line = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n', at) + 1); };
-const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
+// (these three refuse a missing head too: they cut nothing in silence -- a Cancel moved made every
+// Cancel act do nothing, and a reworded announce reported a page fault: r62 Q7)
+const arrow = (head) => { const at = src.indexOf(head); return at < 0 ? miss(head) : src.slice(at, src.indexOf('\n};\n', at) + 4); };
 // (addToScene's own tail, after its scene is shown: what it does once a model has joined -- the
 // harness called landPendingView itself, and a mutant that took it out of addToScene passed: r60)
 const ADD_TAIL = (() => {
   const head = '  announce(`${name} added: ${models.length} models in the view`);\n';
   const at = src.indexOf(head);
-  return at < 0 ? '' : src.slice(at + head.length, src.indexOf('\n}\n', at));
+  return at < 0 ? miss(head) : src.slice(at + head.length, src.indexOf('\n}\n', at));
 })();
 // (a block inside a function, from its head to its own close two spaces in)
 const block = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n  }\n', at) + 5); };
@@ -76,6 +79,8 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
   // the unit the address asked for this model read and put back, at the address's end: r61, the
   // differential)
   + 'let unitRead = \'mm\';\nfunction readUnit() { return unitRead; }\n'
+  // ("this file is in": the shown model read in another unit, its ?unit= written as the re-read writes it)
+  + 'function setUnitRead(u) { unitRead = u; syncUnitParam(); }\n'
   + 'function loadShown() {\n  const asked = addressUnit(app.sourceUrl);\n  forgetAddressModel();\n  unitRead = \'mm\';\n  syncUnitParam();\n  unitRead = asked;\n  syncUnitParam();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {', true) || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {', true)) + '}\n'
   + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {')
   // (and its hidden parts, held back as its tour is: r59 Q4)
@@ -87,7 +92,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
   'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {', 'function syncUnitParam() {', 'function addressUnit(url) {',
-  'async function unwindPick(n, before) {',
+  src.includes('async function unwindPick(c) {') ? 'async function unwindPick(c) {' : 'async function unwindPick(n, before) {',
   'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', 'function addressTourEnds(r, ownFailed) {',
@@ -105,7 +110,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   + `function addShown() {\n${ADD_TAIL}\n}\n`;
 
 // (Cancel on the load's card, as main.js wires it)
-const CANCEL = (() => { const at = src.indexOf("  $('pcancel').onclick = () => {"); return at < 0 ? '' : src.slice(at, src.indexOf('\n  };\n', at) + 5); })();
+const CANCEL = (() => { const head = "  $('pcancel').onclick = () => {"; const at = src.indexOf(head); return at < 0 ? miss(head) : src.slice(at, src.indexOf('\n  };\n', at) + 5); })();
 
 const tick = () => new Promise((res) => setTimeout(res, 1));
 const settle = async (n) => { for (let i = 0; i < n; i++) await tick(); };
@@ -152,42 +157,42 @@ export async function runStart(c) {
     get state() { return stack[at].state; },
     pushState(state, _t, u) { stack.splice(at + 1); cur = new URL(String(u), cur); stack.push({ state, href: cur.href }); at++; },
     replaceState(state, _t, u) { cur = new URL(String(u), cur); stack[at] = { state, href: cur.href }; },
-    back() {
-      // (Back from the first entry leaves the page, as from a fresh tab)
-      if (at === 0) { o.left = true; return; }
+    // (n entries on, or back: back past the first entry leaves the page, as from a fresh tab; past the
+    // last, nothing -- r60 Q5 Forward, r62 go)
+    go(n) {
+      if (at + n < 0) { o.left = true; o.leftBy = o.acting ? 'visitor' : 'page'; return; }
+      if (!n || at + n > stack.length - 1) return;
       const before = cur.href;
-      at--;
+      at += n;
       cur = new URL(stack[at].href);
       setTimeout(() => fire(before), 0);
     },
-    // (and Forward, to the entry after: r60 Q5)
-    forward() {
-      if (at === stack.length - 1) return;
-      const before = cur.href;
-      at++;
-      cur = new URL(stack[at].href);
-      setTimeout(() => fire(before), 0);
-    },
+    back() { history.go(-1); },
+    forward() { history.go(1); },
   };
   let run = null, modelSeen = false;
   const act = (d) => {
     o.acted.push(d); // (an act set for a moment that never comes -- no model loads -- is not one)
     // (a pick needs an entry to pick: before the list has answered there is none)
     o.events.push(d.pick ? (app.listEntries?.[d.pick - 1] ? 'pick' : 'pick (no entry)') : d.add ? `add${app.scene ? '' : ' (no scene)'}`
-      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : `file ${d.file}`);
+      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? 'unit' : `file ${d.file}`);
     if (d.click) return dom.posterload.onclick && dom.posterload.onclick();
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));
     // (through the select's own rule: a pick of the model shown or opening is nothing -- the harness
     // opened it all the same, and pushed an entry the page never does: r60, the differential)
+    // (the history as it was before the first pick, for the take-back's check: I20)
+    if (d.pick && !o.pickSnap) o.pickSnap = { stack: stack.map((s) => s.href), at };
     if (d.pick) { const e = app.listEntries?.[d.pick - 1]; return e && e.url !== run.listedNow() && run.openListed(e.url); }
     // (Back: the entry before, as the history keeps it -- with its #view=, r58 Q4)
-    if (d.back) return history.back();
+    if (d.back) { o.acting = true; try { return history.back(); } finally { o.acting = false; } }
     if (d.forward) return history.forward();
     // (a #view= edited into the address: a new entry, popstate then hashchange)
     if (d.hash) { const before = cur.href; cur = new URL(cur); cur.hash = '#view=v2'; history.pushState(null, '', cur.href); return fire(before); }
     // (the #view= taken out of the address: a new entry, as an edit is -- r60 A4)
     if (d.unhash) { const before = cur.href; cur = new URL(cur); cur.hash = ''; history.pushState(null, '', cur.href); return fire(before); }
+    // ("this file is in": another unit for the model shown -- r62 Q2)
+    if (d.unit) return app.header && run.setUnitRead(d.unit);
     // (Cancel on the load's card, as wired)
     if (d.cancel) return dom.pcancel.onclick && dom.pcancel.onclick();
     return run.openFile({ name: d.file, size: d.size || 10 });
@@ -279,7 +284,7 @@ export async function runStart(c) {
     'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom', 'history', 'closeMenus', 'tourParts', 'syncTreeChecks', 'pushState', 'updateButtons',
     'viewChanged', 'shownLacksGpu', 'MM_PER',
     `${BODY}; function wireCancel() { ${CANCEL} }
-    return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel, listedNow };`)(
+    return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel, listedNow, setUnitRead };`)(
     app, (id) => dom[id], (t) => o.shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
     // (the list filled: the entry's rules for a model already shown, as fillModelList runs them --
     // a list answering after its model never played the entry's tour: r59 Q6)
@@ -313,5 +318,6 @@ export async function runStart(c) {
   o.href = cur.href; // (the address at the end)
   o.entries = stack.length; // (the history's entries, as many as the page's: r61 A3)
   o.stack = stack.map((e) => e.href); // (and their addresses)
+  o.at = at; // (and the one shown)
   return o;
 }
