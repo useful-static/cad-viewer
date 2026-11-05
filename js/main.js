@@ -17,7 +17,7 @@ import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './pale
 import { entryByName, fetchModelLists, readCapped } from './model-list.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
-import { deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft } from './import-progress.js';
+import { deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
@@ -210,6 +210,10 @@ function setStatus(s, msg) {
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
   if (!PROGRESS_STATES.has(s)) $('progress').hidden = true;
+  // (a card, a model or an error is now the view's to show: index.html's
+  // "Loading the 3D viewer…" goes)
+  // ("?.": tests/test-scene.mjs runs this function's own code with no page)
+  if (s === 'ready' || s === 'idle' || s === 'error') globalThis.document?.documentElement.classList.add('started');
   showEmpty();
 }
 
@@ -228,25 +232,38 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // rule: the tour's end asked app.header and the GPU error set 'error' whatever ran, so a tour
 // unread over a drawing, or a GPU error under a load's "convert it?" question, made the page's
 // error -- the question and its buttons hidden, the load hung (r48 A1, Q1, Q2, Q10)
+// (the page's error only when nothing is shown and nothing runs: an error up -- a load's own, on the
+// card -- is kept, the new failure told beside it, and a recovery is left to end: the card lost why
+// the model failed, and a recovery ended on an error with a working renderer -- r49 Q3, Q4, A5)
 function failApart(msg) {
-  if (somethingShown() || PROGRESS_STATES.has(app.status)) tellReady(msg);
+  if (somethingShown() || app.status !== 'idle') tellReady(msg);
   else { setStatus('error', msg); announce(msg); }
 }
 
+// The GPU recovery's start: the page 'recovering' -- but a load under way keeps its state, its card
+// and its question, and the loss is told (written over it, a load's "convert it?" question was
+// hidden and the load hung: r49 Q1)
+function recoveryStarts(why) {
+  const text = `GPU context lost (${why}); recovering`;
+  if (PROGRESS_STATES.has(app.status)) tell(text, 6000);
+  else setStatus('recovering', text);
+}
 // The GPU recovery's end: back to ready, or idle when nothing is shown, and "recovered on …" told
 // (it was written into the undrawn line, and with nothing shown the line read the bare word
-// "idle": r48 A7). A load that started meanwhile owns the state: nothing is written over it.
+// "idle": r48 A7). A load that started meanwhile owns the state: nothing is written over it, and
+// it is told all the same (r49 Q1).
 function recovered() {
-  if (app.status !== 'recovering') return;
-  if (somethingShown()) setStatus('ready', readyText());
-  else setStatus('idle', IDLE_MSG);
+  if (app.status === 'recovering') {
+    if (somethingShown()) setStatus('ready', readyText());
+    else setStatus('idle', IDLE_MSG);
+  }
   tell(`recovered on ${app.backend}`, 4000);
 }
 
 // The empty-state card: shown while there is no model and no load running (and,
 // by CSS, during a drag over the view). After a failed load it carries the error.
 function showEmpty() {
-  const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering';
+  const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering' || app.readingList;
   // (an embed's poster stands in for it until the visitor asks for the model)
   $('empty').hidden = somethingShown() || busy || !$('poster').hidden;
   $('emptyerr').hidden = app.status !== 'error';
@@ -319,6 +336,7 @@ function keepFilter(f) {
 // null when the length is unknown (tessellation; a stream with no size).
 // setStatus hides it on any state that is not a load in progress.
 function showProgress(title, frac, detail = '', hint = '') {
+  document.documentElement.classList.add('started'); // (index.html's "Loading the 3D viewer…" goes)
   $('progress').hidden = false;
   $('ptitle').textContent = title;
   const bar = $('pbar');
@@ -730,7 +748,7 @@ async function recoverRenderer(why) {
   }
   recovering = true;
   recoveries++;
-  setStatus('recovering', `GPU context lost (${why}); recovering`);
+  recoveryStarts(why);
   showInfo(); // the renderer line says it is lost until a new one is adopted
   let adopted = false;
   try {
@@ -773,7 +791,9 @@ async function recoverRenderer(why) {
       app.error = String(e.message || e);
       // the renderer is live; it is the model that does not fit (e.g. after
       // falling back to a smaller backend)
-      setStatus('error', `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`);
+      // (by the one rule: a load begun meanwhile keeps its state -- r49 Q1)
+      if (PROGRESS_STATES.has(app.status)) tell(`recovered on ${app.backend}, but it cannot hold this model: ${app.error}`, 6000);
+      else setStatus('error', `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`);
     });
   }
   if (lossPending !== null) {
@@ -1626,13 +1646,14 @@ async function shareView() {
   app.lastViewLink = link;
   // (a link carries the first MAX_NOTES notes: said, not left for the visitor to find)
   const nNotes = app.measure ? app.measure.notes().length : 0;
-  const cut = nNotes > MAX_NOTES ? ` (with the first ${MAX_NOTES} of its ${nNotes} notes: a link is short)` : '';
   // (copied only when the clipboard took it: a refusal, or a prompt the visitor cancelled, read
   // "View link copied" -- r47 A5; with the box shown it says the link itself, and a note after it
   // came once the box had closed -- what the box does not say is told: r48 Q11)
-  const more = (app.sourceUrl ? '' : 'it holds the view, not the file (opened from this device)') + cut;
-  if (copied) tell(`View link copied${more ? `: ${more}` : ''}`, 3000);
-  else if (more) tell(`The view link ${more.trim()}`, 4000);
+  // (its clauses a list, joined: "View link copied:  (with the first 20…" -- r49 A6, Q6)
+  const clauses = [app.sourceUrl ? '' : 'it holds the view, not the file (opened from this device)',
+    nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : ''].filter(Boolean);
+  if (copied) tell(`View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`, 3000);
+  else if (clauses.length) tell(`The view link: ${clauses.join('; ')}`, 4000);
 }
 
 // ---------- tours (js/tour.js) ----------
@@ -1914,6 +1935,19 @@ function setTourPlaying(on) {
   if (!on && t.i === t.tour.steps.length - 1) t.ended = true;
 }
 
+// A tour step's missing parts, told -- but not in the moment of the tour's start, which told every
+// part it lacks: whatever step is shown in that moment, the start's own or the one a picture, a
+// video or the maker's "Show this step" shows next (the flag spent by step 1 left those saying both
+// notes at once: r46 A4, r47 A7, r48 Q7, r49 A3, Q2)
+function tellStepMissing(t) {
+  if (app.tourMissing.length && !t.startedNow) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+}
+function markStarted(t, told) {
+  if (!told) return;
+  t.startedNow = true;
+  setTimeout(() => { t.startedNow = false; }, 0);
+}
+
 function showTourStep(i) {
   const t = app.tour;
   const n = t.tour.steps.length;
@@ -1950,12 +1984,9 @@ function showTourStep(i) {
   // (not right after the tour's start, which told every part it lacks -- the two said in one moment,
   // in two wordings, the start's 6 s note replaced at once: r46 A4, Q4; keyed on that, not on the
   // index: step 1 shown again by ◀, a loop or a replay never named its missing parts -- r47 A7)
-  // (used up only by the first step it was meant for: the tour maker's "Show this step" or the video
-  // path, showing another step first, spent it and both notes were read -- r48 Q7)
-  const fresh = t.justStarted && t.i === 0;
-  if (app.tourMissing.length && !fresh) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
-  if (t.i === 0) t.justStarted = false;
-  announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
+  tellStepMissing(t);
+  // (a step with no text read without a trailing space: r49 Q7)
+  announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}.${s.text ? ` ${s.text}` : ''}`);
 }
 
 // only: a step id (?step=<id>, a v2 tour): that step alone, held, with no
@@ -2023,7 +2054,7 @@ function startTour(tour, url, only = null) {
   // the names it uses that this model lacks, once (a tour outlives a model update)
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) tellReady(`the tour names parts this model lacks: ${missing.join(', ')}`);
-  app.tour.justStarted = missing.length > 0;
+  markStarted(app.tour, missing.length > 0);
   showTourStep(0);
   return true;
 }
@@ -2380,6 +2411,11 @@ const IDLE_MS = 2500;
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 function readLooks() {
   app.lightBg = getPref('cadv.bg') === 'light';
+  // ?embed=1&theme=light|dark: the framing page's theme, as index.html's head
+  // script painted the frame; the Light button still turns it, and nothing
+  // is remembered here
+  const theme = app.embed ? embedParams.get('theme') : null;
+  if (theme === 'light' || theme === 'dark') app.lightBg = theme === 'light';
   app.ghostHidden = getPref('cadv.ghost') === '1';
   app.levelOrbit = getPref('cadv.level') === '1';
   app.turntable = params.get('turntable') === '1' && !reducedMotion();
@@ -5241,8 +5277,10 @@ function tessellate(buf, format, seq, name, threads) {
     w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
     show();
     // the multi-core try is sent a copy, so the bytes are still here for the
-    // single-threaded one if it fails
-    w.postMessage({ buffer: buf, format, threads }, threads ? [] : [buf]);
+    // single-threaded one if it fails -- a copy that does not fit is a failure of this try, the
+    // worker and its progress timer ended (unguarded, the one-thread retry succeeded and the leaked
+    // timer set the page back to "tessellating" every second: r49 A1)
+    try { w.postMessage({ buffer: buf, format, threads }, threads ? [] : [buf]); } catch (e) { done(reject, new Error(`no room for the file's copy: ${e?.message || e}`)); }
   });
 }
 
@@ -5364,7 +5402,7 @@ async function loadUrl(url) {
         ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${(total / 1e6).toFixed(1)} MB`
         : `fetching ${(got / 1e6).toFixed(1)} MB`);
       const secs = (performance.now() - tf) / 1000;
-      const rate = secs > 0.5 ? ` · ${mb(got / secs)} MB/s` : '';
+      const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
       showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
         pct ? `${mb(got)} of ${mb(total)} MB${rate}` : `${mb(got)} MB${rate}`);
     }
@@ -5387,10 +5425,11 @@ function droppedFile(e) {
   const dt = e.dataTransfer;
   const files = dt ? dt.files : [];
   const f = files[0];
-  if (!f) { announce(`Nothing to open: drop ${opensShort()}`); return null; }
+  // (told: these refusals were heard and never shown -- r49 A4)
+  if (!f) { tell(`Nothing to open: drop ${opensShort()}`, 4000); return null; }
   const item = dt.items && dt.items[0];
   if (item && item.webkitGetAsEntry && item.webkitGetAsEntry()?.isDirectory) {
-    announce(`${f.name} is a folder: drop the model file in it`);
+    tell(`${f.name} is a folder: drop the model file in it`, 4000);
     return null;
   }
   return pickModelFile([...files]);
@@ -6794,7 +6833,7 @@ function wireInput() {
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);
     await refreshCacheBar();
-    announce(err ? `could not clear the saved conversions: ${err.message || err}` : 'saved conversions cleared');
+    tell(err ? `could not clear the saved conversions: ${err.message || err}` : 'saved conversions cleared', err ? 6000 : 3000); // (told: r49 A4)
   };
   window.addEventListener('keydown', (e) => {
     // leave browser shortcuts (Ctrl/Cmd/Alt+key) and typing in fields alone
@@ -7008,10 +7047,21 @@ async function main() {
   const place = modelNameIn(params);
   if (place) {
     setStatus('idle', 'reading the model list…');
-    listed = readLists(lists, () => false);
-    await listed;
+    // the model is on its way: its card says so, not "No model to show" for
+    // the list's round trip (seconds, on a slow link). No Cancel: the list is
+    // read whatever is pressed, and its model would open after one.
+    app.readingList = true;
+    showProgress('Opening the 3D model', null, 'reading the model list');
+    $('pcancel').hidden = true;
+    try {
+      listed = readLists(lists, () => false);
+      await listed;
+    } finally {
+      app.readingList = false;
+      $('pcancel').hidden = false;
+    }
     src = modelUrlIn(params) || app.listEntries?.[0]?.url || null;
-    if (src && !modelUrlIn(params)) announce(`the model list has no model ${place}: its first opens`);
+    if (src && !modelUrlIn(params)) tell(`the model list has no model ${place}: its first opens`, 6000); // (told: r49 A4)
   }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
   // viewer, for a model this page opens from a URL that its list entry does
@@ -7104,8 +7154,9 @@ async function main() {
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
       if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
       // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
-      // nothing was said -- r48 A1, A2)
-      else tell(`the tour is ready: open its 3D model${somethingShown() ? '' : ` (${IDLE_MSG})`}`, 6000);
+      // nothing was said -- r48 A1, A2; not after its own model failed to open, whose error stands --
+      // r49 Q5)
+      else if (app.status !== 'error') tell(`the tour is ready: open its 3D model${somethingShown() ? '' : ` (${IDLE_MSG})`}`, 6000);
     }
     // (the next model picked from the list plays its own tour)
     if (app.header) { app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
@@ -7119,12 +7170,21 @@ async function readLists(lists, openFirst) {
   const timed = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
   const r = await fetchModelLists(lists, location.href, timed);
   fillModelList(r.entries);
-  app.listNote = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
-  if (app.listNote) tell(app.listNote, 6000); // (shown and heard: the status line is not drawn)
-  if (openFirst() && r.entries.length) {
-    await loadListed(r.entries[0].url);
-  } else if (app.status === 'ready') setStatus('ready', readyText());
-  else if (app.status === 'idle') setStatus(app.listNote && !r.entries.length ? 'error' : 'idle', app.listNote || IDLE_MSG);
+  if (listsRead(r, openFirst())) await loadListed(r.entries[0].url);
+}
+// What the model lists' answer says, and whether to open their first model: a list with nothing in
+// it to open is a failure apart from the load (failApart's one rule: its own put it on the card and
+// in a note at once, and kept a failed load's error where a tour's replaced it -- r49 A2); one that
+// failed beside lists that answered is told; the ready line carries it (app.listNote)
+function listsRead(r, openFirst) {
+  const note = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
+  app.listNote = '';
+  if (note && !r.entries.length) failApart(note);
+  else if (note) tell(note, 6000);
+  app.listNote = note; // (after failApart: its ready line already says it once)
+  if (openFirst && r.entries.length) return true;
+  if (app.status === 'ready' && !(note && !r.entries.length)) setStatus('ready', readyText());
+  return false;
 }
 
 // ?selftest=1: after loading, pick the canvas centre and publish one JSON line

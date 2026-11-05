@@ -270,8 +270,12 @@ export async function withoutEdgesFailed(buf) {
     if (dv.getUint32(0, true) !== MAGIC || dv.getUint32(4, true) !== VERSION) return null;
     const jlen = dv.getUint32(8, true);
     // (a length past the file throws in the view's making: caught)
-    // (one with a mesh list, as every .cadmesh header has: `{}` or `[]` was taken as one -- r48 A6)
-    try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))); return h && typeof h === 'object' && Array.isArray(h.meshes) ? h : null; } catch { return null; }
+    // (one with a mesh list and its sections, as the decoder asks of every header: `{}` or `[]` was
+    // taken as one -- r48 A6 -- and the mesh list alone was a second test of what a header is -- r49 A7)
+    try {
+      const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen)));
+      return h && typeof h === 'object' && Array.isArray(h.meshes) && h.sections && typeof h.sections === 'object' ? h : null;
+    } catch { return null; }
   };
   const h = head();
   if (h && !('edgesFailed' in h)) return buf;

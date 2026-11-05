@@ -7,8 +7,9 @@
      multi-core converter starts them from; models, lists, tours and pictures
      from any site (a ?list= or ?src= names them), since a model list is data
      and nothing it carries is ever run or written as HTML. No plugins, no
-     <base>, no forms. The inline <style> below needs 'unsafe-inline'. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src * data: blob:; img-src * data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+     <base>, no forms. The inline <style> below needs 'unsafe-inline'; the one
+     inline script (the embed's first paint) is allowed by its hash alone. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-wr31hl8/4+wIrrJ1aayp8WZtYslSFZyVSwiE/RGmpmk=' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src * data: blob:; img-src * data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <!-- a link's address never leaves with more than this site's origin -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -35,8 +36,31 @@
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
+<!-- Before first paint, in another page's frame (?embed=1): the embed layout,
+     and ?theme=light|dark, the framing page's theme (the light view and a
+     light frame; dark is the default). Applied by main.js alone, a slow link
+     showed the whole desktop toolbar, dark, for as long as the scripts took.
+     The CSP allows this one inline script by its hash: a change to it is a
+     change to the hash (tests/test-embed-early.mjs checks the two agree). -->
+<script>try{var q=new URLSearchParams(location.search),c=document.documentElement.classList;if(q.get("embed")==="1"){c.add("embed");if(q.get("theme")==="light")c.add("light")}}catch(e){}</script>
 <style>
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
+  /* ?embed=1&theme=light (the head script): a light frame over the light view
+     (--bg is the paper the view draws on, styles.js PAPER) */
+  html.light { --bg:#f4f4f2; --panel:#ffffff; --line:#d0d5dc; --fg:#1d2127; --dim:#5b6472; color-scheme:light; }
+  html.light :is(button, select, label.btn, a.btn) { background:#eef0f3; }
+  html.light :is(button, label.btn, a.btn):hover { border-color:#9aa3af; }
+  html.light #stage > #hdend :is(button, a.btn) { background:rgba(255,255,255,.9); }
+  html.light #helpbtn[aria-expanded=true] { background:#dfe3e8; border-color:#9aa3af; }
+  html.light #helppop kbd { background:#eef0f3; border-color:#b8bfc8; }
+  html.light #tourcard { background:rgba(255,255,255,.96); box-shadow:0 8px 24px rgba(15,23,42,.18); }
+  html.light #embedhint { background:rgba(255,255,255,.92); box-shadow:0 0 0 1px var(--line); }
+  html.light .pbar { background:#e2e6eb; }
+  html.light #stage .card { box-shadow:0 8px 30px rgba(15,23,42,.18); }
+  /* an embed, until main.js has something of its own to show: the viewer
+     says it is coming (main.js adds html.started) */
+  html.embed:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
+    transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
@@ -207,9 +231,10 @@
   #sheetscount { color:var(--dim); }
   /* ?embed=1: the 3D view alone, its few controls over it; until a click or
      tap makes it active it takes no wheel or drag from the page around it */
-  body.embed { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
-  body.embed header, body.embed #parts, body.embed #scrim { display:none !important; }
-  body.embed #stage { grid-column:1 / -1; grid-row:1 / -1; }
+  /* (html.embed: the head script, from the first paint; body.embed: main.js) */
+  :is(html.embed body, body.embed) { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
+  :is(html.embed, body.embed) :is(header, #parts, #scrim) { display:none !important; }
+  :is(html.embed, body.embed) #stage { grid-column:1 / -1; grid-row:1 / -1; }
   body.embed:not(.active) #stage { touch-action:pan-x pan-y pinch-zoom; cursor:pointer; }
   /* a tour's caption card: bottom left, above the options bar; frames keep
      the strip it covers clear (main.js tourCover) */

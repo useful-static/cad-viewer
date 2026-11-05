@@ -845,9 +845,9 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.ok(writers.length >= 8, `ready writers found: ${writers.length}`);
   // (a tour's step tells its missing parts but right after the start, which told them all: keyed on
   // that, not on the step's index -- r46 A4, r47 A7)
-  assert.match(src, /const fresh = t\.justStarted && t\.i === 0;\n {2}if \(app\.tourMissing\.length && !fresh\) tell\(/);
-  assert.match(src, /\n {2}if \(t\.i === 0\) t\.justStarted = false;\n/, 'used up by the first step only (r48 Q4, Q7)');
-  assert.match(src, /app\.tour\.justStarted = missing\.length > 0;\n {2}showTourStep\(0\);/);
+  // (the tour's start marks its moment, then shows step 1: r49 A3 -- the behaviour in its own arm below)
+  assert.match(src, /markStarted\(app\.tour, missing\.length > 0\);\n {2}showTourStep\(0\);/);
+  assert.match(src, /\n {2}tellStepMissing\(t\);\n/);
   // (a GPU error and a tour unread go through failApart, the one rule for a failure apart from the load -- r48 A1, Q1, Q2)
   assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; failApart\(`GPU error: \$\{msg\}`\); \} \};/);
   assert.equal([...src.matchAll(/failApart\(`the tour \$\{r\.error\}`\)/g)].length, 2, 'both tour reads');
@@ -1082,6 +1082,36 @@ await test('the read worker: a copy that cannot be posted rejects in words, the 
   const r = await readInWorker({ buf: new ArrayBuffer(8) }, 'big.stl').then(() => 'resolved', (e) => e.message);
   assert.deepEqual([r, made[0].ended, cleared, app.cancelTess], ['big.stl could not be read: no room for its copy (Array buffer allocation failed)', true, [7], null]);
 });
+await test('a tour step\'s missing parts: not told in the moment of the start, whatever step is shown then; told after it (r48 Q7, r49 A3, Q2)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const told = [];
+  const app = { tourMissing: ['J5'] };
+  const [tellStepMissing, markStarted] = new Function('app', 'tell', 'setTimeout', `${cut('function tellStepMissing(t) {')}${cut('function markStarted(t, told) {')}; return [tellStepMissing, markStarted];`)(
+    app, (t) => told.push(t), setTimeout);
+  const t = {};
+  markStarted(t, true);
+  tellStepMissing(t); // (the start's own step 1)
+  tellStepMissing(t); // (the step a picture, a video or the maker shows next, in the same moment)
+  assert.deepEqual(told, [], 'the start told them');
+  await new Promise((r) => setTimeout(r, 5));
+  tellStepMissing(t); // (step 1 shown again, by ◀, a loop or a replay)
+  assert.deepEqual(told, ['not in this model: J5'], 'told after the moment');
+  const u = {};
+  markStarted(u, false); // (a start that told nothing)
+  tellStepMissing(u);
+  assert.equal(told.length, 2);
+});
+await test('the converter: a copy that cannot be posted rejects in words, the worker and its progress timer ended (r49 A1)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function tessellate(buf, format, seq, name, threads) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'");
+  const app = {}, made = [], cleared = [];
+  class Worker { constructor() { made.push(this); } postMessage() { throw new RangeError('Array buffer allocation failed'); } terminate() { this.ended = true; } }
+  const tessellate = new Function('app', 'Worker', 'stale', 'announce', 'forecast', 'forecastTotal', 'mb', 'setStatus', 'showProgress', 'TESS_HINT', 'setInterval', 'clearInterval', 'crashText',
+    `${body}; return tessellate;`)(app, Worker, () => false, () => {}, () => ({}), () => 0, (n) => String(n), () => {}, () => {}, '', () => 9, (t) => cleared.push(t), (m) => m);
+  const r = await tessellate(new ArrayBuffer(8), 'step', 1, 'big.step', true).then(() => 'resolved', (e) => e.message);
+  assert.deepEqual([r, made[0].ended, cleared, app.cancelTess], ['no room for the file\'s copy: Array buffer allocation failed', true, [9], null]);
+});
 await test('Measure\'s copy: said when copied, and when the clipboard refuses or is not there (r46 Q6, r47 A4, Q4)', async () => {
   const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
   const at = src.indexOf('const copyText = (text, done) => {'), code = src.slice(at, src.indexOf('\n  };', at) + 5);
@@ -1115,6 +1145,8 @@ const NOTE_STATES = {
   'idle ready': { status: 'ready', msg: 'ready', shows: 'model', ready: 'ready' },
   'ready, a drawing': { status: 'ready', msg: 'ready · 2D drawing', shows: 'drawing', ready: 'ready · 2D drawing' },
   'loading': { status: 'loading', msg: 'reading b.step 40 %', shows: 'model', ready: 'ready' },
+  // (r49: a load waiting on its question -- a GPU loss under it hid the question, and the load hung)
+  'asking to convert': { status: 'loading', msg: 'big.step is 300 MB: convert it?', shows: 'model', ready: 'ready' },
   'loading over a drawing': { status: 'loading', msg: 'reading b.step 40 %', shows: 'drawing', ready: 'ready · 2D drawing' },
   'tessellating': { status: 'tessellating', msg: 'tessellating 3 of 9', shows: 'model', ready: 'ready' },
   'exporting': { status: 'ready', msg: `ready · ${GOING}`, shows: 'model', ready: 'ready' },
@@ -1128,10 +1160,12 @@ const NOTE_STATES = {
 // (The note's time is the contract's too: a hold shortened or dropped passed every test -- r48 Q3)
 const same = 'same';
 const busyRun = (s) => s.status === 'loading' || s.status === 'tessellating';
-// a failure apart from the load (failApart): told where something is shown or a load runs, the state
-// kept; else the page's error, its card showing it
-const apart = (s, words) => (s.shows || busyRun(s))
+// a failure apart from the load (failApart): the page's error only when nothing is shown and nothing
+// runs (idle, no model); else told, the state kept -- a load's own error on the card kept, and a
+// recovery left to end (r49 Q3, Q4: the card lost why the model failed; a recovery ended on an error)
+const apart = (s, words) => (s.shows || s.status !== 'idle')
   ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, 6000]], [words]] : ['error', words, [], [words]];
+const LOST = 'GPU context lost (device lost); recovering', LIST = 'model list l.json: HTTP 404';
 const NOTE_CONTRACT = {
   // tell(words): shown and read out; state and line kept, in every state
   tell: (r) => [same, same, [['copied', 3000]], ['copied']],
@@ -1151,9 +1185,18 @@ const NOTE_CONTRACT = {
   oversize: (r, s) => apart(s, O),
   failApart: (r, s) => apart(s, G),
   // the GPU recovery's end: back to what is shown (idle with nothing), "recovered on …" told; a
-  // load begun meanwhile owns the state (r48 A7)
-  recovered: (r, s) => s.status !== 'recovering' ? [same, same, [], []]
+  // load begun meanwhile owns the state, and is told too (r48 A7, r49 Q1)
+  recovered: (r, s) => s.status !== 'recovering' ? [same, same, [[REC, 4000]], [REC]]
     : (s.shows ? ['ready', s.ready, [[REC, 4000]], [`ready · ${REC}`]] : ['idle', 'IDLE', [[REC, 4000]], [`IDLE · ${REC}`]]),
+  // the GPU recovery's start: 'recovering' -- but under a load, which keeps its state, its card and
+  // its question, told (r49 Q1: a loss under "convert it?" hid the question and the load hung)
+  // (not within a recovery: recoverRenderer keeps a second loss for after the first)
+  recoveryStarts: (r, s) => s.status === 'recovering' ? null : busyRun(s) ? [same, same, [[LOST, 6000]], [LOST]]
+    : ['recovering', LOST, [], [LOST]],
+  // a model list that could not be read, with nothing in it to open: a failure apart from the load,
+  // by failApart's one rule (r49 A2: its own rule put it on the card and in the note at once, and
+  // kept a failed load's error where a tour's replaced it)
+  listFails: (r, s) => apart(s, LIST),
   // Export: its progress and its end told; the line written only while ready; the state kept
   exportMesh: (r, s) => (s.shows !== 'model' || r === 'exporting') ? null
     : [same, s.status === 'ready' ? `ready · ${SAVED}` : same, [[GOING, 4000], [SAVED, 3000]], [GOING, SAVED]],
@@ -1165,7 +1208,8 @@ await test('the note contract: each page state against each writer of a note or 
   const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
   const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text) {',
     'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
-    'function openFile(f) {', 'async function exportMesh(fmt) {', 'function failApart(msg) {', 'function recovered() {', 'function showEmpty() {'].map(cutIf).join('')
+    'function openFile(f) {', 'async function exportMesh(fmt) {', 'function failApart(msg) {', 'function recovered() {', 'function showEmpty() {',
+    'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {'].map(cutIf).join('') + line('const listNote = ')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
@@ -1181,11 +1225,12 @@ await test('the note contract: each page state against each writer of a note or 
       const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: true } };
       const run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
         'startLoad', 'beginLoad', 'EXPORTS', 'exportable', 'meshLabel', 'saveBase', 'exportBasis', 'downloadBlob',
-        `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad, failApart, recovered };`)(
+        `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad, failApart, recovered, recoveryStarts, listsRead };`)(
         app, (id) => dom[id], (t, ms) => shown.push([t, ms]), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30,
         () => {}, () => {}, { stl: { write: async () => new Uint8Array(4), type: 'model/stl', up: 'z' } }, (m, ids) => ids, () => 'B', () => 'm', () => [1, 0, 0, 0, 1, 0, 0, 0, 1], () => {});
       const act = { tell: () => run.tell('copied', 3000), tellReady: () => run.tellReady(W), sayNoFacts: () => run.sayNoFacts(N), loadFails: () => run.setStatus('error', E),
         cancel: () => run.cancelLoad(), oversize: () => run.openFile({ name: 'big.stl', size: 3e9 }), failApart: () => run.failApart(G), recovered: () => run.recovered(),
+        recoveryStarts: () => run.recoveryStarts('device lost'), listFails: () => run.listsRead({ errors: [{ url: 'l.json', message: 'HTTP 404' }], entries: [] }, false),
         exportMesh: () => run.exportMesh('stl') }[col];
       // (each read-out flushed apart, as a page's later tasks are; the card as the last setStatus left it)
       await act(); await new Promise((res) => setTimeout(res, 5));

@@ -116,3 +116,15 @@ export function timeLeft(fc, factor, step, fraction, inStep, quiet = 0) {
   const here = byPace === null ? byForecast : (1 - f) * byForecast + f * byPace;
   return here + later;
 }
+
+// A download's speed for its progress card, and with the bytes still to come
+// the time left at that speed: kB/s below 1 MB/s, since a phone's link read
+// "0.0 MB/s" for the whole of a minute-long download.
+export function rateText(bytesPerSec, left = null) {
+  const speed = bytesPerSec >= 1e6
+    ? `${(bytesPerSec / 1e6).toFixed(1)} MB/s`
+    : `${Math.max(1, Math.round(bytesPerSec / 1e3))} kB/s`;
+  if (left == null || !(bytesPerSec > 0) || !(left > 0)) return speed;
+  const s = Math.ceil(left / bytesPerSec);
+  return `${speed} · ${s < 60 ? `${s} s` : `${Math.ceil(s / 60)} min`} left`;
+}

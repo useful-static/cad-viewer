@@ -113,7 +113,7 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   // could not fail: r48 Q6; and a header with no mesh list -- {} or [] -- not taken as one: r48 A6)
   const ver = plain.slice(0); new DataView(ver).setUint32(4, 99, true);
   await assert.rejects(withoutEdgesFailed(ver), /^Error: cadmesh/, 'another version');
-  for (const json of ['{}', '[]', '{"sections":{}}']) {
+  for (const json of ['{}', '[]', '{"sections":{}}', '{"meshes":[]}']) { // (the last: a mesh list without its sections -- r49 A7)
     const j = new TextEncoder().encode(json), b = new ArrayBuffer(12 + j.length), dv = new DataView(b);
     dv.setUint32(0, 0x4d444143, true); dv.setUint32(4, 1, true); dv.setUint32(8, j.length, true); new Uint8Array(b, 12).set(j);
     await assert.rejects(withoutEdgesFailed(b), /^Error: cadmesh/, json);

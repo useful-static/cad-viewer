@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  COEF, QUIET_S, deviceFactor, forecast, forecastDone, forecastTotal, stepOf, timeLeft,
+  COEF, QUIET_S, deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft,
 } from '../js/import-progress.js';
 import { stepFeatures } from '../js/step-features.js';
 
@@ -108,6 +108,22 @@ test('the bar: done grows through the steps and stays under the total', () => {
     assert.ok(d <= forecastTotal(fc));
     last = d;
   }
+});
+test('a download\'s rate: kB/s on a slow link, MB/s on a fast one, and the time left', () => {
+  // the 3G case measured on a 1.9 MB model: ~45 kB/s, which read "0.0 MB/s"
+  assert.equal(rateText(45e3), '45 kB/s');
+  assert.equal(rateText(45e3, 0.9e6), '45 kB/s · 20 s left');
+  assert.equal(rateText(45e3, 1.8e6), '45 kB/s · 40 s left');
+  assert.equal(rateText(45e3, 2.7e6), '45 kB/s · 1 min left');
+  assert.equal(rateText(45e3, 3e6), '45 kB/s · 2 min left');
+  assert.equal(rateText(2.5e6, 5e6), '2.5 MB/s · 2 s left');
+  assert.equal(rateText(1e6), '1.0 MB/s');
+  // a trickle is never "0 kB/s", and nothing left, an unknown length or no
+  // speed yet says no time
+  assert.equal(rateText(200), '1 kB/s');
+  assert.equal(rateText(45e3, 0), '45 kB/s');
+  assert.equal(rateText(45e3, null), '45 kB/s');
+  assert.equal(rateText(0, 1e6), '1 kB/s');
 });
 
 done();
