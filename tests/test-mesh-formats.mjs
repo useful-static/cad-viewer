@@ -758,7 +758,10 @@ await test('r4-4 a 3MF model part of 200 MB of "<a/>" tags, and one of 10 M + 1 
   const head = '<model unit="millimeter"><resources><object id="1"><mesh><triangles>';
   const n = 10_000_001, t = '<triangle/>';
   const tris = await zipDeflated('3D/3dmodel.model', Buffer.concat([Buffer.from(head), Buffer.alloc(n * t.length, t)]));
-  await refusedFast(() => parseMesh('3mf', tris, 'b.3mf'), /b\.3mf holds more than the 10,000,000 triangles this viewer opens/, 5000);
+  // (the refusal comes at the 10,000,001st triangle, so the whole 110 MB part is scanned first: 4431 ms
+  // alone and 5057 ms after this file's other arms, measured r53 -- its 5000 ms bound failed 3 runs in
+  // 3 on a busy host, the code unchanged. The bound of the part that unpacks past 500 MB, above.)
+  await refusedFast(() => parseMesh('3mf', tris, 'b.3mf'), /b\.3mf holds more than the 10,000,000 triangles this viewer opens/, 10000);
 });
 await test('r4-5 an OBJ of 4 MB of "g" lines and an STL of 32 MB of "solid" lines: no body per empty group, refused at once', async () => {
   await refusedFast(() => parseMesh('obj', Buffer.alloc(4 * 2 ** 20, 'g\n').buffer, 'x.obj'), /x\.obj has no triangles to show/, 1500);

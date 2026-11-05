@@ -1,5 +1,8 @@
 // Model lists: ?list=<url> names a JSON file of the models a site offers, and
-// the viewer shows their names in a drop-down that opens the one picked.
+// the viewer shows their names in a drop-down that opens the one picked. Also
+// the address's rules the page (main.js) and its early fetch (js/early.js)
+// share: the model it names (modelUrlFrom, modelNameFrom), whether a poster
+// holds it back (posterAsked), and a list's or tour's read (timedFetch).
 // ?list= may be given more than once; the lists are joined in the order the
 // URL gives them, and a file named twice keeps its first place and name.
 //
@@ -124,7 +127,16 @@ export function entryByName(entries, name) {
 // example.com/models.json), else against the page. The one rule for the page (main.js modelUrlIn)
 // and for its early fetch (js/early.js), which starts the model's download before main.js runs.
 const isPlace = (raw) => /^\d+$/.test(raw || '');
-const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
+// (relative to the page or to a list: not a scheme's URL, not a //host one)
+export const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
+// Whether the address asks for an embed's poster (?embed=1&poster=<image>): its picture, and the
+// model only with View in 3D -- for the page and its early fetch alike (they decided it apart, and
+// a ?list= embed with a poster downloaded its first model at once: r53 Q2, A2)
+export const posterAsked = (search) => search.get('embed') === '1' && !!search.get('poster');
+// A model list's or a tour's read: given up after 20 s, as the page and its early fetch both ask
+// (r53 A4: written out three times)
+export const READ_TIMEOUT_MS = 20000;
+export const timedFetch = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : {});
 export function modelUrlFrom(search, lists, entries, base) {
   const listed = lists.length > 0;
   if (listed && search.get('model')) return entryByName(entries, search.get('model'))?.url || null;

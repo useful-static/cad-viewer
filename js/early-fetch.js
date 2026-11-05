@@ -27,6 +27,17 @@ export function earlyFetch(url, init) {
   return p;
 }
 
+// Every early download not taken by now let go -- its body cancelled, which ends it: called when the
+// page's start from its address is over (main.js startFromUrl), by which time each load the address
+// names has taken its own. One the visitor's own file took the place of went on downloading for no
+// one (r53 Q3). Says how many it let go.
+export function releaseEarly() {
+  const left = [...early.values()];
+  early.clear();
+  for (const p of left) p.then((r) => r.body?.cancel().catch(() => {}), () => {});
+  return left.length;
+}
+
 // The lists read early, kept for the read of the same lists (in order)
 export function setEarlyLists(urls, result) { lists = { key: urls.join('\n'), result }; }
 export function earlyLists(urls) {

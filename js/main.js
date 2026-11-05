@@ -12,8 +12,8 @@ import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { entryByName, fetchModelLists, modelNameFrom, modelUrlFrom, readCapped } from './model-list.js';
-import { earlyFetch, earlyLists } from './early-fetch.js';
+import { entryByName, fetchModelLists, isRelative, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
+import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft } from './import-progress.js';
@@ -44,9 +44,15 @@ import { WebGLRenderer } from './renderer-webgl.js';
 // "Failed to fetch dynamically imported module: …/js/mesh-formats.js" was the card's error: r52 A8, Q8).
 const once = (load, what) => {
   let p = null;
-  return () => (p ||= load().catch(() => {
+  // (a failed download -- import()'s TypeError -- in those words; any other failure, a module that
+  // does not run, said as itself, and its cause kept in the console: every failure was "check the
+  // connection" -- r53 A6, Q7)
+  return () => (p ||= load().catch((e) => {
     p = null;
-    throw new Error(`the viewer's reader for ${what} could not be downloaded: check the connection, then open the file again`);
+    console.error(e);
+    throw new Error(e instanceof TypeError
+      ? `the viewer's reader for ${what} could not be downloaded: check the connection, then open the file again`
+      : `the viewer's reader for ${what} did not load: ${e?.message || e}`);
   }));
 };
 const meshReaders = once(() => import('./mesh-formats.js'), 'meshes and zips');
@@ -1719,7 +1725,7 @@ async function readTour(url) {
   try { abs = fileUrl(new URL(url, location.href).href); } catch { return { error: `"${url}" is not a URL` }; }
   let text;
   try {
-    const r = await fetch(abs, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
+    const r = await timedFetch(abs);
     if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
     // (read up to its limit, as it arrives: js/model-list.js readCapped, js/tour.js MAX_TOUR_BYTES)
     try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: `${e.message}: ${abs}` }; }
@@ -4896,6 +4902,22 @@ function startTourIn(tour, url, only = null) {
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
+// A zip's companions for its model, each by its file name as the reader asks for it: those in the
+// model's own folder first, so a same-named file in another folder (a zip of red/chair.obj with
+// red/chair.mtl, and blue/chair.obj with blue/chair.mtl) never takes the model's place -- the last
+// one read won, and the red chair opened blue (r53 Q1). A companion elsewhere (a textures/ folder)
+// still serves when the model's folder has none of its name.
+function zipCompanions(files, model) {
+  const dir = (n) => n.slice(0, n.lastIndexOf('/') + 1);
+  const own = dir(model), seen = new Set(), out = [];
+  for (const n of [...files.filter((f) => dir(f) === own), ...files.filter((f) => dir(f) !== own)]) {
+    const base = n.split('/').pop().toLowerCase();
+    if (n === model || !isCompanion(n) || seen.has(base)) continue;
+    seen.add(base);
+    out.push(n);
+  }
+  return out;
+}
 async function loadZip(buf, name, seq) {
   setStatus('loading', `unpacking ${name}`);
   showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
@@ -4910,7 +4932,7 @@ async function loadZip(buf, name, seq) {
   const model = files.find(opens);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   const others = files.filter((n) => n !== model && opens(n)).length;
-  const extras = files.filter((n) => isCompanion(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
+  const extras = zipCompanions(files, model).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
   const inner = await z.get(model);
   if (stale(seq)) return;
   if (others) announce(`opening ${model} from ${name} (${others} more in it not opened)`);
@@ -5419,8 +5441,10 @@ async function loadUrl(url) {
     // against the page, as every link does; a list's files resolve against
     // the list. Given a list, the error says so.
     const tried = res.url || new URL(url, location.href).href;
-    const relative = !/^[a-z][a-z0-9+.-]*:/i.test(url) && new URLSearchParams(location.search).has('list');
-    const hint = relative ? ' (a relative ?src= is read from this page\'s address, not from the model list: give the full URL)' : '';
+    // (one test of "relative", js/model-list.js isRelative: a //host address is not -- r53 A7; one the
+    // list names was read from the list, and came here absolute)
+    const relative = isRelative(url) && new URLSearchParams(location.search).has('list');
+    const hint = relative ? ' (a relative address the model list does not name is read from this page\'s address: give the full URL)' : '';
     throw new Error((res.status === 404 ? `file not found (404): ${tried}`
       : `could not download ${tried}: the server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`) + hint);
   }
@@ -7139,15 +7163,19 @@ function openStart(src) {
 }
 // View in 3D on an embed's poster: the model and its adds, then a ?tour= read while the poster was up
 // (it was told "open its 3D model" and never played, urlTourPending left set -- r50 Q3)
-function viewIn3D(src) {
+// (src null: the list's first model, once the list has been read -- a ?list= embed's poster waits
+// for View in 3D too: r53 Q2)
+async function viewIn3D(src) {
   $('poster').hidden = true;
   setEmbedActive(true);
+  if (!src && app.listRead) await app.listRead;
+  src = src || app.listEntries?.[0]?.url || null;
   app.startSeq = app.loadSeq; // (the visitor's own ask)
-  return openStart(src).then(() => {
-    const w = app.tourWaiting;
-    app.tourWaiting = null;
-    if (w && app.header) { startTourIn(w.tour, w.url, w.step); app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
-  });
+  if (!src) { if (app.status !== 'error') setStatus('idle', idleText()); return; }
+  await openStart(src);
+  const w = app.tourWaiting;
+  app.tourWaiting = null;
+  if (w && app.header) { startTourIn(w.tour, w.url, w.step); app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
 }
 // A file picked or dropped while the GPU starts: the model of those picked, its companions kept
 // with it (pickModelFile) (the first file was taken, an .obj with its .mtl opened the .mtl: r50 A2;
@@ -7247,8 +7275,10 @@ async function startFromUrl(early) {
   // again: review r19.
   // ?embed=1&poster=<image>: the picture, and the model only when the visitor
   // asks for it (View in 3D) -- a page of several embeds downloads none of
-  // their models until one is wanted
-  const poster = app.embed && src && untouched() && params.get('poster');
+  // their models until one is wanted. Asked by js/model-list.js posterAsked, the rule js/early.js
+  // holds its download back by; for a ?src= and for a list's first model alike (a ?list= embed
+  // opened its first at once, poster or not: r53 Q2). A tour's own model is not held behind it.
+  const poster = posterAsked(params) && (src || lists.length > 0) && untouched() && params.get('poster');
   let opening = null;
   if (poster) {
     try { $('posterimg').src = new URL(poster, location.href).href; } catch { /* a bad URL: the button alone */ }
@@ -7276,19 +7306,23 @@ async function startFromUrl(early) {
   // "reading the model list…" for good, the card with no error: r50 Q1. The page is still 'init'
   // here otherwise, "starting GPU", and this is what moves it on -- unless the visitor's own file is
   // opening, whose line it is.)
-  if (!src && app.status !== 'error' && untouched()) {
+  if (!src && !poster && app.status !== 'error' && untouched()) {
     setStatus('idle', lists.length && !place ? 'reading the model list…' : tourUrl ? 'reading the tour…' : idleText());
   }
-  // (already read when ?src was a place in it)
-  listed = listed || (lists.length ? readLists(lists, () => !src && untouched() && !touring) : null);
+  // (already read when ?src was a place in it; its first not opened behind a poster)
+  listed = listed || (lists.length ? readLists(lists, () => !src && !poster && untouched() && !touring) : null);
+  app.listRead = listed; // (View in 3D on a list's poster waits for it)
   await Promise.all([opening, listed]);
+  // (each load the address names has taken its early download by now: one left over -- the visitor
+  // opened a file of their own instead -- is let go, not downloaded for no one: r53 Q3)
+  releaseEarly();
   if (touring) {
     const r = await touring;
     if (r.error) failApart(`the tour ${r.error}`);
     else {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
-      if (!app.header && !src && !tourOwn && untouched() && app.listEntries?.length) await startUpLoad(app.listEntries[0].url);
+      if (!app.header && !src && !poster && !tourOwn && untouched() && app.listEntries?.length) await startUpLoad(app.listEntries[0].url);
       // (a tour made for its own model, with the visitor's own file opened instead: not played over
       // it, and nothing said -- its cameras and parts played over the visitor's file: r52 A2, Q1)
       const notOurs = !!r.tour.model && !untouched();
@@ -7313,9 +7347,10 @@ async function startFromUrl(early) {
 // other load started), and tell which lists could not be read, or that they
 // name no models (the status line, not drawn, carries it too)
 async function readLists(lists, openFirst) {
-  const timed = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
-  // (read already when js/early.js started it, before main.js ran)
-  const r = await (earlyLists(lists) || fetchModelLists(lists, location.href, timed));
+  // (read already when js/early.js started it, before main.js ran; read here again if that read
+  // failed outright -- each list's own failure is in its answer, not a rejection)
+  const early = earlyLists(lists);
+  const r = await (early ? early.catch(() => fetchModelLists(lists, location.href, timedFetch)) : fetchModelLists(lists, location.href, timedFetch));
   fillModelList(r.entries);
   if (listsRead(r, openFirst())) await startUpLoad(r.entries[0].url);
 }

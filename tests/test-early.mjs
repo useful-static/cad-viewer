@@ -51,6 +51,19 @@ await test('nothing is fetched behind an embed\'s poster, nor a list\'s first be
   assert.deepEqual(await runAndTake(''), []);
 });
 
+await test('a full-URL ?src= beside a ?list= is fetched at once, not after the list answers (r53 A1)', async () => {
+  // (the list held: its answer never comes in this arm)
+  const held = globalThis.fetch;
+  asked = [];
+  globalThis.fetch = async (u) => { asked.push(String(u)); return String(u).endsWith('l.json') ? new Promise(() => {}) : new Response('x'); };
+  globalThis.location = { href: `${SITE}?list=l.json&src=https%3A%2F%2Fx.example%2Fc.stl`, search: '?list=l.json&src=https%3A%2F%2Fx.example%2Fc.stl' };
+  await import(`../js/early.js?case=${++n}`);
+  await new Promise((r) => setTimeout(r, 5));
+  globalThis.fetch = held;
+  assert.deepEqual(asked.filter((u) => !u.endsWith('l.json')), ['https://x.example/c.stl']);
+  await earlyFetch('https://x.example/c.stl');
+});
+
 await test('main.js takes each early one once: the model\'s download, the lists\' read', async () => {
   await run('list=l.json&model=bee');
   const lists = earlyLists(['l.json']);

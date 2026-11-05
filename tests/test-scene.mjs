@@ -15,7 +15,7 @@ import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
 import { box, washer } from './brep-model.mjs';
-import { entryByName, fetchModelLists, modelNameFrom, modelUrlFrom, readCapped } from '../js/model-list.js';
+import { entryByName, fetchModelLists, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
@@ -1584,6 +1584,14 @@ const START_CASES = {
   // (r52 Q6: a file dropped on an embed's poster opened under it, the poster left up)
   'a file dropped on an embed\'s poster': { q: 'embed=1&src=a.stl&poster=p.png', drop: 'd.stl', posterGone: true,
     want: ['ready', 'ready', [false, ''], [], ['d.stl'], false] },
+  // (r53 Q2: a ?list= embed with a poster opened its first model at once, poster or not)
+  'an embed\'s poster + ?list=': { q: 'embed=1&list=l.json&poster=p.png', serve: { 'l.json': LISTED }, want: ['idle', POSTER, [false, ''], [], [], false] },
+  'an embed\'s poster + ?list=, View in 3D': { q: 'embed=1&list=l.json&poster=p.png', serve: { 'l.json': LISTED }, click: true,
+    want: ['ready', 'ready', [false, ''], [], ['a.stl'], false] },
+  // (r53 Q4: a file refused while the list is read for its model is told -- the card is hidden for
+  // the read -- and is no load, so the list's model opens)
+  'a file over the size refused while the list is read, + ?index=': { q: 'list=l.json&index=2', serve: { 'l.json': LISTED },
+    during: { at: 'l.json', file: 'big.stl', size: 3e9 }, want: ['ready', 'ready', [false, ''], [BIGO], ['b.stl'], false] },
   // (r50 A1: an over-size file added cancelled the running load)
   'Add model… a file over the size': { q: 'src=a.stl', add: [BIG], want: ['ready', `ready · ${BIGO}`, [false, ''], [BIGO], ['a.stl'], false] },
   'Add model… a file': { q: 'src=a.stl', add: [{ name: 'e.stl', size: 10 }], want: ['ready', 'ready', [false, ''], [], ['a.stl', 'e.stl'], false] },
@@ -1593,7 +1601,9 @@ await test('the start-up contract: each address, embed, poster and early pick, m
   const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at) + 1); };
   const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
-  const body = line('let saySeq = 0') + ['async function startFromUrl(early) {', 'function viewIn3D(src) {', 'function addPicked(files) {',
+  // (viewIn3D async since r53: cut with its keyword, else as it was)
+  const body = line('let saySeq = 0') + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
+    'async function startFromUrl(early) {', 'function addPicked(files) {',
     'async function readLists(lists, openFirst) {', 'function listsRead(r, openFirst) {', 'function loadListed(url) {', 'function startLoad(fn) {',
     'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
     'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
@@ -1624,7 +1634,7 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     const tick = () => new Promise((res) => setTimeout(res, 1));
     let run = null;
     // (the visitor opens a file of their own while the start-up reads or loads `at`: Open…, as wired)
-    const visit = (at) => { if (c.during && c.during.at === at) setTimeout(() => run.openFile({ name: c.during.file, size: 10 }), 0); };
+    const visit = (at) => { if (c.during && c.during.at === at) setTimeout(() => run.openFile({ name: c.during.file, size: c.during.size || 10 }), 0); };
     const fetchFake = async (u) => {
       const path = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
       visit(path);
@@ -1652,12 +1662,13 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES', 'params',
       'location', 'document', 'window', 'fetch', 'fetchModelLists', 'fillModelList', 'entryByName', 'fileUrl', 'readCapped', 'parseTour', 'MAX_TOUR_BYTES',
       'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
-      'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists',
+      'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists', 'posterAsked', 'timedFetch', 'releaseEarly',
       `${body}; return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile };`)(
       app, (id) => dom[id], (t) => shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
       { href: `${SITE}?${c.q}${c.hash || ''}`, hash: c.hash || '' }, doc, { addEventListener() {} }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
       readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, () => { tour = true; }, () => {}, () => {}, () => {}, () => {},
-      () => { views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null);
+      () => { views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
+      posterAsked, fetchFake, () => 0);
     try {
       const early = c.early ? run.earlyPick(c.early) : null;
       await run.startFromUrl(early);
@@ -1676,6 +1687,84 @@ await test('the start-up contract: each address, embed, poster and early pick, m
   }
   if (failed.length) console.log(`start-up cases failing: ${failed.length}\n${failed.join('\n')}`);
   assert.deepEqual(failed, [], `start-up cases failing: ${failed.length}`);
+});
+
+test('a zip\'s companions for its model: its own folder\'s first, a same-named file elsewhere never in their place (r53 Q1)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function zipCompanions(files, model) {');
+  const zipCompanions = new Function('isCompanion', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return zipCompanions;`)(isCompanion);
+  // (the red chair: red's .mtl, whichever order the zip lists them)
+  const red = ['blue/chair.obj', 'blue/chair.mtl', 'red/chair.obj', 'red/chair.mtl'];
+  assert.deepEqual(zipCompanions(red, 'red/chair.obj'), ['red/chair.mtl']);
+  assert.deepEqual(zipCompanions([...red].reverse(), 'red/chair.obj'), ['red/chair.mtl']);
+  assert.deepEqual(zipCompanions(red, 'blue/chair.obj'), ['blue/chair.mtl']);
+  // (a textures folder still serves; the model's own folder wins a name both have)
+  assert.deepEqual(zipCompanions(['m/a.obj', 'm/a.mtl', 'tex/wood.png', 'm/wood.png'], 'm/a.obj'), ['m/a.mtl', 'm/wood.png']);
+  assert.deepEqual(zipCompanions(['a.gltf', 'bin/a.bin'], 'a.gltf'), ['bin/a.bin']);
+});
+
+// main.js's own loadUrl and readLists take the early downloads, once: a ?src= page downloaded its
+// model twice under a mutant no test saw (r53 Q3)
+await test('loadUrl takes the model\'s early download and readLists the early read, once each (r53 Q3)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const ef = await import('../js/early-fetch.js');
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (u) => { asked.push(String(u)); return String(u).endsWith('.json') ? new Response(JSON.stringify({ 'a.stl': 'A' })) : new Response('abc'); };
+  const app = { loadSeq: 0 }, got = [];
+  const el = () => ({ hidden: false, textContent: '' });
+  const f = new Function('app', '$', 'setStatus', 'announce', 'fileName', 'showProgress', 'directFor', 'earlyFetch', 'fetchFailedText', 'isRelative',
+    'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad',
+    `${cut('function beginLoad() {')}${cut('function stale(seq) {')}${cut('async function loadUrl(url) {')}${cut('async function readLists(lists, openFirst) {')}; return { loadUrl, readLists };`)(
+    app, () => el(), () => {}, () => {}, (u) => u.split('/').pop(), () => {}, (u) => ({ url: u }), ef.earlyFetch, async () => 'x', () => false,
+    2 ** 31, (n) => n, () => '', () => '0', async (buf, name) => { got.push([name, buf.byteLength]); }, { href: 'https://s.example/', search: '' },
+    ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {});
+  // (the early ones, as js/early.js starts them)
+  ef.startEarly('https://s.example/a.stl');
+  ef.setEarlyLists(['l.json'], fetchModelLists(['l.json'], 'https://s.example/', (u) => fetch(u)));
+  asked.length = 0;
+  await f.loadUrl('https://s.example/a.stl');
+  await f.readLists(['l.json'], () => false);
+  assert.deepEqual([asked, got, app.listEntries.map((e) => e.name)], [[], [['a.stl', 3]], ['A']], 'no second fetch of either');
+  await f.loadUrl('https://s.example/a.stl');
+  assert.deepEqual(asked, ['https://s.example/a.stl'], 'taken once: the next load fetches its own');
+  globalThis.fetch = realFetch;
+});
+
+// js/early.js against the start-up table: its own run on each case's address (the page's first
+// module, before main.js), the model it fetches early is the one the start-up opens first -- never
+// another -- and every model the address opens is fetched early but a tour's own (the tour is read
+// first) and one behind a poster (View in 3D). The two read the address by one set of rules
+// (js/model-list.js), and decided the poster apart: r53 A2, Q2.
+await test('js/early.js fetches early the model the start-up opens first, and no other (r53 A2, Q2, Q3)', async () => {
+  const { releaseEarly, earlyLists } = await import('../js/early-fetch.js');
+  const realFetch = globalThis.fetch;
+  const failed = [];
+  let n = 0;
+  for (const [name, c] of Object.entries(START_CASES)) {
+    if (c.early || c.during || c.drop || c.add) continue; // (the visitor's own files: not the address's)
+    const params = new URLSearchParams(c.q), serve = c.serve || {}, asked = [];
+    globalThis.location = { href: `${SITE}?${c.q}`, search: `?${c.q}` };
+    globalThis.fetch = async (u) => {
+      const p = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
+      asked.push(p);
+      return p in serve ? new Response(serve[p], { status: 200 }) : new Response('', { status: 404 });
+    };
+    await import(`../js/early.js?start=${++n}`);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 1));
+    releaseEarly();
+    earlyLists(params.getAll('list'));
+    const models = asked.filter((p) => !p.endsWith('.json')).map((p) => p.split('/').pop());
+    // (what the start-up opens first from the address: nothing behind a poster until View in 3D)
+    const first = posterAsked(params) ? null : c.want[4][0] || null;
+    if (models.length > 1) failed.push(`${name}: fetched early ${JSON.stringify(models)}`);
+    else if (models[0] && models[0] !== first) failed.push(`${name}: fetched early ${models[0]}, the start-up opens ${first}`);
+    else if (first && !models[0] && !params.has('tour')) failed.push(`${name}: ${first} not fetched early`);
+  }
+  globalThis.fetch = realFetch;
+  delete globalThis.location;
+  assert.deepEqual(failed, [], `cases: ${failed.length}\n${failed.join('\n')}`);
 });
 
 done();
