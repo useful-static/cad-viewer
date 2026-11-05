@@ -88,6 +88,8 @@ const app = {
   cancelTess: null,
   edgeJobs: new Map(), // base -> { stop, promise }: each model's running edge build (edgesOf, stopEdgeJobs)
   listPending: null, // { url, seq }: a model of the model list being opened (listedNow)
+  entryN: 0, // the last history entry id given (cadvEntry: wireHistory)
+  entryState: null, // the state of the history entry shown, as last seen
   fetchAbort: null, // the running download's AbortController (beginLoad aborts it)
   wanted: null,
   selected: new Set(),
@@ -3502,7 +3504,12 @@ function openListed(url, refocus = false, keepMenu = false) {
   // (by what the address says, not its spelling: "lists/l.json" and "lists%2Fl.json" are one list --
   // a pick of the model the address already names pushed an entry of the same address: r62)
   const spelled = (h) => { const x = new URL(h); x.search = new URLSearchParams(x.search).toString(); return x.href; };
-  if (spelled(u.href) !== spelled(location.href)) { c.at++; history.pushState({ cadvPick: c.id, depth: c.at }, '', u); app.entrySearch = u.search; }
+  if (spelled(u.href) !== spelled(location.href)) {
+    c.at++;
+    history.pushState({ cadvPick: c.id, depth: c.at, cadvEntry: nextEntry() }, '', u);
+    app.entrySearch = u.search;
+    app.entryState = history.state;
+  }
   app.pickPending = pick;
   setPendingView(null, ''); // (a view of the last model is not a view of this one)
   // (the visitor's pick ends the address's tour: the model picked plays its own -- picked while the
@@ -3522,7 +3529,8 @@ function openListed(url, refocus = false, keepMenu = false) {
     // (back on the page as first opened, its ?add=s cancelled by the pick: opened again with them --
     // the address named them, the scene had the first model alone: r62 Q3)
     const adds = params.getAll('add').length;
-    if (history.state && history.state.cadvFirst && adds && (app.scene || []).length < 1 + adds && addressModel()) openStart(addressModel());
+    // (only over the first model: a file of the visitor's shown is theirs -- r63 Q2)
+    if (history.state && history.state.cadvFirst && adds && (app.scene || []).length < 1 + adds && addressModel() && app.sourceUrl === addressModel()) openStart(addressModel());
     syncModelList();
   });
 }
@@ -3551,14 +3559,23 @@ async function unwindPick(c) {
 // (app.entrySearch: the address of the entry shown. A browser fires popstate for a change of the
 // fragment alone too, before hashchange: that is an edit of the view, not another entry, and opening
 // the model again cancelled its download and every ?add= -- r59 Q2.)
+// A history entry's id, the next (cadvEntry: wireHistory)
+const nextEntry = () => (app.entryN = (app.entryN || 0) + 1);
 function wireHistory() {
   app.entrySearch = location.search;
   // (the page as first opened, marked in its own entry's state: its address is rewritten under it --
   // syncUnitParam moves ?unit= while its model loads, forgetAddressModel drops its model --, and a
   // Back compared by its text found the first entry no longer and reopened its model alone: r61 A1)
-  history.replaceState({ ...(history.state || {}), cadvFirst: true }, '', location.href);
+  // (every entry the page knows carries an id, cadvEntry: an entry without one is new, a #view= edit
+  // just made, and takes its marks from the entry it was made on -- the first entry's mark, a pick's
+  // depth; a step Back or Forward lands on one with an id, read as it is. Told apart by a pick's
+  // stamp alone, an edit of the first entry lost its mark, and a step back onto the first entry was
+  // read as an edit: r63 A1, Q1, Q3.)
+  history.replaceState({ ...(history.state || {}), cadvFirst: true, cadvEntry: nextEntry() }, '', location.href);
+  app.entryState = history.state;
   const startHref = location.href;
   window.addEventListener('popstate', () => {
+    if (history.state && history.state.cadvEntry) app.entryState = history.state;
     if (app.skipPop) { app.skipPop = false; return; }
     if (location.search === app.entrySearch) return; // (the fragment alone: hashchange's)
     app.entrySearch = location.search;
@@ -3572,18 +3589,21 @@ function wireHistory() {
     const whole = !first || !params.getAll('add').length || (app.scene || []).length > 1;
     // (the model shown OR OPENING: Back while a pick still downloads goes to the entry's model -- the
     // pick then showed under the earlier entry's address: r60 Q1)
-    if (!src || (src === listedNow() && whole)) { syncModelList(); return; }
-    // (onto the model still shown while a pick downloads: the pick cancelled, as Cancel does, and the
-    // model kept -- it was downloaded again, its state reset: r61 Q6)
-    if (src === app.sourceUrl && whole && PROGRESS_STATES.has(app.status)) {
+    // (onto the model still shown while a pick downloads -- or an entry naming none, the visitor's own
+    // file shown: the pick cancelled, as Cancel does, and what is shown kept -- it was downloaded
+    // again, its state reset: r61 Q6; the pick went on and showed under an address naming no
+    // model: r63 Q4)
+    const cancelPick = () => {
       listPick++;
       app.pickPending = 0;
       app.pickChain = null;
       beginLoad();
-      setStatus('ready', readyText());
+      if (somethingShown()) setStatus('ready', readyText()); else setStatus('idle', idleText());
       syncModelList();
-      return;
-    }
+    };
+    if (!src) { if (app.pickPending) cancelPick(); else syncModelList(); return; }
+    if (src === listedNow() && whole) { syncModelList(); return; }
+    if (src === app.sourceUrl && whole && PROGRESS_STATES.has(app.status)) { cancelPick(); return; }
     // (the entry's #view= is for the model its address names, as when the page opened (viewIsFor):
     // with none named, a device file's, not the list's first that Back reopens -- r58 Q1)
     setPendingView(search, location.hash);
@@ -3595,8 +3615,21 @@ function wireHistory() {
     // (and its entry the start's address again: a device file's rewrite had dropped its model and
     // ?add=s from it, so the scene Back opened was one the address no longer named -- r62 Q4)
     if (first) {
-      history.replaceState(history.state, '', startHref);
-      app.entrySearch = new URL(startHref).search;
+      // (the start's model and ?add=s, the entry's own ?unit= and view kept -- "this file is in" was
+      // lost, and the start's #view= put back that never landed: r63 A2, Q5)
+      const back = new URL(startHref);
+      // (with the model it names beside it: "this file is in" named the model, and its ?unit= alone
+      // was read as naming none -- syncUnitParam's rule)
+      const here = new URLSearchParams(location.search);
+      const unit = here.get('unit');
+      if (unit) {
+        for (const k of MODEL_PARAMS) { back.searchParams.delete(k); if (here.get(k)) back.searchParams.set(k, here.get(k)); }
+        back.searchParams.set('unit', unit);
+      } else back.searchParams.delete('unit');
+      back.hash = location.hash;
+      history.replaceState(history.state, '', back);
+      app.entrySearch = back.search;
+      setPendingView(new URLSearchParams(back.search), back.hash);
       openStart(src);
     } else loadListed(src);
   });
@@ -3605,14 +3638,20 @@ function wireHistory() {
   // older view: r59 A2, Q3)
   // (a #view= taken out: no view waits -- the start's still landed: r60 A4)
   window.addEventListener('hashchange', () => {
-    // (while a pick downloads: an entry with the chain's stamp is a step Back or Forward among its
-    // own -- its depth is where the page now is; one with none is an edit made now, one deeper,
-    // stamped so: unwindPick)
+    // (a pick downloading: where the page now is in its chain -- an entry of the chain's at its own
+    // depth, an edit made on one of them one deeper, anything else outside it: unwindPick)
     const c = app.pickPending && app.pickChain;
-    if (c) {
-      const s = history.state;
-      if (s && s.cadvPick === c.id) c.at = s.depth;
-      else { c.at++; history.replaceState({ ...(s || {}), cadvPick: c.id, depth: c.at }, '', location.href); }
+    const s = history.state;
+    if (s && s.cadvEntry) {
+      app.entryState = s;
+      if (c) c.at = s.cadvPick === c.id ? s.depth : 0;
+    } else {
+      const prev = app.entryState || {};
+      const own = { cadvEntry: nextEntry() };
+      if (prev.cadvFirst) own.cadvFirst = true;
+      if (c && prev.cadvPick === c.id) { c.at = prev.depth + 1; own.cadvPick = c.id; own.depth = c.at; } else if (c) c.at = 0;
+      history.replaceState(own, '', location.href);
+      app.entryState = own;
     }
     setPendingView(new URLSearchParams(location.search), location.hash);
     if (!PROGRESS_STATES.has(app.status)) landPendingView();
@@ -5014,7 +5053,9 @@ function syncUnitParam() {
   // (a ?unit= is the named model's, by addressUnit's rule: the address names the model shown when it
   // names none -- the list's first, a tour's own --, or a reload read it in mm and dropped the unit:
   // r62 Q2)
-  if (want && !modelUrlIn(u.searchParams)) setModelParam(u, app.sourceUrl);
+  // (and a #view= the address had, naming no model, was a device file's: not this model's -- named
+  // now, it became the model's own view: r63)
+  if (want && !modelUrlIn(u.searchParams)) { setModelParam(u, app.sourceUrl); u.hash = ''; }
   if (want) u.searchParams.set('unit', want); else u.searchParams.delete('unit');
   history.replaceState(history.state, '', u);
   app.entrySearch = u.search; // (the entry shown, rewritten, as forgetAddressModel keeps it: r60 Q7)
@@ -5036,6 +5077,9 @@ function addressUnit(url) {
 function setMeshUnit(u) {
   const src = app.meshSource;
   if (!src || u === src.unit || !MM_PER[u]) return Promise.resolve();
+  // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
+  // the add under way, the address naming a model the scene lacked -- r63 A3)
+  if (app.addsPending && app.addsChain) return app.addsChain.then(() => setMeshUnit(u));
   // (a tour shown is left first, the visitor's view put back: the re-read ends it anyway, and the
   // hidden parts kept below were then the step's -- a "hide" step left every other part hidden)
   if (app.tour) endTour();

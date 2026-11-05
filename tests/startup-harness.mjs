@@ -33,7 +33,9 @@
 // Stand-ins this header does not otherwise name: a tour takes no camera (its steps here have no
 // view of their own); a load's failure is one sentence with its path, not the page's words and
 // hint; a model's unit is the one its address asks for (addressUnit), else millimetres -- its file
-// says nothing of its own (r61 Q8, Q9).
+// says nothing of its own (r61 Q8, Q9); "this file is in" (setMeshUnit) waits for the address's
+// ?add=s and ends the tour as the page's does, its re-read itself stood in for by the address's
+// ?unit= rewrite (syncUnitParam) -- no load, no new header (r63 A3, Q6).
 
 import { readFileSync } from 'node:fs';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
@@ -101,7 +103,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
-  + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+  + line('const autoTourKey = ') + line('const nextEntry = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)
@@ -171,6 +173,7 @@ export async function runStart(c) {
     forward() { history.go(1); },
   };
   let run = null, modelSeen = false;
+  const loadsOf = {};
   const act = (d) => {
     o.acted.push(d); // (an act set for a moment that never comes -- no model loads -- is not one)
     // (a pick needs an entry to pick: before the list has answered there is none)
@@ -192,7 +195,12 @@ export async function runStart(c) {
     // (the #view= taken out of the address: a new entry, as an edit is -- r60 A4)
     if (d.unhash) { const before = cur.href; cur = new URL(cur); cur.hash = ''; history.pushState(null, '', cur.href); return fire(before); }
     // ("this file is in": another unit for the model shown -- r62 Q2)
-    if (d.unit) return app.header && run.setUnitRead(d.unit);
+    // (as setMeshUnit: after the address's ?add=s, the tour ended, the model read in the unit -- the
+    // re-read itself, a load of the same bodies, stood in for by syncUnitParam: r63 A3, Q6)
+    if (d.unit) {
+      if (!app.header) return null;
+      return (app.addsPending && app.addsChain ? app.addsChain : Promise.resolve()).then(() => { o.events.push('tour-end'); run.setUnitRead(d.unit); });
+    }
     // (Cancel on the load's card, as wired)
     if (d.cancel) return dom.pcancel.onclick && dom.pcancel.onclick();
     return run.openFile({ name: d.file, size: d.size || 10 });
@@ -247,6 +255,9 @@ export async function runStart(c) {
     o.opened.push(fromFile && extras.length ? [file, ...extras.map((x) => x.name)].join('+') : file);
     k.setStatus('loading', `downloading ${file}`);
     visit(file);
+    // (and its nth load's own moment, "<file>#n": a retry of a failed model -- r63 Q1)
+    loadsOf[file] = (loadsOf[file] || 0) + 1;
+    visit(`${file}#${loadsOf[file]}`);
     if (!fromFile && !adding && !modelSeen) { modelSeen = true; visit('model'); }
     await settle((c.slow || []).includes(file) ? 30 : 2);
     if (k.stale(seq)) return;

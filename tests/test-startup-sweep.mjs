@@ -92,6 +92,8 @@ const ADDRESSES = {
   // the first entry's address rewritten under it, ?unit= moved: r61 A1; it failing, the ?add= joined
   // the pick: r61 Q1, Q4)
   'list+index1+add+unit': { q: 'list=lists/l.json&index=1&add=x.stl&unit=in', list: true },
+  // (a link the page wrote itself: its list spelled lists%2Fl.json, entry 2 with a view -- r63 Q1, Q9)
+  'list+index (page-spelled)+view': { q: 'list=lists%2Fl.json&index=2', hash: '#view=v', list: true, pageSpelled: true },
   // (a ?unit= with no model named, and beside a tour's own model: whose is it -- r62 Q2)
   'list+unit': { q: 'list=lists/l.json&unit=in', list: true },
   'tour (its model)+unit': { q: 'tour=t.json&unit=in', tour: 'c.stl' },
@@ -187,7 +189,26 @@ function acts(a, embed) {
   }
   // (r62 Q2: "this file is in" inches once the model shows; Q4: a drop, a pick, then Back)
   out.push(['this file is in inches, after', { after: [{ unit: 'in' }] }]);
-  if (a.list && embed !== 'poster') out.push(['a drop, a list pick, then Back', { after: [{ file: 'v.stl' }, { pick: 2 }, { back: true }] }]);
+  if (a.list && embed !== 'poster') {
+    out.push(['a drop, a list pick, then Back', { after: [{ file: 'v.stl' }, { pick: 2 }, { back: true }] }],
+      // (r63: an edit, a pick, then Back -- the edited first entry still the first, A1, Q3; inches, a
+      // pick, then Back -- the unit kept, A2; a drop then a failing pick -- the file kept, Q2; a drop,
+      // a pick, Back during it -- the pick ended, Q4)
+      ['a #view= edit, a list pick, then Back', { after: [{ hash: true }, { pick: 2 }, { back: true }] }],
+      ['this file is in inches, a list pick, then Back', { after: [{ unit: 'in' }, { pick: 2 }, { back: true }] }],
+      ['a drop, then a list pick that fails', { failsPick: true, after: [{ file: 'v.stl' }, { pick: 2 }] }]);
+    // ("during b.stl" is the pick's download only where the start opens another model)
+    if (!/(?:^|&)(index=2|src=b\.stl)/.test(a.q)) {
+      out.push(['a drop, a list pick, Back during it', { slow: ['b.stl'], during: [{ at: 'b.stl', back: true }], after: [{ file: 'v.stl' }, { pick: 2 }] }],
+        // (the visitor's file shown first: the address then names no model at all -- r63 Q4)
+        ['a drop during the model, a list pick, Back during it', { slow: ['b.stl'], during: [{ at: 'model', file: 'v.stl' }, { at: 'b.stl', back: true }], after: [{ pick: 2 }] }]);
+    }
+  }
+  // (r63 A1: during a slow ?add=, an edit, then a pick that fails -- the edited first entry's adds put back)
+  if (a.list && addOf(a.q) && embed !== 'poster') out.push(['during a slow ?add=, an edit, then a pick that fails', { failsPick: true, slow: [addOf(a.q)], during: [{ at: addOf(a.q), hash: true }, { at: addOf(a.q), pick: 2 }] }]);
+  // (r63 Q1: the start's model failing, picked again, Back during the retry -- on an address spelled
+  // as the page writes its own links)
+  if (a.pageSpelled) out.push(['the start\'s model failing, picked again, Back during it', { slow: ['b.stl'], during: [{ at: 'b.stl#2', back: true }], after: [{ pick: 2 }] }]);
   // (a #view= edit while the model loads, and while the list is read: popstate then hashchange -- r59 Q2)
   out.push(['a #view= edit during the model', { during: [{ at: 'model', hash: true }] }]);
   if (a.list) out.push(['a #view= edit during the list', { during: [{ at: LP, hash: true }] }]);
@@ -250,7 +271,8 @@ function check(c, r) {
     // (every entry the visitor picked; and a failed pick's take-back, which reopens the page as first
     // opened with its ?add=s -- the restoring rule, r62 Q3)
     const picked = acts.filter((d) => d.pick).map((d) => ['a.stl', 'b.stl', 'd.stl'][d.pick - 1]);
-    const own = (u) => visitorFiles.has(u.split('/').pop()) || picked.includes(u.split('/').pop()) || acts.some((d) => d.back) || !!c.failsPick;
+    // (the take-back's reopen, over the first model only: never over the visitor's file -- r63 Q2)
+    const own = (u) => visitorFiles.has(u.split('/').pop()) || picked.includes(u.split('/').pop()) || acts.some((d) => d.back) || (!!c.failsPick && !acts.some((d) => d.file));
     const later = r.loadedUrls.slice(visitorAt + 1).filter((u) => !own(u));
     if (later.length) v('I1', `after the visitor's ${r.loadedUrls[visitorAt]}: ${later.join(', ')}`);
   }
@@ -373,8 +395,13 @@ function check(c, r) {
     const shownF = String(r.app.sourceUrl).split('/').pop();
     // (unless the model it names will not open: Back onto an entry whose model fails shows the last
     // model that opened, the address the entry's -- a load failure, not a lost step)
-    const namedF = idx === '1' ? 'a.stl' : idx === '2' ? 'b.stl' : '';
+    const namedF = idx === '1' ? 'a.stl' : idx === '2' ? 'b.stl' : idx === '3' ? 'd.stl' : ''; // (r63 Q10)
     if (idx && shownF !== namedF && !(c.fails || []).includes(namedF)) v('I19', `the address names entry ${idx}, ${shownF} shown`);
+    // (Back onto an entry naming no model -- the visitor's own file shown first -- while the pick
+    // downloads: the pick ends, never shown under it -- r63 Q4)
+    const backAt2 = r.events.lastIndexOf('back');
+    if (!idx && !hq.get('src') && !hq.get('model') && !r.app.addressUrl && backAt2 > r.events.indexOf('pick')
+      && r.events.slice(backAt2 + 1).includes(`shown ${shownF}`) && ['b.stl', 'd.stl'].includes(shownF)) v('I19', `the pick's ${shownF} shown after Back onto an entry naming no model`);
     if (!idx && !hq.get('src') && !hq.get('model') && r.app.addressUrl && shownF !== String(r.app.addressUrl).split('/').pop()) v('I19', `the address names the page as first opened (${String(r.app.addressUrl).split('/').pop()}), ${shownF} shown`);
   }
   // (and the entry's hidden parts laid once per open, not again by a later rule run: r60 Q6 H)
@@ -418,11 +445,34 @@ function check(c, r) {
   if (quiet && r.app.sourceUrl && String(r.app.sourceUrl).split('/').pop() === firstOfAddress(c) && !(c.fails || []).some((f) => qp.getAll('add').includes(f))) {
     for (const f of endAdds) if (!sceneNames.includes(f)) v('I22', `the address names ?add=${f}, the scene ${JSON.stringify(sceneNames)}`);
   }
+  // (nor does a failed pick open again a scene that was whole when it was made: the take-back's
+  // reopen is for adds the pick cancelled -- its guard was untested, r63 Q8)
+  if (c.failsPick && qp.getAll('add').length) {
+    const pickAt3 = r.events.indexOf('pick');
+    const addedBefore = r.events.slice(0, pickAt3).filter((e) => e === 'added').length;
+    const failedAt = r.events.indexOf(`load ${c.failsPick === 'd' ? 'd.stl' : 'b.stl'}`, pickAt3);
+    if (pickAt3 >= 0 && failedAt >= 0 && addedBefore >= qp.getAll('add').length && r.events.slice(failedAt + 1).includes(`load ${firstOfAddress(c)}`)) {
+      v('I22', `a failed pick opened again a scene that was whole (${r.events.join(' > ')})`);
+    }
+  }
   // I23: "this file is in" puts ?unit= beside the model it is for: a reload opens that model in that
   // unit (written beside an address naming no model, a reload ignored it and dropped it: r62 Q2)
   if (acts.some((d) => d.unit) && r.app.sourceUrl && !r.left) {
     const hq = new URL(r.href).searchParams;
-    if (hq.get('unit') && !(hq.get('src') || hq.get('index') || hq.get('model'))) v('I23', `?unit= written beside an address naming no model: ${r.href}`);
+    // (the model it is beside resolving to the model shown: beside ?model=nope a reload still
+    // dropped it -- r63 Q7)
+    const resolved = hq.get('index') ? ['a.stl', 'b.stl', 'd.stl'][+hq.get('index') - 1] : hq.get('src') ? hq.get('src').split('/').pop() : null;
+    const shownU = String(r.app.sourceUrl).split('/').pop();
+    // (unless the model it names will not open, as I19)
+    // (nor the start's own address, a ?unit= typed with no model named: the visitor's, not written)
+    const typed = !resolved && qp.get('unit') && !qp.get('index') && !qp.get('src') && !qp.get('model');
+    if (hq.get('unit') && resolved !== shownU && !(c.fails || []).includes(resolved) && !typed) v('I23', `?unit= beside an address naming ${resolved || 'no model it has'}, ${shownU} shown: ${r.href}`);
+  }
+  // (and Back to the page as first opened keeps the unit the visitor chose there -- the start's
+  // address put back lost it: r63 A2)
+  if (acts.some((d) => d.unit) && acts.some((d) => d.back) && !r.left && r.status === 'ready' && r.app.sourceUrl
+    && String(r.app.sourceUrl).split('/').pop() === firstOfAddress(c) && !new URL(r.href).searchParams.get('unit')) {
+    v('I23', `Back to the page as first opened dropped the visitor's ?unit=: ${r.href}`);
   }
   // I18: File › Check this list… names each list as the address gives it, one that is not a URL too,
   // for check.html to refuse in words (it was left out, and the check named nothing wrong: r59 A5)
@@ -540,7 +590,9 @@ export function endState(r) {
   const lastShown = ev.map((e) => e.startsWith('shown ') || e === 'added').lastIndexOf(true);
   const after = ev.slice(lastShown + 1);
   const view = after.filter((e) => e.startsWith('view ')).pop();
-  const tour = after.filter((e) => e.startsWith('tour ')).pop();
+  // (a tour ended since -- a re-read ends it: r63 Q6 -- is no tour)
+  const tourAt = after.map((e) => e.startsWith('tour ')).lastIndexOf(true);
+  const tour = tourAt >= 0 && !after.slice(tourAt + 1).includes('tour-end') ? after[tourAt] : undefined;
   // (in its own order: a parameter moved is a difference -- r61 A3, A1)
   const q = new URL(r.href).searchParams;
   q.delete('backend');
@@ -548,6 +600,8 @@ export function endState(r) {
     status: r.status, msg: r.msg, card: r.card, told: r.shown,
     scene: (r.app.scene || []).map((m) => base(m.url)), address: q.toString(), hash: new URL(r.href).hash.replace(/^#view=/, ''),
     view: view ? view.slice(5) : null, tour: tour ? tour.slice(5) : null, poster: r.posterUp, entries: r.entries, history: hist,
+    // (a take-back left waiting, or a chain left open: the stuck state an end state did not show, r63 Q11)
+    stuck: { skipPop: !!r.app.skipPop, chain: !!r.app.pickChain },
   };
 }
 
@@ -562,7 +616,11 @@ if (exportAt > 0) {
   const seen = new Set(), pick = [];
   const take = (key, item) => { if (!seen.has(key)) { seen.add(key); pick.push(item); } };
   const parts = (n) => n.split(' | ');
-  for (const item of cases) { const [, , , act] = parts(item[0]); take(`act ${act}`, item); }
+  // (each act on an address it can act on: a pick needs a list, an ?add= act an ?add=, "this file is
+  // in" a list (where it names the model) -- the first address that had the act took it, and a pick
+  // on an address with no list ran nothing in the page: r63 A4)
+  const fits = (act, addr) => (!/pick/.test(act) || addr.list) && (!/\?add=/.test(act) || addOf(addr.q)) && (!/inches/.test(act) || addr.list);
+  for (const item of cases) { const [, , , act] = parts(item[0]); if (fits(act, item[1].addr)) take(`act ${act}`, item); }
   for (const item of cases) { const [addr, embed] = parts(item[0]); take(`addr ${addr}`, item); take(`embed ${embed}`, item); }
   for (const item of cases) if (wanted.has(item[0])) take(`name ${item[0]}`, item);
   const out = [];
