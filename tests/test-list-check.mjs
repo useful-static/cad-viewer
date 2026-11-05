@@ -224,6 +224,10 @@ await test('the list and its tours are read as cad.place reads them: given up af
     const t = await checkTour('https://example.com/slow.cadtour.json');
     assert.equal(t.level, 'bad');
     assert.match(t.detail, /^no answer in time \(20 s, as cad\.place waits\)/);
+    // (the headers in time, the body not: a timeout too, not "not a tour cad.place reads" -- r55 A5, Q7)
+    globalThis.fetch = async () => new Response(new ReadableStream({ start(ctl) { ctl.error(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })); } }), { status: 200 });
+    const b = await checkTour('https://example.com/slow-body.cadtour.json');
+    assert.match(b.detail, /^no answer in time \(20 s, as cad\.place waits\)/);
   } finally { globalThis.fetch = real; }
 });
 

@@ -198,4 +198,30 @@ await test('a wrong extra field refuses the list, naming the file and the field'
   }
 });
 
+await test('a relative ?src= / ?add= the list names is found by the URL the list was read from: a share page\'s file, a redirect\'s target (r55 A2)', async () => {
+  const { listedUrlFrom, modelUrlFrom } = await import('../js/model-list.js');
+  const body = JSON.stringify({ 'a.stl': 'A' });
+  const serve = (redirect) => async (u) => {
+    const r = new Response(body, { status: 200 });
+    if (redirect) Object.defineProperty(r, 'url', { value: redirect });
+    return r;
+  };
+  const base = 'https://page.example/viewer/';
+  // (a GitHub blob page: read as its raw file)
+  const blob = 'https://github.com/o/r/blob/main/lists/l.json';
+  const g = await fetchModelLists([blob], base, serve(null));
+  assert.deepEqual(g.entries.map((e) => e.url), ['https://raw.githubusercontent.com/o/r/main/lists/a.stl']);
+  assert.equal(listedUrlFrom('a.stl', [blob], g.entries, base), 'https://raw.githubusercontent.com/o/r/main/lists/a.stl');
+  assert.equal(modelUrlFrom(new URLSearchParams('src=a.stl'), [blob], g.entries, base), 'https://raw.githubusercontent.com/o/r/main/lists/a.stl');
+  // (a list that answered from elsewhere)
+  const moved = await fetchModelLists(['https://ex.example/l.json'], base, serve('https://ex.example/v2/l.json'));
+  assert.equal(listedUrlFrom('a.stl', ['https://ex.example/l.json'], moved.entries, base), 'https://ex.example/v2/a.stl');
+  // (a plain list, the control; and a name the list does not have)
+  const plain = await fetchModelLists(['https://ex.example/lists/l.json'], base, serve(null));
+  assert.equal(listedUrlFrom('a.stl', ['https://ex.example/lists/l.json'], plain.entries, base), 'https://ex.example/lists/a.stl');
+  assert.equal(listedUrlFrom('b.stl', ['https://ex.example/lists/l.json'], plain.entries, base), null);
+  // (the entry's own fields unchanged: the URL it was read from is not one of them)
+  assert.deepEqual(Object.keys(plain.entries[0]).sort(), ['name', 'url']);
+});
+
 done();

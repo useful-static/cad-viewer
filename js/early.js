@@ -30,7 +30,10 @@ if (lists.length) {
   } else {
     // the model a name gives, or the list's first (for a name the list lacks); with nothing named,
     // the list's first where main.js opens it -- not beside a ?tour=, whose own model opens first
-    read.then((r) => { fetchModel(place ? modelUrlFrom(params, lists, r.entries, location.href) || r.entries[0]?.url : !params.get('tour') ? r.entries[0]?.url : null); },
+    // (a name the list lacks, beside a ?tour=: the tour's own model opens, not the list's first --
+    // the start-up's one order, r55 A4)
+    const first = (r) => (params.get('tour') ? null : r.entries[0]?.url);
+    read.then((r) => { fetchModel(place ? modelUrlFrom(params, lists, r.entries, location.href) || first(r) : first(r)); },
       () => { /* a read that failed outright: main.js reads the lists itself (readLists) */ });
   }
 } else {

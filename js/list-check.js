@@ -7,7 +7,7 @@
 // tried. Pure apart from fetch, which the caller passes (tests pass a fake):
 // tests/test-list-check.mjs.
 
-import { READ_TIMEOUT_MS, fetchModelLists, readCapped, timedFetch } from './model-list.js';
+import { READ_TIMEOUT_MS, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, SNIFF_BYTES, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
@@ -76,7 +76,7 @@ const mb = (n) => (n / 1e6).toFixed(n < 1e6 ? 2 : 1);
 // What a failed fetch means, as cad.place would meet it
 function refused(e) {
   // (given up after cad.place's own time: said as it says it -- r54 A2)
-  if (e && e.name === 'TimeoutError') return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
+  if (isTimeout(e)) return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
   return `not fetched: the site sent no CORS header for it, or did not answer (${e && e.message ? e.message : e})`;
 }
 
@@ -173,6 +173,9 @@ export async function checkTour(url, fetchFn = timedFetch) {
     const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), url);
     return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}`, url };
   } catch (e) {
+    // (the time given up while the body still came: a timeout, not a fault of the tour -- it read
+    // "not a tour cad.place reads: The operation was aborted due to timeout": r55 A5, Q7)
+    if (isTimeout(e)) return { level: 'bad', detail: refused(e), url };
     return { level: 'bad', detail: `not a tour cad.place reads: ${e.message}`, url };
   }
 }

@@ -136,6 +136,9 @@ export const posterAsked = (search) => search.get('embed') === '1' && !!search.g
 // A model list's or a tour's read: given up after 20 s, as the page and its early fetch both ask
 // (r53 A4: written out three times)
 export const READ_TIMEOUT_MS = 20000;
+// Whether a read failed by that time running out -- at the headers or while the body still came (the
+// signal covers both): one test for the page's list and tour reads and check.html's (r55 A5, Q7)
+export const isTimeout = (e) => !!e && e.name === 'TimeoutError';
 // (check.html's list check reads lists and tours by it too: without it, a list that answers in 21 s
 // read 🟢 there and "no answer in time" on cad.place -- r54 A2)
 export const timedFetch = (u, init = {}) => fetch(u, typeof AbortSignal.timeout === 'function' ? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : init);
@@ -150,8 +153,16 @@ export function modelUrlFrom(search, lists, entries, base) {
 // The entry a relative address names, read against each list's own URL as the list's files are; null
 // for none. For ?src= (above) and for each ?add= (js/main.js openStart: a relative ?add= the list
 // names was read from the page's address, and 404'd, the hint saying the list did not name it: r54 A6)
+// Against the URL each entry's list was read from first (a GitHub blob page's raw file, a Dropbox link's,
+// a redirect's target: the ?list= as written named none of them, and a relative ?src= the list named
+// was read from the page and 404'd -- r55 A2); against the ?list= values as written where an entry
+// carries none (one made by hand).
 export function listedUrlFrom(ref, lists, entries, base) {
   if (!isRelative(ref)) return null;
+  for (const e of entries || []) {
+    if (!e.listUrl) continue;
+    try { if (new URL(ref, e.listUrl).href === e.url) return e.url; } catch { /* not a URL */ }
+  }
   for (const l of lists) {
     let url = null;
     try { url = new URL(ref, new URL(l, base)).href; } catch { /* not a URL */ }
@@ -296,6 +307,7 @@ export function joinModelLists(lists) {
       if ((e.id && named.has(e.id)) || (e.aliases || []).some((a) => named.has(a))) {
         x = { ...e, aliases: (e.aliases || []).filter((a) => !named.has(a)) };
         if (named.has(e.id)) delete x.id;
+        if (e.listUrl) Object.defineProperty(x, 'listUrl', { value: e.listUrl, enumerable: false }); // (not spread)
       }
       for (const n of [x.id, ...(x.aliases || [])].filter(Boolean)) named.add(n);
       out.push(x);
@@ -347,12 +359,16 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
       const text = await readCapped(res, MAX_LIST_BYTES);
       // relative files resolve against where the list came from: after a
       // redirect, that is the URL that answered, not the one asked
-      return { entries: parseModelList(text, res.url || url) };
+      // (each entry keeps the URL its list was read from -- a share page's file, a redirect's target --
+      // which a relative ?src= / ?add= naming it resolves against: listedUrlFrom. Not enumerable: the
+      // entry's own fields stay what the list says)
+      const from = res.url || url;
+      return { entries: parseModelList(text, from).map((e) => Object.defineProperty(e, 'listUrl', { value: from, enumerable: false })) };
     } catch (e) {
       // fetch's own TypeError says only "Failed to fetch": no CORS, or no answer
       const message = e instanceof TypeError && !url ? 'not a URL'
         : e instanceof TypeError ? 'could not be fetched (no answer, or the site does not allow it: CORS)'
-          : e && e.name === 'TimeoutError' ? 'no answer in time' : e.message;
+          : isTimeout(e) ? 'no answer in time' : e.message;
       return { entries: [], error: { url: url || u, message } };
     }
   }));

@@ -78,6 +78,11 @@ await test('a reader that could not be downloaded is said in plain words, and tr
   let tries = 0;
   const reader = once(async () => { tries++; if (tries === 1) throw new TypeError('Failed to fetch dynamically imported module: https://x.test/js/mesh-formats.js'); return { ok: 1 }; }, 'meshes and zips');
   await assert.rejects(reader(), { message: 'the viewer\'s reader for meshes and zips could not be downloaded: check the connection, then try again' });
+  // (Firefox's and Safari's words for a failed download too, not Chromium's alone -- r55 Q9)
+  for (const msg of ['error loading dynamically imported module: https://x.test/js/dxf.js', 'Importing a module script failed.']) {
+    const r2 = once(async () => { throw new TypeError(msg); }, '2D drawings');
+    await assert.rejects(r2(), { message: 'the viewer\'s reader for 2D drawings could not be downloaded: check the connection, then try again' }, msg);
+  }
   // (a TypeError that is no download -- the reader downloaded, then threw: said as itself -- r54 A9, Q9)
   const threw = once(async () => { throw new TypeError('x is not a function'); }, 'meshes and zips');
   await assert.rejects(threw(), { message: 'the viewer\'s reader for meshes and zips did not load: x is not a function' });

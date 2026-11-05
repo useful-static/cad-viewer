@@ -12,7 +12,7 @@ import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { entryByName, fetchModelLists, isRelative, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
+import { entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
@@ -1732,11 +1732,12 @@ async function readTour(url) {
     const r = await timedFetch(abs);
     if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
     // (read up to its limit, as it arrives: js/model-list.js readCapped, js/tour.js MAX_TOUR_BYTES)
-    try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: `${e.message}: ${abs}` }; }
+    // (the time running out while the body still came is the same timeout: r55 A5, Q7)
+    try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: isTimeout(e) ? `gave no answer in time: ${abs}` : `${e.message}: ${abs}` }; }
   } catch (e) {
     // (given up after its time: said so, as a list's read says it -- it read "not there, or no
     // CORS": r54 A5)
-    if (e && e.name === 'TimeoutError') return { error: `gave no answer in time: ${abs}` };
+    if (isTimeout(e)) return { error: `gave no answer in time: ${abs}` };
     // (the site answered without CORS -- the tour is not there, or not
     // shared -- or did not answer: fetchFailedText tells which)
     return { error: await fetchFailedText(abs, 'the tour', e, 'could not be read') };
@@ -4926,12 +4927,21 @@ function startTourIn(tour, url, only = null) {
 // folder -- textures/ beside the model's -- still serves. \ in a zip's names is read as / (r54 A3).
 function zipCompanions(files, model, opens) {
   const norm = (n) => n.replace(/\\/g, '/');
-  const dir = (n) => { const s = norm(n); return s.slice(0, s.lastIndexOf('/') + 1); };
+  // (folders compared without case, as the zip's reader and the companion lookup compare names:
+  // Red/chair.obj beside red/chair.mtl opened blue -- r55 Q4)
+  const dir = (n) => { const s = norm(n).toLowerCase(); return s.slice(0, s.lastIndexOf('/') + 1); };
   const own = dir(model);
-  // another model's folder: one holding a model other than this one, and not this model's own folder
-  // or one above it (a zip of a/x.obj and a/b/y.obj: b/ is y's; a/ stays x's)
+  // another model's folder: its folder just below where its path and this model's part -- for
+  // red/source/chair.obj beside blue/source/x.obj that is blue/, so blue/textures/ is not this one's
+  // (it was taken: 600 MB of another model's textures, r55 Q6); for a/x.obj beside a/b/y.obj, a/b/
   const others = files.filter((f) => f !== model && opens(f)).map(dir);
-  const theirs = others.filter((d) => !own.startsWith(d));
+  const theirs = [];
+  for (const d of others) {
+    const a = own.split('/'), b = d.split('/');
+    let i = 0;
+    while (i < a.length - 1 && i < b.length - 1 && a[i] === b[i]) i++;
+    if (i < b.length - 1) theirs.push(`${b.slice(0, i + 1).join('/')}/`);
+  }
   const out = [];
   for (const n of files) {
     if (n === model || !isCompanion(n)) continue;
@@ -4944,7 +4954,7 @@ function zipCompanions(files, model, opens) {
     const up = own.slice(0, own.length - 1).split('/');
     const there = norm(n).split('/');
     let i = 0;
-    while (i < up.length && i < there.length - 1 && up[i] === there[i]) i++;
+    while (i < up.length && i < there.length - 1 && up[i] === there[i].toLowerCase()) i++;
     out.push({ path: n, name: `${'../'.repeat(up.length - i)}${there.slice(i).join('/')}` });
   }
   return out;
@@ -5478,7 +5488,8 @@ async function loadUrl(url) {
     // (a list that could not be read named nothing: said so, not "does not name" -- r54 Q10)
     const unread = !app.listEntries?.length && app.listNote;
     const hint = !relative ? '' : unread
-      ? ` (the model list could not be read -- ${app.listNote} -- so a relative address is read from this page's address: give the full URL)`
+      // ("gave no models": a list read and empty too -- "could not be read" said that of it: r55 Q10)
+      ? ` (the model list gave no models -- ${app.listNote} -- so a relative address is read from this page's address: give the full URL)`
       : ' (a relative address the model list does not name is read from this page\'s address: give the full URL)';
     throw new Error((res.status === 404 ? `file not found (404): ${tried}`
       : `could not download ${tried}: the server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`) + hint);
@@ -5581,7 +5592,8 @@ const oversizeText = (name) => `${name} is over ${(MAX_FILE_BYTES / 2 ** 30).toF
 // goes, not left over the model drawn under it, and View in 3D then opening ?src= over it: r52 Q6)
 function openFile(f) {
   if (refusedForSize(f)) return;
-  if (posterUp()) { $('poster').hidden = true; setEmbedActive(true); }
+  // (and the address's tour is over: View in 3D, which plays it, will not run -- r55 A3, Q2)
+  if (posterUp()) { $('poster').hidden = true; setEmbedActive(true); tourOver(); }
   startLoad(() => loadFile(f));
 }
 
@@ -7214,13 +7226,16 @@ async function viewIn3D(src) {
   // (the visitor's ask is the press: a file they open while the tour or list is read is theirs, and
   // nothing the address names opens over it -- the list's first did: r54 A1, Q3)
   app.startSeq = app.loadSeq;
+  // (a ?src= opens at once, beside the tour's read, as at start-up: it waited for the tour, up to its
+  // 20 s, under no card, then opened over a file the visitor had opened meanwhile -- r55 A1, Q1, Q5)
+  const opening = src ? openStart(src) : null;
   if (!src && (app.tourRead || app.listRead)) {
     // (the card says what is read, not a blank view under "View in 3D loads the model": r54 A7, Q5)
     const what = app.listRead ? 'the model list' : 'the tour';
     setStatus('idle', `reading ${what}…`);
     app.readingList = !!app.listRead;
+    $('pcancel').hidden = true; // (no Cancel: the read goes on whatever is pressed)
     showProgress('Opening the 3D model', null, `reading ${what}`);
-    $('pcancel').hidden = true;
     try {
       await Promise.all([app.tourRead, app.listRead]);
     } finally {
@@ -7228,22 +7243,34 @@ async function viewIn3D(src) {
       $('pcancel').hidden = false;
       showEmpty();
     }
-    if (!untouched()) return;
+    if (!untouched()) { tourOver(); return; }
   }
   const r = app.tourRead ? await app.tourRead : null;
-  src = src || r?.tour?.model || app.listEntries?.[0]?.url || null;
   if (!src) {
-    // (a list that failed or names nothing: its words on the card, not "no model to show": r54 Q4)
-    if (app.status !== 'error') setStatus('error', app.listNote || (r?.error ? `the tour ${r.error}` : 'the address names no model to show'));
-    return;
-  }
-  await openStart(src);
-  // (not over a file of the visitor's own: as at start-up, r52 A2)
-  if (r?.tour && app.header && untouched()) {
-    startTourIn(r.tour, params.get('tour'), params.get('step'));
-    app.autoTourFor = autoTourKey();
-  }
+    src = r?.tour?.model || app.listEntries?.[0]?.url || null;
+    if (!src) {
+      // (a list that failed or names nothing: its words on the card, not "no model to show": r54 Q4)
+      if (app.status !== 'error') setStatus('error', app.listNote || (r?.error ? `the tour ${r.error}` : 'the address names no model to show'));
+      tourOver();
+      return;
+    }
+    await openStart(src);
+  } else await opening;
+  if (r?.tour && app.header && tourPlaysHere(r.tour)) startTourIn(r.tour, params.get('tour'), params.get('step'));
+  tourOver();
+}
+// Whether the address's tour plays over the model now shown: a tour made for its own model not over a
+// file the visitor opened instead (its cameras and parts are its model's -- r52 A2, Q1); one with no
+// model of its own over whatever is shown. The one rule for the start-up and View in 3D (they
+// disagreed: r55 Q3).
+const tourPlaysHere = (tour) => !(tour.model && !untouched());
+// The address's tour is over, played or not: the next model a list opens plays its own (the flag
+// stayed set after a file dropped on the poster, or opened during View in 3D's wait, and no list
+// model's tour played again -- r55 A3, Q2)
+function tourOver() {
+  if (!app.urlTourPending) return;
   app.urlTourPending = false;
+  if (app.header) app.autoTourFor = autoTourKey();
 }
 // A file picked or dropped while the GPU starts: the model of those picked, its companions kept
 // with it (pickModelFile) (the first file was taken, an .obj with its .mtl opened the .mtl: r50 A2;
@@ -7295,8 +7322,8 @@ async function startFromUrl(early) {
     if (reading) {
       setStatus('idle', 'reading the model list…');
       app.readingList = true;
-      showProgress('Opening the 3D model', null, 'reading the model list');
       $('pcancel').hidden = true;
+      showProgress('Opening the 3D model', null, 'reading the model list');
     }
     try {
       listed = readLists(lists, () => false);
@@ -7308,10 +7335,15 @@ async function startFromUrl(early) {
         showEmpty(); // (the card again, with a list's error on it: it stayed hidden -- r50 Q1)
       }
     }
-    src = modelUrlIn(params) || app.listEntries?.[0]?.url || null;
-    // (told: r49 A4; behind a poster it opens with View in 3D, not now -- r51 Q7)
-    if (src && !modelUrlIn(params) && untouched()) {
-      tell(`the model list has no model ${place}: ${app.embed && params.get('poster') ? 'View in 3D opens its first' : 'its first opens'}`, 6000);
+    // (a name the list lacks: the start-up's order from there -- the tour's own model ahead of the
+    // list's first, which opened ahead of it and had the tour played over it: r55 A4)
+    const named = modelUrlIn(params);
+    src = named || (params.get('tour') ? null : app.listEntries?.[0]?.url) || null;
+    // (told: r49 A4; behind a poster it opens with View in 3D, not now -- r51 Q7; "its first opens"
+    // only when it does)
+    if (!named && app.listEntries?.length && untouched()) {
+      const then = params.get('tour') ? '' : `: ${app.embed && params.get('poster') ? 'View in 3D opens its first' : 'its first opens'}`;
+      tell(`the model list has no model ${place}${then}`, 6000);
     }
   }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
@@ -7355,7 +7387,7 @@ async function startFromUrl(early) {
   app.tourRead = touring; // (View in 3D on a poster reads it too)
   // (its own tour, not the list's, plays over the first model: applyListEntry)
   app.urlTourPending = !!tourUrl;
-  const poster = posterAsked(params) && (src || lists.length > 0 || !!tourUrl) && untouched() && params.get('poster');
+  let poster = posterAsked(params) && (src || lists.length > 0 || !!tourUrl) && untouched() && params.get('poster');
   let opening = null;
   if (poster) {
     try { $('posterimg').src = new URL(poster, location.href).href; } catch { /* a bad URL: the button alone */ }
@@ -7388,6 +7420,13 @@ async function startFromUrl(early) {
   releaseEarly();
   if (touring) {
     const r = await touring;
+    // (a poster with nothing behind it -- a tour alone, naming no model -- comes down, the page as
+    // without one: View in 3D ended on an error card where the page said "the tour is ready": r55 Q11)
+    if (poster && !src && !lists.length && !r.error && !r.tour.model && posterUp()) {
+      $('poster').hidden = true;
+      poster = false;
+      setStatus('idle', idleText());
+    }
     if (r.error) failApart(`the tour ${r.error}`);
     else {
       // a tour with no model of its own, on a page given only a list: the
@@ -7395,11 +7434,11 @@ async function startFromUrl(early) {
       if (!app.header && !src && !poster && !tourOwn && untouched() && app.listEntries?.length) await startUpLoad(app.listEntries[0].url);
       // (a tour made for its own model, with the visitor's own file opened instead: not played over
       // it, and nothing said -- its cameras and parts played over the visitor's file: r52 A2, Q1)
-      const notOurs = !!r.tour.model && !untouched();
       // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
-      // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2)
+      // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2; the one rule
+      // of where it plays, tourPlaysHere, View in 3D's too: r55 Q3)
       if (poster) { /* viewIn3D */ }
-      else if (notOurs) app.urlTourPending = false;
+      else if (!tourPlaysHere(r.tour)) tourOver();
       else if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
       // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
       // nothing was said -- r48 A1, A2; not after its own model failed to open, whose error stands --
@@ -7408,7 +7447,8 @@ async function startFromUrl(early) {
       else if (!(tourOwn && app.status === 'error')) tell(`the tour is ready: open its 3D model${somethingShown() || app.embed ? '' : ` (${IDLE_MSG})`}`, 6000);
     }
     // (the next model picked from the list plays its own tour)
-    if (app.header && !poster) { app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
+    // (the start-up's part in the tour over, a model shown or not -- behind a poster, View in 3D's)
+    if (!poster) tourOver();
     // (read: the line no longer says it is being read -- r51, the start-up table)
     if (app.status === 'idle' && app.statusMsg === 'reading the tour…') setStatus('idle', idleText());
   }
