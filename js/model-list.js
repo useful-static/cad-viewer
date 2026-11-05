@@ -116,6 +116,41 @@ export function entryByName(entries, name) {
   return (entries || []).find((e) => e.id === name) || (entries || []).find((e) => (e.aliases || []).includes(name)) || null;
 }
 
+// An address's query back to the URL of the model it names, given the page's lists (`lists`, the
+// ?list= values) and their entries once read: null for none, or for a ?model= / ?index= the lists
+// do not have, or not yet read. ?model= matches an entry's id, else an alias. A numeric ?src= beside
+// a list is read as ?index= (links made before it). A relative ?src= beside a list is the entry it
+// names, read against the list's own URL as the list's files are ("boards/x.cadmesh" in a list at
+// example.com/models.json), else against the page. The one rule for the page (main.js modelUrlIn)
+// and for its early fetch (js/early.js), which starts the model's download before main.js runs.
+const isPlace = (raw) => /^\d+$/.test(raw || '');
+const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
+export function modelUrlFrom(search, lists, entries, base) {
+  const listed = lists.length > 0;
+  if (listed && search.get('model')) return entryByName(entries, search.get('model'))?.url || null;
+  const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
+  if (listed && isPlace(place)) return entries?.[Number(place) - 1]?.url || null;
+  const src = search.get('src');
+  if (listed && isRelative(src)) {
+    for (const l of lists) {
+      let url = null;
+      try { url = new URL(src, new URL(l, base)).href; } catch { /* not a URL */ }
+      const e = url && (entries || []).find((x) => x.url === url);
+      if (e) return e.url;
+    }
+  }
+  return src || null;
+}
+// What an address names by its list, which must be read before it opens: "model le-potato",
+// "index 3", a relative src the list may name; null when it names an absolute URL or nothing
+export function modelNameFrom(search, lists) {
+  if (!lists.length) return null;
+  if (search.get('model')) return `"${search.get('model')}"`;
+  const place = [search.get('index'), search.get('src')].find(isPlace);
+  if (place) return place;
+  return isRelative(search.get('src')) ? `"${search.get('src')}"` : null;
+}
+
 // An entry's other fields, all optional, each checked (a wrong one refuses the
 // list, naming the file and the field, as orient does):
 //   step     the source CAD file the model was converted from: File >

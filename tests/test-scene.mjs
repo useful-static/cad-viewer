@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Two models in one view (js/scene.js mergeModels) and the clearance between
-// them (js/clearance.js).
+// them (js/clearance.js); the scene's edges and facts; and the page's two
+// contracts, each cell or case run on main.js's own code: what the page says
+// (NOTE_STATES x NOTE_CONTRACT, with its sequence arms) and how it starts from
+// its address (START_CASES).
 //   node tests/test-scene.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
@@ -12,11 +15,11 @@ import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
 import { box, washer } from './brep-model.mjs';
-import { entryByName, fetchModelLists, readCapped } from '../js/model-list.js';
+import { entryByName, fetchModelLists, modelNameFrom, modelUrlFrom, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
-import { isCompanion } from '../js/formats.js';
+import { formatOfName, isCompanion } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
 
@@ -1119,7 +1122,7 @@ await test('Copy view link over a scene with a model added from this device says
     const app = { header: {}, dxf: null, sourceUrl: 'https://x.example/case.stl', measure: null,
       scene: [{ url: 'https://x.example/case.stl' }, { url: null }, { url: 'https://x.example/b.stl' }] };
     const shareView = new Function('app', 'viewLink', 'navigator', 'window', 'tell', 'MAX_NOTES',
-      `${cut('async function shareView() {')}${cut('function linkToldText(copied, hasUrl, nNotes')}; return shareView;`)(
+      `${cut('async function shareView() {')}${cut('function linkToldText(copied, hasUrl, nNotes')}${cut('function linkAdds() {')}; return shareView;`)(
       app, () => 'https://cad.place/?src=x', { clipboard: { writeText } }, { prompt() {} }, (t) => told.push(t), 20);
     await shareView();
     return told;
@@ -1223,7 +1226,9 @@ const busyRun = (s) => s.status === 'loading' || s.status === 'tessellating';
 // a failure apart from the load (failApart): the page's error only when nothing is shown and nothing
 // runs (idle, no model); else told, the state kept -- a load's own error on the card kept, and a
 // recovery left to end (r49 Q3, Q4: the card lost why the model failed; a recovery ended on an error)
-const apart = (s, words) => (s.shows || s.poster || s.status !== 'idle')
+// (a list read for its named model hides the card: told then too -- the cell said error, shown
+// nowhere: r52 Q3)
+const apart = (s, words) => (s.shows || s.poster || s.readingList || s.status !== 'idle')
   ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, 6000]], [words]] : ['error', words, [], [words]];
 const LOST = 'GPU context lost (device lost); recovering', LIST = 'model list l.json: HTTP 404';
 // (a row's idle words: an embed's poster its own, an embed none of the open-a-file words -- r51 Q5)
@@ -1270,7 +1275,8 @@ const NOTE_CONTRACT = {
   // a model list that could not be read, with nothing in it to open: a failure apart from the load,
   // by failApart's one rule (r49 A2: its own rule put it on the card and in the note at once, and
   // kept a failed load's error where a tour's replaced it)
-  listFails: (r, s) => apart(s, LIST),
+  // (its own answer ends a read for a named model: the page's error then, not told -- r52)
+  listFails: (r, s) => apart({ ...s, readingList: false }, LIST),
   // Export: its progress and its end told; the line written only while ready; the state kept
   exportMesh: (r, s) => (s.shows !== 'model' || r === 'exporting') ? null
     : [same, s.status === 'ready' ? `ready · ${SAVED}` : same, [[GOING, 4000], [SAVED, 3000]], [GOING, SAVED]],
@@ -1320,7 +1326,9 @@ await test('the note contract: each page state against each writer of a note or 
       const stAfter = st === same ? s.status : st, msgAfter = msg === same ? s.msg : msg;
       const wroteStatus = app.status !== s.status || app.statusMsg !== s.msg;
       // (hidden too while a list is read for a model it names, and behind an embed's poster)
-      const cardWant = !s.shows && !s.readingList && !s.poster && !['loading', 'tessellating', 'recovering', 'init'].includes(stAfter);
+      // (a list's own answer ends the read: listsRead)
+      const reading = s.readingList && !['listFails', 'listPartial'].includes(col);
+      const cardWant = !s.shows && !reading && !s.poster && !['loading', 'tessellating', 'recovering', 'init'].includes(stAfter);
       const card = wroteStatus ? [!dom.empty.hidden, dom.emptyerr.hidden ? '' : dom.emptyerr.textContent] : [cardWant, stAfter === 'error' ? msgAfter : ''];
       const got = [app.status, app.statusMsg, shown, heard, card];
       const exp = [stAfter, msgAfter, sh, hd, [cardWant, stAfter === 'error' ? msgAfter : '']];
@@ -1399,6 +1407,54 @@ await test('the note contract: each page state against each writer of a note or 
     f.cannotHold(); app.mesh = {}; f.setStatus('ready', 'ready'); f.setStatus('loading', 'reading c.step'); f.cancelLoad();
     assert.deepEqual([app.status, app.statusMsg], ['ready', 'ready'], 'cannot hold of another model, Cancel');
   }
+});
+
+await test('a file\'s companions reach its reader whatever is picked, refused or unzipped meanwhile (r52 A1, Q2)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const tick = () => new Promise((res) => setTimeout(res, 1));
+  const run = (unzipWait) => {
+    const app = { loadSeq: 0, status: 'ready', mesh: {}, dxf: null, embed: false };
+    const read = [];
+    let release = null;
+    const held = new Promise((res) => { release = res; });
+    const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
+      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS',
+      `${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
+      + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
+      + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
+      app, 2 * 2 ** 30, isCompanion, () => {}, () => {}, () => false, (fn) => fn(), () => {}, () => {}, () => '0',
+      (seq) => seq !== app.loadSeq,
+      // (the reader: what it is handed, after the awaits a real one makes)
+      async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
+      async () => { if (unzipWait) await held; return { unzip: async () => ({ names: ['m.stl', 'other.mtl'], get: async () => new ArrayBuffer(4) }) }; },
+      async () => {}, formatOfName, 'OPENS');
+    return { f, read, release, app };
+  };
+  const file = (name, size = 10) => ({ name, size, arrayBuffer: async () => { await tick(); return new ArrayBuffer(4); } });
+  const $ = () => ({ hidden: false });
+  globalThis.$ = $;
+  // (a) an .obj with its .mtl, then a drop of a file over the size, refused, while the .obj reads
+  {
+    const { f, read } = run(false);
+    f.openFile(f.pickModelFile([file('x.obj'), file('x.mtl')]));
+    f.openFile(f.pickModelFile([file('huge.stl', 3e9)]));
+    for (let i = 0; i < 10; i++) await tick();
+    assert.deepEqual(read, [['x.obj', ['x.mtl']]], 'a refused pick meanwhile');
+  }
+  // (c) a zip superseded while its reader is fetched, then an .obj with its .mtl
+  {
+    const { f, read, release, app } = run(true);
+    const zipSeq = f.beginLoad();
+    const z = f.loadZip(new ArrayBuffer(4), 'a.zip', zipSeq);
+    f.openFile(f.pickModelFile([file('x.obj'), file('x.mtl')]));
+    await tick(); release(); await z;
+    for (let i = 0; i < 10; i++) await tick();
+    assert.deepEqual(read, [['x.obj', ['x.mtl']]], 'a superseded zip meanwhile');
+    assert.ok(app.loadSeq >= 2);
+  }
+  delete globalThis.$;
 });
 
 // The start-up contract (r51): main()'s start-up from the address -- ?src=, ?list= with ?model= /
@@ -1498,6 +1554,36 @@ const START_CASES = {
     want: ['ready', 'ready', [false, ''], [], ['v.stl'], false] },
   'a file opened while an ?add= loads': { q: 'src=a.stl&add=b.stl&add=c.stl', during: { at: 'b.stl', file: 'v.stl' },
     want: ['ready', 'ready', [false, ''], [], ['a.stl', 'b.stl', 'v.stl'], false] },
+  // (r52 A3, Q3: a file over the size picked while the GPU starts is the visitor's ask too -- the
+  // address's model opened over the refusal, which was painted nowhere)
+  'a file over the size picked while the GPU starts + ?src=': { q: 'src=a.stl', early: [BIG], want: ['error', BIGO, [true, BIGO], [], [], false] },
+  'a file over the size picked while the GPU starts + ?list=': { q: 'list=l.json', serve: { 'l.json': LISTED }, early: [BIG],
+    want: ['error', BIGO, [true, BIGO], [], [], false] },
+  'a file over the size picked while the GPU starts + ?list= + ?index=': { q: 'list=l.json&index=2', serve: { 'l.json': LISTED }, early: [BIG],
+    want: ['error', BIGO, [true, BIGO], [], [], false] },
+  // (r52 A2, Q1: a tour made for its own model played over the visitor's file, or told "open its 3D
+  // model" over the file they were opening)
+  'a file picked while the GPU starts + ?tour= with its model': { q: 'tour=t.json', serve: { 't.json': TOUR('a.stl') }, early: [{ name: 'e.stl', size: 10 }],
+    want: ['ready', 'ready', [false, ''], [], ['e.stl'], false] },
+  'a file opened while the tour (its own model) is read': { q: 'tour=t.json', serve: { 't.json': TOUR('a.stl') }, during: { at: 't.json', file: 'v.stl' },
+    want: ['ready', 'ready', [false, ''], [], ['v.stl'], false] },
+  'a file opened while the tour\'s own model loads': { q: 'tour=t.json', serve: { 't.json': TOUR('a.stl') }, during: { at: 'a.stl', file: 'v.stl' },
+    want: ['ready', 'ready', [false, ''], [], ['a.stl', 'v.stl'], false] },
+  // (r52 Q4: a tour with no model plays over the visitor's file, the list's first not opened over it)
+  'a file opened while ?list= + ?tour= with no model are read': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR() },
+    during: { at: 'l.json', file: 'v.stl' }, want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
+  // (the same with the visitor's file still loading when the tour has been read: the list's first not
+  // opened over it, which cancelled it; the tour, told ready, has no model to play over yet)
+  'a slow file opened while ?list= + ?tour= with no model are read': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR() },
+    during: { at: 'l.json', file: 'v.stl' }, slow: ['v.stl'], want: ['ready', 'ready', [false, ''], [`${READY_T} (IDLE)`], ['v.stl'], false] },
+  // (r52 Q4: every ?add= after the first, and a #view= that waits for them, applied once, the wait ended)
+  '?src= + two ?add=s + #view=': { q: 'src=a.stl&add=b.stl&add=c.stl', hash: '#view=v', views: 1,
+    want: ['ready', 'ready', [false, ''], [], ['a.stl', 'b.stl', 'c.stl'], false] },
+  'an embed\'s poster + two ?add=s + #view=, View in 3D': { q: 'embed=1&src=a.stl&poster=p.png&add=b.stl&add=c.stl', hash: '#view=v', views: 1, click: true,
+    want: ['ready', 'ready', [false, ''], [], ['a.stl', 'b.stl', 'c.stl'], false] },
+  // (r52 Q6: a file dropped on an embed's poster opened under it, the poster left up)
+  'a file dropped on an embed\'s poster': { q: 'embed=1&src=a.stl&poster=p.png', drop: 'd.stl', posterGone: true,
+    want: ['ready', 'ready', [false, ''], [], ['d.stl'], false] },
   // (r50 A1: an over-size file added cancelled the running load)
   'Add model… a file over the size': { q: 'src=a.stl', add: [BIG], want: ['ready', `ready · ${BIGO}`, [false, ''], [BIGO], ['a.stl'], false] },
   'Add model… a file': { q: 'src=a.stl', add: [{ name: 'e.stl', size: 10 }], want: ['ready', 'ready', [false, ''], [], ['a.stl', 'e.stl'], false] },
@@ -1515,20 +1601,22 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     'async function readTour(url) {', 'function listEntry(src) {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
     'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {'].map(cutIf).join('')
     + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
-    + line('const autoTourKey = ') + line('const earlyPick = ') + line('const withExtras = ') + line('const untouched = ') + line('const idleText = ')
-    + line('const POSTER_MSG = ') + line('const oversizeText = ') + arrow('const modelNameIn = ')
-    // (as the real ones: a URL's load drops a pick's companions at once, loadUrl's `app.dropExtras =
-    // null`; a file's takes those it is given, else reads the global after its first await, as
-    // loadMeshFile does)
-    + 'async function loadUrl(url) { app.dropExtras = null; return fakeLoad(url, { beginLoad, stale, setStatus, readyText }, undefined, false); }\n'
-    + 'async function loadFile(f, extras) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText }, extras, true); }\n';
+    + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+    + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
+    // (one line since the rule went to js/model-list.js, r52; before it, the arrow function's lines)
+    + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
+    // (as the real ones: a URL brings no companions; a file takes those its pick kept for it, as
+    // loadFile's own default does -- r52 A1, Q2: the stand-in took them from its argument, and a
+    // global overwritten under the real load passed every case)
+    + 'async function loadUrl(url) { return fakeLoad(url, { beginLoad, stale, setStatus, readyText }, [], false); }\n'
+    + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText }, extras, true); }\n';
   const failed = [];
   for (const [name, c] of Object.entries(START_CASES)) {
     const params = new URLSearchParams(c.q);
     const app = { status: 'init', statusMsg: 'starting GPU', mesh: null, dxf: null, header: null, embed: params.get('embed') === '1', loadSeq: 0,
       listEntries: null, listNote: '', unmeshedFaces: 0, noFacts: null, hidden: new Set(), backend: 'webgl2', scene: null, cam: { orient: 'z' } };
     const shown = [], opened = [], frames = [];
-    let tour = false;
+    let tour = false, views = 0;
     const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {}, classList: { add() {}, remove() {} } });
     const dom = new Proxy({ poster: { hidden: true } }, { get: (o, k) => (k in o ? o[k] : (o[k] = el())) });
     const doc = { querySelector: () => el(), createElement: () => el(), documentElement: { classList: { add() {} } } };
@@ -1543,44 +1631,48 @@ await test('the start-up contract: each address, embed, poster and early pick, m
       for (let i = 0; i < 3; i++) await tick();
       return path in serve ? new Response(serve[path], { status: 200 }) : new Response('', { status: 404 });
     };
-    // (the load itself: numbered, "loading", then the model shown, or its failure thrown for guard)
+    // (the load itself: numbered, "loading", then the model shown -- or, added (startAdd), joined to
+    // the scene, the first model's URL kept -- or its failure thrown for guard)
     const fakeLoad = async (url, k, extras, fromFile) => {
+      const adding = !!app.startingAdd;
       const seq = k.beginLoad();
+      // (every load's card offers Cancel: r52 Q7)
+      if (dom.pcancel.hidden) failed.push(`${name}: ${url} loaded with Cancel hidden`);
       const file = String(url).split('/').pop();
-      const at = opened.push(file) - 1;
+      opened.push(fromFile && extras.length ? [file, ...extras.map((x) => x.name)].join('+') : file);
       k.setStatus('loading', `downloading ${file}`);
       visit(file);
-      await tick();
-      if (fromFile) {
-        const ex = extras !== undefined ? extras || [] : app.dropExtras || [];
-        if (extras === undefined) app.dropExtras = null;
-        if (ex.length) opened[at] = [file, ...ex.map((x) => x.name)].join('+');
-      }
-      await tick();
+      for (let i = 0; i < ((c.slow || []).includes(file) ? 30 : 2); i++) await tick();
       if (k.stale(seq)) return;
       if ((c.fails || []).includes(file)) throw new Error(`could not download ${file}: not found (404)`);
-      Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{}], sourceUrl: url });
+      if (adding) app.scene.push({ url });
+      else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: url });
       k.setStatus('ready', k.readyText());
     };
     run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES', 'params',
       'location', 'document', 'window', 'fetch', 'fetchModelLists', 'fillModelList', 'entryByName', 'fileUrl', 'readCapped', 'parseTour', 'MAX_TOUR_BYTES',
       'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
-      'orientOrNull', 'isCompanion', 'gaveUp', 'console',
+      'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists',
       `${body}; return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile };`)(
       app, (id) => dom[id], (t) => shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
-      { href: `${SITE}?${c.q}`, hash: '' }, doc, { addEventListener() {} }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
+      { href: `${SITE}?${c.q}${c.hash || ''}`, hash: c.hash || '' }, doc, { addEventListener() {} }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
       readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, () => { tour = true; }, () => {}, () => {}, () => {}, () => {},
-      () => {}, () => null, orientOrNull, isCompanion, null, { error() {} });
+      () => { views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null);
     try {
       const early = c.early ? run.earlyPick(c.early) : null;
       await run.startFromUrl(early);
-      for (let i = 0; i < 10; i++) await tick();
+      for (let i = 0; i < 40; i++) await tick();
       if (c.click) { await run.viewIn3D(params.get('src')); for (let i = 0; i < 10; i++) await tick(); }
       if (c.add) { run.addPicked(c.add); for (let i = 0; i < 10; i++) await tick(); }
+      // (a file dropped on the page after the start: the wired drop's openFile)
+      if (c.drop) { run.openFile({ name: c.drop, size: 10 }); for (let i = 0; i < 10; i++) await tick(); }
       for (const f of frames.splice(0)) f();
     } catch (e) { failed.push(`${name}: threw ${e.message}`); continue; }
     const got = [app.status, app.statusMsg, [!dom.empty.hidden, dom.emptyerr.hidden ? '' : dom.emptyerr.textContent], shown, opened, tour];
     try { assert.deepEqual(got, c.want); } catch { failed.push(`${name}: got ${JSON.stringify(got)}, want ${JSON.stringify(c.want)}`); }
+    // (a #view= applied once, after the adds it waits for, and the wait ended: r52 Q4)
+    if (c.views !== undefined && (views !== c.views || app.addsPending)) failed.push(`${name}: views applied ${views}, addsPending ${app.addsPending}; want ${c.views}, false`);
+    if (c.posterGone && !dom.poster.hidden) failed.push(`${name}: the poster still up over the model`);
   }
   if (failed.length) console.log(`start-up cases failing: ${failed.length}\n${failed.join('\n')}`);
   assert.deepEqual(failed, [], `start-up cases failing: ${failed.length}`);

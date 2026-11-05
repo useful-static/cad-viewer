@@ -830,6 +830,9 @@
 <div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname"></p></div>
 <span id="announce" class="sr-only" role="status" aria-live="polite"></span>
 <footer hidden><span id="status">loading</span><span id="model"></span></footer>
+<!-- js/early.js first: the address's list and model downloads start with it, before main.js's
+     modules have all arrived -->
+<script type="module" src="js/early.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

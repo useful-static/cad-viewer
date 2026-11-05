@@ -1,6 +1,8 @@
 // CAD viewer front end: backend selection (WebGPU -> WebGL2 -> WebGL1), loading
-// (.cadmesh direct, .stp/.step/.igs/.brep through the OpenCascade worker),
-// orbit camera, part tree, picking, section plane. Rendering is on demand.
+// (.cadmesh direct; .stp/.step/.igs/.brep through the OpenCascade worker; the
+// meshes -- STL, OBJ, PLY, OFF, 3MF, glTF -- a 2D DXF or DWG, and a zip of one
+// through their readers, loaded on first use), orbit camera, part tree,
+// picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
@@ -10,7 +12,8 @@ import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { entryByName, fetchModelLists, readCapped } from './model-list.js';
+import { entryByName, fetchModelLists, modelNameFrom, modelUrlFrom, readCapped } from './model-list.js';
+import { earlyFetch, earlyLists } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft } from './import-progress.js';
@@ -34,15 +37,23 @@ import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js'
 import { WebGLRenderer } from './renderer-webgl.js';
 
 // The format readers and the 2D view, loaded when a file needs them, not before the page's first
-// card: a .cadmesh.gz shown in an embed loaded the DWG, DXF and mesh-format readers first (main.js's
-// static graph 1.1 MB in 45 modules, "Loading the 3D viewer…" for 18.4 s on a throttled 3G link).
-// Each is fetched once; a failed fetch is tried again by the next file that needs it.
-const once = (load) => { let p = null; return () => (p ||= load().catch((e) => { p = null; throw e; })); };
-const meshReaders = once(() => import('./mesh-formats.js'));
-const fileReaders = once(() => import('./read-file.js'));
+// card: a .cadmesh.gz shown in an embed loaded the DWG, DXF and mesh-format readers first (1.16 MB
+// in 46 modules, "Loading the 3D viewer…" for 33.9 s on a throttled 3G link from a server that does
+// not compress: tests/test-first-phase.mjs, the round-51 review). Each is fetched once; a failed
+// fetch is tried again by the next file that needs it, and said in plain words (the browser's
+// "Failed to fetch dynamically imported module: …/js/mesh-formats.js" was the card's error: r52 A8, Q8).
+const once = (load, what) => {
+  let p = null;
+  return () => (p ||= load().catch(() => {
+    p = null;
+    throw new Error(`the viewer's reader for ${what} could not be downloaded: check the connection, then open the file again`);
+  }));
+};
+const meshReaders = once(() => import('./mesh-formats.js'), 'meshes and zips');
+const fileReaders = once(() => import('./read-file.js'), 'this file');
 // (in hand before show2D, which draws at once: loadDxf awaits them)
 let dxfLib = null, dxfViewLib = null;
-const twoD = once(async () => { [dxfLib, dxfViewLib] = await Promise.all([import('./dxf.js'), import('./dxf-view.js')]); });
+const twoD = once(async () => { [dxfLib, dxfViewLib] = await Promise.all([import('./dxf.js'), import('./dxf-view.js')]); }, '2D drawings');
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -247,8 +258,10 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // then replaced unseen by View in 3D -- r50 Q5)
 // (the GPU still starting is nothing running: a file over the size picked then, opened first since
 // r51 A11, was told and then lost under the idle line)
+// (a list read for the model it names hides the card: a failure then is told -- shown and read
+// out -- not left to a card no one sees: r52 Q3)
 function failApart(msg) {
-  if (somethingShown() || posterUp() || !(app.status === 'idle' || app.status === 'init')) tellReady(msg);
+  if (somethingShown() || posterUp() || app.readingList || !(app.status === 'idle' || app.status === 'init')) tellReady(msg);
   else { setStatus('error', msg); announce(msg); }
 }
 // an embed's poster up: its picture stands in for the model until View in 3D
@@ -1611,41 +1624,13 @@ function setModelParam(u, url) {
   else if (i >= 0) u.searchParams.set('index', String(i + 1));
   else if (url) u.searchParams.set('src', url);
 }
-// ...and back, from an address's query: the URL of the model it names (null
-// for none, or for a ?model= / ?index= the list does not have, or not yet
-// read). ?model= matches an entry's id, else an alias. A numeric ?src=
-// beside a list is read as ?index= (links made before it).
-const isPlace = (raw) => /^\d+$/.test(raw || '');
+// ...and back, from an address's query: the URL of the model it names, by this page's lists
+// (js/model-list.js modelUrlFrom, the rule js/early.js reads the address by too)
 function modelUrlIn(search) {
-  const listed = params.getAll('list').length > 0;
-  if (listed && search.get('model')) return entryByName(app.listEntries, search.get('model'))?.url || null;
-  const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
-  if (listed && isPlace(place)) return app.listEntries?.[Number(place) - 1]?.url || null;
-  // a relative ?src= beside a list: the entry it names, read against the
-  // list's own URL as the list's files are ("boards/x.cadmesh" in a list at
-  // example.com/models.json), else against this page as before
-  const src = search.get('src');
-  if (listed && isRelative(src)) {
-    for (const l of params.getAll('list')) {
-      let url = null;
-      try { url = new URL(src, new URL(l, location.href)).href; } catch { /* not a URL */ }
-      const e = url && (app.listEntries || []).find((x) => x.url === url);
-      if (e) return e.url;
-    }
-  }
-  return src || null;
+  return modelUrlFrom(search, params.getAll('list'), app.listEntries, location.href);
 }
-const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
-// (what an address names by the list, which must be read before it opens:
-// "model le-potato", "index 3", a relative src the list may name; null when
-// it names an absolute URL or nothing)
-const modelNameIn = (search) => {
-  if (!params.getAll('list').length) return null;
-  if (search.get('model')) return `"${search.get('model')}"`;
-  const place = [search.get('index'), search.get('src')].find(isPlace);
-  if (place) return place;
-  return isRelative(search.get('src')) ? `"${search.get('src')}"` : null;
-};
+// (what an address names by the list, which must be read before it opens)
+const modelNameIn = (search) => modelNameFrom(search, params.getAll('list'));
 
 // A link to this model at this view, in the full viewer (never ?embed=)
 function viewLink() {
@@ -1657,12 +1642,9 @@ function viewLink() {
   if (app.sourceUrl) setModelParam(u, app.sourceUrl);
   if (app.sourceUrl && readUnit() !== 'mm') u.searchParams.set('unit', readUnit());
   // the added models opened from a URL, and where they were moved to
-  if (app.sourceUrl && app.scene) {
-    for (const m of app.scene.slice(1)) {
-      if (!m.url) continue;
-      u.searchParams.append('add', m.url);
-      u.searchParams.append('addat', m.offset.map((o) => +o.toFixed(4)).join(','));
-    }
+  for (const m of linkAdds().carried) {
+    u.searchParams.append('add', m.url);
+    u.searchParams.append('addat', m.offset.map((o) => +o.toFixed(4)).join(','));
   }
   for (const k of ['backend']) if (params.get(k)) u.searchParams.set(k, params.get(k));
   // (a drawing: its URL alone, named once above as any model is (show2D sets app.sourceUrl);
@@ -1670,6 +1652,14 @@ function viewLink() {
   if (app.dxf) return u.toString();
   u.hash = `view=${encodeView(currentView())}`;
   return u.toString();
+}
+
+// The added models a view link carries (those opened from a URL, a model from a URL first) and how
+// many it leaves out (those opened from this device): one answer for viewLink and for what Copy
+// view link says of it (each kept its own copy of the test: r52 A5)
+function linkAdds() {
+  const added = app.sourceUrl && app.scene ? app.scene.slice(1) : [];
+  return { carried: added.filter((m) => m.url), left: added.filter((m) => !m.url).length };
 }
 
 // Copy a link to this model at this view. A model opened from this device has
@@ -1692,8 +1682,7 @@ async function shareView() {
   // (the added models opened from this device, which viewLink leaves out: said too -- a scene of a
   // URL's case and a board added from the device copied a link to the case alone, "View link
   // copied" told: r51 A6)
-  const nLocal = app.sourceUrl && app.scene ? app.scene.slice(1).filter((m) => !m.url).length : 0;
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, nLocal);
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left);
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
@@ -3736,6 +3725,9 @@ function pushState() {
 // (in loadBuffer): a failed load leaves the old model, and Save, as they were.
 function beginLoad() {
   app.loadSeq++;
+  // (every load's card offers Cancel: hidden for a list's own read, it stayed hidden over a file the
+  // visitor opened during it, a large STEP's conversion then not to be stopped -- r52 Q7)
+  if ($('pcancel')) $('pcancel').hidden = false;
   // settle a superseded tessellation (a terminated worker fires no events,
   // so its timer and promise would otherwise live forever)
   if (app.cancelTess) app.cancelTess();
@@ -4682,7 +4674,11 @@ async function unpackGz(buf, name, seq) {
   return stale(seq) ? null : out;
 }
 
-async function loadAny(buf, name, seq) {
+// extras: the companions picked, dropped or zipped with the file (an OBJ's .mtl, a .gltf's .bin),
+// carried with it down to its reader -- in a global, a refused pick, an Add model… over the size or a
+// superseded zip wrote over them while the load ran, the .obj then read without its .mtl or with
+// another zip's (r52 A1, Q2)
+async function loadAny(buf, name, seq, extras = []) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
@@ -4707,7 +4703,7 @@ async function loadAny(buf, name, seq) {
     app.adding = null;
     throw new Error(`${name} is a 2D drawing: Add model… adds a 3D model (open the drawing on its own with Open…)`);
   }
-  if (fmt && fmt.kind === 'mesh') return loadMeshFile(buf, name, seq);
+  if (fmt && fmt.kind === 'mesh') return loadMeshFile(buf, name, seq, extras);
   if (fmt && fmt.kind === '2d') return loadDxf(buf, name, seq);
   if (fmt && fmt.kind === 'zip') return loadZip(buf, name, seq);
   // A compressed STEP / IGES / BREP (part.stp.gz, a fraction of the size to
@@ -4790,14 +4786,10 @@ async function loadAny(buf, name, seq) {
 }
 
 // A mesh file read into a .cadmesh, then opened as one: Save .cadmesh keeps
-// it. app.dropExtras: the other files dropped or picked with it (an OBJ's
-// .mtl, a .gltf's .bin), by lower-case name
-async function loadMeshFile(buf, name, seq) {
-  // the companions are this load's alone: taken here, so a later file opened from a URL or a
-  // list never reads an earlier drop's .mtl or scene.bin (a re-read in another unit keeps them
-  // in app.meshSource)
-  const drop = app.dropExtras || [];
-  app.dropExtras = null;
+// it. drop: the other files dropped, picked or zipped with it (an OBJ's
+// .mtl, a .gltf's .bin), this load's alone (a re-read in another unit keeps
+// them in app.meshSource)
+async function loadMeshFile(buf, name, seq, drop = []) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   const { meshFormatOf } = await meshReaders();
@@ -4910,17 +4902,19 @@ async function loadZip(buf, name, seq) {
   await nextPaint();
   if (stale(seq)) return;
   const { unzip } = await meshReaders();
+  // (superseded while the reader was fetched: stopped -- it went on, r52 Q2)
+  if (stale(seq)) return;
   const z = await unzip(buf);
   const files = z.names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
   const opens = (n) => { const f = formatOfName(n); return !!f && f.kind !== 'zip'; };
   const model = files.find(opens);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   const others = files.filter((n) => n !== model && opens(n)).length;
-  app.dropExtras = files.filter((n) => isCompanion(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
+  const extras = files.filter((n) => isCompanion(n)).map((n) => ({ name: n.split('/').pop(), arrayBuffer: () => z.get(n) }));
   const inner = await z.get(model);
   if (stale(seq)) return;
   if (others) announce(`opening ${model} from ${name} (${others} more in it not opened)`);
-  return loadAny(inner, model.split('/').pop(), seq);
+  return loadAny(inner, model.split('/').pop(), seq, extras);
 }
 
 // ---------- 2D DXF (plan feature 23; js/dxf.js, js/dxf-view.js) ----------
@@ -5389,7 +5383,6 @@ async function fetchFailedText(url, name, e, lead = `could not download ${name}`
 
 async function loadUrl(url) {
   const seq = beginLoad();
-  app.dropExtras = null; // (a URL brings no companions: an earlier drop's are not this file's)
   // (a model opened again: its list's tour plays again, once, and its list's hide is applied again
   // -- applyListEntry; not for a model added beside it, which left the first's keys reset)
   if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; }
@@ -5409,14 +5402,16 @@ async function loadUrl(url) {
   const direct = directFor(url);
   if (direct.from) announce(`${direct.from} link: opening the file it shares`);
   try {
-    res = await fetch(direct.url, ac ? { signal: ac.signal } : {});
+    // (the download js/early.js started for it, when there is one: it began before main.js ran)
+    res = await earlyFetch(direct.url, ac ? { signal: ac.signal } : {});
   } catch (e) {
     if (stale(seq)) return; // aborted: a newer load, or Cancel
     const text = await fetchFailedText(url, name, e);
     if (stale(seq)) return;
     throw new Error(text);
   }
-  if (stale(seq)) return;
+  // (an early download is not this load's to abort: its body is let go, which ends it)
+  if (stale(seq)) { res.body?.cancel().catch(() => {}); return; }
   if (!res.ok) {
     // the whole URL tried, not only the file's name: a site owner whose
     // ?src= went wrong could not see where it pointed (feature review
@@ -5497,11 +5492,14 @@ function droppedFile(e) {
 
 // Of several files dropped or picked together, the model (the first that is
 // not a companion: an .mtl, a .bin, a picture), the companions kept for it
-// in app.dropExtras (an OBJ's colours, a .gltf's buffers)
+// with it (companionsOf: an OBJ's colours, a .gltf's buffers), which its
+// load takes (loadFile) whatever else is picked or loaded meanwhile
+const companionsOf = new WeakMap();
 function pickModelFile(files) {
   const f = files.find((x) => !isCompanion(x.name)) || files[0];
-  app.dropExtras = files.filter((x) => x !== f && isCompanion(x.name));
-  const rest = files.length - 1 - app.dropExtras.length;
+  const extras = files.filter((x) => x !== f && isCompanion(x.name));
+  companionsOf.set(f, extras);
+  const rest = files.length - 1 - extras.length;
   if (rest > 0) announce(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`);
   return f;
 }
@@ -5520,25 +5518,26 @@ const oversizeText = (name) => `${name} is over ${(MAX_FILE_BYTES / 2 ** 30).toF
 // A file from the device (Open…, a drop). One too big is refused before
 // anything starts: in loadFile the refusal came after the running load was
 // cancelled, so it also killed a conversion in progress (review r21)
-// extras: the companions picked with it (an .mtl, a .bin), carried with the file -- in the global
-// app.dropExtras alone, a load started before this one (?src=) emptied them: r51 A3, Q2
-function openFile(f, extras) {
+// (on an embed's poster -- a drop -- the file is the visitor's ask, as View in 3D is: the poster
+// goes, not left over the model drawn under it, and View in 3D then opening ?src= over it: r52 Q6)
+function openFile(f) {
   if (refusedForSize(f)) return;
-  startLoad(() => loadFile(f, extras));
+  if (posterUp()) { $('poster').hidden = true; setEmbedActive(true); }
+  startLoad(() => loadFile(f));
 }
 
 // (every caller refuses a file over the size first, refusedForSize -- its own check here came after
 // beginLoad, so it cancelled the running load: r21, r50 A1; dead since, and gone: r51 A9)
-async function loadFile(file, extras) {
+// extras: the companions picked with it (pickModelFile), carried down to its reader
+async function loadFile(file, extras = companionsOf.get(file) || []) {
   const seq = beginLoad();
-  if (extras !== undefined) app.dropExtras = extras;
   app.fetchMs = null;
   setStatus('loading', `reading ${file.name}`);
   showProgress(`Opening ${file.name}`, null, `reading ${mb(file.size)} MB from disk`);
   announce(`loading ${file.name}`); // a new load is news even mid-load
   const buf = await file.arrayBuffer();
   if (stale(seq)) return;
-  return loadAny(buf, file.name, seq);
+  return loadAny(buf, file.name, seq, extras);
 }
 
 // A failure is reported only if it belongs to the newest load (or to no load).
@@ -7069,9 +7068,9 @@ async function main() {
   // first paint): kept and opened once the input is wired. It was ignored,
   // and a drop made the browser leave the page for the file (review r21)
   let early = null;
-  const keep = (k) => { if (k) { early = k; setStatus('init', `starting GPU, then opening ${k.file.name}`); } };
+  const keep = (f) => { if (f) { early = f; setStatus('init', `starting GPU, then opening ${f.name}`); } };
   const over = (e) => e.preventDefault();
-  const drop = (e) => { e.preventDefault(); keep(withExtras(droppedFile(e))); };
+  const drop = (e) => { e.preventDefault(); keep(droppedFile(e)); };
   window.addEventListener('dragover', over);
   window.addEventListener('drop', drop);
   $('open').onchange = (e) => { keep(earlyPick([...e.target.files])); e.target.value = ''; };
@@ -7150,18 +7149,16 @@ function viewIn3D(src) {
     if (w && app.header) { startTourIn(w.tour, w.url, w.step); app.autoTourFor = autoTourKey(); app.urlTourPending = false; }
   });
 }
-// A file picked or dropped while the GPU starts: the model of those picked, and the companions
-// pickModelFile kept for it, carried with it (the first file was taken, an .obj with its .mtl
-// opened the .mtl: r50 A2; left in the global app.dropExtras, a load started before it -- ?src= --
-// emptied them, the .obj grey and a .gltf without its .bin: r51 A3, Q2)
-const withExtras = (f) => (f ? { file: f, extras: app.dropExtras || [] } : null);
-const earlyPick = (files) => withExtras(files.length ? pickModelFile(files) : null);
+// A file picked or dropped while the GPU starts: the model of those picked, its companions kept
+// with it (pickModelFile) (the first file was taken, an .obj with its .mtl opened the .mtl: r50 A2;
+// the .mtl lost to a load started before it: r51 A3, Q2)
+const earlyPick = (files) => (files.length ? pickModelFile(files) : null);
 // File › Add model…: the picked model joins the scene; one over the size refused before anything
 // starts (Add model… called loadFile, whose own check came after beginLoad: r50 A1)
 function addPicked(files) {
   if (!files.length || !app.scene) return;
   const f = pickModelFile(files);
-  if (!refusedForSize(f)) startAdd(() => loadFile(f, app.dropExtras || []));
+  if (!refusedForSize(f)) startAdd(() => loadFile(f));
 }
 
 // The page's start from its address, once the renderer is up: the file the visitor chose meanwhile,
@@ -7172,7 +7169,10 @@ async function startFromUrl(early) {
   // address names opens over it (it waited behind the list read, its line replaced, and the list's
   // model started and was cancelled: r51 A11)
   app.startSeq = app.loadSeq;
-  if (early) openFile(early.file, early.extras);
+  // (refused for its size, it is the visitor's ask all the same: nothing the address names opens
+  // over the refusal, which stands on the card -- the address's model opened over it, the refusal
+  // painted nowhere: r52 A3, Q3)
+  if (early) { openFile(early); app.startSeq = -1; }
   // ?model=<id> or ?index=<n> beside a ?list=: a model the list names
   // (modelUrlIn), so the list is read first; a name it does not have opens
   // its first model and says so. Else ?src=, a URL.
@@ -7289,7 +7289,11 @@ async function startFromUrl(early) {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
       if (!app.header && !src && !tourOwn && untouched() && app.listEntries?.length) await startUpLoad(app.listEntries[0].url);
-      if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
+      // (a tour made for its own model, with the visitor's own file opened instead: not played over
+      // it, and nothing said -- its cameras and parts played over the visitor's file: r52 A2, Q1)
+      const notOurs = !!r.tour.model && !untouched();
+      if (notOurs) app.urlTourPending = false;
+      else if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
       // (behind an embed's poster: kept for View in 3D, nothing said -- r50 Q3)
       else if (poster) app.tourWaiting = { tour: r.tour, url: tourUrl, step: params.get('step') };
       // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
@@ -7310,7 +7314,8 @@ async function startFromUrl(early) {
 // name no models (the status line, not drawn, carries it too)
 async function readLists(lists, openFirst) {
   const timed = (u) => fetch(u, typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(20000) } : {});
-  const r = await fetchModelLists(lists, location.href, timed);
+  // (read already when js/early.js started it, before main.js ran)
+  const r = await (earlyLists(lists) || fetchModelLists(lists, location.href, timed));
   fillModelList(r.entries);
   if (listsRead(r, openFirst())) await startUpLoad(r.entries[0].url);
 }
@@ -7320,6 +7325,9 @@ async function readLists(lists, openFirst) {
 // failed beside lists that answered is told; the ready line carries it (app.listNote)
 function listsRead(r, openFirst) {
   const note = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
+  // (the answer is in: the read for a model it names is over, and its own failure is the page's --
+  // told only, as a refusal of another file during the read is, the card was left with no error)
+  app.readingList = false;
   app.listNote = '';
   if (note && !r.entries.length) failApart(note);
   else if (note) tell(note, 6000);
