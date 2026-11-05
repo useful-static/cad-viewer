@@ -22,6 +22,7 @@ import { orientOrNull } from '../js/orient.js';
 import { formatOfName, isCompanion } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
+import { runStart } from './startup-harness.mjs';
 
 // a box body as encodeCadmesh takes it: 8 corners, 12 triangles, 6 faces
 function boxMesh(name, lo, hi) {
@@ -861,7 +862,8 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.match(src, /\n {2}tellStepMissing\(t\);\n/);
   // (a GPU error and a tour unread go through failApart, the one rule for a failure apart from the load -- r48 A1, Q1, Q2)
   assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; failApart\(`GPU error: \$\{msg\}`\); \} \};/);
-  assert.equal([...src.matchAll(/failApart\(`the tour \$\{r\.error\}`\)/g)].length, 2, 'both tour reads');
+  // (the start-up's own read through failApart's own-read form since r57: the start's failure, told)
+  assert.equal([...src.matchAll(/failApart\(`the tour \$\{r\.error\}`(, true)?\)/g)].length, 2, 'both tour reads');
   assert.match(src, /\n {6}recovered\(\);\n/, 'the recovery\'s end through recovered()');
   // (the touch hint recorded in one place only, after it held -- r48 Q3)
   const th = src.slice(src.indexOf('function touchHintOnce() {'), src.indexOf('\n}\n', src.indexOf('function touchHintOnce() {')));
@@ -1288,7 +1290,7 @@ await test('the note contract: each page state against each writer of a note or 
   const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
   const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text) {',
     'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
-    'function openFile(f', 'async function exportMesh(fmt) {', 'function failApart(msg) {', 'function recovered() {', 'function showEmpty() {',
+    'function openFile(f', 'async function exportMesh(fmt) {', 'function failApart(msg', 'function recovered() {', 'function showEmpty() {',
     'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {', 'function cannotHold() {', 'function refusedForSize(f) {',
     'function rewriteReady(change) {'].map(cutIf).join('')
     + line('const listNote = ') + line('const posterUp = ')
@@ -1527,9 +1529,12 @@ const START_CASES = {
     want: ['ready', 'ready', [false, ''], [], ['a.stl'], true] },
   // (r50 Q5: failApart behind the poster, the card hidden by it)
   'an embed\'s poster + ?tour= unread': { q: 'embed=1&src=a.stl&poster=p.png&tour=t.json', want: ['idle', POSTER, [false, ''], [T404], [], false] },
-  // (r51 Q7: "its first opens" said behind the poster, where nothing opens until View in 3D)
+  // (r51 Q7: nothing opens behind the poster until View in 3D; r57 Q5: the list is read beside the
+  // poster, not before it, and the name it lacks is said when View in 3D opens its first instead)
   'an embed\'s poster + ?list= + a ?model= it lacks': { q: 'embed=1&list=l.json&model=nope&poster=p.png', serve: { 'l.json': LISTED },
-    want: ['idle', POSTER, [false, ''], ['the model list has no model "nope": View in 3D opens its first'], [], false] },
+    want: ['idle', POSTER, [false, ''], [], [], false] },
+  'an embed\'s poster + ?list= + a ?model= it lacks, View in 3D': { q: 'embed=1&list=l.json&model=nope&poster=p.png', serve: { 'l.json': LISTED }, click: true,
+    want: ['ready', 'ready', [false, ''], ['the model list has no model "nope": its first opens'], ['a.stl'], false] },
   'a file picked while the GPU starts': { q: '', early: [{ name: 'e.stl', size: 10 }], want: ['ready', 'ready', [false, ''], [], ['e.stl'], false] },
   // (r50 A2: the first file taken, the .mtl opened)
   'an .obj and its .mtl picked while the GPU starts': { q: '', early: [{ name: 'x.mtl', size: 10 }, { name: 'x.obj', size: 10 }],
@@ -1636,8 +1641,10 @@ const START_CASES = {
   // (r55 A3, Q2: the two poster paths the tour does not play on end it, so a list model's own tour plays)
   'a file dropped on a ?list= + ?tour= embed\'s poster': { q: 'embed=1&list=l.json&tour=t.json&poster=p.png', serve: { 'l.json': LISTED, 't.json': TOUR() },
     drop: 'd.stl', posterGone: true, want: ['ready', 'ready', [false, ''], [], ['d.stl'], false] },
+  // (a tour naming no model plays over the visitor's file, by the one rule tourPlaysHere, as at
+  // start-up and with a ?src= -- this cell held the other answer: r57 A4, Q2)
   'View in 3D pressed while ?list= + ?tour= are read, then a file opened': { q: 'embed=1&list=l.json&tour=t.json&poster=p.png', serve: { 'l.json': LISTED, 't.json': TOUR() },
-    during: [{ at: 'l.json', click: true }, { at: 'l.json', file: 'v.stl' }], want: ['ready', 'ready', [false, ''], [], ['v.stl'], false] },
+    during: [{ at: 'l.json', click: true }, { at: 'l.json', file: 'v.stl' }], want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
   // (r55 Q11: a poster with nothing behind it -- a tour alone, naming no model -- comes down as the
   // tour is read, the page as without one)
   'an embed\'s poster + ?tour= with no model': { q: 'embed=1&tour=t.json&poster=p.png', serve: { 't.json': TOUR() },
@@ -1678,113 +1685,19 @@ const START_CASES = {
   'Add model… a file': { q: 'src=a.stl', add: [{ name: 'e.stl', size: 10 }], want: ['ready', 'ready', [false, ''], [], ['a.stl', 'e.stl'], false] },
 };
 await test('the start-up contract: each address, embed, poster and early pick, main.js\'s own start-up code (r51)', async () => {
-  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
-  const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at) + 1); };
-  const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
-  // (viewIn3D async since r53: cut with its keyword, else as it was)
-  const body = line('let saySeq = 0') + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
-    'async function startFromUrl(early) {', 'function addPicked(files) {',
-    'async function readLists(lists, openFirst) {', 'function listsRead(r, openFirst) {', 'function loadListed(url) {', 'function startLoad(fn) {',
-    'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
-    'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
-    'function failApart(msg) {', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
-    'async function readTour(url) {', 'function listEntry(src) {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
-    'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {'].map(cutIf).join('')
-    + line('const tourPlaysHere = ') + line('const addressModel = ')
-    + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
-    + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
-    + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
-    // (one line since the rule went to js/model-list.js, r52; before it, the arrow function's lines)
-    + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
-    // (as the real ones: a URL brings no companions; a file takes those its pick kept for it, as
-    // loadFile's own default does -- r52 A1, Q2: the stand-in took them from its argument, and a
-    // global overwritten under the real load passed every case)
-    + 'async function loadUrl(url) { return fakeLoad(url, { beginLoad, stale, setStatus, readyText }, [], false); }\n'
-    + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText }, extras, true); }\n';
+  // (main.js's own start, run through the harness the sweep runs it through: one copy of the cuts
+  // and the stand-ins -- two copies drifted apart, r57)
   const failed = [];
   for (const [name, c] of Object.entries(START_CASES)) {
-    const params = new URLSearchParams(c.q);
-    const app = { status: 'init', statusMsg: 'starting GPU', mesh: null, dxf: null, header: null, embed: params.get('embed') === '1', loadSeq: 0,
-      listEntries: null, listNote: '', unmeshedFaces: 0, noFacts: null, hidden: new Set(), backend: 'webgl2', scene: null, cam: { orient: 'z' } };
-    const shown = [], opened = [], frames = [];
-    let tour = false, views = 0, released = 0, embedActive = false;
-    const loadedUrls = [], progress = [];
-    const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {}, classList: { add() {}, remove() {} } });
-    const dom = new Proxy({ poster: { hidden: true } }, { get: (o, k) => (k in o ? o[k] : (o[k] = el())) });
-    const doc = { querySelector: () => el(), createElement: () => el(), documentElement: { classList: { add() {} } } };
-    const serve = c.serve || {};
-    const tick = () => new Promise((res) => setTimeout(res, 1));
-    let run = null;
-    // (the visitor opens a file of their own while the start-up reads or loads `at`: Open…, as wired)
-    // (or presses View in 3D then, through the page's own wired button: r54 Q6, A1)
-    const visit = (at) => {
-      for (const d of [].concat(c.during || [])) {
-        if (d.at === at) {
-          setTimeout(() => (d.click ? dom.posterload.onclick() : d.add ? run.addPicked([{ name: d.add, size: 10 }]) : run.openFile({ name: d.file, size: d.size || 10 })), 0);
-        }
-      }
-    };
-    const fetchFake = async (u) => {
-      const path = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
-      visit(path);
-      for (let i = 0; i < ((c.slow || []).includes(path) ? 30 : 3); i++) await tick();
-      // (an answer that never comes in time: the fetch's own timeout)
-      if (serve[path] === 'TIMEOUT') { const e = new Error('signal timed out'); e.name = 'TimeoutError'; throw e; }
-      // (or the headers in time, the body not: the signal covers both -- r55 A5, Q7)
-      if (serve[path] === 'BODY-TIMEOUT') {
-        return new Response(new ReadableStream({ start(ctl) { ctl.error(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })); } }), { status: 200 });
-      }
-      if (!(path in serve)) return new Response('', { status: 404 });
-      const res = new Response(serve[path], { status: 200 });
-      // (an answer from elsewhere: a redirect's target, the URL that answered)
-      if (c.redirect && c.redirect[path]) Object.defineProperty(res, 'url', { value: SITE + c.redirect[path] });
-      return res;
-    };
-    // (the load itself: numbered, "loading", then the model shown -- or, added (startAdd), joined to
-    // the scene, the first model's URL kept -- or its failure thrown for guard)
-    const fakeLoad = async (url, k, extras, fromFile) => {
-      const adding = !!app.startingAdd;
-      loadedUrls.push(String(url));
-      const seq = k.beginLoad();
-      // (every load's card offers Cancel: r52 Q7)
-      if (dom.pcancel.hidden) failed.push(`${name}: ${url} loaded with Cancel hidden`);
-      const file = String(url).split('/').pop();
-      opened.push(fromFile && extras.length ? [file, ...extras.map((x) => x.name)].join('+') : file);
-      k.setStatus('loading', `downloading ${file}`);
-      visit(file);
-      for (let i = 0; i < ((c.slow || []).includes(file) ? 30 : 2); i++) await tick();
-      if (k.stale(seq)) return;
-      if ((c.fails || []).includes(file)) throw new Error(`could not download ${file}: not found (404)`);
-      if (adding) app.scene.push({ url });
-      else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: url });
-      k.setStatus('ready', k.readyText());
-      visit(`loaded ${file}`); // (a visitor's act once the model is shown)
-    };
-    run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES', 'params',
-      'location', 'document', 'window', 'fetch', 'fetchModelLists', 'fillModelList', 'entryByName', 'fileUrl', 'readCapped', 'parseTour', 'MAX_TOUR_BYTES',
-      'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
-      'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists', 'posterAsked', 'timedFetch', 'releaseEarly',
-      'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom',
-      `${body}; return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile };`)(
-      app, (id) => dom[id], (t) => shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
-      { href: `${SITE}?${c.q}${c.hash || ''}`, hash: c.hash || '' }, doc, { addEventListener() {} }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
-      readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, () => { tour = true; }, () => {}, (t, f, d) => progress.push(`${d}${dom.pcancel.hidden ? ', no Cancel' : ''}`), () => {},
-      (on) => { embedActive = on; },
-      () => { views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
-      posterAsked, fetchFake, () => { released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom);
-    try {
-      const early = c.early ? run.earlyPick(c.early) : null;
-      await run.startFromUrl(early);
-      for (let i = 0; i < 40; i++) await tick();
-      // (the button as the page wired it: a wrong onclick passed while the table called viewIn3D itself -- r54 Q6)
-      if (c.click) { await dom.posterload.onclick(); for (let i = 0; i < 40; i++) await tick(); }
-      if (c.add) { run.addPicked(c.add); for (let i = 0; i < 10; i++) await tick(); }
-      // (a file dropped on the page after the start: the wired drop's openFile)
-      if (c.drop) { run.openFile({ name: c.drop, size: 10 }); for (let i = 0; i < 10; i++) await tick(); }
-      for (const f of frames.splice(0)) f();
-    } catch (e) { failed.push(`${name}: threw ${e.message}`); continue; }
-    const got = [app.status, app.statusMsg, [!dom.empty.hidden, dom.emptyerr.hidden ? '' : dom.emptyerr.textContent], shown, opened, tour];
+    // (the acts after the start, in the harness's terms: View in 3D through the page's own wired
+    // button -- r54 Q6 --, then the case's Add model…, then a file dropped on the page)
+    const after = [c.click && { click: true }, c.add && { add: c.add }, c.drop && { file: c.drop }].filter(Boolean);
+    const o = await runStart({ ...c, after });
+    if (o.threw) { failed.push(`${name}: threw ${o.threw}`); continue; }
+    const { app, shown, opened, tour, views, released, embedActive, loadedUrls, progress, dom } = o;
+    // (every load's card offers Cancel: r52 Q7)
+    for (const url of o.cancelHidden) failed.push(`${name}: ${url} loaded with Cancel hidden`);
+    const got = [app.status, app.statusMsg, o.card, shown, opened, tour];
     try { assert.deepEqual(got, c.want); } catch { failed.push(`${name}: got ${JSON.stringify(got)}, want ${JSON.stringify(c.want)}`); }
     // (a #view= applied once, after the adds it waits for, and the wait ended: r52 Q4)
     if (c.views !== undefined && (views !== c.views || app.addsPending)) failed.push(`${name}: views applied ${views}, addsPending ${app.addsPending}; want ${c.views}, false`);

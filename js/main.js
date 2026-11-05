@@ -270,8 +270,12 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // r51 A11, was told and then lost under the idle line)
 // (a list read for the model it names hides the card: a failure then is told -- shown and read
 // out -- not left to a card no one sees: r52 Q3)
-function failApart(msg) {
-  if (somethingShown() || posterUp() || app.readingList || !(app.status === 'idle' || app.status === 'init')) tellReady(msg);
+// (own: the start's own read failed -- a list's, a tour's -- the page's error when nothing is shown;
+// any other failure while the start still reads is told, the start's load coming over the card --
+// a file refused while a ?list= or a ?tour= was read was the page's error, which the address's model
+// then replaced, the refusal shown nowhere: r57, the start-up sweep's I2)
+function failApart(msg, own = false) {
+  if (somethingShown() || posterUp() || (!own && (app.readingList || app.starting)) || !(app.status === 'idle' || app.status === 'init')) tellReady(msg);
   else { setStatus('error', msg); announce(msg); }
 }
 // an embed's poster up: its picture stands in for the model until View in 3D
@@ -3461,6 +3465,7 @@ function openListed(url, refocus = false, keepMenu = false) {
   // (the visitor's pick ends the address's tour: the model picked plays its own -- picked while the
   // address's tour was read, neither tour played: r56 Q3)
   tourOver();
+  if (!app.addressUrl) app.visitorFirst = true; // (before any of the address's was shown: addressModel)
   if (!keepMenu) closeMenus(refocus); // the narrow layout's File menu: the pick is made
   const pick = ++listPick;
   loadListed(url).then(() => {
@@ -4047,7 +4052,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // with no ?src (its model was opened from a device) to the next one opened
   // from a device, never to a model list's first (review r16 M2)
   // (with ?add= models still to come, after them: its ids are the scene's)
-  if (app.pendingView && !app.addsPending && (app.pendingView.src ? app.sourceUrl === app.pendingView.src : !app.sourceUrl)) {
+  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {
     applyView(app.pendingView.view, true);
     app.pendingView = null;
   }
@@ -5602,6 +5607,7 @@ function openFile(f) {
   if (refusedForSize(f)) return;
   // (and the address's tour is over: View in 3D, which plays it, will not run -- r55 A3, Q2)
   if (posterUp()) { $('poster').hidden = true; setEmbedActive(true); tourOver(); }
+  if (!app.addressUrl) app.visitorFirst = true; // (before any of the address's was shown: addressModel)
   startLoad(() => loadFile(f));
 }
 
@@ -7190,14 +7196,26 @@ const untouched = () => app.loadSeq === app.startSeq;
 function startUpLoad(url) {
   const p = loadListed(url);
   app.startSeq = app.loadSeq; // (loadListed numbered it at once: beginLoad)
-  if (!app.addressUrl) app.addressUrl = url; // (the first: the model the address opens -- addressModel)
-  return p;
+  // (the model the page first showed from its address -- addressModel: recorded once shown, not when
+  // its load began; one the visitor superseded was never shown -- r57 Q4)
+  return p.then(() => {
+    if (!app.addressUrl && !app.visitorFirst && app.header && app.sourceUrl === url) app.addressUrl = url;
+  });
 }
+// Whether a view (#view=) is for the model shown: the model its address names (named), or, naming
+// none, a model opened from the device -- never a model list's first (review r16 M2: a link made
+// over a file from the device names no model, and carries the page's lists). A view link of a list's
+// or a URL's model names it, so a #view= naming none is a device file's. The one rule for the view
+// a page opens with, a #view= edited in, and the view waiting on ?add=s (the edit took the list's
+// first too: r57 A2).
+const viewIsFor = (named) => (named ? app.sourceUrl === named : !app.sourceUrl);
 // The model the page as first opened shows from its address -- its start's first load (?src=, the
 // tour's own model, the list's first: the start-up's order), else the list's first. What Back to the
 // first entry and a #view= on it mean by "the page as first opened" (both took the list's first, and
 // a page that had opened the tour's model went back to a model it never showed: r56 A2)
-const addressModel = () => app.addressUrl || app.listEntries?.[0]?.url || null;
+// (a file of the visitor's own, or a pick, shown before any of the address's: none -- Back then keeps
+// the model shown, not one the page never showed: r57 Q4)
+const addressModel = () => app.addressUrl || (app.visitorFirst ? null : app.listEntries?.[0]?.url) || null;
 // ?src= and then its ?add=s (each with an optional ?addat=x,y,z in mm, in the same order), and a view
 // link (#view=) that waits for them, its part ids the scene's: the one chain, at start-up or from
 // View in 3D (behind an embed's poster every ?add= was dropped: r51 A5)
@@ -7206,7 +7224,8 @@ function openStart(src) {
   const adds = params.getAll('add'), ats = params.getAll('addat');
   if (!adds.length) return opening;
   app.addsPending = true;
-  return opening.then(async () => {
+  // (kept: an Add model… meanwhile waits for it -- addPicked)
+  return (app.addsChain = opening.then(async () => {
     const lists = params.getAll('list');
     for (const [i, raw] of adds.entries()) {
       // (a relative ?add= the list names is its entry, as a relative ?src= is: the list read first
@@ -7221,11 +7240,11 @@ function openStart(src) {
       await p;
     }
     app.addsPending = false;
-    if (app.pendingView && app.header && app.pendingView.src === app.sourceUrl) {
+    if (app.pendingView && app.header && viewIsFor(app.pendingView.src)) {
       applyView(app.pendingView.view, true);
       app.pendingView = null;
     }
-  });
+  }));
 }
 // View in 3D on an embed's poster: the model and its adds, then a ?tour= read while the poster was up
 // (it was told "open its 3D model" and never played, urlTourPending left set -- r50 Q3)
@@ -7259,27 +7278,51 @@ async function viewIn3D(src) {
       $('pcancel').hidden = false;
       showEmpty();
     }
-    if (!untouched()) { tourOver(); return; }
+    // (the visitor's own file during the wait: the tour by the one rule, as at start-up and with a
+    // ?src= -- returning here, a tour with no model never played over it: r57 A4, Q2)
+    if (!untouched()) { addressTourEnds(app.tourRead ? await app.tourRead : null, false); return; }
   }
   const r = app.tourRead ? await app.tourRead : null;
   const tourOwn = !src && !!r?.tour?.model;
   if (!src) {
-    src = r?.tour?.model || app.listEntries?.[0]?.url || null;
+    // (a name the list was read for, behind the poster: r57 Q5 -- one it lacks said now, its first opening)
+    const named = modelNameIn(params) && modelUrlIn(params);
+    src = named || r?.tour?.model || app.listEntries?.[0]?.url || null;
+    if (modelNameIn(params) && !named && !r?.tour?.model && app.listEntries?.length) lackingNote(modelNameIn(params), true);
     if (!src) {
       // (a tour alone that names no model: the poster had nothing behind it -- the page as without
       // one, as when the tour was read before the press: r56 A3, Q2)
-      if (r?.tour && !app.listRead) { setStatus('idle', idleText()); tourReadyNote(); }
+      if (r?.tour && !listsGiven().length) setStatus('idle', idleText());
       // (a list that failed or names nothing: its words on the card, not "no model to show": r54 Q4)
       else if (app.status !== 'error') setStatus('error', app.listNote || (r?.error ? `the tour ${r.error}` : 'the address names no model to show'));
-      tourOver();
+      // (a tour read, whatever the list did: said -- a failed list kept it unsaid: r57 A3)
+      addressTourEnds(r, false);
       return;
     }
+    // (a tour that could not be read is over before the list's first opens, which then plays its own,
+    // as at start-up: r57, the start-up sweep's I11)
+    if (r?.error) tourOver();
     await openStart(src);
   } else await opening;
-  if (r?.tour && app.header && tourPlaysHere(r.tour)) startTourIn(r.tour, params.get('tour'), params.get('step'));
-  // (no model to play over, and not its own model failing: said, as at start-up -- it was dropped
-  // unsaid: r56 Q6)
-  else if (r?.tour && !app.header && !(tourOwn && app.status === 'error')) tourReadyNote();
+  addressTourEnds(r, tourOwn && app.status === 'error');
+}
+const listsGiven = () => params.getAll('list');
+// "The model list has no model X", and what opens instead when its first does -- with View in 3D
+// behind a poster. One sentence, built in one place (two built it apart: r57 A7).
+function lackingNote(place, firstOpens) {
+  const then = !firstOpens ? '' : `: ${posterUp() ? 'View in 3D opens its first' : 'its first opens'}`;
+  tell(`the model list has no model ${place}${then}`, 6000);
+}
+// The address's tour, once read and its model's load done: played over the model shown by the one
+// rule (tourPlaysHere) -- but only while it is still the address's (a list pick ends it, and it still
+// played over the model picked, ending that model's own: r57 A1, Q1); with no model to play over,
+// said ready, unless its own model failed; then over. The start-up's and View in 3D's ending.
+function addressTourEnds(r, ownFailed) {
+  if (r?.tour && app.urlTourPending) {
+    if (!tourPlaysHere(r.tour)) { /* its own model's, not the visitor's file's: nothing said */ }
+    else if (app.header) startTourIn(r.tour, params.get('tour'), params.get('step'));
+    else if (!ownFailed) tourReadyNote();
+  }
   tourOver();
 }
 // "The tour is ready", said where it has no model to play over: never the open-a-file words in an
@@ -7312,9 +7355,15 @@ function addPicked(files) {
   if (refusedForSize(f)) return;
   // (a model added joins the one shown, the address's own still there: not the visitor opening
   // something else -- the tour did not play over the address's model: r56 Q7)
-  const was = untouched();
-  startAdd(() => loadFile(f));
-  if (was) app.startSeq = app.loadSeq;
+  const go = () => {
+    const was = untouched();
+    startAdd(() => loadFile(f));
+    if (was) app.startSeq = app.loadSeq;
+  };
+  // (while the address's ?add=s still load: after them, neither cancelling the other -- the visitor's
+  // add aborted one of them, then the next aborted the visitor's: r57 A5, Q3)
+  if (app.addsPending && app.addsChain) app.addsChain.then(go);
+  else go();
 }
 
 // The page's start from its address, once the renderer is up: the file the visitor chose meanwhile,
@@ -7329,6 +7378,8 @@ async function startFromUrl(early) {
   // over the refusal, which stands on the card -- the address's model opened over it, the refusal
   // painted nowhere: r52 A3, Q3)
   if (early) { openFile(early); app.startSeq = -1; }
+  // (from here to the start's end, a failure apart from it is told: failApart -- r57)
+  app.starting = true;
   // ?model=<id> or ?index=<n> beside a ?list=: a model the list names
   // (modelUrlIn), so the list is read first; a name it does not have opens
   // its first model and says so. Else ?src=, a URL.
@@ -7345,7 +7396,11 @@ async function startFromUrl(early) {
   let listed = null;
   let src = params.get('src');
   const place = modelNameIn(params);
-  if (place) {
+  // (behind a poster the list is read beside it, not before it: the poster goes up at once and View
+  // in 3D opens the name once the list has answered -- the "reading the model list" card showed for
+  // up to 20 s for a model nobody had asked to open: r57 Q5)
+  if (place && posterAsked(params) && untouched()) listed = readLists(lists, () => false);
+  else if (place) {
     // the model is on its way: its card says so, not "No model to show" for
     // the list's round trip (seconds, on a slow link). No Cancel: the list is
     // read whatever is pressed; a file the visitor opens meanwhile is theirs,
@@ -7376,7 +7431,7 @@ async function startFromUrl(early) {
     // only when it does)
     // (beside a tour, said once what opens is known: at the tour's end)
     if (!named && app.listEntries?.length && untouched() && !params.get('tour')) {
-      tell(`the model list has no model ${place}: ${app.embed && params.get('poster') ? 'View in 3D opens its first' : 'its first opens'}`, 6000);
+      lackingNote(place, true);
     }
   }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
@@ -7394,12 +7449,11 @@ async function startFromUrl(early) {
   };
   if (viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
   window.addEventListener('hashchange', () => {
-    // (the model now in ?src=: a pick from the model list changes it)
-    // (no src: a model from the device, or the list's first, which the page
-    // as first opened shows and Back returns to)
+    // (the model now in ?src=: a pick from the model list changes it; the one rule of the link's,
+    // viewIsFor -- this one also took the list's first, which a link opened with no model never does:
+    // r57 A2)
     const now = modelUrlIn(new URLSearchParams(location.search));
-    const first = addressModel(); // (as Back takes it: r56 A2)
-    if (viewHash() && app.header && (now ? app.sourceUrl === now : !app.sourceUrl || app.sourceUrl === first)) applyView(decodeView(viewHash()), true);
+    if (viewHash() && app.header && viewIsFor(now)) applyView(decodeView(viewHash()), true);
   });
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the visitor opened
@@ -7466,33 +7520,23 @@ async function startFromUrl(early) {
     let firstOpened = false;
     if (!app.header && !src && !poster && !tourOwn && untouched() && app.listEntries?.length) {
       firstOpened = true;
+      // (a tour that failed is over before the list's first opens, which then plays its own -- the
+      // flag still set held it back: r57 A6)
+      if (r.error) tourOver();
       await startUpLoad(app.listEntries[0].url);
     }
-    if (place && !poster && !modelUrlIn(params) && app.listEntries?.length && (firstOpened || tourOwn)) {
-      tell(`the model list has no model ${place}${firstOpened ? ': its first opens' : ''}`, 6000);
-    }
-    if (r.error) failApart(`the tour ${r.error}`);
-    else {
-      // (a tour made for its own model, with the visitor's own file opened instead: not played over
-      // it, and nothing said -- its cameras and parts played over the visitor's file: r52 A2, Q1)
-      // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
-      // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2; the one rule
-      // of where it plays, tourPlaysHere, View in 3D's too: r55 Q3)
-      if (poster) { /* viewIn3D */ }
-      else if (!tourPlaysHere(r.tour)) tourOver();
-      else if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
-      // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
-      // nothing was said -- r48 A1, A2; not after its own model failed to open, whose error stands --
-      // r49 Q5 -- but over any other failure, a list's or a ?src='s, it is: r50 A5, r51 Q4; never the
-      // open-a-file words in an embed, whose visitor chose nothing to open)
-      else if (!(tourOwn && app.status === 'error')) tourReadyNote();
-    }
-    // (the next model picked from the list plays its own tour)
-    // (the start-up's part in the tour over, a model shown or not -- behind a poster, View in 3D's)
-    if (!poster) tourOver();
+    if (place && !poster && !modelUrlIn(params) && app.listEntries?.length && (firstOpened || tourOwn)) lackingNote(place, firstOpened);
+    if (r.error) failApart(`the tour ${r.error}`, true);
+    // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
+    // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2. Else the
+    // one ending, View in 3D's too: addressTourEnds -- played by tourPlaysHere while the address's,
+    // told when there is nothing to play over unless its own model failed: r48 A1, A2; r49 Q5;
+    // r50 A5; r51 Q4; r55 Q3; r57 A1, Q1)
+    if (!poster) addressTourEnds(r.error ? null : r, tourOwn && app.status === 'error');
     // (read: the line no longer says it is being read -- r51, the start-up table)
     if (app.status === 'idle' && app.statusMsg === 'reading the tour…') setStatus('idle', idleText());
   }
+  app.starting = false;
 }
 
 // The model lists: fill the drop-down, open the first model when wanted (no
@@ -7516,7 +7560,7 @@ function listsRead(r, openFirst) {
   // told only, as a refusal of another file during the read is, the card was left with no error)
   app.readingList = false;
   app.listNote = '';
-  if (note && !r.entries.length) failApart(note);
+  if (note && !r.entries.length) failApart(note, true);
   else if (note) tell(note, 6000);
   // (after failApart: its ready line already says it once; a first model to open writes its own)
   if (!note || !r.entries.length || openFirst) app.listNote = note;

@@ -231,4 +231,18 @@ await test('the list and its tours are read as cad.place reads them: given up af
   } finally { globalThis.fetch = real; }
 });
 
+// (the tour's model said where the page opens it: resolved against the URL that answered, a redirect's
+// target -- answeredFrom's use here was unobservable, r57 Q8)
+await test('a tour\'s own model is reported as the page opens it, from the URL that answered (r57 Q8)', async () => {
+  const { checkTour } = await import('../js/list-check.js');
+  const fetchFn = async () => {
+    const res = new Response(JSON.stringify({ cadtour: 1, model: 'c.stl', steps: [{ title: 'one' }] }), { status: 200 });
+    Object.defineProperty(res, 'url', { value: 'https://example.com/moved/t.cadtour.json' });
+    return res;
+  };
+  const t = await checkTour('https://example.com/t.cadtour.json', fetchFn);
+  assert.equal(t.level, 'ok');
+  assert.match(t.detail, /; its model https:\/\/example\.com\/moved\/c\.stl$/);
+});
+
 done();

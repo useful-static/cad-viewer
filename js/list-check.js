@@ -171,7 +171,9 @@ export async function checkTour(url, fetchFn = timedFetch) {
   if (!res.ok) return { level: 'bad', detail: `${res.status === 404 ? 'not found' : 'refused'} (${res.status})`, url };
   try {
     const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), answeredFrom(res, url));
-    return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}`, url };
+    // (and the model it opens, as the page resolves it -- against the URL that answered: r57 Q8, the
+    // base otherwise unseen)
+    return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}${t.model ? `; its model ${t.model}` : ''}`, url };
   } catch (e) {
     // (the time given up while the body still came: a timeout, not a fault of the tour -- it read
     // "not a tour cad.place reads: The operation was aborted due to timeout": r55 A5, Q7)
