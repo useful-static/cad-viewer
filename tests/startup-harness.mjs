@@ -4,8 +4,10 @@
 // runs and returns what was seen. The start-up table (tests/test-scene.mjs START_CASES) states
 // per-case answers through it; the generated sweep (tests/test-startup-sweep.mjs) states invariants
 // (r57). What stands in for main.js, and what it leaves out (r59 A7, Q6):
-// - the network (fetch): served paths, timeouts, redirects; the early read (earlyLists) is never
-//   there, so each list is read here;
+// - the network (fetch): served paths, timeouts, redirects, each answered a few ticks on; the lists
+//   read early, as js/early.js reads them, while the GPU starts (earlyLists), the model's early
+//   download not (each model is "loaded" by fakeLoad, below);
+// - main() itself: its GPU start is a few ticks; an act's moment comes once it is past them;
 // - the load's own work (fakeLoad): numbered, "loading", then the model shown, a failure thrown; a
 //   device file shown with no URL (sourceUrl null), as main.js shows it; nothing drawn;
 // - the browser's history and address: a stack of entries, Back firing popstate and, with the
@@ -39,6 +41,13 @@ const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
 const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
 const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at) + 1); };
 const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
+// (addToScene's own tail, after its scene is shown: what it does once a model has joined -- the
+// harness called landPendingView itself, and a mutant that took it out of addToScene passed: r60)
+const ADD_TAIL = (() => {
+  const head = '  announce(`${name} added: ${models.length} models in the view`);\n';
+  const at = src.indexOf(head);
+  return at < 0 ? '' : src.slice(at + head.length, src.indexOf('\n}\n', at));
+})();
 // (a block inside a function, from its head to its own close two spaces in)
 const block = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 5); };
 // The load's own rules, run where the real load runs them (the stand-in skipped them, and a view a
@@ -47,7 +56,9 @@ const block = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src
 // plays, or is held back (applyListEntry).
 const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { app.autoTourFor = null;') + '}\n'
   // (the rule as round 57 wrote it, for a run on that code)
-  + 'function loadShown() {\n' + (block('  if (!app.addsPending && pendingViewIsFor()) {') || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {')) + '}\n'
+  // (the address forgets its model when a device file shows, as loadBuffer has it -- the harness kept
+  // it, and every Back and #view= after a drop read the address's model: r60 A6, the differential)
+  + 'function loadShown() {\n  forgetAddressModel();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {') || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {')) + '}\n'
   + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {')
   // (and its hidden parts, held back as its tour is: r59 Q4)
   + block('  if (app.header && e && e.hide && app.listHideFor !== autoTourKey()') + '}\n';
@@ -57,20 +68,22 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
   'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
-  'async function readTour(url) {', 'function listEntry(src) {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
+  'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {',
+  'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', 'function addressTourEnds(r, ownFailed) {',
   'function viewIsFor(search) {', 'function linkViewOf(hash) {', 'function setModelParam(u, url) {',
   src.includes('function lackingNote(place, opened) {') ? 'function lackingNote(place, opened) {' : 'function lackingNote(place, firstOpens) {'].map(cutIf).join('')
-  + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ') + line('const MODEL_PARAMS = ')
+  + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ') + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
   + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)
-  + 'async function loadUrl(url) { loadOpens(); return fakeLoad(url, { beginLoad, stale, setStatus, readyText, loadShown, entryShown }, [], false); }\n'
-  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText, loadShown, entryShown }, extras, true); }\n';
+  + 'async function loadUrl(url) { loadOpens(); return fakeLoad(url, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown }, [], false); }\n'
+  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown }, extras, true); }\n'
+  + `function addShown() {\n${ADD_TAIL}\n}\n`;
 
 // (Cancel on the load's card, as main.js wires it)
 const CANCEL = (() => { const at = src.indexOf("  $('pcancel').onclick = () => {"); return at < 0 ? '' : src.slice(at, src.indexOf('\n  };\n', at) + 5); })();
@@ -100,18 +113,31 @@ export async function runStart(c) {
   const loc = { get href() { return cur.href; }, get search() { return cur.search; }, get hash() { return cur.hash; } };
   const stack = [{ state: null, href: cur.href }];
   let at = 0;
-  const fire = (hashBefore) => {
+  // (hashchange only when the fragment alone changed, the rest of the address the same, as Chromium
+  // fires it -- measured: an entry differing in search and fragment fires popstate alone; the
+  // harness fired both: r60 Q2)
+  const fire = (hrefBefore) => {
+    const was = new URL(hrefBefore);
     if (listeners.popstate) listeners.popstate();
-    if (cur.hash !== hashBefore && listeners.hashchange) listeners.hashchange();
+    if (cur.hash !== was.hash && cur.search === was.search && listeners.hashchange) listeners.hashchange();
   };
   const history = {
     get state() { return stack[at].state; },
     pushState(state, _t, u) { stack.splice(at + 1); cur = new URL(String(u), cur); stack.push({ state, href: cur.href }); at++; },
     replaceState(state, _t, u) { cur = new URL(String(u), cur); stack[at] = { state, href: cur.href }; },
     back() {
-      if (at === 0) return;
-      const before = cur.hash;
+      // (Back from the first entry leaves the page, as from a fresh tab)
+      if (at === 0) { o.left = true; return; }
+      const before = cur.href;
       at--;
+      cur = new URL(stack[at].href);
+      setTimeout(() => fire(before), 0);
+    },
+    // (and Forward, to the entry after: r60 Q5)
+    forward() {
+      if (at === stack.length - 1) return;
+      const before = cur.href;
+      at++;
       cur = new URL(stack[at].href);
       setTimeout(() => fire(before), 0);
     },
@@ -121,26 +147,55 @@ export async function runStart(c) {
     o.acted.push(d); // (an act set for a moment that never comes -- no model loads -- is not one)
     // (a pick needs an entry to pick: before the list has answered there is none)
     o.events.push(d.pick ? (app.listEntries?.[d.pick - 1] ? 'pick' : 'pick (no entry)') : d.add ? `add${app.scene ? '' : ' (no scene)'}`
-      : d.click ? 'click' : d.back ? 'back' : d.hash ? 'hash' : d.cancel ? 'cancel' : `file ${d.file}`);
+      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : `file ${d.file}`);
     if (d.click) return dom.posterload.onclick && dom.posterload.onclick();
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));
-    if (d.pick) { const e = app.listEntries?.[d.pick - 1]; return e && run.openListed(e.url); }
+    // (through the select's own rule: a pick of the model shown or opening is nothing -- the harness
+    // opened it all the same, and pushed an entry the page never does: r60, the differential)
+    if (d.pick) { const e = app.listEntries?.[d.pick - 1]; return e && e.url !== run.listedNow() && run.openListed(e.url); }
     // (Back: the entry before, as the history keeps it -- with its #view=, r58 Q4)
     if (d.back) return history.back();
+    if (d.forward) return history.forward();
     // (a #view= edited into the address: a new entry, popstate then hashchange)
-    if (d.hash) { const before = cur.hash; cur = new URL(cur); cur.hash = '#view=v2'; history.pushState(null, '', cur.href); return fire(before); }
+    if (d.hash) { const before = cur.href; cur = new URL(cur); cur.hash = '#view=v2'; history.pushState(null, '', cur.href); return fire(before); }
+    // (the #view= taken out of the address: a new entry, as an edit is -- r60 A4)
+    if (d.unhash) { const before = cur.href; cur = new URL(cur); cur.hash = ''; history.pushState(null, '', cur.href); return fire(before); }
     // (Cancel on the load's card, as wired)
     if (d.cancel) return dom.pcancel.onclick && dom.pcancel.onclick();
     return run.openFile({ name: d.file, size: d.size || 10 });
   };
   // (an act's own throw, or its promise's, is the run's: recorded, not the process ended)
   const safe = (d) => { try { return Promise.resolve(act(d)).catch((e) => { o.threw ||= e.message; }); } catch (e) { o.threw ||= e.message; return null; } };
-  const visit = (at) => { for (const d of [].concat(c.during || [])) if (d.at === at) setTimeout(() => safe(d), 0); };
+  // (each "during" act once: a moment that comes again -- Back reloading the act's file -- looped: r60 Q8)
+  const fired = new Set();
+  // (the page wired -- main() past its GPU start --: an act's moment comes no sooner, as in the page,
+  // where js/early.js reads before main.js has wired a thing; a read whose moment it is waits to
+  // answer until the act is done, as tests/ui-diff.py holds it -- r60, the differential)
+  let wired = null;
+  const wiredP = new Promise((res) => { wired = res; });
+  // (js/early.js's read of the lists, taken once by readLists: earlyLists)
+  const listsQ = params.getAll('list');
+  let earlyRead = null;
+  const earlyListsOf = (urls) => {
+    if (!earlyRead || urls.join('\n') !== listsQ.join('\n')) return null;
+    const r = earlyRead;
+    earlyRead = null;
+    return r;
+  };
+  const visit = (at) => {
+    const ds = [].concat(c.during || []).filter((d) => d.at === at && !fired.has(d));
+    for (const d of ds) fired.add(d);
+    if (!ds.length) return null;
+    // (a task on, as a page act comes: what the start does at once -- readLists taking the early
+    // read -- is done by then)
+    return wiredP.then(() => new Promise((res) => setTimeout(() => { for (const d of ds) safe(d); res(); }, 0)));
+  };
   const fetchFake = async (u) => {
     const path = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
-    visit(path);
+    const acting = visit(path);
     await settle((c.slow || []).includes(path) ? 30 : 3);
+    if (acting) { await acting; await settle(1); }
     if (serve[path] === 'TIMEOUT') { const e = new Error('signal timed out'); e.name = 'TimeoutError'; throw e; }
     if (serve[path] === 'BODY-TIMEOUT') {
       return new Response(new ReadableStream({ start(ctl) { ctl.error(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })); } }), { status: 200 });
@@ -172,7 +227,14 @@ export async function runStart(c) {
     // shows it -- the stand-in named it, and a view meant for a named model passed as a device
     // file's: r59 A7)
     // (the scene's header made anew for the scene with it, as showScene makes it: r59 A6)
-    if (adding) { app.scene.push({ url, at: app.addOffset ? app.addOffset.join(',') : null }); app.header = { meshes: app.scene.map(() => ({})) }; }
+    // (and, as showScene does, the tour over the scene ended and the camera put back to the preset:
+    // a model joining ends a tour, and the view a link set is gone -- r60, the differential)
+    if (adding) {
+      app.scene.push({ url, at: app.addOffset ? app.addOffset.join(',') : null });
+      app.header = { meshes: app.scene.map(() => ({})) };
+      o.events.push('added');
+      k.addShown(); // (addToScene's end: a view waiting lands on the scene -- r60 A3)
+    }
     else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: fromFile ? null : url });
     if (!adding && (app.listEntries || []).some((e) => e.url === url)) o.pendingAtList.push([file, !!app.urlTourPending]);
     if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); }
@@ -187,7 +249,7 @@ export async function runStart(c) {
     'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom', 'history', 'closeMenus', 'tourParts', 'syncTreeChecks', 'pushState', 'updateButtons',
     'viewChanged', 'shownLacksGpu',
     `${BODY}; function wireCancel() { ${CANCEL} }
-    return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel };`)(
+    return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel, listedNow };`)(
     app, (id) => dom[id], (t) => o.shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
     // (the list filled: the entry's rules for a model already shown, as fillModelList runs them --
     // a list answering after its model never played the entry's tour: r59 Q6)
@@ -196,12 +258,18 @@ export async function runStart(c) {
     readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, (t, u) => { o.tour = true; o.events.push(`tour ${String(u || '').split('/').pop()}`); }, () => {},
     (t, f, d) => o.progress.push(`${d}${dom.pcancel.hidden ? ', no Cancel' : ''}`), () => {}, (on) => { o.embedActive = on; },
     // (a view: the fragment's own text, so which one landed is seen)
-    (v) => { o.views++; o.events.push(`view ${v}`); }, (s) => s, orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
+    (v) => { o.views++; o.events.push(`view ${v}`); }, (s) => s, orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, earlyListsOf,
     posterAsked, fetchFake, () => { o.released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom,
     history, () => {}, () => ({ ids: ['hidden-part'] }), () => {}, () => {}, () => {}, () => { o.events.push('hide'); }, () => false);
   try {
     if (typeof run.wireHistory === 'function') run.wireHistory();
     run.wireCancel();
+    // (js/early.js reads the address's lists before main.js has started: while the GPU starts, the
+    // list is read -- the harness read it only from startFromUrl, and a pick during the tour's read
+    // found no entry the page had: r60, the differential)
+    if (listsQ.length) earlyRead = fetchModelLists(listsQ, loc.href, fetchFake);
+    await settle(5); // (the GPU starting)
+    wired();
     const early = c.early ? run.earlyPick(c.early) : null;
     await run.startFromUrl(early);
     await settle(c.settle || 40);

@@ -3333,7 +3333,11 @@ function applyListEntry() {
       // and a list model with an ?add= never played its tour -- r59, the sweep's I15)
       const key = autoTourKey();
       const t = e.tours[0];
-      readTour(t.url).then((r) => { if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour) startTourIn(r.tour, t.url); });
+      // (after the address's ?add=s, as the link's view waits for them: a model joining ends the tour
+      // over the scene -- showScene --, and the entry's tour started, then was ended at once by the
+      // ?add= it was opened with: r60, the differential against the real page)
+      const adds = app.addsPending && app.addsChain ? app.addsChain : null;
+      Promise.all([readTour(t.url), adds]).then(([r]) => { if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour) startTourIn(r.tour, t.url); });
     }
   }
   syncMenuButtons();
@@ -3471,11 +3475,11 @@ let listPick = 0;
 function openListed(url, refocus = false, keepMenu = false) {
   const before = location.href;
   const u = new URL(before);
-  setModelParam(u, url);
   // (the pick opens its model alone: the address it pushes names that model, with the page's lists,
-  // not the first entry's ?add=s and ?tour=, which a reload of it then opened and played -- r59 A4, Q1)
-  for (const k of ['add', 'addat', 'tour', 'step']) u.searchParams.delete(k);
-  u.hash = ''; // a view of the last model is not a view of this one
+  // not the first entry's ?add=s and ?tour=, which a reload of it then opened and played, nor its
+  // view -- a view of the last model is not a view of this one: r59 A4, Q1; dropAddressModel)
+  dropAddressModel(u);
+  setModelParam(u, url);
   // a pick is a step in the history: Back opens the model before it again
   // (feature review item 21; it replaced the entry, so Back left the page)
   if (u.href !== before) { history.pushState({ cadvPick: true }, '', u); app.entrySearch = u.search; }
@@ -3491,7 +3495,9 @@ function openListed(url, refocus = false, keepMenu = false) {
     // name the model still shown, so the pick can be made again (and the
     // step it pushed is taken back, so Back does not land on it)
     if (pick !== listPick || app.sourceUrl === url) return;
-    if (location.href === u.href) {
+    // (by the pick's address, its fragment aside: a #view= edited in during the download made an
+    // entry of its own, and the pick's address stayed, naming a model not shown: r60 Q4)
+    if (location.search === u.search) {
       if (history.state && history.state.cadvPick) { app.skipPop = true; history.back(); } else history.replaceState(null, '', before);
       app.entrySearch = new URL(before).search;
     }
@@ -3520,11 +3526,12 @@ function wireHistory() {
     // alone -- it opens again with them: r59 A3)
     const first = location.search === firstSearch;
     const whole = !first || !params.getAll('add').length || (app.scene || []).length > 1;
-    if (!src || (src === app.sourceUrl && whole)) { syncModelList(); return; }
+    // (the model shown OR OPENING: Back while a pick still downloads goes to the entry's model -- the
+    // pick then showed under the earlier entry's address: r60 Q1)
+    if (!src || (src === listedNow() && whole)) { syncModelList(); return; }
     // (the entry's #view= is for the model its address names, as when the page opened (viewIsFor):
     // with none named, a device file's, not the list's first that Back reopens -- r58 Q1)
-    const view = linkViewOf(location.hash);
-    app.pendingView = view ? { search, view } : null;
+    setPendingView(search, location.hash);
     listPick++;
     // (the page as first opened: its model with the address's ?add=s, as its start opened it -- Back
     // reopened the model alone, and the entry's view went onto a partial scene: r59 A3, Q1)
@@ -3534,15 +3541,27 @@ function wireHistory() {
   // (a #view= edited in: the view the address now names, waiting for its model as the start's does
   // -- applied at once, an edit made while the ?add=s loaded was then overwritten by the start's
   // older view: r59 A2, Q3)
+  // (a #view= taken out: no view waits -- the start's still landed: r60 A4)
   window.addEventListener('hashchange', () => {
-    const view = linkViewOf(location.hash);
-    if (!view) return;
-    app.pendingView = { search: new URLSearchParams(location.search), view };
-    if (app.header && !app.addsPending && !PROGRESS_STATES.has(app.status) && pendingViewIsFor()) {
-      applyLinkView(view);
-      app.pendingView = null;
-    }
+    setPendingView(new URLSearchParams(location.search), location.hash);
+    if (!PROGRESS_STATES.has(app.status)) landPendingView();
   });
+}
+// The view a link's address waits with: its fragment's view for the model the address names, or
+// none (a fragment naming no view clears what waited). One setter for the start, Back and an edit
+// (popstate cleared it on no view, hashchange kept the old one: r60 A4).
+function setPendingView(search, hash) {
+  const view = linkViewOf(hash);
+  app.pendingView = view ? { search, view } : null;
+}
+// The waiting view lands, if it is for the scene shown and the address's ?add=s are in: at the
+// model's load, at the ?add=s' end, on an edit with nothing loading, and when the visitor's own Add
+// model… joins (it never landed there, and was left waiting: r60 A3). One rule, viewIsFor's.
+function landPendingView() {
+  if (app.header && !app.addsPending && pendingViewIsFor()) {
+    applyLinkView(app.pendingView.view);
+    app.pendingView = null;
+  }
 }
 
 // A pointer pick opens at once. A keyboard change does not: a closed select
@@ -4098,10 +4117,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // with no ?src (its model was opened from a device) to the next one opened
   // from a device, never to a model list's first (review r16 M2)
   // (with ?add= models still to come, after them: its ids are the scene's)
-  if (!app.addsPending && pendingViewIsFor()) {
-    applyLinkView(app.pendingView.view);
-    app.pendingView = null;
-  }
+  landPendingView();
   const tris = mesh.header.indexCount / 3;
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
     uploadMs: Math.round(performance.now() - t0), decodeMs: Math.round(decodeMs),
@@ -4198,6 +4214,8 @@ async function addToScene(base, name, seq) {
   setView('iso');
   setStatus('ready', readyText());
   announce(`${name} added: ${models.length} models in the view`);
+  // (a #view= edited in while it loaded lands on the scene it joined: r60 A3)
+  landPendingView();
 }
 
 // Draw `models` as the scene: merged, uploaded, then made the shown model.
@@ -4924,6 +4942,7 @@ function syncUnitParam() {
   if ((u.searchParams.get('unit') || null) === want) return;
   if (want) u.searchParams.set('unit', want); else u.searchParams.delete('unit');
   history.replaceState(history.state, '', u);
+  app.entrySearch = u.search; // (the entry shown, rewritten, as forgetAddressModel keeps it: r60 Q7)
 }
 // which model a list's tour auto-played for: the URL it was opened from (else its data)
 const autoTourKey = () => app.sourceUrl || app.header;
@@ -5091,10 +5110,21 @@ function setSheet(i) {
 // opened from the device kept them -- the one rule for both, loadBuffer and show2D)
 function forgetAddressModel() {
   const q = new URLSearchParams(location.search);
-  if (app.sourceUrl || ![...MODEL_PARAMS, 'unit'].some((k) => q.has(k))) return;
+  if (app.sourceUrl || (![...ADDRESS_MODEL_PARAMS].some((k) => q.has(k)) && !location.hash.startsWith('#view='))) return;
   const u = new URL(location.href);
-  for (const k of [...MODEL_PARAMS, 'unit']) u.searchParams.delete(k);
-  history.replaceState(null, '', u);
+  dropAddressModel(u);
+  history.replaceState(history.state, '', u);
+  app.entrySearch = u.search; // (the entry shown, rewritten: wireHistory -- r60 A1)
+}
+// What an address loses when another model replaces the one it names -- a list pick's or a device
+// file's: the model, its unit, the address's ?add=s and their places, its tour, and its view (each
+// of those was the replaced model's). One rule for both: a pick dropped add / addat / tour / step, a
+// dropped file only the model and the unit, and the view stayed to read as the device file's
+// (r59 A4, r60 A2, and the sweep's I6 under the harness's address writes).
+const ADDRESS_MODEL_PARAMS = [...MODEL_PARAMS, 'unit', 'add', 'addat', 'tour', 'step'];
+function dropAddressModel(u) {
+  for (const k of ADDRESS_MODEL_PARAMS) u.searchParams.delete(k);
+  u.hash = '';
 }
 
 function show2D(drawing, name, url) {
@@ -7285,6 +7315,9 @@ function openStart(src) {
   const adds = params.getAll('add'), ats = params.getAll('addat');
   if (!adds.length) return opening;
   app.addsPending = true;
+  // (one chain at a time: a second start of the page as first opened -- Back to it -- ends the first,
+  // whose loop went on beside it under the one shared guard: r60 Q3)
+  const chain = (app.startChain = {});
   // (kept: an Add model… meanwhile waits for it -- addPicked)
   return (app.addsChain = opening.then(async () => {
     const lists = params.getAll('list');
@@ -7294,7 +7327,7 @@ function openStart(src) {
       // (not when the list's own read opened this first model: its entries are in, and the read waits
       // on this chain -- r58 A2)
       if (lists.length && isRelative(raw) && app.listRead && !app.listEntries) await app.listRead;
-      if (!app.scene || !untouched()) break;
+      if (!app.scene || !untouched() || app.startChain !== chain) break;
       const u = (lists.length && listedUrlFrom(raw, lists, app.listEntries, location.href)) || raw;
       const at = (ats[i] || '').split(',').map(Number);
       app.addOffset = at.length === 3 && at.every(Number.isFinite) ? at : null;
@@ -7302,11 +7335,9 @@ function openStart(src) {
       app.startSeq = app.loadSeq;
       await p;
     }
+    if (app.startChain !== chain) return; // (a newer start's adds are its own to end)
     app.addsPending = false;
-    if (app.header && pendingViewIsFor()) {
-      applyLinkView(app.pendingView.view);
-      app.pendingView = null;
-    }
+    landPendingView();
   }));
 }
 // A view link's view applied to the model shown -- at its load, after the address's ?add=s, or on a
@@ -7537,8 +7568,7 @@ async function startFromAddress(early) {
   // #view=…: the view a shared link names, applied when the model its address names has loaded (with
   // none named, the next one opened from the device, never the model list's first): viewIsFor, by
   // the address. (A bad escape decodeURIComponent throws on is no view: it stopped the model loading.)
-  const linkView = linkViewOf(location.hash);
-  if (linkView) app.pendingView = { search: params, view: linkView };
+  setPendingView(params, location.hash);
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the visitor opened
   // something meanwhile (untouched). Through loadListed, so a list read

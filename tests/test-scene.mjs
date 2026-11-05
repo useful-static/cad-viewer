@@ -1462,7 +1462,8 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
 // The start-up contract (r51): main()'s start-up from the address -- ?src=, ?list= with ?model= /
 // ?index=, ?tour=, ?add=, an embed and its poster -- with a file picked or dropped while the GPU
 // starts, and Add model…, each run on main.js's own code (startFromUrl, viewIn3D, earlyPick,
-// addPicked and every function they reach), the network and the load itself the only stand-ins.
+// addPicked and every function they reach), through tests/startup-harness.mjs, whose header lists
+// what it stands in for; tests/ui-diff.py measures it against the real page (r60 A7).
 // Round 50's highs were here, held by source arms, and its first fix stopped the page at
 // "starting GPU" where no node test ran (r50 Q1).
 //
@@ -1575,8 +1576,10 @@ const START_CASES = {
   'a file opened while the tour\'s own model loads': { q: 'tour=t.json', serve: { 't.json': TOUR('a.stl') }, during: { at: 'a.stl', file: 'v.stl' },
     want: ['ready', 'ready', [false, ''], [], ['a.stl', 'v.stl'], false] },
   // (r52 Q4: a tour with no model plays over the visitor's file, the list's first not opened over it)
+  // (the tour answering after the file shows: played over it. Answering first, with nothing shown,
+  // it is said ready -- the page's order with the list read early, r60's differential)
   'a file opened while ?list= + ?tour= with no model are read': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR() },
-    during: { at: 'l.json', file: 'v.stl' }, want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
+    slow: ['t.json'], during: { at: 'l.json', file: 'v.stl' }, want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
   // (the same with the visitor's file still loading when the tour has been read: the list's first not
   // opened over it, which cancelled it; the tour, told ready, has no model to play over yet)
   'a slow file opened while ?list= + ?tour= with no model are read': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR() },
@@ -1644,7 +1647,7 @@ const START_CASES = {
   // (a tour naming no model plays over the visitor's file, by the one rule tourPlaysHere, as at
   // start-up and with a ?src= -- this cell held the other answer: r57 A4, Q2)
   'View in 3D pressed while ?list= + ?tour= are read, then a file opened': { q: 'embed=1&list=l.json&tour=t.json&poster=p.png', serve: { 'l.json': LISTED, 't.json': TOUR() },
-    during: [{ at: 'l.json', click: true }, { at: 'l.json', file: 'v.stl' }], want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
+    slow: ['t.json'], during: [{ at: 'l.json', click: true }, { at: 'l.json', file: 'v.stl' }], want: ['ready', 'ready', [false, ''], [], ['v.stl'], true] },
   // (r55 Q11: a poster with nothing behind it -- a tour alone, naming no model -- comes down as the
   // tour is read, the page as without one)
   'an embed\'s poster + ?tour= with no model': { q: 'embed=1&tour=t.json&poster=p.png', serve: { 't.json': TOUR() },

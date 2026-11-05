@@ -82,6 +82,10 @@ const ADDRESSES = {
   // entry's rules then run by the list's fill -- Q6; the same with a link's view -- A6)
   'src+2 adds': { q: 'src=a.stl&add=b.stl&addat=1,0,0&add=x.stl&addat=0,2,0' },
   'src+late list': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, list: true, lateList: true },
+  // (the list's first named in another unit: a pick names its own model, not in that unit -- r60 Q6 B)
+  'list+index1+unit': { q: 'list=lists/l.json&index=1&unit=in', list: true },
+  // (the list's first named, with a view: a pick that fails returns to it -- r60 A5)
+  'list+index1+view': { q: 'list=lists/l.json&index=1', hash: '#view=v', list: true },
   'src+late list+view': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, hash: '#view=v', list: true, lateList: true },
 };
 // the model an address's ?add= names
@@ -138,6 +142,17 @@ function acts(a, embed) {
   // (Add model… once the model shows and before its list answers: the header made anew, the entry's
   // rules then run by the list's fill -- the hide went over the link's view: r59 A6)
   if (a.lateList) out.push(['Add model… once the model shows, the list still read', { during: [{ at: 'loaded a.stl', add: 'e.stl' }] }]);
+  // (r60 A3-A6: a drop, then a #view= edit; an edit while the visitor's own Add model… loads; the
+  // #view= taken out while the model loads; a list pick that fails, beside a #view=)
+  out.push(['a drop, then a #view= edit', { after: [{ file: 'v.stl' }, { hash: true }] }],
+    ['a #view= edit during Add model…', { during: [{ at: 'e.stl', hash: true }], after: [{ add: 'e.stl' }] }],
+    ['the #view= taken out during the model', { during: [{ at: 'model', unhash: true }] }]);
+  if (a.list) out.push(['a list pick that fails', { failsPick: true, after: [{ pick: 2 }] }]);
+  // (r60 Q1, Q5: Back while the pick still loads; a pick, Back, then Forward)
+  if (a.list && embed !== 'poster') {
+    out.push(['Back during the pick\'s load', { slow: ['b.stl'], during: [{ at: 'b.stl', back: true }], after: [{ pick: 2 }] }],
+      ['a pick, Back, then Forward', { after: [{ pick: 2 }, { back: true }, { forward: true }] }]);
+  }
   // (a #view= edit while the model loads, and while the list is read: popstate then hashchange -- r59 Q2)
   out.push(['a #view= edit during the model', { during: [{ at: 'model', hash: true }] }]);
   if (a.list) out.push(['a #view= edit during the list', { during: [{ at: LP, hash: true }] }]);
@@ -169,7 +184,9 @@ function caseOf(a, embedQ, o, actC) {
   const firstModel = /src=a\.stl/.test(a.q) ? 'a.stl' : a.tour && !/src=/.test(a.q) ? 'c.stl' : /(index=2|src=b\.stl)/.test(a.q) ? 'b.stl' : 'a.stl';
   // (a list answering after its model: read slowly)
   const slow = [...(actC.slow || []), ...(a.lateList ? [LP] : [])];
-  return { q: embedQ + a.q, hash: a.hash, serve, redirect, files, fails: o.failsFirst ? [firstModel] : [], ...actC, slow };
+  // (a pick that fails: the entry it picks, b.stl, not found)
+  const fails = [...(o.failsFirst ? [firstModel] : []), ...(actC.failsPick ? ['b.stl'] : [])];
+  return { q: embedQ + a.q, hash: a.hash, serve, redirect, files, ...actC, fails, slow };
 }
 
 // The invariants, each a check of one run: a list of [invariant, what was seen] when broken
@@ -250,18 +267,35 @@ function check(c, r) {
   const place = !!(qp.get('index') || qp.get('model') || (qp.get('src') && !/^https?:/.test(qp.get('src'))));
   const names = !!(qp.get('src') || place);
   const listUnread = /^list (fails|times out)/.test(c.outcome);
-  const namedFile = !names || (place && listUnread) ? null : qp.get('index') === '2' ? 'b.stl' : qp.get('model') ? null : (qp.get('src') || '').split('/').pop();
+  const namedFile = !names || (place && listUnread) ? null : qp.get('index') === '2' ? 'b.stl' : qp.get('index') === '1' ? 'a.stl'
+    : qp.get('model') ? null : (qp.get('src') || '').split('/').pop();
   const forView = (f) => (names ? !!namedFile && f === namedFile : visitorFiles.has(f));
   const shownAt = (i) => (r.events.slice(0, i).filter((x) => x.startsWith('shown ')).pop() || '').slice(6);
+  // (the #view= taken out: no view lands after it -- the start's still did: r60 A4; and a pick that
+  // failed leaves the page as it was, its camera too -- the undo's Back applied the link's view
+  // again: r60 A5)
+  const unhashAt = r.events.indexOf('unhash');
+  if (unhashAt >= 0 && r.events.slice(unhashAt + 1).some((e) => e.startsWith('view '))) v('I6', `a view applied after the #view= was taken out (${r.events.join(' > ')})`);
+  if (c.failsPick && r.events.includes('pick')) {
+    const pickAt2 = r.events.indexOf('pick');
+    if (r.events.slice(pickAt2 + 1).some((e) => e.startsWith('view '))) v('I6', `a view applied after a pick that failed (${r.events.join(' > ')})`);
+  }
   if (c.hash || acts.some((d) => d.hash)) {
     // (each time a view applies, onto the model it is for -- onto the visitor's file for a named
     // model: r58 R2, r59 A1)
-    r.events.forEach((e, i) => { if (e.startsWith('view ') && !forView(shownAt(i))) v('I6', `the link's ${e} applied onto ${shownAt(i) || 'nothing'}`); });
+    // (an edit made after a device file showed is judged by the address then, which names no model:
+    // the device file forgot the address's model -- forgetAddressModel)
+    const deviceBefore = (i) => r.events.slice(0, i).some((x) => /^shown [ve]\.stl$/.test(x));
+    r.events.forEach((e, i) => {
+      if (!e.startsWith('view ')) return;
+      const ok = e === 'view v2' && deviceBefore(i) ? visitorFiles.has(shownAt(i)) : forView(shownAt(i));
+      if (!ok) v('I6', `the link's ${e} applied onto ${shownAt(i) || 'nothing'}`);
+    });
     const shownFiles = r.events.filter((e) => e.startsWith('shown ')).map((e) => e.slice(6));
     // (the address's own view, applied to its model once that shows first -- unless the visitor's own
     // open, a pick or a file, came before it could)
     const pickFirst = r.events.indexOf('pick') >= 0 && r.events.indexOf('pick') < r.events.indexOf(`shown ${namedFile}`);
-    if (c.hash && namedFile && shownFiles[0] === namedFile && !pickFirst && !acts.some((d) => d.file === 'v.stl' || d.hash) && r.views < 1) v('I6', `the link's view not applied to ${namedFile}, which it names`);
+    if (c.hash && namedFile && shownFiles[0] === namedFile && !pickFirst && !acts.some((d) => d.file === 'v.stl' || d.hash || d.unhash) && r.views < 1) v('I6', `the link's view not applied to ${namedFile}, which it names`);
     // (an edit, with its model shown at the end: the last view applied, after the edit, is the edit's
     // -- an edit during the ?add=s was overwritten by the start's older view: r59 A2, Q3)
     const hashAt = r.events.indexOf('hash');
@@ -274,10 +308,26 @@ function check(c, r) {
   // I17: a list pick pushes an address that names its model alone, with the page's lists -- not the
   // first entry's ?add=s and ?tour=, which a reload then opened and played (r59 A4, Q1); and each
   // ?add= sits at its own ?addat= (r59 Q7)
-  if (acts.some((d) => d.pick) && !acts.some((d) => d.back) && r.events.includes('pick')) {
+  // (a pick that failed takes its address back: the page's as before it)
+  if (acts.some((d) => d.pick) && !acts.some((d) => d.back) && !c.failsPick && r.events.includes('pick')) {
     const h = new URL(r.href).searchParams;
-    if (h.get('add') || h.get('tour') || h.get('addat')) v('I17', `the pick's address keeps the first entry's ${['add', 'addat', 'tour'].filter((k) => h.get(k)).join(', ')}: ${r.href}`);
+    if (['add', 'addat', 'tour', 'unit'].some((k) => h.get(k))) v('I17', `the pick's address keeps the first entry's ${['add', 'addat', 'tour', 'unit'].filter((k) => h.get(k)).join(', ')}: ${r.href}`);
   }
+  // I19: the model the address names is the model shown -- a pick shown under the entry Back went to,
+  // and Forward's entry over the model before it, read otherwise (r60 Q1, Q5)
+  if (!r.left && r.status === 'ready' && r.app.sourceUrl && r.events.includes('pick')) {
+    const hq = new URL(r.href).searchParams;
+    const idx = hq.get('index');
+    const shownF = String(r.app.sourceUrl).split('/').pop();
+    if (idx && shownF !== (idx === '1' ? 'a.stl' : idx === '2' ? 'b.stl' : '')) v('I19', `the address names entry ${idx}, ${shownF} shown`);
+    if (!idx && !hq.get('src') && !hq.get('model') && r.app.addressUrl && shownF !== String(r.app.addressUrl).split('/').pop()) v('I19', `the address names the page as first opened (${String(r.app.addressUrl).split('/').pop()}), ${shownF} shown`);
+  }
+  // (and the entry's hidden parts laid once per open, not again by a later rule run: r60 Q6 H)
+  const opens = r.events.map((e, i) => [e, i]).filter(([e]) => e.startsWith('load ')).map(([, i]) => i);
+  opens.forEach((i, k) => {
+    const seg = r.events.slice(i, opens[k + 1] ?? r.events.length);
+    if (seg.filter((e) => e === 'hide').length > 1) v('I15', `the entry's hidden parts laid ${seg.filter((e) => e === 'hide').length} times in one open`);
+  });
   // I18: File › Check this list… names each list as the address gives it, one that is not a URL too,
   // for check.html to refuse in words (it was left out, and the check named nothing wrong: r59 A5)
   if (qp.getAll('list').length && !/embed=1/.test(c.q)) {
@@ -353,6 +403,11 @@ function check(c, r) {
     const viewAt = seg.findIndex((x) => x.startsWith('view ')), ownAt = seg.indexOf(own);
     // (a view applied at the load comes before the entry's rules: applied first, then its tour)
     if (viewAt >= 0 && ownAt > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `${own} played over the link's view on ${f}`);
+    // (nor ended at once by the address's own ?add= joining after it started: the page as first
+    // opened is the model with its adds, and its tour is theirs -- the differential, r60)
+    if (ownAt >= 0 && seg.slice(ownAt + 1).includes('added') && !acts.some((d) => d.add)) {
+      v('I15', `${own} ended by the address's ?add= joining after it (${ev.join(' > ')})`);
+    }
     // (nor its hidden parts, by the model's URL whatever replaced its header -- an Add model…, a
     // re-read: r59 A6, Q4)
     if (viewAt >= 0 && seg.indexOf('hide') > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `the entry's hidden parts laid over the link's view on ${f}`);
@@ -372,6 +427,53 @@ for (const [an, a] of Object.entries(ADDRESSES)) {
       for (const [actn, actC] of acts(a, en)) cases.push([`${an} | ${en} | ${on} | ${actn}`, { ...caseOf(a, eq, o, actC), addr: a, outcome: on }]);
     }
   }
+}
+
+// The end state of one run, as tests/ui-diff.py reads the same state off the real page in Chromium
+// (r60): the page's status and line, the card, what was told, the scene's models, the address, the
+// view link's view on the model shown last, and the tour playing over it.
+export function endState(r) {
+  if (r.left) return { left: true }; // (Back from the first entry: the page left)
+  const base = (u) => String(u || '').split('/').pop();
+  const ev = r.events;
+  // (the scene's last change: a model shown, or one joining it -- each ends the tour and sets the view)
+  const lastShown = ev.map((e) => e.startsWith('shown ') || e === 'added').lastIndexOf(true);
+  const after = ev.slice(lastShown + 1);
+  const view = after.filter((e) => e.startsWith('view ')).pop();
+  const tour = after.filter((e) => e.startsWith('tour ')).pop();
+  const q = new URL(r.href).searchParams;
+  q.delete('backend');
+  q.sort();
+  return {
+    status: r.status, msg: r.msg, card: r.card, told: r.shown,
+    scene: (r.app.scene || []).map((m) => base(m.url)), address: q.toString(), hash: new URL(r.href).hash.replace(/^#view=/, ''),
+    view: view ? view.slice(5) : null, tour: tour ? tour.slice(5) : null, poster: r.posterUp,
+  };
+}
+
+// --export <file> [--names <file>]: a sample of the sweep for tests/ui-diff.py -- every act at every
+// moment once, every address and embed mode once, then every run named in <file> (one name a line,
+// as --list prints them) -- each with the harness's end state; written, and no test run.
+const exportAt = process.argv.indexOf('--export');
+if (exportAt > 0) {
+  const { readFileSync, writeFileSync } = await import('node:fs');
+  const namesAt = process.argv.indexOf('--names');
+  const wanted = namesAt > 0 ? new Set(readFileSync(process.argv[namesAt + 1], 'utf8').split('\n').map((l) => l.trim()).filter(Boolean)) : new Set();
+  const seen = new Set(), pick = [];
+  const take = (key, item) => { if (!seen.has(key)) { seen.add(key); pick.push(item); } };
+  const parts = (n) => n.split(' | ');
+  for (const item of cases) { const [, , , act] = parts(item[0]); take(`act ${act}`, item); }
+  for (const item of cases) { const [addr, embed] = parts(item[0]); take(`addr ${addr}`, item); take(`embed ${embed}`, item); }
+  for (const item of cases) if (wanted.has(item[0])) take(`name ${item[0]}`, item);
+  const out = [];
+  for (const [name, c] of [...new Map(pick.map((p) => [p[0], p])).values()]) {
+    const r = await runStart(c);
+    const { addr, ...spec } = c;
+    out.push({ name, case: spec, harness: endState(r) });
+  }
+  writeFileSync(process.argv[exportAt + 1], JSON.stringify(out, null, 1));
+  console.log(`EXPORT ${out.length} runs of ${cases.length}`);
+  process.exit(0);
 }
 
 await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I18 (r57-r59)`, async () => {
