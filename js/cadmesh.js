@@ -265,7 +265,10 @@ export async function withoutEdgesFailed(buf) {
   // refuses it in the decoder's words -- an engine's RangeError or TypeError was thrown: r46 Q8)
   const head = () => {
     if (raw.byteLength < 12) return null;
-    const jlen = new DataView(raw).getUint32(8, true);
+    // (a .cadmesh's own: not one gave two answers -- accepted without a record, refused with one: r47 A8)
+    const dv = new DataView(raw);
+    if (dv.getUint32(0, true) !== MAGIC || dv.getUint32(4, true) !== VERSION) return null;
+    const jlen = dv.getUint32(8, true);
     // (a length past the file throws in the view's making: caught)
     try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))); return h && typeof h === 'object' ? h : null; } catch { return null; }
   };

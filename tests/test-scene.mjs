@@ -836,13 +836,23 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.equal(readyText(), 'ready · 3 faces could not be meshed and are missing · model list x: HTTP 404 · no volume for this model: y');
   Object.assign(app, { dxf: { drawing: { units: null } }, noFacts: null });
   assert.equal(readyText(), 'ready · 2D drawing (its unit is not stored) · model list x: HTTP 404', 'a drawing\'s word with the list\'s note');
-  // (each status line said while ready starts with the ready text, but the export's progress -- its
-  // end writes the ready text back)
-  const writers = [...src.matchAll(/setStatus\(([^,]*'ready'[^,]*), (`[^`]*`|'[^']*'|[^)]*\))\)/g)].map((m) => m[2]);
-  const bare = writers.filter((w) => !/readyText\(\)/.test(w) && !/^`exporting /.test(w));
-  assert.ok(writers.length >= 6, `ready writers found: ${writers.length}`);
-  // (a tour's first step does not tell its missing parts again: the start told them all -- r46 A4)
-  assert.match(src, /if \(app\.tourMissing\.length && t\.i > 0\) tell\(/);
+  // (each line that writes a ready status carries the ready text: read line by line, every such
+  // writer -- the regex saw 7 of 11, and its exemption for the export's progress hid one: r47 Q6)
+  // (code lines only; sayNoFacts' `line` is readyText() + the tail, built the line above it)
+  const writers = src.split('\n').filter((l) => !/^\s*\/\//.test(l) && /setStatus\((?:'ready'|[^,]*\? 'ready')/.test(l));
+  const bare = writers.filter((l) => !/readyText\(\)/.test(l) && !/&& line !== msg\) setStatus\('ready', line\);$/.test(l));
+  assert.match(src, /const line = readyText\(\) \+ \(tail \?\? ''\);\n {2}if \(app\.status === 'ready' && tail !== null && line !== msg\) setStatus\('ready', line\);/);
+  assert.ok(writers.length >= 8, `ready writers found: ${writers.length}`);
+  // (a tour's step tells its missing parts but right after the start, which told them all: keyed on
+  // that, not on the step's index -- r46 A4, r47 A7)
+  assert.match(src, /if \(app\.tourMissing\.length && !t\.justStarted\) tell\(/);
+  assert.match(src, /app\.tour\.justStarted = missing\.length > 0;\n {2}showTourStep\(0\);/);
+  // (Explode over Measure: its reason shown, Measure saying "measure off" itself -- r47 A6)
+  assert.match(src, /tell\('Measure is off while exploded: [^']*', 6000, null\)/);
+  // (the view link "copied" only when the clipboard took it -- r47 A5)
+  assert.match(src, /tell\(\(copied \? 'View link copied' : 'View link in the box to copy'\)/);
+  // (the touch hint counted as seen only if it held its time -- r47 Q7)
+  assert.match(src, /setTimeout\(\(\) => \{ if \(\$\('hover'\)\.textContent === TOUCH_HINT\) setPref\('cadv\.touchHint', '1'\); \}, 5000\);/);
   // (Measure is given the one rule, tell, not a show-only flash to pair by hand: r46 A3, Q3 J)
   assert.match(src, /announce, tell, queueFrame, syncOptbar,/);
   assert.doesNotMatch(readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8'), /deps\.flash/);
@@ -865,7 +875,7 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const body = line('let saySeq = 0') + cut('function announce(text) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text) {')
-    + cut('function tellReady(words, ms = 6000) {') + cut('function setStatus(s, msg) {');
+    + cut('function tellReady(words, ms = 6000) {') + cut('function setStatus(s, msg) {') + line('function somethingShown() {');
   const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
   const dom = { status: el(), progress: el(), announce: el() };
   const app = { status: 'idle', statusMsg: 'idle' }, heard = [], shown = [];
@@ -1017,6 +1027,132 @@ test('containment does not trust the winding but the normals: a block wound insi
   };
   for (const flip of ['all', 'one side']) assert.deepEqual(ask(flip, true), [0, true], `${flip}, normals out`);
   assert.deepEqual(ask('all', false), [4, false], 'wound inside out, no normals: no material');
+});
+
+test('the hover line: a note of 4 s or more holds it against labels, its end puts back the last label any view gave (a 2D layer too), a tap shows through it, a model left lets it go (r46 Q5, r47 A3, A4, Q4, Q5)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const body = line('let viewNameTimer = ') + line('let noteHeldUntil = 0') + cut('function flashHover(text, ms = 1500) {') + cut('function hoverLabel(text, asked = false) {') + cut('function clearHover() {');
+  let now = 0;
+  const timers = [];
+  const hov = { textContent: '' };
+  const [flashHover, hoverLabel, clearHover] = new Function('$', 'performance', 'setTimeout', 'clearTimeout', 'app', `${body}; return [flashHover, hoverLabel, clearHover];`)(
+    () => hov, { now: () => now }, (f, ms) => { timers.push({ f, at: now + ms }); return timers.length; }, () => {}, {});
+  const advance = (ms) => { now += ms; for (const t of timers.splice(0)) { if (t.at <= now) t.f(); else timers.push(t); } };
+  hoverLabel('layer DIM');
+  flashHover('12.70 mm · ΔX 12.70 ΔY 0.00', 4000);
+  hoverLabel('layer DIM'); // (the 2D view sends it once: during the hold)
+  assert.equal(hov.textContent, '12.70 mm · ΔX 12.70 ΔY 0.00', 'held');
+  advance(4000);
+  assert.equal(hov.textContent, 'layer DIM', 'the last label back at its end');
+  flashHover('one finger turns · …', 6000);
+  hoverLabel('pcb', true);
+  assert.equal(hov.textContent, 'pcb', 'a tap shows through the hold');
+  flashHover('could not save m.step: x', 6000);
+  clearHover();
+  hoverLabel('lid');
+  assert.equal(hov.textContent, 'lid', 'a model left: the hold let go');
+  flashHover('front', 1500);
+  hoverLabel('lid');
+  assert.equal(hov.textContent, 'lid', 'a short note holds nothing');
+});
+await test('Measure\'s copy: said when copied, and when the clipboard refuses or is not there (r46 Q6, r47 A4, Q4)', async () => {
+  const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
+  const at = src.indexOf('const copyText = (text, done) => {'), code = src.slice(at, src.indexOf('\n  };', at) + 5);
+  const told = [];
+  const make = (nav) => new Function('deps', 'navigator', `${code}; return copyText;`)({ tell: (t) => told.push(t) }, nav);
+  make({ clipboard: { writeText: async () => {} } })('12.7 mm', 'copied');
+  make({})('12.7 mm', 'copied');
+  make({ clipboard: { writeText: async () => { throw new Error('denied'); } } })('12.7 mm', 'copied');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(told.sort(), ['copied', 'could not copy: denied', 'could not copy: no clipboard here']);
+});
+
+// ---------- The note contract (r47: rounds 43-46 each found a high in this path, fixed case by
+// case; this table states it once, and every cell runs main.js's own code) ----------
+//
+// Rows: the page's states, with what is on screen. Columns: the writers of a note or of the line.
+// A cell: the status after, the line after (#status, not drawn: what a later ready line builds
+// on), what is shown in the view's note line, and what is read out. 'same' keeps the row's own.
+// The line is drawn nowhere, so what the visitor learns is only what is shown and what is heard:
+// a cell whose shown and heard are empty while it says something is the fault this table guards.
+const W = 'could not move B: x', N = 'no volume for this model: v', E = 'not loaded: z.step: no surfaces';
+const O = 'big.stl is over 2 GB, more than this viewer opens';
+const GOING = 'exporting 1 body as STL…', SAVED = 'saved m.stl: 1 body, 0.0 MB';
+const NOTE_STATES = {
+  'no model': { status: 'idle', msg: 'open or drop a file', shows: null, ready: null },
+  'idle ready': { status: 'ready', msg: 'ready', shows: 'model', ready: 'ready' },
+  'ready, a drawing': { status: 'ready', msg: 'ready · 2D drawing', shows: 'drawing', ready: 'ready · 2D drawing' },
+  'loading': { status: 'loading', msg: 'reading b.step 40 %', shows: 'model', ready: 'ready' },
+  'loading over a drawing': { status: 'loading', msg: 'reading b.step 40 %', shows: 'drawing', ready: 'ready · 2D drawing' },
+  'tessellating': { status: 'tessellating', msg: 'tessellating 3 of 9', shows: 'model', ready: 'ready' },
+  'exporting': { status: 'ready', msg: `ready · ${GOING}`, shows: 'model', ready: 'ready' },
+  'error': { status: 'error', msg: 'not loaded: y.step', shows: 'model', ready: 'ready' },
+  'recovering': { status: 'recovering', msg: 'recovering the GPU…', shows: 'model', ready: 'ready' },
+};
+// each cell: [status, line, shown[], heard (the joined read-outs, in order)] -- or null: not reachable
+// (Cancel is on the loading card only; Export needs a 3D model, and is not run within itself)
+const same = 'same';
+const NOTE_CONTRACT = {
+  // tell(words): shown and read out; state and line kept, in every state
+  tell: (r) => [same, same, ['copied'], ['copied']],
+  // tellReady(words): told in every state; the line gains the words only while ready, after the
+  // ready text (an export's progress replaced)
+  tellReady: (r, s) => [same, s.status === 'ready' ? `${s.ready} · ${W}` : same, [W], [W]],
+  // sayNoFacts(word): told when new, in every state; written into a ready line in place
+  sayNoFacts: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${N} · ${GOING}` : `${s.ready} · ${N}`) : same, [N], [N]],
+  // a load's failure, setStatus('error', …): the page's error; shown in the view when a model or
+  // a drawing stays (the error card shows it only when nothing does); read out
+  loadFails: (r, s) => ['error', E, s.shows ? [E] : [], [E]],
+  // Cancel on the loading card: back to what is shown -- a drawing is shown too
+  cancel: (r, s) => (s.status === 'loading' || s.status === 'tessellating')
+    ? (s.shows ? ['ready', s.ready, [], [`loading cancelled · ${s.ready}`]] : ['idle', 'IDLE', [], ['loading cancelled · IDLE']]) : null,
+  // a file over the size refused: told where something is shown or a load runs, its state kept;
+  // the page's error with nothing shown
+  oversize: (r, s) => (s.shows || s.status === 'loading' || s.status === 'tessellating')
+    ? [same, s.status === 'ready' ? `${s.ready} · ${O}` : same, [O], [O]] : ['error', O, [], [O]],
+  // Export: its progress and its end told; the line written only while ready; the state kept
+  exportMesh: (r, s) => (s.shows !== 'model' || r === 'exporting') ? null
+    : [same, s.status === 'ready' ? `ready · ${SAVED}` : same, [GOING, SAVED], [GOING, SAVED]],
+};
+await test('the note contract: each page state against each writer of a note or the line, every cell main.js\'s own code (r47)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
+  const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text) {',
+    'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
+    'function openFile(f) {', 'async function exportMesh(fmt) {'].map(cutIf).join('')
+    + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
+  const failed = [];
+  for (const [row, s] of Object.entries(NOTE_STATES)) {
+    for (const [col, want] of Object.entries(NOTE_CONTRACT)) {
+      const cell = want(row, s);
+      if (!cell) continue;
+      const app = { status: s.status, statusMsg: s.msg, mesh: s.shows === 'model' ? {} : null, dxf: s.shows === 'drawing' ? { drawing: { units: 'mm' } } : null,
+        header: s.shows === 'model' ? { meshes: [{}] } : null, baseMesh: {}, hidden: new Set(), cam: { orient: 'z' }, sourceName: 'm.stl',
+        unmeshedFaces: 0, listNote: '', noFacts: null };
+      const shown = [], heard = [], frames = [];
+      const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
+      const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
+      const dom = { status: el(), progress: el(), announce: live };
+      const run = new Function('app', '$', 'flashHover', 'showEmpty', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
+        'startLoad', 'beginLoad', 'EXPORTS', 'exportable', 'meshLabel', 'saveBase', 'exportBasis', 'downloadBlob',
+        `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad };`)(
+        app, (id) => dom[id], (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30,
+        () => {}, () => {}, { stl: { write: async () => new Uint8Array(4), type: 'model/stl', up: 'z' } }, (m, ids) => ids, () => 'B', () => 'm', () => [1, 0, 0, 0, 1, 0, 0, 0, 1], () => {});
+      const act = { tell: () => run.tell('copied', 3000), tellReady: () => run.tellReady(W), sayNoFacts: () => run.sayNoFacts(N), loadFails: () => run.setStatus('error', E),
+        cancel: () => run.cancelLoad(), oversize: () => run.openFile({ name: 'big.stl', size: 3e9 }), exportMesh: () => run.exportMesh('stl') }[col];
+      // (each read-out flushed apart, as a page's later tasks are)
+      await act(); await new Promise((res) => setTimeout(res, 5));
+      const [st, msg, sh, hd] = cell;
+      const got = [app.status, app.statusMsg, shown, heard];
+      const exp = [st === same ? s.status : st, msg === same ? s.msg : msg, sh, hd];
+      try { assert.deepEqual(got, exp); } catch { failed.push(`${row} × ${col}: got ${JSON.stringify(got)}, want ${JSON.stringify(exp)}`); }
+    }
+  }
+  assert.deepEqual(failed, [], `cells failing: ${failed.length}\n${failed.join('\n')}`);
 });
 
 done();

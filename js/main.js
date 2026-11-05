@@ -200,6 +200,10 @@ function setStatus(s, msg) {
   // line while ready reach the user as a note -- tellReady, sayNoFacts -- r44 Q1)
   const text = msg || s;
   if (!PROGRESS_STATES.has(s) && (s !== app.status || (s === 'error' && text !== app.statusMsg))) announce(text);
+  // (an error while a model or drawing stays is shown in the view: the error card shows it only
+  // when nothing does, and the line is not drawn -- a load's failure over a model was read out
+  // and drawn nowhere: r47 Q1)
+  if (s === 'error' && somethingShown()) tell(text, 6000, null);
   app.status = s;
   app.statusMsg = msg || s; // (what the line says: sayNoFacts writes its word in place, showBase takes it back)
   $('status').textContent = msg || s;
@@ -213,12 +217,17 @@ function setStatus(s, msg) {
 const IDLE_MSG = `open or drop ${opensShort()}`;
 const mb = (n) => (n / 1e6).toFixed(1);
 
+// Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a file
+// refused for its size, the GPU recovery's end and an error shown in the view (three of them
+// asked app.mesh alone, and a drawing read as nothing shown: r47 A2, Q3)
+function somethingShown() { return !!(app.mesh || app.dxf); }
+
 // The empty-state card: shown while there is no model and no load running (and,
 // by CSS, during a drag over the view). After a failed load it carries the error.
 function showEmpty() {
   const busy = PROGRESS_STATES.has(app.status) || app.status === 'init' || app.status === 'recovering';
   // (an embed's poster stands in for it until the visitor asks for the model)
-  $('empty').hidden = !!app.mesh || !!app.dxf || busy || !$('poster').hidden;
+  $('empty').hidden = somethingShown() || busy || !$('poster').hidden;
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
   // In an embed the card is for the host page's visitor, who chose nothing to
@@ -595,10 +604,11 @@ function setExplode(on, focus = false) {
   if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
-  // (told, and on the ready line while ready: tellReady, the one guard -- r46 A2)
+  // (shown: Measure says "measure off" itself, and the note kept on the ready line stayed there with
+  // Measure back on -- said twice, in two wordings: r47 A6)
   if (on && app.measure && app.measure.on) {
     app.measure.setOn(false);
-    tellReady('Measure is off while exploded: it measures the parts where they are, not where Explode draws them');
+    tell('Measure is off while exploded: it measures the parts where they are, not where Explode draws them', 6000, null);
   }
   // (Paint picks the faces where they are: off while exploded)
   if (on && app.paintFaces) setPaint(false);
@@ -735,7 +745,7 @@ async function recoverRenderer(why) {
       setTimeout(() => { if (app.renderer === r && !isDead(r)) recoveries = 0; }, RECOVERY_QUIET_MS);
       // a load that started meanwhile owns the status line; do not paint over it
       if (app.status === 'recovering') {
-        setStatus(app.mesh ? 'ready' : 'idle', app.mesh ? `${readyText()} · recovered on ${app.backend}` : 'idle');
+        setStatus(somethingShown() ? 'ready' : 'idle', somethingShown() ? `${readyText()} · recovered on ${app.backend}` : 'idle');
       }
     }, (e) => {
       if (app.renderer !== r) return; // superseded by a further recovery
@@ -1049,22 +1059,30 @@ function viewKey(digit) {
 // the next hover replaces it)
 // (a note of 4 s or more -- a failure, a link's note, the touch hint -- holds the line for its time:
 // the next part under the pointer or a tap erased it, never to come back -- r46 Q5)
-let noteHeldUntil = 0;
+// (a note's end puts back the last label a view handed hoverLabel -- the 3D part under the pointer
+// or the 2D view's layer or snap: it read app.hover, 3D only, and a drawing's label, sent once on a
+// change, never came back -- r47 A3, Q5)
+let noteHeldUntil = 0, lastLabel = '';
 function flashHover(text, ms = 1500) {
   const hov = $('hover');
   hov.textContent = text;
   noteHeldUntil = ms >= 4000 ? performance.now() + ms : 0;
   clearTimeout(viewNameTimer);
-  viewNameTimer = setTimeout(() => { noteHeldUntil = 0; if (hov.textContent === text) hov.textContent = app.hover ? meshLabel(app.hover) : ''; }, ms);
+  viewNameTimer = setTimeout(() => { noteHeldUntil = 0; if (hov.textContent === text) hov.textContent = lastLabel; }, ms);
 }
-// the hover line's part name, unless a note holds it (its end shows the part then under the pointer)
-function hoverLabel(text) {
-  if (performance.now() < noteHeldUntil) return;
+// the hover line's label (a part's name, a layer, a snap), unless a note holds it -- kept for the
+// note's end; `asked`: a tap that asks for the name, shown through a hold (it was swallowed under
+// the touch hint that says "tap names a part": r47 Q5)
+function hoverLabel(text, asked = false) {
+  lastLabel = text;
+  if (!asked && performance.now() < noteHeldUntil) return;
+  noteHeldUntil = 0;
   $('hover').textContent = text;
 }
-// the hover line emptied, a note's hold with it (a model or drawing left)
+// the hover line emptied, a note's hold and the last label with it (a model or drawing left)
 function clearHover() {
   noteHeldUntil = 0;
+  lastLabel = '';
   $('hover').textContent = '';
 }
 
@@ -1077,8 +1095,10 @@ function touchHintOnce() {
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
-  setPref('cadv.touchHint', '1');
   tell(TOUCH_HINT, 6000);
+  // (counted as seen only if it held its time: a 6 s note right after the load replaced it, and it
+  // was recorded as shown and never came back -- r47 Q7)
+  setTimeout(() => { if ($('hover').textContent === TOUCH_HINT) setPref('cadv.touchHint', '1'); }, 5000);
 }
 
 // ---------- view links (js/view-link.js) ----------
@@ -1213,11 +1233,11 @@ async function exportMesh(fmt) {
   if (!ids.length) { tell(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
-  // (told as well as written: the status line is not drawn, and a ready-to-ready line is not heard --
-  // a long export said nothing while it ran: r46 A6, Q7)
-  const going = `exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`;
-  setStatus('ready', going);
-  tell(going, 4000);
+  // (its progress and its end through tellReady, the one guard of the ready line: told always,
+  // written only while ready -- its own two setStatus('ready') turned a load, its "convert it?"
+  // question or a GPU recovery to 'ready' under it: r47 A1, Q2; told, as a ready-to-ready line is
+  // not heard: r46 A6)
+  tellReady(`exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`, 4000);
   await new Promise((r) => setTimeout(r, 0)); // the note paints first
   let bytes;
   try {
@@ -1231,8 +1251,7 @@ async function exportMesh(fmt) {
   const name = `${base}.${fmt}`;
   downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
   app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name }; // (for tests)
-  setStatus('ready', readyText());
-  tell(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`, 3000);
+  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`, 3000);
 }
 
 // Save picture (P): the view as a PNG at the picture options' size and
@@ -1587,8 +1606,10 @@ async function shareView() {
   // (a link carries the first MAX_NOTES notes: said, not left for the visitor to find)
   const nNotes = app.measure ? app.measure.notes().length : 0;
   const cut = nNotes > MAX_NOTES ? ` (with the first ${MAX_NOTES} of its ${nNotes} notes: a link is short)` : '';
-  tell((app.sourceUrl ? 'View link copied'
-    : 'View link copied: it holds the view, not the file (opened from this device)') + cut, 3000);
+  // (copied only when the clipboard took it: a refusal, or a prompt the visitor cancelled, read
+  // "View link copied" -- r47 A5)
+  tell((copied ? 'View link copied' : 'View link in the box to copy')
+    + (app.sourceUrl ? '' : ': it holds the view, not the file (opened from this device)') + cut, 3000);
 }
 
 // ---------- tours (js/tour.js) ----------
@@ -1903,9 +1924,11 @@ function showTourStep(i) {
   }
   if (x.on) x.t = exNow;
   flyTo(to ? to.pose : null, to ? to.ortho : !!app.cam.ortho, s.transition, s.ease, ex1, holdStep);
-  // (not at the first step: the tour's start told every part it lacks, and the two said in one
-  // moment, in two wordings, the start's 6 s note replaced at once -- r46 A4, Q4)
-  if (app.tourMissing.length && t.i > 0) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  // (not right after the tour's start, which told every part it lacks -- the two said in one moment,
+  // in two wordings, the start's 6 s note replaced at once: r46 A4, Q4; keyed on that, not on the
+  // index: step 1 shown again by ◀, a loop or a replay never named its missing parts -- r47 A7)
+  if (app.tourMissing.length && !t.justStarted) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  t.justStarted = false;
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
 }
 
@@ -1974,6 +1997,7 @@ function startTour(tour, url, only = null) {
   // the names it uses that this model lacks, once (a tour outlives a model update)
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) tellReady(`the tour names parts this model lacks: ${missing.join(', ')}`);
+  app.tour.justStarted = missing.length > 0;
   showTourStep(0);
   return true;
 }
@@ -5360,7 +5384,7 @@ function openFile(f) {
   if (f.size > MAX_FILE_BYTES) {
     const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
     // (a model shown, or a load under way -- which keeps its line: told; else the page's error)
-    if (app.mesh || PROGRESS_STATES.has(app.status)) tellReady(msg);
+    if (somethingShown() || PROGRESS_STATES.has(app.status)) tellReady(msg);
     else setStatus('error', msg);
     return;
   }
@@ -6392,7 +6416,7 @@ function wireInput() {
         select(id ? [id] : [], additive);
         if (id) revealRow(id);
         // a finger has no hover: the view's name label shows what a tap picked
-        if (d.type === 'touch') hoverLabel(id ? meshLabel(id) : '');
+        if (d.type === 'touch') hoverLabel(id ? meshLabel(id) : '', true);
         return true;
       });
     }
@@ -6561,7 +6585,7 @@ function wireInput() {
   $('pcancel').onclick = () => {
     beginLoad();
     announce('loading cancelled');
-    if (app.mesh) setStatus('ready', readyText());
+    if (somethingShown()) setStatus('ready', readyText());
     else setStatus('idle', IDLE_MSG);
   };
   window.addEventListener('drop', (e) => {

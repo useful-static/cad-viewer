@@ -101,6 +101,14 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   assert.equal(await withoutEdgesFailed(cutShort), cutShort, 'the header alone read');
   const badLen = plain.slice(0); new DataView(badLen).setUint32(8, 0xfffffff0, true);
   await assert.rejects(withoutEdgesFailed(badLen), /^Error: cadmesh/);
+  // (a file too short for a header, and one not a .cadmesh: the decoder's refusal, one answer whether
+  // its JSON names a record or not -- r47 A8, Q8)
+  await assert.rejects(withoutEdgesFailed(plain.slice(0, 8)), /^Error: cadmesh/);
+  for (const json of ['{"units":"mm"}', '{"units":"mm","edgesFailed":{"error":"x","factsRule":4}}']) {
+    const j = new TextEncoder().encode(json), notOurs = new ArrayBuffer(12 + j.length), dv = new DataView(notOurs);
+    dv.setUint32(0, 0x46445025, true); dv.setUint32(4, 99, true); dv.setUint32(8, j.length, true); new Uint8Array(notOurs, 12).set(j);
+    await assert.rejects(withoutEdgesFailed(notOurs), /^Error: cadmesh/, json);
+  }
   // (the bytes Save writes: decoded, without the record, gzipped where it can -- r45 Q9)
   const toSave = await cadmeshToSave(raw);
   assert.deepEqual([isGzip(toSave), decodeCadmesh(await inflateCadmesh(toSave)).header.edgesFailed], [true, undefined]);
