@@ -1771,28 +1771,9 @@ await test('a mesh\'s companion files together are capped at the size a file may
   assert.equal(read.length, 1);
 });
 
-await test('a list pick ends the address\'s tour, and Back to the first entry opens the model the address opened (r56 Q3, A2)', async () => {
-  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
-  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
-  const app = { urlTourPending: true, header: {}, sourceUrl: 'https://s.example/c.stl', listEntries: [{ url: 'https://s.example/a.stl' }, { url: 'https://s.example/b.stl' }] };
-  const loaded = [];
-  let pop = null;
-  const loc = { href: 'https://s.example/?list=l.json', search: '?list=l.json', hash: '' };
-  const f = new Function('app', 'setModelParam', 'history', 'closeMenus', 'loadListed', 'syncModelList', 'location', 'window', 'modelUrlIn', 'decodeView', 'autoTourKey',
-    `let listPick = 0;\n${cut('function openListed(url, refocus = false, keepMenu = false) {')}${cut('function wireHistory() {')}${cut('function tourOver() {')}${line('const addressModel = ')}; return { openListed, wireHistory };`)(
-    app, () => {}, { pushState() {}, replaceState() {}, back() {}, state: null }, () => {}, (u) => { loaded.push(u); return Promise.resolve(); }, () => {}, loc,
-    { addEventListener: (ev, fn) => { if (ev === 'popstate') pop = fn; } }, () => null, () => null, () => app.sourceUrl);
-  // (a pick while the address's tour is read: the tour over, the pick's own then plays -- neither did)
-  f.openListed('https://s.example/b.stl');
-  assert.deepEqual([app.urlTourPending, app.autoTourFor], [false, 'https://s.example/c.stl'], 'the address\'s tour over at the pick');
-  // (Back to the first entry, which opened the tour's model c.stl: c.stl, not the list's first)
-  app.addressUrl = 'https://s.example/c.stl';
-  app.sourceUrl = 'https://s.example/b.stl';
-  f.wireHistory();
-  pop();
-  assert.deepEqual(loaded, ['https://s.example/b.stl', 'https://s.example/c.stl']);
-});
+// (r56's pick-and-Back arm -- a pick ends the address's tour, Back reopens the tour's own model -- is
+// held by the start-up sweep since r59, through the harness's real history: I9 and I6. Its own
+// stand-ins, a history of no-ops and an address that never moved, no longer fit the code: r59 A7.)
 
 // main.js's own loadUrl and readLists take the early downloads, once: a ?src= page downloaded its
 // model twice under a mutant no test saw (r53 Q3)

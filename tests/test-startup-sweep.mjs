@@ -27,7 +27,13 @@
 //   I13 "the tour is ready" is never told over its own model's failure;
 //   I14 a tour read that names no model is played or said ready, not dropped unsaid;
 //   I15 a list entry's own tour plays when its model opens, and never over a view link's view on it;
-//   I16 every model the address names loads from where it is served (beside its list, its tour).
+//   I16 every model the address names loads from where it is served (beside its list, its tour);
+//   I17 a list pick pushes an address naming its model alone (no first entry's ?add=s, ?tour=), and
+//       each ?add= sits at its own ?addat=;
+//   I18 File › Check this list… names each list as the address gives it.
+// (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
+// browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
+// a new header for each added model, and the list's late answer running the entry's rules.)
 // (r58: the harness runs the load's own rules -- the view link's view, the entry's tour -- serves
 // only the model paths given, and Back restores the first entry's #view=.)
 //   node tests/test-startup-sweep.mjs            (exit 0 = all pass)
@@ -39,7 +45,8 @@ import { test, done } from './harness.mjs';
 
 // (each entry with a tour of its own, as a list's models carry them: the entry's tour plays when its
 // model opens, held back by the address's tour and by a view link's view over it -- r58 A3)
-const LIST = JSON.stringify({ 'a.stl': { name: 'A', tours: [{ name: 'own', url: 'at.json' }] }, 'b.stl': { name: 'B', tours: [{ name: 'own', url: 'bt.json' }] } });
+// (and the first with parts it hides when it opens -- held back by a link's view as its tour is: r59 A6, Q4)
+const LIST = JSON.stringify({ 'a.stl': { name: 'A', tours: [{ name: 'own', url: 'at.json' }], hide: ['lid'] }, 'b.stl': { name: 'B', tours: [{ name: 'own', url: 'bt.json' }] } });
 const TOUR = (model) => JSON.stringify({ cadtour: 1, ...(model ? { model } : {}), steps: [{ title: 'one' }] });
 const BIG = 'big.stl is over 2 GB, more than this viewer opens';
 const LP = 'lists/l.json'; // (the list's path)
@@ -71,6 +78,11 @@ const ADDRESSES = {
   'src+add+view': { q: 'src=a.stl&add=b.stl', hash: '#view=v' },
   // (a ?list= that is not a URL beside a ?src=: refused in words, the ?src= opening -- r58 Q6)
   'src+bad list': { q: 'src=a.stl&list=http://[x' },
+  // (r59: two ?add=s, each at its own ?addat= -- Q7; a list that answers after its model opened, the
+  // entry's rules then run by the list's fill -- Q6; the same with a link's view -- A6)
+  'src+2 adds': { q: 'src=a.stl&add=b.stl&addat=1,0,0&add=x.stl&addat=0,2,0' },
+  'src+late list': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, list: true, lateList: true },
+  'src+late list+view': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, hash: '#view=v', list: true, lateList: true },
 };
 // the model an address's ?add= names
 const addOf = (q) => (q.match(/(?:^|&)add=([^&]+)/) || [])[1] || null;
@@ -108,7 +120,11 @@ function acts(a, embed) {
       ['Add model…, then a slow drop, during the ?add=', { slow: ['v.stl'], during: [{ at: addOf(a.q), add: 'e.stl' }, { at: addOf(a.q), file: 'v.stl' }] }],
       // (the visitor's file shown while a slow ?add= still settles: what waited on the adds then
       // meets the visitor's file -- r58 R2)
-      ['a drop during a slow ?add=', { slow: [addOf(a.q)], during: [{ at: addOf(a.q), file: 'v.stl' }] }]);
+      ['a drop during a slow ?add=', { slow: [addOf(a.q)], during: [{ at: addOf(a.q), file: 'v.stl' }] }],
+      // (Cancel on the ?add=, an Add model… queued behind it: no newer ask, it joins -- r59 Q5)
+      ['Add model…, then Cancel, during a slow ?add=', { slow: [addOf(a.q)], during: [{ at: addOf(a.q), add: 'e.stl' }, { at: addOf(a.q), cancel: true }] }],
+      // (a #view= edit while the ?add= loads: the address's last view is the one that stays -- r59 A2, Q3)
+      ['a #view= edit during a slow ?add=', { slow: [addOf(a.q)], during: [{ at: addOf(a.q), hash: true }] }]);
   }
   if (a.list) out.push(['a list pick, then Back', { after: [{ pick: 2 }, { back: true }] }]);
   // (the visitor's file over the address's model before it showed, then a pick and Back: the page
@@ -116,7 +132,15 @@ function acts(a, embed) {
   if (a.list && embed !== 'poster') out.push(['a drop during the model, then a list pick and Back', { during: [{ at: 'model', file: 'v.stl' }], after: [{ pick: 2 }, { back: true }] }]);
   // (Back with no entry of the page's own before it: onto the model shown -- behind a poster, with
   // nothing shown and no pick, there is no entry to go back to)
-  if (a.list && embed !== 'poster') out.push(['Back after', { after: [{ back: true }] }]);
+  // (a pick of the model shown, then Back: onto the model shown -- r57 Q6 m13. Back with no entry
+  // before it leaves the page, which the history now keeps: r59)
+  if (a.list && embed !== 'poster') out.push(['a pick of the first, then Back', { after: [{ pick: 1 }, { back: true }] }]);
+  // (Add model… once the model shows and before its list answers: the header made anew, the entry's
+  // rules then run by the list's fill -- the hide went over the link's view: r59 A6)
+  if (a.lateList) out.push(['Add model… once the model shows, the list still read', { during: [{ at: 'loaded a.stl', add: 'e.stl' }] }]);
+  // (a #view= edit while the model loads, and while the list is read: popstate then hashchange -- r59 Q2)
+  out.push(['a #view= edit during the model', { during: [{ at: 'model', hash: true }] }]);
+  if (a.list) out.push(['a #view= edit during the list', { during: [{ at: LP, hash: true }] }]);
   // (two acts: the visitor's file during the tour's read, then Add model… once it shows -- the tour's
   // own model opened over both under a mutant one act never reaches: r57 Q7 m6)
   if ('tour' in a) out.push(['a drop during the tour, then Add model…', { slow: ['t.json'], during: [{ at: 't.json', file: 'v.stl' }, { at: 'loaded v.stl', add: 'e.stl' }] }]);
@@ -140,9 +164,12 @@ function caseOf(a, embedQ, o, actC) {
   if (a.list) { serve[`${listAt}at.json`] = TOUR(); serve[`${listAt}bt.json`] = TOUR(); }
   // (with no list, a.stl and b.stl are the page's own: ?src=, ?add=; x.stl an ?add= no list names)
   const files = a.list ? [`${listAt}a.stl`, `${listAt}b.stl`, `${tourAt}c.stl`, 'x.stl'] : ['a.stl', 'b.stl', `${tourAt}c.stl`, 'x.stl'];
+  if (a.lateList) files.push('lists/a.stl'); // (its ?src= a URL of its own, wherever the list answers)
   // the model that fails: the one the start would open first
   const firstModel = /src=a\.stl/.test(a.q) ? 'a.stl' : a.tour && !/src=/.test(a.q) ? 'c.stl' : /(index=2|src=b\.stl)/.test(a.q) ? 'b.stl' : 'a.stl';
-  return { q: embedQ + a.q, hash: a.hash, serve, redirect, files, fails: o.failsFirst ? [firstModel] : [], ...actC };
+  // (a list answering after its model: read slowly)
+  const slow = [...(actC.slow || []), ...(a.lateList ? [LP] : [])];
+  return { q: embedQ + a.q, hash: a.hash, serve, redirect, files, fails: o.failsFirst ? [firstModel] : [], ...actC, slow };
 }
 
 // The invariants, each a check of one run: a list of [invariant, what was seen] when broken
@@ -175,6 +202,8 @@ function check(c, r) {
   const refused = (c.early && c.early[0].size > 1e9) || acts.some((d) => d.size > 1e9);
   // (and with nothing shown at the end, on the card: told while the start ran, a note after it
   // replaced it, the card empty -- r58 Q7)
+  // (but never under a poster still up, which stands for the model and hides the card: r59 Q7 Q-m2)
+  if (refused && r.posterUp && r.status === 'error') v('I2', `the refusal made the page's error under the poster still up`);
   if (refused && !r.app.header && !r.posterUp && r.status !== 'error' && !acts.some((d) => d.file === 'v.stl' || d.pick || d.click)) v('I2', `"${BIG}" told, then off the card with nothing shown (ended ${r.status} ${JSON.stringify(r.msg)})`);
   if (refused && !r.shown.includes(BIG) && r.card[1] !== BIG) v('I2', `"${BIG}" neither told nor on the card (told ${JSON.stringify(r.shown)}, card ${JSON.stringify(r.card)})`);
   // I3: not ended on a load or a read
@@ -191,13 +220,18 @@ function check(c, r) {
     const backAt = r.events.indexOf('back');
     // (what Back itself loaded, if anything: an ?add= loaded before it is not Back's)
     const loadsAfter = r.events.slice(backAt + 1).filter((e) => e.startsWith('load ')).map((e) => e.slice(5));
-    const last = loadsAfter[loadsAfter.length - 1];
+    // (its model first, the address's ?add=s after it)
+    const last = loadsAfter[0];
     if (startModel && last && last !== startModel.split('/').pop()) v('I6', `Back loaded ${last}, the start opened ${startModel}`);
     // (Back onto the model already shown loads nothing: r57 Q6 m13 -- one whose load failed is not
     // shown, and Back tries it again)
     const before = r.events.slice(0, backAt).filter((e) => e.startsWith('load ')).pop();
     const reload = r.events.slice(backAt + 1).find((e) => e.startsWith('load '));
-    if (startModel && before === `load ${startModel.split('/').pop()}` && !(c.fails || []).includes(before.slice(5)) && reload) v('I6', `Back onto the shown ${before.slice(5)}: ${reload}`);
+    // (by name: under a redirect, the late list names an a.stl at another URL than its ?src=, two
+    // models of one name -- these checks key on names, so that pair is left out)
+    const twoOfOneName = c.addr.lateList && c.redirect;
+    // (an address with ?add=s reopens its model with them over the model shown alone: r59 A3)
+    if (startModel && !twoOfOneName && !addOf(c.q) && before === `load ${startModel.split('/').pop()}` && !(c.fails || []).includes(before.slice(5)) && reload) v('I6', `Back onto the shown ${before.slice(5)}: ${reload}`);
     // (and what it loads is a model the page showed from its address before the pick -- the first
     // start-up load that started, superseded by the visitor's file unseen, was taken: r57 Q4)
     // (an address that names its model -- ?src=, ?index= -- has Back open that one, shown or not)
@@ -208,36 +242,53 @@ function check(c, r) {
       if (visitorFiles.has(firstShown) || (firstShown && f !== firstShown && !(c.fails || []).includes(f))) v('I6', `Back loaded ${f}; the page first showed ${firstShown}`);
     }
   }
-  // (a #view= is for the model its address names, or, naming none, a file from the device -- never a
-  // list's first: the view link's rule, one for every path, r57 A2)
-  if (acts.some((d) => d.hash) && r.app.header) {
-    // (a ?model= the list lacks names nothing it has: the list's first opens instead, not its model)
-    const named = /(?:^|&)(src|index)=/.test(c.q);
-    const shown = String(r.app.sourceUrl || '').split('/').pop();
-    const forIt = named ? r.app.sourceUrl === r.app.addressUrl && !!r.app.addressUrl : !r.app.sourceUrl || visitorFiles.has(shown);
-    if (forIt && r.views < 1) v('I6', `a #view= edit not applied to ${shown || 'the device file'}`);
-    if (!forIt && r.views > 0) v('I6', `a #view= edit applied to ${shown}, which it does not name`);
-  }
-  // (the view a page opens with, by the same rule: applied to the model its address names once that
-  // shows first, and never, with none named, to anything but a file from the device -- the load's own
-  // rule was not run, and Back put the device file's view on the list's first: r58 Q1, Q4, A4)
-  if (c.hash && !acts.some((d) => d.hash)) {
-    const namedFile = /(?:^|&)src=a\.stl/.test(c.q) ? 'a.stl' : /(?:^|&)(index=2|src=b\.stl)/.test(c.q) ? 'b.stl' : null;
+  // The view link's rule, by the ADDRESS (r57 A2, r58 A4, Q1, r59 A1): a #view= -- the address's own
+  // (v), or one edited in (v2) -- is for the model its address names, the one its list has there once
+  // read (for nothing while the list is unread or lacks it), or, naming none, for a file from the
+  // device; never the list's first.
+  const qp = new URLSearchParams(c.q);
+  const place = !!(qp.get('index') || qp.get('model') || (qp.get('src') && !/^https?:/.test(qp.get('src'))));
+  const names = !!(qp.get('src') || place);
+  const listUnread = /^list (fails|times out)/.test(c.outcome);
+  const namedFile = !names || (place && listUnread) ? null : qp.get('index') === '2' ? 'b.stl' : qp.get('model') ? null : (qp.get('src') || '').split('/').pop();
+  const forView = (f) => (names ? !!namedFile && f === namedFile : visitorFiles.has(f));
+  const shownAt = (i) => (r.events.slice(0, i).filter((x) => x.startsWith('shown ')).pop() || '').slice(6);
+  if (c.hash || acts.some((d) => d.hash)) {
+    // (each time a view applies, onto the model it is for -- onto the visitor's file for a named
+    // model: r58 R2, r59 A1)
+    r.events.forEach((e, i) => { if (e.startsWith('view ') && !forView(shownAt(i))) v('I6', `the link's ${e} applied onto ${shownAt(i) || 'nothing'}`); });
     const shownFiles = r.events.filter((e) => e.startsWith('shown ')).map((e) => e.slice(6));
-    const deviceShown = shownFiles.some((f) => visitorFiles.has(f));
-    // (a list pick before it showed is the visitor's own open: the link's view went with the page's)
+    // (the address's own view, applied to its model once that shows first -- unless the visitor's own
+    // open, a pick or a file, came before it could)
     const pickFirst = r.events.indexOf('pick') >= 0 && r.events.indexOf('pick') < r.events.indexOf(`shown ${namedFile}`);
-    // (nor a file the visitor opened before the view could apply -- it waits on the ?add=s)
-    if (namedFile && shownFiles[0] === namedFile && !pickFirst && !acts.some((d) => d.file === 'v.stl') && r.views < 1) v('I6', `the link's view not applied to ${namedFile}, which it names`);
-    if (!namedFile && !deviceShown && r.views > 0) v('I6', `the link's view applied to ${shownFiles.join(', ')}, none of which it names`);
-    // (and each time it applies, onto the model it is for: the one named, else a device file -- the
-    // view waiting on the ?add=s went onto the visitor's file: r58 R2)
-    r.events.forEach((e, i) => {
-      if (e !== 'view') return;
-      const on = (r.events.slice(0, i).filter((x) => x.startsWith('shown ')).pop() || '').slice(6);
-      if (namedFile ? on !== namedFile : !visitorFiles.has(on)) v('I6', `the link's view applied onto ${on || 'nothing'}`);
-    });
+    if (c.hash && namedFile && shownFiles[0] === namedFile && !pickFirst && !acts.some((d) => d.file === 'v.stl' || d.hash) && r.views < 1) v('I6', `the link's view not applied to ${namedFile}, which it names`);
+    // (an edit, with its model shown at the end: the last view applied, after the edit, is the edit's
+    // -- an edit during the ?add=s was overwritten by the start's older view: r59 A2, Q3)
+    const hashAt = r.events.indexOf('hash');
+    const endShown = shownAt(r.events.length);
+    if (hashAt >= 0 && forView(endShown) && !acts.some((d) => d.file || d.pick || d.back)) {
+      const after = r.events.slice(hashAt + 1).filter((e) => e.startsWith('view '));
+      if (after[after.length - 1] !== 'view v2') v('I6', `the #view= edit not the view at the end (${r.events.join(' > ')})`);
+    }
   }
+  // I17: a list pick pushes an address that names its model alone, with the page's lists -- not the
+  // first entry's ?add=s and ?tour=, which a reload then opened and played (r59 A4, Q1); and each
+  // ?add= sits at its own ?addat= (r59 Q7)
+  if (acts.some((d) => d.pick) && !acts.some((d) => d.back) && r.events.includes('pick')) {
+    const h = new URL(r.href).searchParams;
+    if (h.get('add') || h.get('tour') || h.get('addat')) v('I17', `the pick's address keeps the first entry's ${['add', 'addat', 'tour'].filter((k) => h.get(k)).join(', ')}: ${r.href}`);
+  }
+  // I18: File › Check this list… names each list as the address gives it, one that is not a URL too,
+  // for check.html to refuse in words (it was left out, and the check named nothing wrong: r59 A5)
+  if (qp.getAll('list').length && !/embed=1/.test(c.q)) {
+    const given = new URL(r.dom.checklist.href || 'https://x/').searchParams.getAll('list');
+    if (given.length !== qp.getAll('list').length) v('I18', `the list check names ${given.length} list(s) of ${qp.getAll('list').length}: ${r.dom.checklist.href}`);
+  }
+  const ats = qp.getAll('addat');
+  qp.getAll('add').forEach((f, i) => {
+    const m = (r.app.scene || []).find((x) => String(x.url).split('/').pop() === f);
+    if (m && ats[i] && m.at !== ats[i]) v('I17', `${f} at ${m.at}, its ?addat= ${ats[i]}`);
+  });
   // I7: every load offered Cancel
   if (r.cancelHidden.length) v('I7', `loaded with Cancel hidden: ${r.cancelHidden.join(', ')}`);
   // I9: the address's tour never starts after a list pick, which ends it (r57 A1, Q1)
@@ -255,7 +306,10 @@ function check(c, r) {
   // the list's first -- only ?src= took it: r58 A2)
   const added = addOf(c.q);
   const startShown = r.events.find((e) => e.startsWith('shown '));
-  if (added && !(c.fails || []).length && !acts.some((d) => d.file || d.pick || d.back) && !c.early && startShown && !r.posterUp
+  // (and Back to the first entry after a pick reopens it with them -- Back opened the model alone:
+  // r59 A3, Q1)
+  const pickBack = acts.length >= 2 && acts[acts.length - 1].back && acts.some((d) => d.pick) && !acts.some((d) => d.file);
+  if (added && !(c.fails || []).length && (!acts.some((d) => d.file || d.pick || d.back || d.cancel) || pickBack) && !c.early && startShown && !r.posterUp
     && !(r.app.scene || []).some((m) => String(m.url).split('/').pop() === added)) {
     v('I10', `the address's ?add= ${added} not in the scene: ${JSON.stringify((r.app.scene || []).map((m) => String(m.url).split('/').pop()))}`);
   }
@@ -296,11 +350,15 @@ function check(c, r) {
     const end = k + 1 < shows.length ? shows[k + 1][1] : ev.length;
     const nextShown = ev.findIndex((x, j) => j > i && x.startsWith('shown '));
     const seg = ev.slice(i + 1, nextShown < 0 ? ev.length : nextShown);
-    const viewAt = seg.indexOf('view'), ownAt = seg.indexOf(own);
+    const viewAt = seg.findIndex((x) => x.startsWith('view ')), ownAt = seg.indexOf(own);
     // (a view applied at the load comes before the entry's rules: applied first, then its tour)
     if (viewAt >= 0 && ownAt > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `${own} played over the link's view on ${f}`);
+    // (nor its hidden parts, by the model's URL whatever replaced its header -- an Add model…, a
+    // re-read: r59 A6, Q4)
+    if (viewAt >= 0 && seg.indexOf('hide') > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `the entry's hidden parts laid over the link's view on ${f}`);
     const pending = (r.pendingAtList.find(([pf]) => pf === f) || [])[1];
-    if (end === ev.length && nextShown < 0 && pending === false && viewAt < 0 && ownAt < 0 && !seg.includes('tour t.json') && !acts.some((d) => d.hash)) {
+    if (end === ev.length && nextShown < 0 && pending === false && viewAt < 0 && ownAt < 0 && !seg.includes('tour t.json') && !acts.some((d) => d.hash)
+      && !(c.addr.lateList && c.redirect)) { // (two models of one name: see I6)
       v('I15', `${f} opened with no link's view over it and the address's tour over, and ${own} never played`);
     }
   });
@@ -316,7 +374,7 @@ for (const [an, a] of Object.entries(ADDRESSES)) {
   }
 }
 
-await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I16 (r57, r58)`, async () => {
+await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I18 (r57-r59)`, async () => {
   const byInv = {};
   const t0 = Date.now();
   let unreached = 0;

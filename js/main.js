@@ -3282,7 +3282,9 @@ function listEntry(src) {
 // view as it applied it, and the entry's tour then played over it), or still to come to it, after
 // the address's ?add=s. A pending view for another model -- a device file's -- is not over this one,
 // and held its own tour back (r58 A3). viewIsFor is the rule for which model a view is for.
-const linkViewOver = () => (!!app.header && app.viewLinkedFor === app.header) || pendingViewIsFor();
+// (keyed by the model's URL, as the entry's other keys are: the header is replaced by every Add
+// model…, move and re-read in another unit, and the list's hide went over the link's view: r59 A6, Q4)
+const linkViewOver = () => (!!app.header && app.viewLinkedFor === autoTourKey()) || pendingViewIsFor();
 function applyListEntry() {
   const e = app.header ? listEntry(app.sourceUrl) : null;
   // Download STEP: the entry's source file, else the file itself when the
@@ -3327,9 +3329,11 @@ function applyListEntry() {
     if (linkViewOver() || app.urlTourPending) app.autoTourFor = autoTourKey();
     else if (e && e.tours && e.tours.length && !app.tour) {
       app.autoTourFor = autoTourKey();
-      const h = app.header;
+      // (still this model's open, by its key: the header is made anew by every ?add= and Add model…,
+      // and a list model with an ?add= never played its tour -- r59, the sweep's I15)
+      const key = autoTourKey();
       const t = e.tours[0];
-      readTour(t.url).then((r) => { if (!r.error && app.header === h && !app.tour) startTourIn(r.tour, t.url); });
+      readTour(t.url).then((r) => { if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour) startTourIn(r.tour, t.url); });
     }
   }
   syncMenuButtons();
@@ -3344,9 +3348,11 @@ function applyListEntry() {
   // not over a view link's view; ahead of its tour, which starts from them
   // (keyed as the auto tour is, by the model's URL: a re-read in another unit is not a new open,
   // and laid the list's hide over the visitor's own hide / show)
-  if (app.header && e && e.hide && app.listHideFor !== autoTourKey() && !linkViewOver()) {
+  // (held back by a link's view, it is decided for this open all the same, as the tour's key is: a
+  // re-read in another unit then laid it over the link's view -- r59 Q4)
+  if (app.header && e && e.hide && app.listHideFor !== autoTourKey()) {
     app.listHideFor = autoTourKey();
-    const ids = tourParts(e.hide).ids;
+    const ids = linkViewOver() ? [] : tourParts(e.hide).ids;
     if (ids.length) {
       for (const id of ids) app.hidden.add(id);
       syncTreeChecks();
@@ -3466,10 +3472,13 @@ function openListed(url, refocus = false, keepMenu = false) {
   const before = location.href;
   const u = new URL(before);
   setModelParam(u, url);
+  // (the pick opens its model alone: the address it pushes names that model, with the page's lists,
+  // not the first entry's ?add=s and ?tour=, which a reload of it then opened and played -- r59 A4, Q1)
+  for (const k of ['add', 'addat', 'tour', 'step']) u.searchParams.delete(k);
   u.hash = ''; // a view of the last model is not a view of this one
   // a pick is a step in the history: Back opens the model before it again
   // (feature review item 21; it replaced the entry, so Back left the page)
-  if (u.href !== before) history.pushState({ cadvPick: true }, '', u);
+  if (u.href !== before) { history.pushState({ cadvPick: true }, '', u); app.entrySearch = u.search; }
   app.pendingView = null;
   // (the visitor's pick ends the address's tour: the model picked plays its own -- picked while the
   // address's tour was read, neither tour played: r56 Q3)
@@ -3484,30 +3493,55 @@ function openListed(url, refocus = false, keepMenu = false) {
     if (pick !== listPick || app.sourceUrl === url) return;
     if (location.href === u.href) {
       if (history.state && history.state.cadvPick) { app.skipPop = true; history.back(); } else history.replaceState(null, '', before);
+      app.entrySearch = new URL(before).search;
     }
     syncModelList();
   });
 }
 
-// Back / Forward between list picks: the entry's ?src opened again (and its
-// #view=, applied when it has), unless it is the model shown
+// Back / Forward between list picks: the entry's model opened again (and its #view=, applied when it
+// has), unless it is the model shown; and a #view= edited in. Both listeners here, one rule for the
+// view (viewIsFor, by the entry's address) -- they were wired apart: r59 A8.
+// (app.entrySearch: the address of the entry shown. A browser fires popstate for a change of the
+// fragment alone too, before hashchange: that is an edit of the view, not another entry, and opening
+// the model again cancelled its download and every ?add= -- r59 Q2.)
 function wireHistory() {
+  app.entrySearch = location.search;
+  const firstSearch = location.search;
   window.addEventListener('popstate', () => {
     if (app.skipPop) { app.skipPop = false; return; }
+    if (location.search === app.entrySearch) return; // (the fragment alone: hashchange's)
+    app.entrySearch = location.search;
+    const search = new URLSearchParams(location.search);
     // (an entry with no ?src is the page as first opened: the model its start opened from the
     // address -- the tour's own model ahead of the list's first, not the list's first always: r56 A2)
-    const named = modelUrlIn(new URLSearchParams(location.search));
-    const src = named || addressModel();
-    if (!src || src === app.sourceUrl) { syncModelList(); return; }
-    let view = null;
-    if (location.hash.startsWith('#view=')) {
-      try { view = decodeView(decodeURIComponent(location.hash.slice(6))); } catch { /* a bad link: no view */ }
-    }
-    // (the entry's #view= is for the model its address NAMES, as when the page opened (viewIsFor):
+    const src = modelUrlIn(search) || addressModel();
+    // (the page as first opened is its model with its ?add=s: shown alone -- a pick of it reopened it
+    // alone -- it opens again with them: r59 A3)
+    const first = location.search === firstSearch;
+    const whole = !first || !params.getAll('add').length || (app.scene || []).length > 1;
+    if (!src || (src === app.sourceUrl && whole)) { syncModelList(); return; }
+    // (the entry's #view= is for the model its address names, as when the page opened (viewIsFor):
     // with none named, a device file's, not the list's first that Back reopens -- r58 Q1)
-    app.pendingView = view ? { src: named, view } : null;
+    const view = linkViewOf(location.hash);
+    app.pendingView = view ? { search, view } : null;
     listPick++;
-    loadListed(src);
+    // (the page as first opened: its model with the address's ?add=s, as its start opened it -- Back
+    // reopened the model alone, and the entry's view went onto a partial scene: r59 A3, Q1)
+    if (first) openStart(src);
+    else loadListed(src);
+  });
+  // (a #view= edited in: the view the address now names, waiting for its model as the start's does
+  // -- applied at once, an edit made while the ?add=s loaded was then overwritten by the start's
+  // older view: r59 A2, Q3)
+  window.addEventListener('hashchange', () => {
+    const view = linkViewOf(location.hash);
+    if (!view) return;
+    app.pendingView = { search: new URLSearchParams(location.search), view };
+    if (app.header && !app.addsPending && !PROGRESS_STATES.has(app.status) && pendingViewIsFor()) {
+      applyLinkView(view);
+      app.pendingView = null;
+    }
   });
 }
 
@@ -5470,7 +5504,7 @@ async function loadUrl(url) {
   const seq = beginLoad();
   // (a model opened again: its list's tour plays again, once, and its list's hide is applied again
   // -- applyListEntry; not for a model added beside it, which left the first's keys reset)
-  if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; }
+  if (!app.startingAdd) { app.autoTourFor = null; app.listHideFor = null; app.viewLinkedFor = null; }
   app.urlOfLoad = { seq, url }; // a view link can name a model loaded from a URL
   setStatus('loading', `fetching ${url}`);
   announce(`loading ${fileName(url)}`); // a new load is news even mid-load
@@ -7214,18 +7248,28 @@ function startUpLoad(url) {
     if (!app.addressUrl && !app.visitorFirst && app.header && app.sourceUrl === url) app.addressUrl = url;
   });
 }
-// Whether a view (#view=) is for the model shown: the model its address names (named), or, naming
-// none, a model opened from the device -- never a model list's first (review r16 M2: a link made
-// over a file from the device names no model, and carries the page's lists). A view link of a list's
-// or a URL's model names it, so a #view= naming none is a device file's. The one rule for the view
-// a page opens with, a #view= edited in, and the view waiting on ?add=s (the edit took the list's
-// first too: r57 A2).
-const viewIsFor = (named) => (named ? app.sourceUrl === named : !app.sourceUrl);
-// Whether the waiting view link's view is for the model shown, by viewIsFor. A link whose address
-// names a place in its list (?model=, ?index=, a relative ?src=) names the model the list has there,
-// read once the list has answered -- behind a poster, after the page set the view up -- and none
-// when the list lacks the place (the list's first then opens, and the view was applied to it: r58 A4)
-const pendingViewIsFor = () => !!app.pendingView && viewIsFor(app.pendingView.byPlace ? modelUrlIn(params) : app.pendingView.src);
+// Whether a view link's view (#view=) is for the model shown, by the link's ADDRESS (`search`): an
+// address that names a model -- ?src=, or a place in its list (?model=, ?index=, a relative ?src=) --
+// is for that model, the one its list has there once read, and for nothing while the list has not
+// answered, has failed, or lacks the place; an address that names none is for a model opened from
+// the device, never a list's first (review r16 M2: a link made over a file from the device names no
+// model, and carries the page's lists). The one rule for the view a page opens with, a #view= edited
+// in, Back's, and the view waiting on ?add=s. (Decided by the resolved URL alone, a named place the
+// list had not resolved read as naming none, and its view went to the visitor's file: r59 A1; the
+// edit took the list's first: r57 A2; the lacking place's view went to the list's first: r58 A4.)
+function viewIsFor(search) {
+  const names = !!(search.get('src') || modelNameIn(search));
+  if (!names) return !app.sourceUrl;
+  const url = modelUrlIn(search);
+  return !!url && app.sourceUrl === url;
+}
+const pendingViewIsFor = () => !!app.pendingView && viewIsFor(app.pendingView.search);
+// The view a #view= fragment names, or null (a bad escape -- a hand-edited or cut link -- is no view,
+// never an error). Read once, for the start, Back and an edit (written twice: r59 A8).
+function linkViewOf(hash) {
+  if (!hash.startsWith('#view=')) return null;
+  try { return decodeView(decodeURIComponent(hash.slice(6))); } catch { return null; }
+}
 // The model the page as first opened shows from its address -- its start's first load (?src=, the
 // tour's own model, the list's first: the start-up's order), else the list's first. What Back to the
 // first entry and a #view= on it mean by "the page as first opened" (both took the list's first, and
@@ -7270,7 +7314,7 @@ function openStart(src) {
 // go over it (linkViewOver; r58 A3)
 function applyLinkView(view) {
   applyView(view, true);
-  app.viewLinkedFor = app.header;
+  app.viewLinkedFor = autoTourKey();
 }
 // View in 3D on an embed's poster: the model and its adds, then a ?tour= read while the poster was up
 // (it was told "open its 3D model" and never played, urlTourPending left set -- r50 Q3)
@@ -7393,8 +7437,12 @@ function addPicked(files) {
   // add aborted one of them, then the next aborted the visitor's: r57 A5, Q3)
   // (and dropped if the visitor opened something else meanwhile -- a file, a list pick: the newer ask
   // wins, as it does over an add in flight; the queued add cancelled it -- r58 A1, Q2)
-  if (app.addsPending && app.addsChain) app.addsChain.then(() => { if (untouched()) go(); });
-  else go();
+  // (a Cancel of the address's ?add= is no newer ask: the model it was asked over still shown, and no
+  // load under way, it joins -- a Cancel dropped it unsaid: r59 Q5)
+  const over = app.sourceUrl;
+  if (app.addsPending && app.addsChain) {
+    app.addsChain.then(() => { if (untouched() || (app.sourceUrl === over && app.scene && !PROGRESS_STATES.has(app.status))) go(); });
+  } else go();
 }
 
 // The page's start from its address, once the renderer is up: the file the visitor chose meanwhile,
@@ -7434,8 +7482,9 @@ async function startFromAddress(early) {
   // lists, for their owner, whether or not they read
   if (lists.length && !app.embed) {
     const c = new URL('check.html', location.href);
-    // (a list that is not a URL left out: readLists says so in words -- r58 Q6)
-    for (const l of lists) { try { c.searchParams.append('list', new URL(l, location.href).href); } catch { /* not a URL */ } }
+    // (a list that is not a URL passed as written, for check.html to refuse in words: it threw here
+    // and stopped the start -- r58 Q6 --, then was left out and the check named nothing wrong: r59 A5, Q8)
+    for (const l of lists) { let h = l; try { h = new URL(l, location.href).href; } catch { /* as written */ } c.searchParams.append('list', h); }
     $('checklist').href = c.href;
     $('checklist').hidden = false;
     syncMenuButtons();
@@ -7485,24 +7534,11 @@ async function startFromAddress(early) {
   // viewer, for a model this page opens from a URL that its list entry does
   // not orient (orientFor). A bad one is no orientation, never an error.
   app.urlOrient = orientOrNull(params.get('orient'));
-  // #view=…: the view a shared link names, applied when its model has loaded
-  // (the model its own ?src names; with none, the next one opened from the
-  // device, never the model list's first). A bad escape (a hand-edited or cut
-  // link) is no view, never an error: decodeURIComponent throws on it, which
-  // here stopped the model loading
-  const viewHash = () => {
-    if (!location.hash.startsWith('#view=')) return null;
-    try { return decodeURIComponent(location.hash.slice(6)); } catch { return null; }
-  };
-  // (a place in the list: the model the list has there, once read -- pendingViewIsFor)
-  if (viewHash()) app.pendingView = place ? { byPlace: true, view: decodeView(viewHash()) } : { src, view: decodeView(viewHash()) };
-  window.addEventListener('hashchange', () => {
-    // (the model now in ?src=: a pick from the model list changes it; the one rule of the link's,
-    // viewIsFor -- this one also took the list's first, which a link opened with no model never does:
-    // r57 A2)
-    const now = modelUrlIn(new URLSearchParams(location.search));
-    if (viewHash() && app.header && viewIsFor(now)) applyLinkView(decodeView(viewHash()));
-  });
+  // #view=…: the view a shared link names, applied when the model its address names has loaded (with
+  // none named, the next one opened from the device, never the model list's first): viewIsFor, by
+  // the address. (A bad escape decodeURIComponent throws on is no view: it stopped the model loading.)
+  const linkView = linkViewOf(location.hash);
+  if (linkView) app.pendingView = { search: params, view: linkView };
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the visitor opened
   // something meanwhile (untouched). Through loadListed, so a list read
