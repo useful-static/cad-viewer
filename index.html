@@ -36,6 +36,51 @@
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
+<!-- Every module js/early.js and js/main.js import, asked for at once: the browser found each level
+     of imports only when the level above had arrived (main.js's three levels on a 3G link, 7.4 to
+     15.4 s). early.js's own first, so the address's downloads start soonest. The list is the import
+     graph's (tests/test-first-phase.mjs holds the two equal). -->
+<link rel="modulepreload" href="js/early.js">
+<link rel="modulepreload" href="js/model-list.js">
+<link rel="modulepreload" href="js/orient.js">
+<link rel="modulepreload" href="js/camera.js">
+<link rel="modulepreload" href="js/mat4.js">
+<link rel="modulepreload" href="js/vec3.js">
+<link rel="modulepreload" href="js/same-place.js">
+<link rel="modulepreload" href="js/styles.js">
+<link rel="modulepreload" href="js/tour.js">
+<link rel="modulepreload" href="js/units.js">
+<link rel="modulepreload" href="js/view-link.js">
+<link rel="modulepreload" href="js/open-url.js">
+<link rel="modulepreload" href="js/early-fetch.js">
+<link rel="modulepreload" href="js/main.js">
+<link rel="modulepreload" href="js/cadmesh.js">
+<link rel="modulepreload" href="js/edges.js">
+<link rel="modulepreload" href="js/solid.js">
+<link rel="modulepreload" href="js/box-tree.js">
+<link rel="modulepreload" href="js/tri-distance.js">
+<link rel="modulepreload" href="js/formats.js">
+<link rel="modulepreload" href="js/step-text.js">
+<link rel="modulepreload" href="js/step-meta.js">
+<link rel="modulepreload" href="js/mesh-cache.js">
+<link rel="modulepreload" href="js/palettes.js">
+<link rel="modulepreload" href="js/import-progress.js">
+<link rel="modulepreload" href="js/converter-choice.js">
+<link rel="modulepreload" href="js/datum.js">
+<link rel="modulepreload" href="js/export-mesh.js">
+<link rel="modulepreload" href="js/crc32.js">
+<link rel="modulepreload" href="js/raycast.js">
+<link rel="modulepreload" href="js/drawing-svg.js">
+<link rel="modulepreload" href="js/measure-geom.js">
+<link rel="modulepreload" href="js/measure-ui.js">
+<link rel="modulepreload" href="js/scene.js">
+<link rel="modulepreload" href="js/clearance.js">
+<link rel="modulepreload" href="js/prefs.js">
+<link rel="modulepreload" href="js/tour-recorder.js">
+<link rel="modulepreload" href="js/tour-path.js">
+<link rel="modulepreload" href="js/tour-sight.js">
+<link rel="modulepreload" href="js/renderer-webgl.js">
+<link rel="modulepreload" href="js/face-order.js">
 <!-- Before first paint, in another page's frame (?embed=1): the embed layout,
      and ?theme=light|dark, the framing page's theme (the light view and a
      light frame; dark is the default). Applied by main.js alone, a slow link

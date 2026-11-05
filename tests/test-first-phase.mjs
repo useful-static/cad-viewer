@@ -54,6 +54,17 @@ test('each one held back is loaded by main.js when a file needs it', () => {
   for (const f of ['dwg.js', 'dxf.js', 'mesh-formats.js']) assert.ok(closure('read-file.js').has(f), f);
 });
 
+test('index.html asks for every first-phase module at once: its modulepreload list is the import graph of early.js and main.js, early.js\'s first', () => {
+  const html = readFileSync(join(js, '..', 'index.html'), 'utf8');
+  const pre = [...html.matchAll(/<link rel="modulepreload" href="js\/([\w.-]+\.js)">/g)].map((m) => m[1]);
+  const early = closure('early.js'), all = new Set([...early, ...closure('main.js')]);
+  assert.deepEqual([...pre].sort(), [...all].sort(), 'the list and the graph');
+  assert.equal(new Set(pre).size, pre.length, 'each once');
+  // (the early graph before anything else: the address's downloads wait on it alone)
+  assert.deepEqual(pre.slice(0, early.size).sort(), [...early].sort(), 'early.js\'s graph first');
+  assert.ok(!pre.some((f) => LATER.includes(f)), 'nothing held back');
+});
+
 await test('a reader that could not be downloaded is said in plain words, and tried again by the next file (r52 A8, Q8)', async () => {
   const m = src('main.js');
   const at = m.indexOf('const once = (load, what) => {');
