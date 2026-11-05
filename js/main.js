@@ -28,7 +28,7 @@ import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
 import { mergeModels, modelRanges, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
 import { clearance } from './clearance.js';
-import { CUT_FILL, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
+import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
 import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames } from './tour.js';
@@ -40,7 +40,8 @@ import { WebGLRenderer } from './renderer-webgl.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const STATE_W = 1024;
-const BG = rgb(VIEW_BG);
+// (index.html's head script set html.dark already: an embed in a dark page)
+const BG = rgb(document.documentElement.classList.contains('dark') ? EMBED_DARK_BG : VIEW_BG);
 // Selection tint (cyan; the 4th value is set per frame: 1 = something is
 // selected, so the shaders grey out everything else).
 const HIGHLIGHT = [0.1, 0.78, 1.0];

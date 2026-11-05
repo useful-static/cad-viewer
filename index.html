@@ -9,7 +9,7 @@
      and nothing it carries is ever run or written as HTML. No plugins, no
      <base>, no forms. The inline <style> below needs 'unsafe-inline'; the one
      inline script (the embed's first paint) is allowed by its hash alone. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-wr31hl8/4+wIrrJ1aayp8WZtYslSFZyVSwiE/RGmpmk=' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src * data: blob:; img-src * data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-2m6uHb0HjAyiynbfbkDMVoWzzpC7BQiiI815VGrWt0c=' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src * data: blob:; img-src * data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <!-- a link's address never leaves with more than this site's origin -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -42,7 +42,7 @@
      showed the whole desktop toolbar, dark, for as long as the scripts took.
      The CSP allows this one inline script by its hash: a change to it is a
      change to the hash (tests/test-embed-early.mjs checks the two agree). -->
-<script>try{var q=new URLSearchParams(location.search),c=document.documentElement.classList;if(q.get("embed")==="1"){c.add("embed");if(q.get("theme")==="light")c.add("light")}}catch(e){}</script>
+<script>try{var q=new URLSearchParams(location.search),c=document.documentElement.classList;if(q.get("embed")==="1"){c.add("embed");if(q.get("theme")==="light")c.add("light");else if(q.get("theme")==="dark")c.add("dark")}}catch(e){}</script>
 <style>
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; color-scheme:dark; }
   /* ?embed=1&theme=light (the head script): a light frame over the light view
@@ -57,6 +57,16 @@
   html.light #embedhint { background:rgba(255,255,255,.92); box-shadow:0 0 0 1px var(--line); }
   html.light .pbar { background:#e2e6eb; }
   html.light #stage .card { box-shadow:0 8px 30px rgba(15,23,42,.18); }
+  /* ?embed=1&theme=dark: the framing page's dark, a slate ground (the view
+     draws on it too: styles.js EMBED_DARK_BG), in place of the viewer's own
+     neutral dark; a page that passes no theme keeps the viewer's */
+  html.dark { --bg:#0f172a; --panel:#1e293b; --line:#334155; --fg:#e2e8f0; --dim:#94a3b8; }
+  html.dark :is(button, select, label.btn, a.btn) { background:#273449; }
+  html.dark :is(button, label.btn, a.btn):hover { border-color:#64748b; }
+  html.dark #stage > #hdend :is(button, a.btn) { background:rgba(30,41,59,.88); }
+  html.dark #tourcard { background:rgba(30,41,59,.95); }
+  html.dark #embedhint { background:rgba(15,23,42,.88); }
+  html.dark .pbar { background:#273449; }
   /* an embed, until main.js has something of its own to show: the viewer
      says it is coming (main.js adds html.started) */
   html.embed:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;

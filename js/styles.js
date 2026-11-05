@@ -48,6 +48,9 @@ export const toggleEdges = (id) => ({ shaded: 'edges', edges: 'shaded' }[id] || 
 export const PAPER = '#f4f4f2';
 // the dark view's background (the shaded styles, the dark ground)
 export const VIEW_BG = '#1d2127';
+// an embed's dark when the framing page asks for it (?embed=1&theme=dark,
+// index.html's html.dark): the slate the page is painted in
+export const EMBED_DARK_BG = '#0f172a';
 export const CUT_FILL = '#b8b8b2';
 
 // Paper edge colours by state: [visible, hidden]. Each state keeps hidden

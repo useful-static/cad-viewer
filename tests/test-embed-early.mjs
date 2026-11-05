@@ -53,13 +53,16 @@ test('embed and theme: the classes the first paint gets', () => {
   assert.deepEqual(classesFor('?src=x.cadmesh.gz'), []);
   assert.deepEqual(classesFor('?theme=light'), []); // a theme is the frame's only
   assert.deepEqual(classesFor('?embed=1'), ['embed']);
-  assert.deepEqual(classesFor('?embed=1&theme=dark'), ['embed']);
+  assert.deepEqual(classesFor('?embed=1&theme=dark'), ['dark', 'embed']);
+  assert.deepEqual(classesFor('?theme=dark'), []);
   assert.deepEqual(classesFor('?embed=1&theme=light'), ['embed', 'light']);
   assert.deepEqual(classesFor('?embed=1&theme=LIGHT'), ['embed']);
 });
 
 test('main.js reads ?theme= the same way (embed only, light or dark)', () => {
   const main = readFileSync(join(root, 'js', 'main.js'), 'utf8');
+  // the view's own ground follows html.dark, which only the script sets
+  assert.match(main, /const BG = rgb\(document\.documentElement\.classList\.contains\('dark'\) \? EMBED_DARK_BG : VIEW_BG\);/);
   assert.match(main, /const theme = app\.embed \? embedParams\.get\('theme'\) : null;/);
   assert.match(main, /if \(theme === 'light' \|\| theme === 'dark'\) app\.lightBg = theme === 'light';/);
 });
