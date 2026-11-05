@@ -274,9 +274,13 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // any other failure while the start still reads is told, the start's load coming over the card --
 // a file refused while a ?list= or a ?tour= was read was the page's error, which the address's model
 // then replaced, the refusal shown nowhere: r57, the start-up sweep's I2)
+// (held while the start runs: at its end, with nothing shown, the page's error -- startFromUrl, r58 Q7)
 function failApart(msg, own = false) {
-  if (somethingShown() || posterUp() || (!own && (app.readingList || app.starting)) || !(app.status === 'idle' || app.status === 'init')) tellReady(msg);
-  else { setStatus('error', msg); announce(msg); }
+  if (somethingShown() || posterUp() || !(app.status === 'idle' || app.status === 'init') || (!own && (app.readingList || app.starting))) {
+    tellReady(msg);
+    // (behind a poster too: a tour alone takes it down with nothing behind it)
+    if (app.starting && !own) app.heldFailure = msg;
+  } else { setStatus('error', msg); announce(msg); }
 }
 // an embed's poster up: its picture stands in for the model until View in 3D
 const posterUp = () => !!app.embed && !!$('poster') && !$('poster').hidden;
@@ -3274,6 +3278,11 @@ function listEntry(src) {
 // What the list says of the model on screen: its step, page, author,
 // license, labels, style; the info panel, File and the tree show them. Run
 // on a load and when a list arrives after its model opened.
+// Whether a view link's view is over the model shown: applied to it (the load cleared the pending
+// view as it applied it, and the entry's tour then played over it), or still to come to it, after
+// the address's ?add=s. A pending view for another model -- a device file's -- is not over this one,
+// and held its own tour back (r58 A3). viewIsFor is the rule for which model a view is for.
+const linkViewOver = () => (!!app.header && app.viewLinkedFor === app.header) || pendingViewIsFor();
 function applyListEntry() {
   const e = app.header ? listEntry(app.sourceUrl) : null;
   // Download STEP: the entry's source file, else the file itself when the
@@ -3315,7 +3324,7 @@ function applyListEntry() {
   // (keyed by the model's URL, not its data: a re-read in another unit is the same model opened,
   // and replayed the tour the visitor had closed; a new open of it resets the key: loadUrl)
   if (app.header && app.autoTourFor !== autoTourKey()) {
-    if (app.pendingView || app.urlTourPending) app.autoTourFor = autoTourKey();
+    if (linkViewOver() || app.urlTourPending) app.autoTourFor = autoTourKey();
     else if (e && e.tours && e.tours.length && !app.tour) {
       app.autoTourFor = autoTourKey();
       const h = app.header;
@@ -3335,7 +3344,7 @@ function applyListEntry() {
   // not over a view link's view; ahead of its tour, which starts from them
   // (keyed as the auto tour is, by the model's URL: a re-read in another unit is not a new open,
   // and laid the list's hide over the visitor's own hide / show)
-  if (app.header && e && e.hide && app.listHideFor !== autoTourKey() && !app.pendingView) {
+  if (app.header && e && e.hide && app.listHideFor !== autoTourKey() && !linkViewOver()) {
     app.listHideFor = autoTourKey();
     const ids = tourParts(e.hide).ids;
     if (ids.length) {
@@ -3487,13 +3496,16 @@ function wireHistory() {
     if (app.skipPop) { app.skipPop = false; return; }
     // (an entry with no ?src is the page as first opened: the model its start opened from the
     // address -- the tour's own model ahead of the list's first, not the list's first always: r56 A2)
-    const src = modelUrlIn(new URLSearchParams(location.search)) || addressModel();
+    const named = modelUrlIn(new URLSearchParams(location.search));
+    const src = named || addressModel();
     if (!src || src === app.sourceUrl) { syncModelList(); return; }
     let view = null;
     if (location.hash.startsWith('#view=')) {
       try { view = decodeView(decodeURIComponent(location.hash.slice(6))); } catch { /* a bad link: no view */ }
     }
-    app.pendingView = view ? { src, view } : null;
+    // (the entry's #view= is for the model its address NAMES, as when the page opened (viewIsFor):
+    // with none named, a device file's, not the list's first that Back reopens -- r58 Q1)
+    app.pendingView = view ? { src: named, view } : null;
     listPick++;
     loadListed(src);
   });
@@ -4052,8 +4064,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // with no ?src (its model was opened from a device) to the next one opened
   // from a device, never to a model list's first (review r16 M2)
   // (with ?add= models still to come, after them: its ids are the scene's)
-  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {
-    applyView(app.pendingView.view, true);
+  if (!app.addsPending && pendingViewIsFor()) {
+    applyLinkView(app.pendingView.view);
     app.pendingView = null;
   }
   const tris = mesh.header.indexCount / 3;
@@ -7209,6 +7221,11 @@ function startUpLoad(url) {
 // a page opens with, a #view= edited in, and the view waiting on ?add=s (the edit took the list's
 // first too: r57 A2).
 const viewIsFor = (named) => (named ? app.sourceUrl === named : !app.sourceUrl);
+// Whether the waiting view link's view is for the model shown, by viewIsFor. A link whose address
+// names a place in its list (?model=, ?index=, a relative ?src=) names the model the list has there,
+// read once the list has answered -- behind a poster, after the page set the view up -- and none
+// when the list lacks the place (the list's first then opens, and the view was applied to it: r58 A4)
+const pendingViewIsFor = () => !!app.pendingView && viewIsFor(app.pendingView.byPlace ? modelUrlIn(params) : app.pendingView.src);
 // The model the page as first opened shows from its address -- its start's first load (?src=, the
 // tour's own model, the list's first: the start-up's order), else the list's first. What Back to the
 // first entry and a #view= on it mean by "the page as first opened" (both took the list's first, and
@@ -7230,7 +7247,9 @@ function openStart(src) {
     for (const [i, raw] of adds.entries()) {
       // (a relative ?add= the list names is its entry, as a relative ?src= is: the list read first
       // -- r54 A6)
-      if (lists.length && isRelative(raw) && app.listRead) await app.listRead;
+      // (not when the list's own read opened this first model: its entries are in, and the read waits
+      // on this chain -- r58 A2)
+      if (lists.length && isRelative(raw) && app.listRead && !app.listEntries) await app.listRead;
       if (!app.scene || !untouched()) break;
       const u = (lists.length && listedUrlFrom(raw, lists, app.listEntries, location.href)) || raw;
       const at = (ats[i] || '').split(',').map(Number);
@@ -7240,11 +7259,18 @@ function openStart(src) {
       await p;
     }
     app.addsPending = false;
-    if (app.pendingView && app.header && viewIsFor(app.pendingView.src)) {
-      applyView(app.pendingView.view, true);
+    if (app.header && pendingViewIsFor()) {
+      applyLinkView(app.pendingView.view);
       app.pendingView = null;
     }
   }));
+}
+// A view link's view applied to the model shown -- at its load, after the address's ?add=s, or on a
+// #view= edit -- and the model marked as showing it, so its list entry's tour and hidden parts do not
+// go over it (linkViewOver; r58 A3)
+function applyLinkView(view) {
+  applyView(view, true);
+  app.viewLinkedFor = app.header;
 }
 // View in 3D on an embed's poster: the model and its adds, then a ?tour= read while the poster was up
 // (it was told "open its 3D model" and never played, urlTourPending left set -- r50 Q3)
@@ -7288,11 +7314,11 @@ async function viewIn3D(src) {
     // (a name the list was read for, behind the poster: r57 Q5 -- one it lacks said now, its first opening)
     const named = modelNameIn(params) && modelUrlIn(params);
     src = named || r?.tour?.model || app.listEntries?.[0]?.url || null;
-    if (modelNameIn(params) && !named && !r?.tour?.model && app.listEntries?.length) lackingNote(modelNameIn(params), true);
+    lackingNote(modelNameIn(params), src);
     if (!src) {
       // (a tour alone that names no model: the poster had nothing behind it -- the page as without
       // one, as when the tour was read before the press: r56 A3, Q2)
-      if (r?.tour && !listsGiven().length) setStatus('idle', idleText());
+      if (r?.tour && !params.getAll('list').length) setStatus('idle', idleText());
       // (a list that failed or names nothing: its words on the card, not "no model to show": r54 Q4)
       else if (app.status !== 'error') setStatus('error', app.listNote || (r?.error ? `the tour ${r.error}` : 'the address names no model to show'));
       // (a tour read, whatever the list did: said -- a failed list kept it unsaid: r57 A3)
@@ -7306,12 +7332,15 @@ async function viewIn3D(src) {
   } else await opening;
   addressTourEnds(r, tourOwn && app.status === 'error');
 }
-const listsGiven = () => params.getAll('list');
-// "The model list has no model X", and what opens instead when its first does -- with View in 3D
-// behind a poster. One sentence, built in one place (two built it apart: r57 A7).
-function lackingNote(place, firstOpens) {
-  const then = !firstOpens ? '' : `: ${posterUp() ? 'View in 3D opens its first' : 'its first opens'}`;
-  tell(`the model list has no model ${place}${then}`, 6000);
+// "The model list has no model X": said when the address names a place its list lacks and the start
+// opens something else there -- the list's first ("its first opens") or the tour's own model -- and
+// not when nothing the address names opens. `opened` is that model's URL, or null. One sentence and
+// one rule, for the start-up and View in 3D (the sentence was in one place, when to say it in two,
+// and View in 3D said nothing over the tour's model: r57 A7, r58 A5; nothing opens behind a poster,
+// so it has no poster wording: r58 Q8).
+function lackingNote(place, opened) {
+  if (!place || !opened || modelUrlIn(params) || !app.listEntries?.length) return;
+  tell(`the model list has no model ${place}${opened === app.listEntries[0].url ? ': its first opens' : ''}`, 6000);
 }
 // The address's tour, once read and its model's load done: played over the model shown by the one
 // rule (tourPlaysHere) -- but only while it is still the address's (a list pick ends it, and it still
@@ -7362,14 +7391,31 @@ function addPicked(files) {
   };
   // (while the address's ?add=s still load: after them, neither cancelling the other -- the visitor's
   // add aborted one of them, then the next aborted the visitor's: r57 A5, Q3)
-  if (app.addsPending && app.addsChain) app.addsChain.then(go);
+  // (and dropped if the visitor opened something else meanwhile -- a file, a list pick: the newer ask
+  // wins, as it does over an add in flight; the queued add cancelled it -- r58 A1, Q2)
+  if (app.addsPending && app.addsChain) app.addsChain.then(() => { if (untouched()) go(); });
   else go();
 }
 
 // The page's start from its address, once the renderer is up: the file the visitor chose meanwhile,
 // ?list= (and the ?model= / ?index= of it), ?src=, an embed's ?poster=, ?add=, ?tour=. Its contract
-// is the start-up table, tests/test-scene.mjs START_CASES (r51).
+// is the generated sweep, tests/test-startup-sweep.mjs (r57), with the start-up table, tests/test-scene.mjs
+// START_CASES (r51), for the decisions no invariant states; both run it through tests/startup-harness.mjs.
+// The start's own end: app.starting cleared whatever it threw (a ?list= that is not a URL threw
+// building the list check's link, and it stayed set for good: r58 Q6), and a failure apart from it,
+// told while it ran, made the page's error when the start ended with nothing shown (a refusal
+// during a tour's read was told, then the tour's note replaced it, the card empty: r58 Q7).
 async function startFromUrl(early) {
+  try {
+    await startFromAddress(early);
+  } finally {
+    app.starting = false;
+    const held = app.heldFailure;
+    app.heldFailure = null;
+    if (held && !somethingShown() && !posterUp() && (app.status === 'idle' || app.status === 'init')) { setStatus('error', held); announce(held); }
+  }
+}
+async function startFromAddress(early) {
   // the file the visitor chose while the GPU started: the newest ask, opened first, and nothing the
   // address names opens over it (it waited behind the list read, its line replaced, and the list's
   // model started and was cancelled: r51 A11)
@@ -7388,7 +7434,8 @@ async function startFromUrl(early) {
   // lists, for their owner, whether or not they read
   if (lists.length && !app.embed) {
     const c = new URL('check.html', location.href);
-    for (const l of lists) c.searchParams.append('list', new URL(l, location.href).href);
+    // (a list that is not a URL left out: readLists says so in words -- r58 Q6)
+    for (const l of lists) { try { c.searchParams.append('list', new URL(l, location.href).href); } catch { /* not a URL */ } }
     $('checklist').href = c.href;
     $('checklist').hidden = false;
     syncMenuButtons();
@@ -7399,7 +7446,9 @@ async function startFromUrl(early) {
   // (behind a poster the list is read beside it, not before it: the poster goes up at once and View
   // in 3D opens the name once the list has answered -- the "reading the model list" card showed for
   // up to 20 s for a model nobody had asked to open: r57 Q5)
-  if (place && posterAsked(params) && untouched()) listed = readLists(lists, () => false);
+  // (src none: View in 3D opens the place's entry once the list has answered -- a relative ?src= the
+  // list names stayed the raw string and opened from the page's address, a 404: r58 Q3)
+  if (place && posterAsked(params) && untouched()) { listed = readLists(lists, () => false); src = null; }
   else if (place) {
     // the model is on its way: its card says so, not "No model to show" for
     // the list's round trip (seconds, on a slow link). No Cancel: the list is
@@ -7430,9 +7479,7 @@ async function startFromUrl(early) {
     // (told: r49 A4; behind a poster it opens with View in 3D, not now -- r51 Q7; "its first opens"
     // only when it does)
     // (beside a tour, said once what opens is known: at the tour's end)
-    if (!named && app.listEntries?.length && untouched() && !params.get('tour')) {
-      lackingNote(place, true);
-    }
+    if (untouched() && !params.get('tour')) lackingNote(place, src);
   }
   // ?orient=up:+z,front:-y: which of the file's axes is up and which faces the
   // viewer, for a model this page opens from a URL that its list entry does
@@ -7447,13 +7494,14 @@ async function startFromUrl(early) {
     if (!location.hash.startsWith('#view=')) return null;
     try { return decodeURIComponent(location.hash.slice(6)); } catch { return null; }
   };
-  if (viewHash()) app.pendingView = { src, view: decodeView(viewHash()) };
+  // (a place in the list: the model the list has there, once read -- pendingViewIsFor)
+  if (viewHash()) app.pendingView = place ? { byPlace: true, view: decodeView(viewHash()) } : { src, view: decodeView(viewHash()) };
   window.addEventListener('hashchange', () => {
     // (the model now in ?src=: a pick from the model list changes it; the one rule of the link's,
     // viewIsFor -- this one also took the list's first, which a link opened with no model never does:
     // r57 A2)
     const now = modelUrlIn(new URLSearchParams(location.search));
-    if (viewHash() && app.header && viewIsFor(now)) applyView(decodeView(viewHash()), true);
+    if (viewHash() && app.header && viewIsFor(now)) applyLinkView(decodeView(viewHash()));
   });
   // ?src opens at once; ?list= (one or more) is read beside it, never in its
   // way. With no ?src the list's first model opens, unless the visitor opened
@@ -7488,7 +7536,7 @@ async function startFromUrl(early) {
     opening = touring.then((r) => {
       if (!(r.tour && r.tour.model && untouched())) return null;
       tourOwn = true;
-      return startUpLoad(r.tour.model);
+      return openStart(r.tour.model); // (with the address's ?add=s: r58 A2)
     });
   }
   // (not over an error: a list read above and failed left the page's error, which this wrote over --
@@ -7523,9 +7571,10 @@ async function startFromUrl(early) {
       // (a tour that failed is over before the list's first opens, which then plays its own -- the
       // flag still set held it back: r57 A6)
       if (r.error) tourOver();
-      await startUpLoad(app.listEntries[0].url);
+      // (with the address's ?add=s, as every first model the start opens: openStart -- r58 A2)
+      await openStart(app.listEntries[0].url);
     }
-    if (place && !poster && !modelUrlIn(params) && app.listEntries?.length && (firstOpened || tourOwn)) lackingNote(place, firstOpened);
+    if (!poster) lackingNote(place, firstOpened ? app.listEntries[0].url : tourOwn ? r.tour.model : null);
     if (r.error) failApart(`the tour ${r.error}`, true);
     // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
     // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2. Else the
@@ -7536,7 +7585,6 @@ async function startFromUrl(early) {
     // (read: the line no longer says it is being read -- r51, the start-up table)
     if (app.status === 'idle' && app.statusMsg === 'reading the tour…') setStatus('idle', idleText());
   }
-  app.starting = false;
 }
 
 // The model lists: fill the drop-down, open the first model when wanted (no
@@ -7548,7 +7596,9 @@ async function readLists(lists, openFirst) {
   const early = earlyLists(lists);
   const r = await (early ? early.catch(() => fetchModelLists(lists, location.href, timedFetch)) : fetchModelLists(lists, location.href, timedFetch));
   fillModelList(r.entries);
-  if (listsRead(r, openFirst())) await startUpLoad(r.entries[0].url);
+  // (the list's first, with the address's ?add=s: openStart -- they were never opened beside it, and
+  // behind a poster View in 3D opened them: r58 A2)
+  if (listsRead(r, openFirst())) await openStart(r.entries[0].url);
 }
 // What the model lists' answer says, and whether to open their first model: a list with nothing in
 // it to open is a failure apart from the load (failApart's one rule: its own put it on the card and

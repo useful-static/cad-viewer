@@ -30,8 +30,18 @@ const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
 const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
 const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at) + 1); };
 const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
-const BODY = line('let saySeq = 0') + line('let listPick = 0') + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
-  'async function startFromUrl(early) {', 'function addPicked(files) {',
+// (a block inside a function, from its head to its own close two spaces in)
+const block = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 5); };
+// The load's own rules, run where the real load runs them (the stand-in skipped them, and a view a
+// page opens with, and a list entry's own tour, were never seen: r58 A6, Q4): a new open resets the
+// entry's keys (loadUrl); the view link's view applies at the load (loadBuffer); the entry's own tour
+// plays, or is held back (applyListEntry).
+const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { app.autoTourFor = null;') + '}\n'
+  // (the rule as round 57 wrote it, for a run on that code)
+  + 'function loadShown() {\n' + (block('  if (!app.addsPending && pendingViewIsFor()) {') || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {')) + '}\n'
+  + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {') + '}\n';
+const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
+  'async function startFromUrl(early) {', 'async function startFromAddress(early) {', 'function applyLinkView(view) {', 'function addPicked(files) {',
   'async function readLists(lists, openFirst) {', 'function listsRead(r, openFirst) {', 'function loadListed(url) {', 'function startLoad(fn) {',
   'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
   'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
@@ -39,15 +49,16 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + [src.includes('
   'async function readTour(url) {', 'function listEntry(src) {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', 'function addressTourEnds(r, ownFailed) {',
-  'function lackingNote(place, firstOpens) {'].map(cutIf).join('')
+  src.includes('function lackingNote(place, opened) {') ? 'function lackingNote(place, opened) {' : 'function lackingNote(place, firstOpens) {'].map(cutIf).join('')
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const listsGiven = ') + line('const viewIsFor = ')
+  + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
   + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)
-  + 'async function loadUrl(url) { return fakeLoad(url, { beginLoad, stale, setStatus, readyText }, [], false); }\n'
-  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText }, extras, true); }\n';
+  + 'async function loadUrl(url) { loadOpens(); return fakeLoad(url, { beginLoad, stale, setStatus, readyText, loadShown, entryShown }, [], false); }\n'
+  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText, loadShown, entryShown }, extras, true); }\n';
 
 const tick = () => new Promise((res) => setTimeout(res, 1));
 const settle = async (n) => { for (let i = 0; i < n; i++) await tick(); };
@@ -77,7 +88,8 @@ export async function runStart(c) {
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));
     if (d.pick) { const e = app.listEntries?.[d.pick - 1]; return e && run.openListed(e.url); }
-    if (d.back) { loc.search = `?${c.q}`; loc.hash = ''; return listeners.popstate && listeners.popstate(); }
+    // (the first entry back as it was, its #view= with it, as the history restores it -- r58 Q4)
+    if (d.back) { loc.search = `?${c.q}`; loc.hash = c.hash || ''; return listeners.popstate && listeners.popstate(); }
     if (d.hash) { loc.hash = '#view=v'; return listeners.hashchange && listeners.hashchange(); }
     return run.openFile({ name: d.file, size: d.size || 10 });
   };
@@ -111,11 +123,16 @@ export async function runStart(c) {
     await settle((c.slow || []).includes(file) ? 30 : 2);
     if (k.stale(seq)) return;
     if ((c.fails || []).includes(file)) throw new Error(`could not download ${file}: not found (404)`);
+    // (a model at a URL nothing serves is not found, as the network says: c.files, the model paths
+    // served -- a list or tour resolved against the wrong base loaded all the same: r58 Q4)
+    const path = String(url).startsWith(SITE) ? String(url).slice(SITE.length) : String(url);
+    if (!fromFile && c.files && !c.files.includes(path)) { o.events.push(`missing ${path}`); throw new Error(`could not download ${file}: not found (404)`); }
     if (adding) app.scene.push({ url });
     else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: url });
     if (!adding && (app.listEntries || []).some((e) => e.url === url)) o.pendingAtList.push([file, !!app.urlTourPending]);
-    if (!adding) o.events.push(`shown ${file}`);
+    if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); }
     k.setStatus('ready', k.readyText());
+    if (!adding) k.entryShown();
     visit(`loaded ${file}`);
   };
   run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES', 'params',
@@ -126,11 +143,12 @@ export async function runStart(c) {
     `${BODY}; return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory };`)(
     app, (id) => dom[id], (t) => o.shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
     loc, doc, { addEventListener: (ev, fn) => { listeners[ev] = fn; } }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
-    readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, () => { o.tour = true; o.events.push('tour'); }, () => {},
+    // (a tour started: the address's ?tour= or a list entry's own, by the file it came from)
+    readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, (t, u) => { o.tour = true; o.events.push(`tour ${String(u || '').split('/').pop()}`); }, () => {},
     (t, f, d) => o.progress.push(`${d}${dom.pcancel.hidden ? ', no Cancel' : ''}`), () => {}, (on) => { o.embedActive = on; },
-    () => { o.views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
+    () => { o.views++; o.events.push('view'); }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
     posterAsked, fetchFake, () => { o.released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom,
-    (u, url) => { loc.search = `?model=${encodeURIComponent(url)}`; }, { pushState() {}, replaceState() {}, back() {}, state: null }, () => {});
+    (u, url) => { loc.search = `?model=${encodeURIComponent(url)}`; loc.hash = ''; }, { pushState() {}, replaceState() {}, back() {}, state: null }, () => {});
   try {
     if (typeof run.wireHistory === 'function') run.wireHistory();
     const early = c.early ? run.earlyPick(c.early) : null;
