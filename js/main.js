@@ -217,10 +217,31 @@ function setStatus(s, msg) {
 const IDLE_MSG = `open or drop ${opensShort()}`;
 const mb = (n) => (n / 1e6).toFixed(1);
 
-// Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a file
-// refused for its size, the GPU recovery's end and an error shown in the view (three of them
+// Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a failure
+// apart from the load, the GPU recovery's end and an error shown in the view (three of them
 // asked app.mesh alone, and a drawing read as nothing shown: r47 A2, Q3)
 function somethingShown() { return !!(app.mesh || app.dxf); }
+
+// A failure that is not the running or shown load's own -- a file refused for its size, a tour
+// that could not be read, a GPU error: told while something is shown or a load runs, their state
+// and line kept; else the page's error (the card shows it), read out again when it repeats. One
+// rule: the tour's end asked app.header and the GPU error set 'error' whatever ran, so a tour
+// unread over a drawing, or a GPU error under a load's "convert it?" question, made the page's
+// error -- the question and its buttons hidden, the load hung (r48 A1, Q1, Q2, Q10)
+function failApart(msg) {
+  if (somethingShown() || PROGRESS_STATES.has(app.status)) tellReady(msg);
+  else { setStatus('error', msg); announce(msg); }
+}
+
+// The GPU recovery's end: back to ready, or idle when nothing is shown, and "recovered on …" told
+// (it was written into the undrawn line, and with nothing shown the line read the bare word
+// "idle": r48 A7). A load that started meanwhile owns the state: nothing is written over it.
+function recovered() {
+  if (app.status !== 'recovering') return;
+  if (somethingShown()) setStatus('ready', readyText());
+  else setStatus('idle', IDLE_MSG);
+  tell(`recovered on ${app.backend}`, 4000);
+}
 
 // The empty-state card: shown while there is no model and no load running (and,
 // by CSS, during a drag over the view). After a failed load it carries the error.
@@ -386,7 +407,7 @@ function adoptRenderer(r) {
     reported = true;
     recoverRenderer(why);
   };
-  r.onerror = (msg) => { if (app.renderer === r) { app.error = msg; setStatus('error', `GPU error: ${msg}`); } };
+  r.onerror = (msg) => { if (app.renderer === r) { app.error = msg; failApart(`GPU error: ${msg}`); } };
   // lost between creation and here (onlost was not wired yet): report it now
   if (isDead(r)) queueMicrotask(() => r.onlost && r.onlost('lost before it was adopted'));
   $('backend').textContent = app.backend.toUpperCase();
@@ -604,11 +625,11 @@ function setExplode(on, focus = false) {
   if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
-  // (shown: Measure says "measure off" itself, and the note kept on the ready line stayed there with
-  // Measure back on -- said twice, in two wordings: r47 A6)
+  // (told, not kept on the ready line, which stayed with Measure back on: r47 A6; read out too -- its
+  // reason reached no screen reader, Measure saying only "measure off": r48 Q8)
   if (on && app.measure && app.measure.on) {
     app.measure.setOn(false);
-    tell('Measure is off while exploded: it measures the parts where they are, not where Explode draws them', 6000, null);
+    tell('Measure is off while exploded: it measures the parts where they are, not where Explode draws them', 6000);
   }
   // (Paint picks the faces where they are: off while exploded)
   if (on && app.paintFaces) setPaint(false);
@@ -743,10 +764,7 @@ async function recoverRenderer(why) {
       // device lost on every draw (a watchdog reset on a huge model) would
       // otherwise reset it each cycle and recover forever
       setTimeout(() => { if (app.renderer === r && !isDead(r)) recoveries = 0; }, RECOVERY_QUIET_MS);
-      // a load that started meanwhile owns the status line; do not paint over it
-      if (app.status === 'recovering') {
-        setStatus(somethingShown() ? 'ready' : 'idle', somethingShown() ? `${readyText()} · recovered on ${app.backend}` : 'idle');
-      }
+      recovered();
     }, (e) => {
       if (app.renderer !== r) return; // superseded by a further recovery
       // r died too: the GPU, not the model, is the problem, and the recovery
@@ -1073,9 +1091,12 @@ function flashHover(text, ms = 1500) {
 // the hover line's label (a part's name, a layer, a snap), unless a note holds it -- kept for the
 // note's end; `asked`: a tap that asks for the name, shown through a hold (it was swallowed under
 // the touch hint that says "tap names a part": r47 Q5)
+// (a tap on the background asks for nothing: it no longer erases a held note -- r48 A8; a tap
+// while the touch hint shows has followed it: the hint counted as seen -- r48 Q9)
 function hoverLabel(text, asked = false) {
   lastLabel = text;
-  if (!asked && performance.now() < noteHeldUntil) return;
+  if (asked && text && $('hover').textContent === TOUCH_HINT) setPref('cadv.touchHint', '1');
+  if (!(asked && text) && performance.now() < noteHeldUntil) return;
   noteHeldUntil = 0;
   $('hover').textContent = text;
 }
@@ -1607,9 +1628,11 @@ async function shareView() {
   const nNotes = app.measure ? app.measure.notes().length : 0;
   const cut = nNotes > MAX_NOTES ? ` (with the first ${MAX_NOTES} of its ${nNotes} notes: a link is short)` : '';
   // (copied only when the clipboard took it: a refusal, or a prompt the visitor cancelled, read
-  // "View link copied" -- r47 A5)
-  tell((copied ? 'View link copied' : 'View link in the box to copy')
-    + (app.sourceUrl ? '' : ': it holds the view, not the file (opened from this device)') + cut, 3000);
+  // "View link copied" -- r47 A5; with the box shown it says the link itself, and a note after it
+  // came once the box had closed -- what the box does not say is told: r48 Q11)
+  const more = (app.sourceUrl ? '' : 'it holds the view, not the file (opened from this device)') + cut;
+  if (copied) tell(`View link copied${more ? `: ${more}` : ''}`, 3000);
+  else if (more) tell(`The view link ${more.trim()}`, 4000);
 }
 
 // ---------- tours (js/tour.js) ----------
@@ -1927,8 +1950,11 @@ function showTourStep(i) {
   // (not right after the tour's start, which told every part it lacks -- the two said in one moment,
   // in two wordings, the start's 6 s note replaced at once: r46 A4, Q4; keyed on that, not on the
   // index: step 1 shown again by ◀, a loop or a replay never named its missing parts -- r47 A7)
-  if (app.tourMissing.length && !t.justStarted) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
-  t.justStarted = false;
+  // (used up only by the first step it was meant for: the tour maker's "Show this step" or the video
+  // path, showing another step first, spent it and both notes were read -- r48 Q7)
+  const fresh = t.justStarted && t.i === 0;
+  if (app.tourMissing.length && !fresh) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
+  if (t.i === 0) t.justStarted = false;
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}. ${s.text}`);
 }
 
@@ -3182,7 +3208,7 @@ function applyListEntry() {
     b.onclick = async () => {
       closeMenus();
       const r = await readTour(t.url);
-      if (r.error) { tellReady(`the tour ${r.error}`); return; } // (as ?tour='s: one handling -- r46 A5)
+      if (r.error) { failApart(`the tour ${r.error}`); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
       startTourIn(r.tour, t.url);
     };
     tl.append(b);
@@ -5091,7 +5117,11 @@ function readInWorker(msg, name) {
       if (!ready) { app.lastReadVia = 'page'; done(resolve, null); return; }
       done(reject, new Error(`${name} could not be read: the reader stopped (${e.message || 'it ran out of memory'})`));
     };
-    w.postMessage(msg);
+    // (the copy posted to the reader may not fit: said, and the worker, its timer and the load's
+    // cancel let go -- it rejected with the engine's words, the worker left running 60 s: r48 A4.
+    // A launch of its own, beside workerJob, as a reader that dies before it is ready hands the
+    // file to the page)
+    try { w.postMessage(msg); } catch (e) { done(reject, new Error(`${name} could not be read: no room for its copy (${e?.message || e})`)); }
   });
 }
 
@@ -5383,9 +5413,7 @@ function pickModelFile(files) {
 function openFile(f) {
   if (f.size > MAX_FILE_BYTES) {
     const msg = `${f.name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
-    // (a model shown, or a load under way -- which keeps its line: told; else the page's error)
-    if (somethingShown() || PROGRESS_STATES.has(app.status)) tellReady(msg);
-    else setStatus('error', msg);
+    failApart(msg); // (a model or drawing shown, or a load under way: told; else the page's error)
     return;
   }
   startLoad(() => loadFile(f));
@@ -6131,8 +6159,9 @@ function wireInput() {
     // and Measure and Paint pick the parts where they are, not where Explode
     // draws them)
     beforeOn: () => {
-      // (shown: setExplode says "explode off" itself -- said twice in one moment -- r46 Q4)
-      if (app.explode.on) { setExplode(false); tell('Explode off while measuring', 1500, null); }
+      // (no note of its own: setExplode says "explode off", and Measure's hint replaced a note here in
+      // the same task, unseen -- r46 Q4, r48 A5)
+      if (app.explode.on) setExplode(false);
       if (app.paintFaces) setPaint(false);
     },
   });
@@ -7068,15 +7097,15 @@ async function main() {
   await Promise.all([opening, listed]);
   if (touring) {
     const r = await touring;
-    if (r.error) {
-      if (app.header) tellReady(`the tour ${r.error}`);
-      else setStatus('error', `the tour ${r.error}`);
-    } else {
+    if (r.error) failApart(`the tour ${r.error}`);
+    else {
       // a tour with no model of its own, on a page given only a list: the
       // list's first model, as without a tour
       if (!app.header && app.loadSeq === seq0 && app.listEntries?.length) await loadListed(app.listEntries[0].url);
       if (app.header) startTourIn(r.tour, tourUrl, params.get('step'));
-      else if (app.status === 'idle') setStatus('idle', `the tour is ready: open its model (${IDLE_MSG})`);
+      // (told, whatever is shown: written idle to idle it was heard by no one, and over a drawing
+      // nothing was said -- r48 A1, A2)
+      else tell(`the tour is ready: open its 3D model${somethingShown() ? '' : ` (${IDLE_MSG})`}`, 6000);
     }
     // (the next model picked from the list plays its own tour)
     if (app.header) { app.autoTourFor = autoTourKey(); app.urlTourPending = false; }

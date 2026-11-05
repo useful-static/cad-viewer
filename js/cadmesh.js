@@ -16,7 +16,7 @@
 //               faceStart?, faceCount? }],
 //     root:{ name, meshes:[i...], children:[...] },
 //     sourceUnits?, angularDeflection?, recolour?,
-//     facts?, factsRule?, silhouettesOmitted?, edgesFailed?:{ error, factsRule } }
+//     facts?, factsRule?, silhouettesOmitted?, edgesFailed?:{ error, factsRule? } }
 // edgesFailed (never beside facts): the edges' and facts' build failed when the
 // viewer read the file (KEEP_WITHOUT_EDGES); the viewer builds them again unless
 // it was a size limit under today's rule (writtenSizeLimit). Save .cadmesh drops it.
@@ -270,7 +270,8 @@ export async function withoutEdgesFailed(buf) {
     if (dv.getUint32(0, true) !== MAGIC || dv.getUint32(4, true) !== VERSION) return null;
     const jlen = dv.getUint32(8, true);
     // (a length past the file throws in the view's making: caught)
-    try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))); return h && typeof h === 'object' ? h : null; } catch { return null; }
+    // (one with a mesh list, as every .cadmesh header has: `{}` or `[]` was taken as one -- r48 A6)
+    try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 12, jlen))); return h && typeof h === 'object' && Array.isArray(h.meshes) ? h : null; } catch { return null; }
   };
   const h = head();
   if (h && !('edgesFailed' in h)) return buf;

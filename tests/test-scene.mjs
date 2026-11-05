@@ -845,19 +845,28 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.ok(writers.length >= 8, `ready writers found: ${writers.length}`);
   // (a tour's step tells its missing parts but right after the start, which told them all: keyed on
   // that, not on the step's index -- r46 A4, r47 A7)
-  assert.match(src, /if \(app\.tourMissing\.length && !t\.justStarted\) tell\(/);
+  assert.match(src, /const fresh = t\.justStarted && t\.i === 0;\n {2}if \(app\.tourMissing\.length && !fresh\) tell\(/);
+  assert.match(src, /\n {2}if \(t\.i === 0\) t\.justStarted = false;\n/, 'used up by the first step only (r48 Q4, Q7)');
   assert.match(src, /app\.tour\.justStarted = missing\.length > 0;\n {2}showTourStep\(0\);/);
-  // (Explode over Measure: its reason shown, Measure saying "measure off" itself -- r47 A6)
-  assert.match(src, /tell\('Measure is off while exploded: [^']*', 6000, null\)/);
+  // (a GPU error and a tour unread go through failApart, the one rule for a failure apart from the load -- r48 A1, Q1, Q2)
+  assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; failApart\(`GPU error: \$\{msg\}`\); \} \};/);
+  assert.equal([...src.matchAll(/failApart\(`the tour \$\{r\.error\}`\)/g)].length, 2, 'both tour reads');
+  assert.match(src, /\n {6}recovered\(\);\n/, 'the recovery\'s end through recovered()');
+  // (the touch hint recorded in one place only, after it held -- r48 Q3)
+  const th = src.slice(src.indexOf('function touchHintOnce() {'), src.indexOf('\n}\n', src.indexOf('function touchHintOnce() {')));
+  assert.equal([...th.matchAll(/setPref\(/g)].length, 1);
+  // (Explode over Measure: its reason told -- shown and heard, not kept on the ready line -- r47 A6, r48 Q8)
+  assert.match(src, /tell\('Measure is off while exploded: [^']*', 6000\);/);
   // (the view link "copied" only when the clipboard took it -- r47 A5)
-  assert.match(src, /tell\(\(copied \? 'View link copied' : 'View link in the box to copy'\)/);
+  assert.match(src, /if \(copied\) tell\(`View link copied/);
+  assert.doesNotMatch(src, /View link in the box to copy/);
   // (the touch hint counted as seen only if it held its time -- r47 Q7)
   assert.match(src, /setTimeout\(\(\) => \{ if \(\$\('hover'\)\.textContent === TOUCH_HINT\) setPref\('cadv\.touchHint', '1'\); \}, 5000\);/);
   // (Measure is given the one rule, tell, not a show-only flash to pair by hand: r46 A3, Q3 J)
   assert.match(src, /announce, tell, queueFrame, syncOptbar,/);
   assert.doesNotMatch(readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8'), /deps\.flash/);
   // (each failure added to the ready line told, by name: an export's failed was shown 1.5 s and never heard -- r45 Q1)
-  for (const words of ['export failed: ', 'could not save ', 'could not move ', 'could not recolour: ', 'the tour has no step', 'the tour names parts this model lacks: ', 'the tour ${r.error}']) {
+  for (const words of ['export failed: ', 'could not save ', 'could not move ', 'could not recolour: ', 'the tour has no step', 'the tour names parts this model lacks: ']) {
     assert.ok(src.includes(`tellReady(\`${words}`), `told: ${words}`);
   }
   assert.deepEqual(bare, [], 'a ready line without the ready text');
@@ -1037,18 +1046,24 @@ test('the hover line: a note of 4 s or more holds it against labels, its end put
   let now = 0;
   const timers = [];
   const hov = { textContent: '' };
-  const [flashHover, hoverLabel, clearHover] = new Function('$', 'performance', 'setTimeout', 'clearTimeout', 'app', `${body}; return [flashHover, hoverLabel, clearHover];`)(
-    () => hov, { now: () => now }, (f, ms) => { timers.push({ f, at: now + ms }); return timers.length; }, () => {}, {});
+  const prefs = {};
+  const [flashHover, hoverLabel, clearHover] = new Function('$', 'performance', 'setTimeout', 'clearTimeout', 'app', 'TOUCH_HINT', 'setPref', `${body}; return [flashHover, hoverLabel, clearHover];`)(
+    () => hov, { now: () => now }, (f, ms) => { timers.push({ f, at: now + ms }); return timers.length; }, () => {}, {}, 'one finger turns · …', (k, v) => { prefs[k] = v; });
   const advance = (ms) => { now += ms; for (const t of timers.splice(0)) { if (t.at <= now) t.f(); else timers.push(t); } };
   hoverLabel('layer DIM');
   flashHover('12.70 mm · ΔX 12.70 ΔY 0.00', 4000);
   hoverLabel('layer DIM'); // (the 2D view sends it once: during the hold)
   assert.equal(hov.textContent, '12.70 mm · ΔX 12.70 ΔY 0.00', 'held');
-  advance(4000);
+  advance(3000);
+  hoverLabel('layer DIM');
+  assert.equal(hov.textContent, '12.70 mm · ΔX 12.70 ΔY 0.00', 'still held 3 s in: the hold is the note\'s own time (r48 Q3)');
+  advance(1000);
   assert.equal(hov.textContent, 'layer DIM', 'the last label back at its end');
   flashHover('one finger turns · …', 6000);
+  hoverLabel('', true);
+  assert.equal(hov.textContent, 'one finger turns · …', 'a tap on the background asks for nothing: the note held (r48 A8)');
   hoverLabel('pcb', true);
-  assert.equal(hov.textContent, 'pcb', 'a tap shows through the hold');
+  assert.deepEqual([hov.textContent, prefs['cadv.touchHint']], ['pcb', '1'], 'a tap shows through the hold, and the hint it followed counts as seen (r48 Q9)');
   flashHover('could not save m.step: x', 6000);
   clearHover();
   hoverLabel('lid');
@@ -1056,6 +1071,16 @@ test('the hover line: a note of 4 s or more holds it against labels, its end put
   flashHover('front', 1500);
   hoverLabel('lid');
   assert.equal(hov.textContent, 'lid', 'a short note holds nothing');
+});
+await test('the read worker: a copy that cannot be posted rejects in words, the worker ended, its timer and the load\'s cancel let go (r48 A4)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function readInWorker(msg, name) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'");
+  const app = {}, made = [], cleared = [];
+  class Worker { constructor() { made.push(this); } postMessage() { throw new RangeError('Array buffer allocation failed'); } terminate() { this.ended = true; } }
+  const readInWorker = new Function('app', 'Worker', 'READ_LIMIT_S', 'setTimeout', 'clearTimeout', `${body}; return readInWorker;`)(
+    app, Worker, 60, () => 7, (t) => cleared.push(t));
+  const r = await readInWorker({ buf: new ArrayBuffer(8) }, 'big.stl').then(() => 'resolved', (e) => e.message);
+  assert.deepEqual([r, made[0].ended, cleared, app.cancelTess], ['big.stl could not be read: no room for its copy (Array buffer allocation failed)', true, [7], null]);
 });
 await test('Measure\'s copy: said when copied, and when the clipboard refuses or is not there (r46 Q6, r47 A4, Q4)', async () => {
   const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
@@ -1078,10 +1103,15 @@ await test('Measure\'s copy: said when copied, and when the clipboard refuses or
 // The line is drawn nowhere, so what the visitor learns is only what is shown and what is heard:
 // a cell whose shown and heard are empty while it says something is the fault this table guards.
 const W = 'could not move B: x', N = 'no volume for this model: v', E = 'not loaded: z.step: no surfaces';
-const O = 'big.stl is over 2 GB, more than this viewer opens';
+const O = 'big.stl is over 2 GB, more than this viewer opens', G = 'GPU error: device lost', REC = 'recovered on webgl2';
 const GOING = 'exporting 1 body as STL…', SAVED = 'saved m.stl: 1 body, 0.0 MB';
+// (r48: three rows with nothing shown -- a first load, its failure, a recovery -- ran no cell of
+// Cancel's idle branch or the error card: r48 A3)
 const NOTE_STATES = {
   'no model': { status: 'idle', msg: 'open or drop a file', shows: null, ready: null },
+  'loading, nothing shown': { status: 'loading', msg: 'reading b.step 40 %', shows: null, ready: null },
+  'error, nothing shown': { status: 'error', msg: 'not loaded: y.step', shows: null, ready: null },
+  'recovering, nothing shown': { status: 'recovering', msg: 'recovering the GPU…', shows: null, ready: null },
   'idle ready': { status: 'ready', msg: 'ready', shows: 'model', ready: 'ready' },
   'ready, a drawing': { status: 'ready', msg: 'ready · 2D drawing', shows: 'drawing', ready: 'ready · 2D drawing' },
   'loading': { status: 'loading', msg: 'reading b.step 40 %', shows: 'model', ready: 'ready' },
@@ -1091,30 +1121,42 @@ const NOTE_STATES = {
   'error': { status: 'error', msg: 'not loaded: y.step', shows: 'model', ready: 'ready' },
   'recovering': { status: 'recovering', msg: 'recovering the GPU…', shows: 'model', ready: 'ready' },
 };
-// each cell: [status, line, shown[], heard (the joined read-outs, in order)] -- or null: not reachable
-// (Cancel is on the loading card only; Export needs a 3D model, and is not run within itself)
+// each cell: [status, line, shown[[text, ms]], heard (the joined read-outs, in order)] -- or null:
+// not reachable (Cancel is on the loading card only; Export needs a 3D model, and is not run within
+// itself). Every cell also checks the empty card: shown only with nothing shown and no load or
+// recovery running, carrying the error when there is one (showEmpty's own code, r48 A3).
+// (The note's time is the contract's too: a hold shortened or dropped passed every test -- r48 Q3)
 const same = 'same';
+const busyRun = (s) => s.status === 'loading' || s.status === 'tessellating';
+// a failure apart from the load (failApart): told where something is shown or a load runs, the state
+// kept; else the page's error, its card showing it
+const apart = (s, words) => (s.shows || busyRun(s))
+  ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, 6000]], [words]] : ['error', words, [], [words]];
 const NOTE_CONTRACT = {
   // tell(words): shown and read out; state and line kept, in every state
-  tell: (r) => [same, same, ['copied'], ['copied']],
+  tell: (r) => [same, same, [['copied', 3000]], ['copied']],
   // tellReady(words): told in every state; the line gains the words only while ready, after the
   // ready text (an export's progress replaced)
-  tellReady: (r, s) => [same, s.status === 'ready' ? `${s.ready} · ${W}` : same, [W], [W]],
+  tellReady: (r, s) => [same, s.status === 'ready' ? `${s.ready} · ${W}` : same, [[W, 6000]], [W]],
   // sayNoFacts(word): told when new, in every state; written into a ready line in place
-  sayNoFacts: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${N} · ${GOING}` : `${s.ready} · ${N}`) : same, [N], [N]],
-  // a load's failure, setStatus('error', …): the page's error; shown in the view when a model or
+  sayNoFacts: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${N} · ${GOING}` : `${s.ready} · ${N}`) : same, [[N, 6000]], [N]],
+  // a load's own failure, setStatus('error', …): the page's error; shown in the view when a model or
   // a drawing stays (the error card shows it only when nothing does); read out
-  loadFails: (r, s) => ['error', E, s.shows ? [E] : [], [E]],
+  loadFails: (r, s) => ['error', E, s.shows ? [[E, 6000]] : [], [E]],
   // Cancel on the loading card: back to what is shown -- a drawing is shown too
-  cancel: (r, s) => (s.status === 'loading' || s.status === 'tessellating')
+  cancel: (r, s) => busyRun(s)
     ? (s.shows ? ['ready', s.ready, [], [`loading cancelled · ${s.ready}`]] : ['idle', 'IDLE', [], ['loading cancelled · IDLE']]) : null,
-  // a file over the size refused: told where something is shown or a load runs, its state kept;
-  // the page's error with nothing shown
-  oversize: (r, s) => (s.shows || s.status === 'loading' || s.status === 'tessellating')
-    ? [same, s.status === 'ready' ? `${s.ready} · ${O}` : same, [O], [O]] : ['error', O, [], [O]],
+  // a file over the size refused, and any failure apart from the load (a GPU error, a tour that
+  // could not be read): one rule (r48 A1, Q1, Q2)
+  oversize: (r, s) => apart(s, O),
+  failApart: (r, s) => apart(s, G),
+  // the GPU recovery's end: back to what is shown (idle with nothing), "recovered on …" told; a
+  // load begun meanwhile owns the state (r48 A7)
+  recovered: (r, s) => s.status !== 'recovering' ? [same, same, [], []]
+    : (s.shows ? ['ready', s.ready, [[REC, 4000]], [`ready · ${REC}`]] : ['idle', 'IDLE', [[REC, 4000]], [`IDLE · ${REC}`]]),
   // Export: its progress and its end told; the line written only while ready; the state kept
   exportMesh: (r, s) => (s.shows !== 'model' || r === 'exporting') ? null
-    : [same, s.status === 'ready' ? `ready · ${SAVED}` : same, [GOING, SAVED], [GOING, SAVED]],
+    : [same, s.status === 'ready' ? `ready · ${SAVED}` : same, [[GOING, 4000], [SAVED, 3000]], [GOING, SAVED]],
 };
 await test('the note contract: each page state against each writer of a note or the line, every cell main.js\'s own code (r47)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -1123,7 +1165,7 @@ await test('the note contract: each page state against each writer of a note or 
   const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
   const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text) {',
     'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
-    'function openFile(f) {', 'async function exportMesh(fmt) {'].map(cutIf).join('')
+    'function openFile(f) {', 'async function exportMesh(fmt) {', 'function failApart(msg) {', 'function recovered() {', 'function showEmpty() {'].map(cutIf).join('')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
@@ -1132,27 +1174,47 @@ await test('the note contract: each page state against each writer of a note or 
       if (!cell) continue;
       const app = { status: s.status, statusMsg: s.msg, mesh: s.shows === 'model' ? {} : null, dxf: s.shows === 'drawing' ? { drawing: { units: 'mm' } } : null,
         header: s.shows === 'model' ? { meshes: [{}] } : null, baseMesh: {}, hidden: new Set(), cam: { orient: 'z' }, sourceName: 'm.stl',
-        unmeshedFaces: 0, listNote: '', noFacts: null };
+        unmeshedFaces: 0, listNote: '', noFacts: null, backend: 'webgl2', embed: false };
       const shown = [], heard = [], frames = [];
       const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
       const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
-      const dom = { status: el(), progress: el(), announce: live };
-      const run = new Function('app', '$', 'flashHover', 'showEmpty', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
+      const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: true } };
+      const run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
         'startLoad', 'beginLoad', 'EXPORTS', 'exportable', 'meshLabel', 'saveBase', 'exportBasis', 'downloadBlob',
-        `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad };`)(
-        app, (id) => dom[id], (t) => shown.push(t), () => {}, new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30,
+        `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad, failApart, recovered };`)(
+        app, (id) => dom[id], (t, ms) => shown.push([t, ms]), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30,
         () => {}, () => {}, { stl: { write: async () => new Uint8Array(4), type: 'model/stl', up: 'z' } }, (m, ids) => ids, () => 'B', () => 'm', () => [1, 0, 0, 0, 1, 0, 0, 0, 1], () => {});
       const act = { tell: () => run.tell('copied', 3000), tellReady: () => run.tellReady(W), sayNoFacts: () => run.sayNoFacts(N), loadFails: () => run.setStatus('error', E),
-        cancel: () => run.cancelLoad(), oversize: () => run.openFile({ name: 'big.stl', size: 3e9 }), exportMesh: () => run.exportMesh('stl') }[col];
-      // (each read-out flushed apart, as a page's later tasks are)
+        cancel: () => run.cancelLoad(), oversize: () => run.openFile({ name: 'big.stl', size: 3e9 }), failApart: () => run.failApart(G), recovered: () => run.recovered(),
+        exportMesh: () => run.exportMesh('stl') }[col];
+      // (each read-out flushed apart, as a page's later tasks are; the card as the last setStatus left it)
       await act(); await new Promise((res) => setTimeout(res, 5));
       const [st, msg, sh, hd] = cell;
-      const got = [app.status, app.statusMsg, shown, heard];
-      const exp = [st === same ? s.status : st, msg === same ? s.msg : msg, sh, hd];
+      const stAfter = st === same ? s.status : st, msgAfter = msg === same ? s.msg : msg;
+      const wroteStatus = app.status !== s.status || app.statusMsg !== s.msg;
+      const cardWant = !s.shows && !['loading', 'tessellating', 'recovering', 'init'].includes(stAfter);
+      const card = wroteStatus ? [!dom.empty.hidden, dom.emptyerr.hidden ? '' : dom.emptyerr.textContent] : [cardWant, stAfter === 'error' ? msgAfter : ''];
+      const got = [app.status, app.statusMsg, shown, heard, card];
+      const exp = [stAfter, msgAfter, sh, hd, [cardWant, stAfter === 'error' ? msgAfter : '']];
       try { assert.deepEqual(got, exp); } catch { failed.push(`${row} × ${col}: got ${JSON.stringify(got)}, want ${JSON.stringify(exp)}`); }
     }
   }
   assert.deepEqual(failed, [], `cells failing: ${failed.length}\n${failed.join('\n')}`);
+  // (the same failure apart from the load twice, nothing shown: heard both times -- the second
+  // refusal of a file dropped again was neither shown nor heard: r48 Q10)
+  {
+    const app = { status: 'idle', statusMsg: 'IDLE', mesh: null, dxf: null, embed: false };
+    const heard = [];
+    const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
+    const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
+    const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: true } };
+    const frames = [];
+    const { failApart } = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG',
+      `${body}; return { failApart };`)(app, (id) => dom[id], () => {}, new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE');
+    failApart(O); await new Promise((res) => setTimeout(res, 5));
+    failApart(O); await new Promise((res) => setTimeout(res, 5)); for (const f of frames.splice(0)) f();
+    assert.deepEqual(heard, [O, O], 'the second refusal heard too');
+  }
 });
 
 done();

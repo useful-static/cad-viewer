@@ -109,6 +109,15 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
     dv.setUint32(0, 0x46445025, true); dv.setUint32(4, 99, true); dv.setUint32(8, j.length, true); new Uint8Array(notOurs, 12).set(j);
     await assert.rejects(withoutEdgesFailed(notOurs), /^Error: cadmesh/, json);
   }
+  // (the magic ours and the version not, alone -- the arm above changed both, so the version half
+  // could not fail: r48 Q6; and a header with no mesh list -- {} or [] -- not taken as one: r48 A6)
+  const ver = plain.slice(0); new DataView(ver).setUint32(4, 99, true);
+  await assert.rejects(withoutEdgesFailed(ver), /^Error: cadmesh/, 'another version');
+  for (const json of ['{}', '[]', '{"sections":{}}']) {
+    const j = new TextEncoder().encode(json), b = new ArrayBuffer(12 + j.length), dv = new DataView(b);
+    dv.setUint32(0, 0x4d444143, true); dv.setUint32(4, 1, true); dv.setUint32(8, j.length, true); new Uint8Array(b, 12).set(j);
+    await assert.rejects(withoutEdgesFailed(b), /^Error: cadmesh/, json);
+  }
   // (the bytes Save writes: decoded, without the record, gzipped where it can -- r45 Q9)
   const toSave = await cadmeshToSave(raw);
   assert.deepEqual([isGzip(toSave), decodeCadmesh(await inflateCadmesh(toSave)).header.edgesFailed], [true, undefined]);
