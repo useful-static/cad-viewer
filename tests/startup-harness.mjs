@@ -21,12 +21,18 @@
 // - redirect: path -> the path that answered;
 // - fails: the model files whose load fails;
 // - slow: paths read or loaded slowly;
+// - files: the model paths served (any other a 404);
 // - early: the files picked while the GPU starts;
 // - during: [{ at, act... }], where at is a path read, a model file loaded, 'loaded <file>', or
 //   'model' (the first model the address loads). An act is one of: file / size (the visitor opens
-//   a file), click (View in 3D), add (Add model…), pick (a list entry, by place), back (Back to the
-//   first entry), hash (a #view= edit).
-// - click / add / drop / pick / back / hash: the same acts after the start.
+//   a file), click (View in 3D), add (Add model…), pick (a list entry, by place, through the
+//   select's own rule), back / forward (the history), hash (a #view= edit), unhash (the #view=
+//   taken out), cancel (the card's Cancel).
+// - after: [act...], the same acts once the start has settled.
+// Stand-ins this header does not otherwise name: a tour takes no camera (its steps here have no
+// view of their own); a load's failure is one sentence with its path, not the page's words and
+// hint; a model's unit is the one its address asks for (addressUnit), else millimetres -- its file
+// says nothing of its own (r61 Q8, Q9).
 
 import { readFileSync } from 'node:fs';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
@@ -34,12 +40,18 @@ import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
 import { isCompanion } from '../js/formats.js';
+import { MM_PER } from '../js/units.js';
 
 export const SITE = 'https://site.example/v/';
 
 const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
-const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at) + 1); };
+// (a cut whose head main.js no longer has is named, and the run refused, not cut to nothing in
+// silence -- a reflowed line made the sweep report a page fault: r61 A6. The fallbacks for an older
+// main.js are optional; CV_HARNESS_OLD=1 runs an older main.js with what it has.)
+const MISSING = [];
+const miss = (head, optional) => { if (!optional) MISSING.push(head); return ''; };
+const cutIf = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n}\n', at) + 2); };
+const line = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n', at) + 1); };
 const arrow = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n};\n', at) + 4); };
 // (addToScene's own tail, after its scene is shown: what it does once a model has joined -- the
 // harness called landPendingView itself, and a mutant that took it out of addToScene passed: r60)
@@ -49,7 +61,7 @@ const ADD_TAIL = (() => {
   return at < 0 ? '' : src.slice(at + head.length, src.indexOf('\n}\n', at));
 })();
 // (a block inside a function, from its head to its own close two spaces in)
-const block = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 5); };
+const block = (head, optional = false) => { const at = src.indexOf(head); return at < 0 ? miss(head, optional) : src.slice(at, src.indexOf('\n  }\n', at) + 5); };
 // The load's own rules, run where the real load runs them (the stand-in skipped them, and a view a
 // page opens with, and a list entry's own tour, were never seen: r58 A6, Q4): a new open resets the
 // entry's keys (loadUrl); the view link's view applies at the load (loadBuffer); the entry's own tour
@@ -58,7 +70,13 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
   // (the rule as round 57 wrote it, for a run on that code)
   // (the address forgets its model when a device file shows, as loadBuffer has it -- the harness kept
   // it, and every Back and #view= after a drop read the address's model: r60 A6, the differential)
-  + 'function loadShown() {\n  forgetAddressModel();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {') || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {')) + '}\n'
+  // (and the address's ?unit= rewritten as loadBuffer rewrites it, before the model's unit is read --
+  // the first entry's text changed under it, which Back compared: r61 A1)
+  // (twice, as the page does: once before the model's unit is read -- ?unit= dropped --, once after,
+  // the unit the address asked for this model read and put back, at the address's end: r61, the
+  // differential)
+  + 'let unitRead = \'mm\';\nfunction readUnit() { return unitRead; }\n'
+  + 'function loadShown() {\n  const asked = addressUnit(app.sourceUrl);\n  forgetAddressModel();\n  unitRead = \'mm\';\n  syncUnitParam();\n  unitRead = asked;\n  syncUnitParam();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {', true) || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {', true)) + '}\n'
   + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {')
   // (and its hidden parts, held back as its tour is: r59 Q4)
   + block('  if (app.header && e && e.hide && app.listHideFor !== autoTourKey()') + '}\n';
@@ -68,15 +86,16 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
   'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
-  'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {',
+  'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {', 'function syncUnitParam() {', 'function addressUnit(url) {',
+  'async function unwindPick(n, before) {',
   'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', 'function addressTourEnds(r, ownFailed) {',
   'function viewIsFor(search) {', 'function linkViewOf(hash) {', 'function setModelParam(u, url) {',
-  src.includes('function lackingNote(place, opened) {') ? 'function lackingNote(place, opened) {' : 'function lackingNote(place, firstOpens) {'].map(cutIf).join('')
-  + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ') + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
+  src.includes('function lackingNote(place, opened) {') ? 'function lackingNote(place, opened) {' : 'function lackingNote(place, firstOpens) {'].map((h) => cutIf(h)).join('')
+  + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
-  + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
+  + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
   + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
@@ -92,6 +111,7 @@ const tick = () => new Promise((res) => setTimeout(res, 1));
 const settle = async (n) => { for (let i = 0; i < n; i++) await tick(); };
 
 export async function runStart(c) {
+  if (MISSING.length && !process.env.CV_HARNESS_OLD) throw new Error(`startup-harness: main.js has no ${MISSING.map((h) => JSON.stringify(h.trim())).join(', ')} -- a cut's head changed`);
   const params = new URLSearchParams(c.q);
   const app = { status: 'init', statusMsg: 'starting GPU', mesh: null, dxf: null, header: null, embed: params.get('embed') === '1', loadSeq: 0,
     listEntries: null, listNote: '', unmeshedFaces: 0, noFacts: null, hidden: new Set(), backend: 'webgl2', scene: null, cam: { orient: 'z' } };
@@ -100,7 +120,14 @@ export async function runStart(c) {
   // model's own tour back while it is)
   const o = { shown: [], opened: [], loadedUrls: [], progress: [], cancelHidden: [], acted: [], events: [], pendingAtList: [], tour: false, views: 0,
     released: 0, embedActive: false, threw: null, app };
+  // (a window's listeners, each type a list, `once` kept: unwindPick waits on a popstate of its own)
   const frames = [], listeners = {};
+  const listen = (ev, fn, opt) => { (listeners[ev] ||= []).push({ fn, once: !!(opt && opt.once) }); };
+  const emit = (ev) => {
+    const ls = listeners[ev] || [];
+    listeners[ev] = ls.filter((l) => !l.once);
+    for (const l of ls) l.fn();
+  };
   const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {}, classList: { add() {}, remove() {} } });
   const dom = new Proxy({ poster: { hidden: true } }, { get: (t, k) => (k in t ? t[k] : (t[k] = el())) });
   o.dom = dom;
@@ -118,8 +145,8 @@ export async function runStart(c) {
   // harness fired both: r60 Q2)
   const fire = (hrefBefore) => {
     const was = new URL(hrefBefore);
-    if (listeners.popstate) listeners.popstate();
-    if (cur.hash !== was.hash && cur.search === was.search && listeners.hashchange) listeners.hashchange();
+    emit('popstate');
+    if (cur.hash !== was.hash && cur.search === was.search) emit('hashchange');
   };
   const history = {
     get state() { return stack[at].state; },
@@ -218,11 +245,14 @@ export async function runStart(c) {
     if (!fromFile && !adding && !modelSeen) { modelSeen = true; visit('model'); }
     await settle((c.slow || []).includes(file) ? 30 : 2);
     if (k.stale(seq)) return;
-    if ((c.fails || []).includes(file)) throw new Error(`could not download ${file}: not found (404)`);
+    // (the failure names the path tried, as the page's does -- not the file alone, which made a 404 from
+    // the wrong directory compare equal to one from the right: r61 Q8; the page's hint after it is its
+    // own words, not stood in for)
+    const path = String(url).startsWith(SITE) ? String(url).slice(SITE.length) : String(url);
+    if ((c.fails || []).includes(file)) throw new Error(`could not download ${path}: not found (404)`);
     // (a model at a URL nothing serves is not found, as the network says: c.files, the model paths
     // served -- a list or tour resolved against the wrong base loaded all the same: r58 Q4)
-    const path = String(url).startsWith(SITE) ? String(url).slice(SITE.length) : String(url);
-    if (!fromFile && c.files && !c.files.includes(path)) { o.events.push(`missing ${path}`); throw new Error(`could not download ${file}: not found (404)`); }
+    if (!fromFile && c.files && !c.files.includes(path)) { o.events.push(`missing ${path}`); throw new Error(`could not download ${path}: not found (404)`); }
     // (an added model at the offset its ?addat= gave; a device file shown with no URL, as main.js
     // shows it -- the stand-in named it, and a view meant for a named model passed as a device
     // file's: r59 A7)
@@ -247,20 +277,20 @@ export async function runStart(c) {
     'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
     'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists', 'posterAsked', 'timedFetch', 'releaseEarly',
     'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom', 'history', 'closeMenus', 'tourParts', 'syncTreeChecks', 'pushState', 'updateButtons',
-    'viewChanged', 'shownLacksGpu',
+    'viewChanged', 'shownLacksGpu', 'MM_PER',
     `${BODY}; function wireCancel() { ${CANCEL} }
     return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel, listedNow };`)(
     app, (id) => dom[id], (t) => o.shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
     // (the list filled: the entry's rules for a model already shown, as fillModelList runs them --
     // a list answering after its model never played the entry's tour: r59 Q6)
-    loc, doc, { addEventListener: (ev, fn) => { listeners[ev] = fn; } }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; if (app.header) run.entryShown(); }, entryByName, fileUrl,
+    loc, doc, { addEventListener: listen }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; if (app.header) run.entryShown(); }, entryByName, fileUrl,
     // (a tour started: the address's ?tour= or a list entry's own, by the file it came from)
     readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, (t, u) => { o.tour = true; o.events.push(`tour ${String(u || '').split('/').pop()}`); }, () => {},
     (t, f, d) => o.progress.push(`${d}${dom.pcancel.hidden ? ', no Cancel' : ''}`), () => {}, (on) => { o.embedActive = on; },
     // (a view: the fragment's own text, so which one landed is seen)
     (v) => { o.views++; o.events.push(`view ${v}`); }, (s) => s, orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, earlyListsOf,
     posterAsked, fetchFake, () => { o.released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom,
-    history, () => {}, () => ({ ids: ['hidden-part'] }), () => {}, () => {}, () => {}, () => { o.events.push('hide'); }, () => false);
+    history, () => {}, () => ({ ids: ['hidden-part'] }), () => {}, () => {}, () => {}, () => { o.events.push('hide'); }, () => false, MM_PER);
   try {
     if (typeof run.wireHistory === 'function') run.wireHistory();
     run.wireCancel();
@@ -281,5 +311,7 @@ export async function runStart(c) {
   o.card = [!dom.empty.hidden, dom.emptyerr.hidden ? '' : dom.emptyerr.textContent];
   o.posterUp = !dom.poster.hidden;
   o.href = cur.href; // (the address at the end)
+  o.entries = stack.length; // (the history's entries, as many as the page's: r61 A3)
+  o.stack = stack.map((e) => e.href); // (and their addresses)
   return o;
 }

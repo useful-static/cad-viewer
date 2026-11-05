@@ -30,7 +30,8 @@
 //   I16 every model the address names loads from where it is served (beside its list, its tour);
 //   I17 a list pick pushes an address naming its model alone (no first entry's ?add=s, ?tour=), and
 //       each ?add= sits at its own ?addat=;
-//   I18 File › Check this list… names each list as the address gives it.
+//   I18 File › Check this list… names each list as the address gives it;
+//   I19 the model the address names is the model shown (after a pick, Back, Forward, a failed pick).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -82,6 +83,10 @@ const ADDRESSES = {
   // entry's rules then run by the list's fill -- Q6; the same with a link's view -- A6)
   'src+2 adds': { q: 'src=a.stl&add=b.stl&addat=1,0,0&add=x.stl&addat=0,2,0' },
   'src+late list': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, list: true, lateList: true },
+  // (a list entry named beside an ?add=, in another unit: a pick and Back reopen it with its add --
+  // the first entry's address rewritten under it, ?unit= moved: r61 A1; it failing, the ?add= joined
+  // the pick: r61 Q1, Q4)
+  'list+index1+add+unit': { q: 'list=lists/l.json&index=1&add=x.stl&unit=in', list: true },
   // (the list's first named in another unit: a pick names its own model, not in that unit -- r60 Q6 B)
   'list+index1+unit': { q: 'list=lists/l.json&index=1&unit=in', list: true },
   // (the list's first named, with a view: a pick that fails returns to it -- r60 A5)
@@ -148,6 +153,13 @@ function acts(a, embed) {
     ['a #view= edit during Add model…', { during: [{ at: 'e.stl', hash: true }], after: [{ add: 'e.stl' }] }],
     ['the #view= taken out during the model', { during: [{ at: 'model', unhash: true }] }]);
   if (a.list) out.push(['a list pick that fails', { failsPick: true, after: [{ pick: 2 }] }]);
+  // (a pick that fails with a #view= edited in during its download, and a failed pick then Forward:
+  // every entry it made taken back, none left to land on -- r61 A2, Q3)
+  if (a.list && embed !== 'poster') {
+    out.push(['a list pick that fails, a #view= edit during it', { failsPick: true, slow: ['b.stl'], during: [{ at: 'b.stl', hash: true }], after: [{ pick: 2 }] }],
+      ['a list pick that fails, then Back', { failsPick: true, after: [{ pick: 2 }, { back: true }] }],
+      ['a list pick that fails, then Forward', { failsPick: true, after: [{ pick: 2 }, { forward: true }] }]);
+  }
   // (r60 Q1, Q5: Back while the pick still loads; a pick, Back, then Forward)
   if (a.list && embed !== 'poster') {
     out.push(['Back during the pick\'s load', { slow: ['b.stl'], during: [{ at: 'b.stl', back: true }], after: [{ pick: 2 }] }],
@@ -249,6 +261,12 @@ function check(c, r) {
     const twoOfOneName = c.addr.lateList && c.redirect;
     // (an address with ?add=s reopens its model with them over the model shown alone: r59 A3)
     if (startModel && !twoOfOneName && !addOf(c.q) && before === `load ${startModel.split('/').pop()}` && !(c.fails || []).includes(before.slice(5)) && reload) v('I6', `Back onto the shown ${before.slice(5)}: ${reload}`);
+    // (nor onto the model still shown while a pick downloads: the pick ends, the model stays -- it was
+    // downloaded again: r61 Q6)
+    const lastShown = r.events.slice(0, backAt).filter((e) => e.startsWith('shown ')).pop();
+    const loadingAtBack = r.events.slice(0, backAt).filter((e) => e.startsWith('load ') || e.startsWith('shown ')).pop();
+    if (!addOf(c.q) && lastShown && loadingAtBack && loadingAtBack.startsWith('load ') && reload === `load ${lastShown.slice(6)}`
+      && !(c.fails || []).includes(lastShown.slice(6))) v('I6', `Back onto the shown ${lastShown.slice(6)}, a pick downloading: ${reload}`);
     // (and what it loads is a model the page showed from its address before the pick -- the first
     // start-up load that started, superseded by the visitor's file unseen, was taken: r57 Q4)
     // (an address that names its model -- ?src=, ?index= -- has Back open that one, shown or not)
@@ -285,7 +303,8 @@ function check(c, r) {
     // model: r58 R2, r59 A1)
     // (an edit made after a device file showed is judged by the address then, which names no model:
     // the device file forgot the address's model -- forgetAddressModel)
-    const deviceBefore = (i) => r.events.slice(0, i).some((x) => /^shown [ve]\.stl$/.test(x));
+    // (the visitor's own file: v.stl -- e.stl only ever joins, as 'added': r61 Q11)
+    const deviceBefore = (i) => r.events.slice(0, i).some((x) => x === 'shown v.stl');
     r.events.forEach((e, i) => {
       if (!e.startsWith('view ')) return;
       const ok = e === 'view v2' && deviceBefore(i) ? visitorFiles.has(shownAt(i)) : forView(shownAt(i));
@@ -315,11 +334,15 @@ function check(c, r) {
   }
   // I19: the model the address names is the model shown -- a pick shown under the entry Back went to,
   // and Forward's entry over the model before it, read otherwise (r60 Q1, Q5)
-  if (!r.left && r.status === 'ready' && r.app.sourceUrl && r.events.includes('pick')) {
+  // (and after a pick that failed, the page "error" over the model still shown: r61 A2, Q3)
+  if (!r.left && !['loading', 'tessellating'].includes(r.status) && r.app.sourceUrl && r.events.includes('pick')) {
     const hq = new URL(r.href).searchParams;
     const idx = hq.get('index');
     const shownF = String(r.app.sourceUrl).split('/').pop();
-    if (idx && shownF !== (idx === '1' ? 'a.stl' : idx === '2' ? 'b.stl' : '')) v('I19', `the address names entry ${idx}, ${shownF} shown`);
+    // (unless the model it names will not open: Back onto an entry whose model fails shows the last
+    // model that opened, the address the entry's -- a load failure, not a lost step)
+    const namedF = idx === '1' ? 'a.stl' : idx === '2' ? 'b.stl' : '';
+    if (idx && shownF !== namedF && !(c.fails || []).includes(namedF)) v('I19', `the address names entry ${idx}, ${shownF} shown`);
     if (!idx && !hq.get('src') && !hq.get('model') && r.app.addressUrl && shownF !== String(r.app.addressUrl).split('/').pop()) v('I19', `the address names the page as first opened (${String(r.app.addressUrl).split('/').pop()}), ${shownF} shown`);
   }
   // (and the entry's hidden parts laid once per open, not again by a later rule run: r60 Q6 H)
@@ -328,6 +351,12 @@ function check(c, r) {
     const seg = r.events.slice(i, opens[k + 1] ?? r.events.length);
     if (seg.filter((e) => e === 'hide').length > 1) v('I15', `the entry's hidden parts laid ${seg.filter((e) => e === 'hide').length} times in one open`);
   });
+  // I20: a pick that failed leaves no entry of its own in the history -- Back from an edit made during
+  // its download, or Forward, opened it again (r61 A2, Q3)
+  const idx2 = (h) => new URL(h).searchParams.get('index') === '2';
+  if (c.failsPick && r.events.includes('pick') && r.stack && !idx2(r.stack[0]) && r.stack.some(idx2)) {
+    v('I20', `the failed pick's entry left in the history: ${(r.stack || []).map((h) => new URL(h).search).join(' | ')}`);
+  }
   // I18: File › Check this list… names each list as the address gives it, one that is not a URL too,
   // for check.html to refuse in words (it was left out, and the check named nothing wrong: r59 A5)
   if (qp.getAll('list').length && !/embed=1/.test(c.q)) {
@@ -402,7 +431,9 @@ function check(c, r) {
     const seg = ev.slice(i + 1, nextShown < 0 ? ev.length : nextShown);
     const viewAt = seg.findIndex((x) => x.startsWith('view ')), ownAt = seg.indexOf(own);
     // (a view applied at the load comes before the entry's rules: applied first, then its tour)
-    if (viewAt >= 0 && ownAt > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `${own} played over the link's view on ${f}`);
+    // (an edit's view too: the exemption for one made before excused nothing, and hid a tour over an
+    // edit landed during the ?add=s -- r61 Q2, Q5)
+    if (viewAt >= 0 && ownAt > viewAt) v('I15', `${own} played over the link's view on ${f}`);
     // (nor ended at once by the address's own ?add= joining after it started: the page as first
     // opened is the model with its adds, and its tour is theirs -- the differential, r60)
     if (ownAt >= 0 && seg.slice(ownAt + 1).includes('added') && !acts.some((d) => d.add)) {
@@ -410,7 +441,7 @@ function check(c, r) {
     }
     // (nor its hidden parts, by the model's URL whatever replaced its header -- an Add model…, a
     // re-read: r59 A6, Q4)
-    if (viewAt >= 0 && seg.indexOf('hide') > viewAt && !seg.slice(0, viewAt).includes('hash')) v('I15', `the entry's hidden parts laid over the link's view on ${f}`);
+    if (viewAt >= 0 && seg.indexOf('hide') > viewAt) v('I15', `the entry's hidden parts laid over the link's view on ${f}`);
     const pending = (r.pendingAtList.find(([pf]) => pf === f) || [])[1];
     if (end === ev.length && nextShown < 0 && pending === false && viewAt < 0 && ownAt < 0 && !seg.includes('tour t.json') && !acts.some((d) => d.hash)
       && !(c.addr.lateList && c.redirect)) { // (two models of one name: see I6)
@@ -441,13 +472,13 @@ export function endState(r) {
   const after = ev.slice(lastShown + 1);
   const view = after.filter((e) => e.startsWith('view ')).pop();
   const tour = after.filter((e) => e.startsWith('tour ')).pop();
+  // (in its own order: a parameter moved is a difference -- r61 A3, A1)
   const q = new URL(r.href).searchParams;
   q.delete('backend');
-  q.sort();
   return {
     status: r.status, msg: r.msg, card: r.card, told: r.shown,
     scene: (r.app.scene || []).map((m) => base(m.url)), address: q.toString(), hash: new URL(r.href).hash.replace(/^#view=/, ''),
-    view: view ? view.slice(5) : null, tour: tour ? tour.slice(5) : null, poster: r.posterUp,
+    view: view ? view.slice(5) : null, tour: tour ? tour.slice(5) : null, poster: r.posterUp, entries: r.entries,
   };
 }
 
@@ -476,7 +507,7 @@ if (exportAt > 0) {
   process.exit(0);
 }
 
-await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I18 (r57-r59)`, async () => {
+await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I19 (r57-r61)`, async () => {
   const byInv = {};
   const t0 = Date.now();
   let unreached = 0;
