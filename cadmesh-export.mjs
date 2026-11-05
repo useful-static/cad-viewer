@@ -2,7 +2,9 @@
 // A .cadmesh (or .cadmesh.gz) to the standard mesh formats, offline: the same writers as the
 // viewer's File > Export (js/export-mesh.js) -- STL (binary, mm, no colour), 3MF (mm, one object
 // per body, colours) and GLB (metres, one node per body, colours) -- each turned as the viewer
-// turns it: Z up for STL and 3MF, Y up for GLB.
+// turns it: Z up for STL and 3MF, Y up for GLB. The model's own orientation is --orient /
+// --model-up, +z-y (STEP's usual) when neither is given -- not the page's default for a file
+// with no orientation of its own, the file's frame (+y+z): give --model-up y for such a model.
 //
 //   node cadmesh-export.mjs <in.cadmesh[.gz]> [--to stl,3mf,glb] [--out <base>]
 //                           [--orient <up,front> | --model-up y|z] [--skip <regex>]

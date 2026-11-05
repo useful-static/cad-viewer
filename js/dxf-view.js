@@ -21,6 +21,8 @@ const SELECTED = PAPER_EDGES.selected[0];
 const FADED = PAPER_EDGES.faded[0];
 const HIT_PX = 8;
 const MIN_TEXT_PX = 3; // a text under this height on screen is not drawn (and not clicked)
+// the size every text is set in, then scaled to its height (r64 Q2)
+const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 
 // The 2D view's one question, "the nearest item to (x, y) within r that accept() takes", by the
 // viewer's one box tree (js/box-tree.js, two-dimensional here): the snaps are points (boxes of no
@@ -187,6 +189,7 @@ export function snapPoints(paths, o) {
     if (!s) {
       if (made.size > 4096) made.clear();
       s = [xy[2 * i], xy[2 * i + 1], SNAP_KINDS[kind[i]], paths[path[i]].layer, ...(kind[i] === 2 ? [rad.get(i)] : [])];
+      if (paths[path[i]].hold != null) s.hold = paths[path[i]].hold; // (and the frozen layer it is held to: r64 Q1)
       made.set(i, s);
     }
     return s;
@@ -200,16 +203,19 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const o = [(ext.min[0] + ext.max[0]) / 2, (ext.min[1] + ext.max[1]) / 2];
   const st = { s: 1, c: [0, 0], selected: null, hover: null, off: new Set(drawing.layers.filter((l) => !l.on).map((l) => l.name)),
     measure: false, pending: null, results: [], snap: null };
+  // an item not shown: its layer off, or the frozen layer of the block reference it is drawn under
+  // (js/dxf.js hold: a reference on a frozen layer draws none of its block -- r64 Q1)
+  const hid = (it) => st.off.has(it.layer) || (it.hold != null && st.off.has(it.hold));
   // the drawing's unit as written for a reader ("µm"), as the info panel writes it
   const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
-    const key = `${p.layer}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
+    const key = `${p.layer}\u0000${p.hold ?? ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
     let g = groups.get(key);
     // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
     // drawing units (it scales with the zoom, as on paper)
-    if (!g) { g = { layer: p.layer, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, path: new Path2D(), points: [] }; groups.set(key, g); }
+    if (!g) { g = { layer: p.layer, hold: p.hold, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, path: new Path2D(), points: [] }; groups.set(key, g); }
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
     // (a fill not a hatch's even-odd loops is added counter-clockwise: the group's fills are one
     // non-zero path, and two overlapping SOLIDs wound opposite ways left their overlap empty)
@@ -224,13 +230,16 @@ export function createDxfView(canvas, drawing, cb = {}) {
 
   // a text's lines as drawn: an MTEXT with a reference width wrapped at it by the font's measure
   // (js/dxf.js wrapLines), once per text -- what is drawn and what a click finds
+  // (every text is set in FONT_PX and scaled to its height: set in drawing units, a 0.0025-unit
+  // text -- 2.5 mm in a metre drawing -- had no ink at any zoom, the canvas keeping no font that
+  // small, a 0.1-unit one measured 6% narrow, and fonts stop at 10,000 px: r64 Q2)
   const wrapped = new WeakMap();
   const linesOf = (t) => {
     if (!(t.mtext && t.wrap > 0)) return t.text.split('\n');
     let w = wrapped.get(t);
     if (!w) {
-      ctx.save(); ctx.font = `${t.h}px sans-serif`;
-      w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.widthFactor || 1), t.wrap);
+      ctx.save(); ctx.font = FONT;
+      w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.h / FONT_PX) * (t.widthFactor || 1), t.wrap);
       ctx.restore();
       wrapped.set(t, w);
     }
@@ -241,9 +250,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const widthOf = (t) => {
     let w = widths.get(t);
     if (w === undefined) {
-      ctx.save(); ctx.font = `${t.h}px sans-serif`;
+      ctx.save(); ctx.font = FONT;
       w = 0;
-      for (const l of linesOf(t)) w = Math.max(w, ctx.measureText(l).width * (t.widthFactor || 1));
+      for (const l of linesOf(t)) w = Math.max(w, ctx.measureText(l).width * (t.h / FONT_PX) * (t.widthFactor || 1));
       ctx.restore();
       widths.set(t, w);
     }
@@ -277,7 +286,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const sel = st.selected;
     const order = [...groups.values()].sort((a, b) => (a.layer === sel) - (b.layer === sel)); // the selected layer last, on top
     for (const g of order) {
-      if (st.off.has(g.layer)) continue;
+      if (hid(g)) continue;
       const hot = g.layer === sel || g.layer === st.hover;
       const col = g.layer === sel ? SELECTED : sel && g.layer !== st.hover ? FADED : g.colour;
       if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
@@ -301,7 +310,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     }
     // text: native, upright in its own frame
     for (const t of drawing.texts) {
-      if (st.off.has(t.layer)) continue;
+      if (hid(t)) continue;
       const px = t.h * st.s;
       if (px < MIN_TEXT_PX) continue; // too small to read: left out
       ctx.save();
@@ -309,21 +318,23 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
-      ctx.scale(1, -1);
+      // (in the font's own px from here, scaled to the text's height: FONT_PX)
+      const k0 = t.h / FONT_PX;
+      ctx.scale(k0, -k0);
       ctx.fillStyle = t.layer === sel ? SELECTED : sel && t.layer !== st.hover ? FADED : onPaper(t.colour);
-      ctx.font = `${t.h}px sans-serif`;
+      ctx.font = FONT;
       ctx.textAlign = t.align;
       // (an MTEXT with a reference width wraps at it, measured in the font -- js/dxf.js wrapLines;
       // made once per text, as the font's width does not change with the zoom; kept here, not in
       // the drawing)
       const lines = linesOf(t);
-      const lh = t.h * 1.4;
+      const lh = FONT_PX * 1.4;
       // aligned / fit (js/dxf.js): the text fitted to its baseline's length -- aligned in both
       // directions, fit in width only
       if (t.fit > 0) {
         let w = 0;
         for (const l of lines) w = Math.max(w, ctx.measureText(l).width); // (a loop: not a spread of every line)
-        if (w > 0) { const k = t.fit / w; ctx.scale(k, t.fitMode === 'aligned' ? k : 1); }
+        if (w > 0) { const k = t.fit / k0 / w; ctx.scale(k, t.fitMode === 'aligned' ? k : 1); }
       } else if (t.widthFactor) ctx.scale(t.widthFactor, 1); // (its width factor, 41)
       // backward / upside down (a TEXT's 71): mirrored about its point
       if (t.mirrorX || t.mirrorY) ctx.scale(t.mirrorX ? -1 : 1, t.mirrorY ? -1 : 1);
@@ -334,7 +345,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
         // an MTEXT block hangs from its point (top), or is centred on it (middle), or stands on it
         // (bottom): the attachment's row -- every row was drawn hanging, a dimension's value
         // (middle) half a block low, across the line it labels
-        const H = (lines.length - 1) * lh + t.h;
+        const H = (lines.length - 1) * lh + FONT_PX;
         const y0 = t.valign === 'middle' ? -H / 2 : t.valign === 'bottom' ? -H : 0;
         ctx.textBaseline = 'top';
         lines.forEach((l, i) => ctx.fillText(l, 0, y0 + i * lh));
@@ -387,7 +398,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const snapTree = () => tree || (tree = pointTree(snapPoints(drawing.paths, o)));
   function snapAt(px, py) {
     const [ux, uy] = toUnits(px, py);
-    return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !st.off.has(s[3]));
+    return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !hid({ layer: s[3], hold: s.hold }));
   }
   // the lines, indexed once for the hover and a click's layer: built just after the drawing is
   // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)
@@ -421,7 +432,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the layer of the line nearest css px (x, y), within HIT_PX
   function layerAt(px, py) {
     const [ux, uy] = toUnits(px, py);
-    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i) => !st.off.has(drawing.paths[i].layer));
+    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i) => !hid(drawing.paths[i]));
     if (pi >= 0) return drawing.paths[pi].layer;
     // else a text under the point (inside its box, as the extents take it): a layer only texts
     // use could not be picked
@@ -429,7 +440,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // drawn at all -- the estimate's box, uncut, picked a layer from empty sheet past a frame)
     const ti = textAt(textsIndexed(), ux, uy, (i) => {
       const t = drawing.texts[i];
-      if (st.off.has(t.layer) || t.h * st.s < MIN_TEXT_PX) return false;
+      if (hid(t) || t.h * st.s < MIN_TEXT_PX) return false;
       return !t.clip || (ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3]);
     });
     return ti >= 0 ? drawing.texts[ti].layer : null;

@@ -15,6 +15,27 @@
 // file named so that does not start so is not one). Without it the start only hints (an OBJ may
 // open with any statement, a glTF's JSON keys come in any order, a binary STL has no magic): the
 // viewer opens such a file by its name, so a start that says nothing is no fault.
+// The DWG releases js/dwg.js reads, by the version tag a file starts with: [the release's name,
+// the reader's version number]. The one table for the reader (which refuses any other tag), the
+// DWG row's range below, and check.html (js/list-check.js), which called an R12 drawing "ok · DWG"
+// that the page refuses (r64 A2). Kept here so this module does not load the DWG reader.
+// AC1013: the R14 pre-release stamp, in which AutoCAD R14 shipped most of its own sample drawings.
+export const DWG_RELEASES = {
+  AC1012: ['R13', 13], AC1013: ['R14 (AC1013)', 14], AC1014: ['R14', 14], AC1015: ['R2000', 15], AC1018: ['R2004', 18],
+  AC1021: ['R2007', 21], AC1024: ['R2010', 24], AC1027: ['R2013', 27], AC1032: ['R2018', 32],
+};
+const DWG_TAGS = Object.keys(DWG_RELEASES);
+// a version tag's refusal, or null for one the reader reads: an older tag is said as older, a later
+// one as later (every unread tag was "older than R13", a 2024 drawing too -- r64 A8)
+export function dwgRefusal(tag) {
+  if (DWG_RELEASES[tag]) return null;
+  if (!/^AC\d{4}$/.test(tag)) return 'not a DWG file';
+  const first = DWG_TAGS[0], last = DWG_TAGS[DWG_TAGS.length - 1];
+  const where = tag < first ? `older than ${DWG_RELEASES[first][0]}` : tag > last ? `later than ${DWG_RELEASES[last][0]}` : `no release of ${dwgRange()}`;
+  return `a ${tag} DWG (${where}) is not read`;
+}
+const dwgRange = () => `${DWG_RELEASES[DWG_TAGS[0]][0]} to ${DWG_RELEASES[DWG_TAGS[DWG_TAGS.length - 1]][0].replace(/^R(?=\d{4})/, '')}`;
+
 export const FORMATS = [
   { label: 'STEP', ext: ['stp', 'step'], kind: 'cad', cad: 'step', magic: true },
   { label: 'IGES', ext: ['igs', 'iges'], kind: 'cad', cad: 'iges' },
@@ -28,9 +49,8 @@ export const FORMATS = [
   { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true },
   { label: 'glTF', ext: ['gltf'], kind: 'mesh' },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
-  // (range: the releases js/dwg.js reads, said in "opens"; tests/test-formats.mjs holds it to dwg.js
-  // VERSION_NAMES -- kept here, not imported, so this table does not load the DWG reader)
-  { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true, range: 'R13 to 2018' },
+  // (range: the releases js/dwg.js reads, said in "opens": DWG_RELEASES' first to last)
+  { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true, range: dwgRange() },
   { label: 'zip', ext: ['zip'], kind: 'zip', magic: true },
 ];
 // (as: a 3MF is a zip, and its start says only that)
@@ -72,8 +92,8 @@ export function fileNameOfUrl(url) {
   return tail;
 }
 
-// A DWG by its bytes: "AC10" and two digits (R13 to R2018 are read; an older one reaches the
-// reader, which refuses it by name)
+// A DWG by its bytes: "AC10" and two digits (the releases in DWG_RELEASES are read; any other
+// reaches the reader, which refuses it in dwgRefusal's words)
 export const isDWGBytes = (b) => b.length >= 6 && b[0] === 0x41 && b[1] === 0x43 && b[2] === 0x31 && b[3] === 0x30 && b[4] >= 0x30 && b[4] <= 0x39 && b[5] >= 0x30 && b[5] <= 0x39;
 
 // The format a file's first bytes say (after gunzip), or null. A binary STL has no magic (its

@@ -553,5 +553,8 @@ for (const [rel, f] of Object.entries(files)) {
 t('not a DWG, and a pre-R13 DWG, are refused by name', () => {
   assert.throws(() => readDWG(new TextEncoder().encode('hello world')), /not a DWG file/);
   assert.throws(() => readDWG(new TextEncoder().encode('AC1009 an R12 drawing')), /AC1009 DWG \(older than R13\) is not read/);
+  // a later release is said as later, not "older than R13" (r64 A8); a tag between two read is neither
+  assert.throws(() => readDWG(new TextEncoder().encode('AC1035 a later drawing')), /AC1035 DWG \(later than R2018\) is not read/);
+  assert.throws(() => readDWG(new TextEncoder().encode('AC1016 a drawing')), /AC1016 DWG \(no release of R13 to 2018\) is not read/);
 });
 done();

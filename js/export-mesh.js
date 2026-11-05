@@ -43,6 +43,14 @@ function bodyOf(model, id, basis, scale) {
 }
 
 // ---- STL ----
+// s as UTF-8 in at most n bytes, cut before a character that would not fit whole
+export function utf8Within(s, n) {
+  const b = new TextEncoder().encode(s);
+  if (b.length <= n) return b;
+  let e = n;
+  while (e > 0 && (b[e] & 0xc0) === 0x80) e--;
+  return b.subarray(0, e);
+}
 export function toSTL(model, ids0, basis, name = 'model') {
   const [ids] = withTriangles(model, ids0, []);
   let n = 0;
@@ -50,8 +58,9 @@ export function toSTL(model, ids0, basis, name = 'model') {
   const buf = new ArrayBuffer(84 + 50 * n);
   const dv = new DataView(buf);
   // the header must not start with "solid" (an ASCII STL's first word)
-  const head = new TextEncoder().encode(`cad.place export: ${name}`.slice(0, 80));
-  new Uint8Array(buf, 0, 80).set(head);
+  // (80 BYTES, cut at a whole character: cut at 80 characters, a name of 21 CJK characters was
+  // more than 80 bytes of UTF-8 and the export threw "offset is out of bounds" -- r64 A1)
+  new Uint8Array(buf, 0, 80).set(utf8Within(`cad.place export: ${name}`, 80));
   dv.setUint32(80, n, true);
   let o = 84;
   for (const id of ids) {
@@ -125,7 +134,11 @@ export async function zip(files) {
 }
 
 // ---- 3MF ----
-const xmlEsc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+// (a character XML 1.0 does not allow -- a control character, a lone surrogate, U+FFFE/FFFF --
+// becomes U+FFFD: written as it was, a body name with one made a 3MF no strict XML parser reads -- r64 A3)
+export const xmlEsc = (s) => String(s)
+  .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '�')
+  .replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const hex2 = (v) => v.toString(16).padStart(2, '0').toUpperCase();
 const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/, '').replace(/\.$/, ''));
 

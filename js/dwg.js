@@ -20,6 +20,7 @@
 import { caret, valueKind, aciColour, STRUCTURE, parseDXF, unescapeDxf } from './dxf.js';
 import { crc32 } from './crc32.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
+import { DWG_RELEASES, dwgRefusal } from './formats.js';
 
 // --- checks -------------------------------------------------------------------------------------
 
@@ -55,10 +56,10 @@ function magic(n) {
 
 // --- 2: bit codes -------------------------------------------------------------------------------
 
-// AC1013: the R14 pre-release stamp, in which AutoCAD R14 shipped most of its own sample drawings;
-// read by the R14 rules (all 81 on the R14 media pass every check so)
-const VER = { AC1012: 13, AC1013: 14, AC1014: 14, AC1015: 15, AC1018: 18, AC1021: 21, AC1024: 24, AC1027: 27, AC1032: 32 };
-export const VERSION_NAMES = { AC1012: 'R13', AC1013: 'R14 (AC1013)', AC1014: 'R14', AC1015: 'R2000', AC1018: 'R2004', AC1021: 'R2007', AC1024: 'R2010', AC1027: 'R2013', AC1032: 'R2018' };
+// the releases read and their version numbers: js/formats.js DWG_RELEASES, the one table
+// (AC1013, R14's pre-release stamp, is read by the R14 rules: all 81 on the R14 media pass every check so)
+const VER = Object.fromEntries(Object.entries(DWG_RELEASES).map(([t, [, v]]) => [t, v]));
+export const VERSION_NAMES = Object.fromEntries(Object.entries(DWG_RELEASES).map(([t, [n]]) => [t, n]));
 
 class Bits {
   // b: the bytes; p: the bit position; v: the version number (13 .. 32)
@@ -999,6 +1000,9 @@ const DECODE = {
     o.d = d;
     this.entityHandles(o); d.style = o.h.Ha(o.handle);
   },
+  // (its flags -- a constant one, flags 2, is drawn in every insert of its block: js/dxf.js -- are
+  // not read here: read as an ATTRIB is, every ATTDEF failed its object's check, its own fields after
+  // the flags not read -- r64 Q4, open)
   ATTDEF(o, r, v) { o.d = text(r, v); },
   BLOCK(o, r) { o.d = { name: r.TV() }; this.entityHandles(o); },
   ENDBLK(o) { this.entityHandles(o); },
@@ -1362,7 +1366,7 @@ export function readDWG(buf) {
   const b = buf instanceof Uint8Array ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : new Uint8Array(buf);
   const tag = String.fromCharCode(...b.subarray(0, 6));
   const v = VER[tag];
-  if (!v) throw new Error(/^AC\d{4}$/.test(tag) ? `a ${tag} DWG (older than R13) is not read` : 'not a DWG file');
+  if (!v) throw new Error(dwgRefusal(tag));
   const chk = new Checks();
   const maint = b[0x0b];
   // a file too short for its file header, or whose container cannot be walked, is refused by name

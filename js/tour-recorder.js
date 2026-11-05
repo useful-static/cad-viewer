@@ -23,7 +23,7 @@ import { DEFAULTS, MAX_STEPS, RANGES, STEP_FIELDS, TEXT_MAX, TITLE_MAX, TOUR_VER
 // what a step keeps when the draft is written: the parser's own field list
 const STEP_KEYS = ['id', ...STEP_FIELDS];
 
-// A draft ({ title, mode, loop, orient, steps }) as the file holds it, the
+// A draft ({ title, mode, loop, orient, unit, steps }) as the file holds it, the
 // panel's own fields left out. Pure: tests/test-tour.mjs reads it back with
 // parseTour.
 export function draftToTour(draft, modelUrl = null) {

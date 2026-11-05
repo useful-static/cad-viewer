@@ -41,6 +41,9 @@ const FILES = {
   [`${B}case.3mf`]: Buffer.from('PK\x03\x04rest'),
   [`${B}ply-named-stl.stl`]: 'ply\nformat ascii 1.0\n',
   [`${B}dwg-named-dxf.dxf`]: Buffer.from('AC1015\0\0\0\0'),
+  [`${B}r12.dwg`]: Buffer.from('AC1009\0\0\0\0'),
+  [`${B}r12-named-dxf.dxf`]: Buffer.from('AC1009\0\0\0\0'),
+  [`${B}r2000.dwg`]: Buffer.from('AC1015\0\0\0\0'),
   // sent with Content-Encoding: gzip: the browser has unpacked it by the time it is read
   [`${B}unpacked.stp.gz`]: 'ISO-10303-21;\nHEADER;\n',
   [`${B}text.stp.gz`]: 'hello',
@@ -130,6 +133,20 @@ await test('a .dxf holding a DWG opens (a warning); a .gz that arrives unpacked 
   assert.match(up.detail, /arrives unpacked/);
   const junk = await checkFile(`${B}text.stp.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(junk.level, 'bad', junk.detail);
+});
+await test('a DWG of a release the page does not read is bad, in the reader\'s words, whatever its name (r64 A2)', async () => {
+  const { readDWG } = await import('../js/dwg.js');
+  let said = null;
+  try { readDWG(FILES[`${B}r12.dwg`]); } catch (e) { said = e.message; }
+  const r12 = await checkFile(`${B}r12.dwg`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(r12.level, 'bad', r12.detail);
+  assert.ok(r12.detail.includes(said), `${r12.detail} | ${said}`);
+  const named = await checkFile(`${B}r12-named-dxf.dxf`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(named.level, 'bad', named.detail);
+  assert.match(named.detail, /AC1009 DWG \(older than R13\) is not read \(named DXF\)/);
+  // must accept: a release it reads stays ok
+  const r2000 = await checkFile(`${B}r2000.dwg`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(r2000.level, 'ok', r2000.detail);
 });
 await test('a STEP the site sends without CORS is a warning (a download link needs none); a model so is bad', async () => {
   const step = await checkFile('https://other.example/x.stp', { fetchFn: fakeFetch, method: 'HEAD', download: true });

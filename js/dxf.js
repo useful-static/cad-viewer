@@ -278,8 +278,11 @@ export function parseDXF(s, opts = {}) {
       if (r.type !== 'LAYER') continue;
       const aci = num(r, 62, 7);
       const tc = get(r, 420, null);
+      // (frozen, kept apart from off: a block reference on a frozen layer draws none of its block,
+      // its entities on other layers too, where one on a layer that is off hides only what takes
+      // the insert's layer -- r64 Q1)
       layers.set(get(r, 2, '0'), { name: get(r, 2, '0'), colour: tc !== null ? trueColour(Number(tc)) : aciColour(Math.abs(aci)), on: aci >= 0 && !(num(r, 70) & 1),
-        ltype: get(r, 6, 'CONTINUOUS').toUpperCase(), weight: num(r, 370, -3) });
+        frozen: !!(num(r, 70) & 1), ltype: get(r, 6, 'CONTINUOUS').toUpperCase(), weight: num(r, 370, -3) });
     }
   }
   if (!layers.has('0')) layers.set('0', { name: '0', colour: aciColour(7), on: true });
@@ -312,9 +315,14 @@ export function parseDXF(s, opts = {}) {
   const notDrawn = {};
   const counted = new WeakSet();
   const countOnce = (r, k) => { if (counted.has(r)) return; counted.add(r); notDrawn[k] = (notDrawn[k] || 0) + 1; };
-  const ctxOf = (o) => ({ layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked,
-    add: (p) => { if (p.pts.every(Number.isFinite)) addItem(budget, o.paths, p, p.pts.length); },
-    addText: (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) addItem(budget, o.texts, t, 2); } });
+  // (hold: the frozen layer of the outermost block reference being walked, if one is -- each item
+  // drawn under it carries it, and is shown only while that layer is: r64 Q1)
+  const ctxOf = (o) => {
+    const c = { layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null };
+    c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; addItem(budget, o.paths, p, p.pts.length); } };
+    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (c.hold !== null) t.hold = c.hold; addItem(budget, o.texts, t, 2); } };
+    return c;
+  };
   emit(ents, IDENT, null, 0, ctxOf(out));
   // Layouts (paper space): the active one is the entities flagged 67 = 1,
   // others are the *Paper_Space<n> blocks. Each draws its own entities and,
@@ -841,10 +849,14 @@ function emit(recs, M, byBlock, depth, ctx) {
         }
         break;
       }
-      case 'TEXT': case 'MTEXT': case 'ATTRIB': {
+      case 'TEXT': case 'MTEXT': case 'ATTRIB': case 'ATTDEF': {
         // (an ATTRIB is a TEXT that follows its INSERT -- a title block's values -- and one
         // flagged invisible (70 bit 1) is not drawn; its vertical alignment is 74, not 73)
         if (r.type === 'ATTRIB' && (num(r, 70) & 1)) break;
+        // (an ATTDEF is its block's definition of one, not drawn -- STRUCTURE --, but a constant
+        // one (70 bit 2, not invisible) has no ATTRIB: its value is drawn from it, in every insert
+        // of its block, as an ATTRIB is -- r64 Q4)
+        if (r.type === 'ATTDEF' && (depth === 0 || (num(r, 70) & 3) !== 2)) break;
         // An R2018 multi-line ATTRIB holds its value as an embedded MTEXT after "101 Embedded
         // Object": that MTEXT is what is drawn -- its text, point, height and attachment (its own
         // group 1 is the first line only; drawn as a TEXT it stood 3.8 heights too high), the
@@ -852,9 +864,11 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (and an R2018 MTEXT's own groups end at its "101 Embedded Object": what follows -- a
         // point in its 11 -- was read as its direction, and 334 MTEXTs at hand drew turned 73.83°)
         if (r.src === undefined) {
-          const emb = r.type === 'ATTRIB' || r.type === 'MTEXT' ? r.g.findIndex((x) => x[0] === 101) : -1;
-          r.src = emb < 0 ? (r.type === 'ATTRIB' ? { type: 'ATTRIB', g: attribTextGroups(r.g) } : r)
-            : r.type === 'ATTRIB' ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : { type: 'MTEXT', g: r.g.slice(0, emb) };
+          // (an ATTDEF drawn is read as an ATTRIB is)
+          const att = r.type === 'ATTRIB' || r.type === 'ATTDEF';
+          const emb = att || r.type === 'MTEXT' ? r.g.findIndex((x) => x[0] === 101) : -1;
+          r.src = emb < 0 ? (att ? { type: 'ATTRIB', g: attribTextGroups(r.g) } : r)
+            : att ? { type: 'MTEXT', g: r.g.slice(emb + 1) } : { type: 'MTEXT', g: r.g.slice(0, emb) };
         }
         const e = r.src;
         const mt = e.type === 'MTEXT';
@@ -967,13 +981,18 @@ function emit(recs, M, byBlock, depth, ctx) {
         const ix = isDim ? 0 : num(q, 10), iy = isDim ? 0 : num(q, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
         if (ctx.walked) ctx.walked.add(get(q, 2, ''));
-        for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
-          const c = Math.cos(rot), s = Math.sin(rot);
-          // insertion point, then rotation and scale, the array cell, the block base
-          const T = [c * sx, s * sx, -s * sy, c * sy, ix + c * ci * dc - s * ri * dr, iy + s * ci * dc + c * ri * dr];
-          const B = [1, 0, 0, 1, -b.base[0], -b.base[1]];
-          emit(b.recs, mul(isDim ? M : O, mul(T, B)), inner, depth + 1, ctx);
-        }
+        // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
+        const held = ctx.hold;
+        if (held === null && L.frozen) ctx.hold = layer;
+        try {
+          for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
+            const c = Math.cos(rot), s = Math.sin(rot);
+            // insertion point, then rotation and scale, the array cell, the block base
+            const T = [c * sx, s * sx, -s * sy, c * sy, ix + c * ci * dc - s * ri * dr, iy + s * ci * dc + c * ri * dr];
+            const B = [1, 0, 0, 1, -b.base[0], -b.base[1]];
+            emit(b.recs, mul(isDim ? M : O, mul(T, B)), inner, depth + 1, ctx);
+          }
+        } finally { ctx.hold = held; }
         break;
       }
       case 'LEADER': {
@@ -1338,7 +1357,8 @@ function extentsOf(out) {
 // validation's comparator
 const ATTRIB_TEXT_CODES = new Set([11, 21, 41, 71, 72]);
 export function attribTextGroups(g) {
-  const k = g.findIndex((x) => x[0] === 100 && x[1] === 'AcDbAttribute');
+  // (an ATTDEF's part is AcDbAttributeDefinition: r64 Q4)
+  const k = g.findIndex((x) => x[0] === 100 && (x[1] === 'AcDbAttribute' || x[1] === 'AcDbAttributeDefinition'));
   return k < 0 ? g : g.filter((x, i) => i < k || !ATTRIB_TEXT_CODES.has(x[0]));
 }
 

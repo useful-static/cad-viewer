@@ -2,7 +2,8 @@
 // matched to a model's bodies. Pure (no DOM), so tests/test-tour.mjs checks it
 // in Node.
 //
-// A tour is { cadtour: 1|2, title?, model?, orient?, mode?, loop?, defaults?, steps: [...] }.
+// A tour is { cadtour: 1|2, title?, model?, orient?, unit?, mode?, loop?, defaults?, steps: [...] }
+// (unit: the unit its sizes were written in for a model with no unit of its own; tourAt below).
 // Version 2 is version 1 plus an optional step "id": a fixed name a page
 // can ask for one step by (?step=<id>), where a title is for people and
 // gets renamed. A v1 file with an "id" is refused, as any unknown field is.

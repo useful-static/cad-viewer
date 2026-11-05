@@ -9,7 +9,7 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, SNIFF_BYTES, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
+import { FORMATS, SNIFF_BYTES, dwgRefusal, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -124,9 +124,15 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     const got = inner ? sniffFormat(inner) : null;
     const want = namedFormat(url);
     if (gz) bits.push('gzip');
+    // a DWG of a release the reader does not read, whatever its name, is refused by the page:
+    // "ok · DWG" said an R12 drawing would open (r64 A2)
+    const unread = got === 'DWG' ? dwgRefusal(String.fromCharCode(...inner.subarray(0, 6))) : null;
     if (!inner) {
       bits.push('its gzip could not be read here');
       level = 'warn';
+    } else if (unread) {
+      bits.push(want && want !== got ? `${unread} (named ${want})` : unread);
+      level = 'bad';
     } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
       // the viewer opens a mesh or a 2D drawing by its bytes where they are conclusive
       // (js/mesh-formats.js meshFormatOf; a DWG by its "AC10" whatever its name), so a .stl

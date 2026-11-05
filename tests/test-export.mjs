@@ -75,6 +75,29 @@ await test('3MF: a zip with the three parts; mm; one object per body; a colour p
   assert.match(x, /name="Tri &amp; &lt;co&gt;"/);
   assert.match(x, /<vertex x="10" y="20" z="0"\/>/);
 });
+await test('a long non-ASCII name: the STL header is at most 80 bytes, cut at a whole character (r64 A1)', () => {
+  for (const name of ['板'.repeat(21), 'é'.repeat(70), '😀'.repeat(30), 'a'.repeat(200)]) {
+    const b = toSTL(model, [1, 2], IDENT, name);
+    assert.equal(b.length, 84 + 50 * 3, name);
+    const head = b.slice(0, 80);
+    const end = head.indexOf(0) < 0 ? 80 : head.indexOf(0);
+    // decoded strictly: a split character throws
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(head.slice(0, end));
+    assert.ok(`cad.place export: ${name}`.startsWith(text) && text.length > 20, text);
+  }
+});
+await test('3MF: a character XML does not allow in a body name is written as U+FFFD, so the file is well-formed (r64 A3)', async () => {
+  const files = unzip(await to3MF(model, [1, 2], IDENT, ['Pl\u0001ate\u001f', 'lone \ud800 x￿']));
+  const x = files['3D/3dmodel.model'];
+  assert.doesNotMatch(x, /[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/);
+  assert.doesNotMatch(x, /[\ud800-\udfff]/);
+  assert.match(x, /name="Pl�ate�"/);
+  assert.match(x, /name="lone � x�"/);
+  // must accept: a pair (an emoji) is one character, kept
+  const ok = unzip(await to3MF(model, [1, 2], IDENT, ['😀', 'tab\tok']))['3D/3dmodel.model'];
+  assert.match(ok, /name="😀"/);
+  assert.match(ok, /name="tab\tok"/);
+});
 await test('GLB: the header and chunks; per body a node, positions in metres with bounds, normals, colours, indices', () => {
   const g = toGLB(model, [1, 2], YUP);
   const dv = new DataView(g.buffer);

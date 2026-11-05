@@ -88,7 +88,7 @@ const app = {
   cancelTess: null,
   edgeJobs: new Map(), // base -> { stop, promise }: each model's running edge build (edgesOf, stopEdgeJobs)
   listPending: null, // { url, seq }: a model of the model list being opened (listedNow)
-  entryN: 0, // the last history entry id given (cadvEntry: wireHistory)
+  pageId: null, // this page's id, in each history entry it writes (cadvEntry: wireHistory)
   entryState: null, // the state of the history entry shown, as last seen
   fetchAbort: null, // the running download's AbortController (beginLoad aborts it)
   wanted: null,
@@ -3506,7 +3506,7 @@ function openListed(url, refocus = false, keepMenu = false) {
   const spelled = (h) => { const x = new URL(h); x.search = new URLSearchParams(x.search).toString(); return x.href; };
   if (spelled(u.href) !== spelled(location.href)) {
     c.at++;
-    history.pushState({ cadvPick: c.id, depth: c.at, cadvEntry: nextEntry() }, '', u);
+    history.pushState({ cadvPick: c.id, depth: c.at, cadvEntry: app.pageId }, '', u);
     app.entrySearch = u.search;
     app.entryState = history.state;
   }
@@ -3530,7 +3530,7 @@ function openListed(url, refocus = false, keepMenu = false) {
     // the address named them, the scene had the first model alone: r62 Q3)
     const adds = params.getAll('add').length;
     // (only over the first model: a file of the visitor's shown is theirs -- r63 Q2)
-    if (history.state && history.state.cadvFirst && adds && (app.scene || []).length < 1 + adds && addressModel() && app.sourceUrl === addressModel()) openStart(addressModel());
+    if (ownEntry(history.state) && history.state.cadvFirst && adds && (app.scene || []).length < 1 + adds && addressModel() && app.sourceUrl === addressModel()) openStart(addressModel());
     syncModelList();
   });
 }
@@ -3546,7 +3546,7 @@ async function unwindPick(c) {
     app.skipPop = true;
     go();
   });
-  const k = history.state && history.state.cadvPick === c.id ? history.state.depth : 0;
+  const k = ownEntry(history.state) && history.state.cadvPick === c.id ? history.state.depth : 0;
   if (k > 0) await step(() => history.go(-k));
   history.pushState(history.state, '', c.before);
   await step(() => history.back());
@@ -3559,24 +3559,36 @@ async function unwindPick(c) {
 // (app.entrySearch: the address of the entry shown. A browser fires popstate for a change of the
 // fragment alone too, before hashchange: that is an edit of the view, not another entry, and opening
 // the model again cancelled its download and every ?add= -- r59 Q2.)
-// A history entry's id, the next (cadvEntry: wireHistory)
-const nextEntry = () => (app.entryN = (app.entryN || 0) + 1);
+// This page's id, in every history entry it writes (cadvEntry: wireHistory): a history entry's
+// state outlives a reload, and the entries before it carry the marks of a page that is gone -- read
+// as this page's, Back after a reload kept the pick's model under the list's first's address (r64
+// Q3). A number counted from 1 told no page from another; nothing read it but as "there" (r64 Q6).
+const newPageId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+const ownEntry = (s) => !!(s && s.cadvEntry && s.cadvEntry === app.pageId);
+// (an entry another page wrote -- before a reload --: its marks are not this page's)
+const otherPages = (s) => !!(s && s.cadvEntry && s.cadvEntry !== app.pageId);
 function wireHistory() {
+  app.pageId = newPageId();
   app.entrySearch = location.search;
   // (the page as first opened, marked in its own entry's state: its address is rewritten under it --
   // syncUnitParam moves ?unit= while its model loads, forgetAddressModel drops its model --, and a
   // Back compared by its text found the first entry no longer and reopened its model alone: r61 A1)
-  // (every entry the page knows carries an id, cadvEntry: an entry without one is new, a #view= edit
+  // (every entry the page knows carries its id, cadvEntry = app.pageId: an entry without one is new, a #view= edit
   // just made, and takes its marks from the entry it was made on -- the first entry's mark, a pick's
   // depth; a step Back or Forward lands on one with an id, read as it is. Told apart by a pick's
   // stamp alone, an edit of the first entry lost its mark, and a step back onto the first entry was
   // read as an edit: r63 A1, Q1, Q3.)
-  history.replaceState({ ...(history.state || {}), cadvFirst: true, cadvEntry: nextEntry() }, '', location.href);
+  // (a reloaded entry's own marks were the page before's -- a pick's depth -- and are dropped)
+  const { cadvFirst: _f, cadvEntry: _e, cadvPick: _p, depth: _d, ...kept } = history.state || {};
+  history.replaceState({ ...kept, cadvFirst: true, cadvEntry: app.pageId }, '', location.href);
   app.entryState = history.state;
   const startHref = location.href;
   window.addEventListener('popstate', () => {
-    if (history.state && history.state.cadvEntry) app.entryState = history.state;
+    if (ownEntry(history.state)) app.entryState = history.state;
     if (app.skipPop) { app.skipPop = false; return; }
+    // (an entry from before a reload: its address opened as it opens fresh -- its model, lists,
+    // tour, ?add=s and view --, by loading it: this page's start and first model are not its)
+    if (otherPages(history.state)) { location.reload(); return; }
     if (location.search === app.entrySearch) return; // (the fragment alone: hashchange's)
     app.entrySearch = location.search;
     const search = new URLSearchParams(location.search);
@@ -3642,12 +3654,14 @@ function wireHistory() {
     // depth, an edit made on one of them one deeper, anything else outside it: unwindPick)
     const c = app.pickPending && app.pickChain;
     const s = history.state;
-    if (s && s.cadvEntry) {
+    // (an entry another page wrote is popstate's: reloaded there)
+    if (otherPages(s)) return;
+    if (ownEntry(s)) {
       app.entryState = s;
       if (c) c.at = s.cadvPick === c.id ? s.depth : 0;
     } else {
       const prev = app.entryState || {};
-      const own = { cadvEntry: nextEntry() };
+      const own = { cadvEntry: app.pageId };
       if (prev.cadvFirst) own.cadvFirst = true;
       if (c && prev.cadvPick === c.id) { c.at = prev.depth + 1; own.cadvPick = c.id; own.depth = c.at; } else if (c) c.at = 0;
       history.replaceState(own, '', location.href);
@@ -5080,6 +5094,14 @@ function setMeshUnit(u) {
   // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
   // the add under way, the address naming a model the scene lacked -- r63 A3)
   if (app.addsPending && app.addsChain) return app.addsChain.then(() => setMeshUnit(u));
+  // (nor over another model opening -- a list pick, a dropped file: the re-read is a load, and it
+  // ended that one, the visitor's pick lost and its entry taken back under the unit just written --
+  // r64 A4. A re-read of this one under way is replaced, as a second choice means.)
+  if (PROGRESS_STATES.has(app.status) && app.rereadSeq !== app.loadSeq) {
+    $('meshunit').value = src.unit;
+    tell(`not read in ${u}: another model is opening`);
+    return Promise.resolve();
+  }
   // (a tour shown is left first, the visitor's view put back: the re-read ends it anyway, and the
   // hidden parts kept below were then the step's -- a "hide" step left every other part hidden)
   if (app.tour) endTour();
@@ -5088,6 +5110,7 @@ function setMeshUnit(u) {
   const url = app.sourceUrl;
   return startLoad(() => {
     const seq = beginLoad();
+    app.rereadSeq = seq;
     if (url) app.urlOfLoad = { seq, url };
     setStatus('loading', `reading ${src.name} in ${u}`);
     // (the same bodies, at another size: the visitor's hidden parts stay hidden)

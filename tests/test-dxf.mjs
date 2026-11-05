@@ -1082,4 +1082,50 @@ test('a block entity of 100,000 groups inserted 2,500 times: its groups are read
   assert.equal(d.texts.length, 2500);
 });
 
+// (r64 Q1: a block reference on a frozen layer draws none of its block -- its entities on other,
+// thawed layers too; one on a layer that is off hides only what takes the insert's layer)
+const heldTo = (layerFlags) => parseDXF(dxf([
+  [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+  [0, 'LAYER'], [2, 'A'], [70, 0], [62, 1],
+  [0, 'LAYER'], [2, 'F'], [70, layerFlags], [62, 2],
+  [0, 'ENDTAB'], [0, 'ENDSEC'],
+  ...blocks([[0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0], [0, 'LINE'], [8, 'A'], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 5], [11, 1], [21, 5], [0, 'ENDBLK']],
+    [[0, 'BLOCK'], [2, 'OUTER'], [10, 0], [20, 0], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [0, 'ENDBLK']]),
+  [0, 'SECTION'], [2, 'ENTITIES'],
+  [0, 'INSERT'], [8, 'F'], [2, 'B'], [10, 0], [20, 0],
+  // (nested: a reference on F to a block that references B on layer 0, which takes F)
+  [0, 'INSERT'], [8, 'F'], [2, 'OUTER'], [10, 10], [20, 0],
+  [0, 'LINE'], [8, 'A'], [10, 0], [20, 9], [11, 1], [21, 9],
+  [0, 'ENDSEC'], [0, 'EOF']]));
+test('a block reference on a frozen layer: every item it draws is held to that layer, nested ones too; one on a layer off is not (r64 Q1)', () => {
+  const fz = heldTo(1);
+  const F = fz.layers.find((l) => l.name === 'F');
+  assert.deepEqual([F.on, F.frozen], [false, true]);
+  const paths = fz.paths.map((p) => [p.layer, p.hold ?? null, p.pts[1]]);
+  // B's line on A at y 0 and its layer-0 line at y 5 (which takes F), each twice (the nested one at x 10); the free line on A
+  assert.deepEqual(paths.sort(), [['A', 'F', 0], ['A', 'F', 0], ['A', null, 9], ['F', 'F', 5], ['F', 'F', 5]].sort());
+  // must accept: a layer only off holds nothing
+  const off = parseDXF(dxf([
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'], [0, 'LAYER'], [2, 'F'], [70, 0], [62, -2], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    ...blocks([[0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0], [0, 'LINE'], [8, 'A'], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'ENDBLK']]),
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, 'F'], [2, 'B'], [10, 0], [20, 0], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(off.paths.map((p) => [p.layer, p.hold ?? null]), [['A', null]]);
+  assert.equal(off.layers.find((l) => l.name === 'F').frozen, false);
+});
+// (r64 Q4: a constant attribute has no ATTRIB on the insert: its value is drawn from its definition)
+test('a constant ATTDEF (70 bit 2) is drawn in every insert of its block; a plain one, an invisible constant one, one outside a block are not (r64 Q4)', () => {
+  const att = (flags, tag, value) => [[0, 'ATTDEF'], [8, '0'], [100, 'AcDbText'], [10, 1], [20, 1], [40, 2], [1, value], [100, 'AcDbAttributeDefinition'], [3, 'prompt'], [2, tag], [70, flags]];
+  const t = parseDXF(dxf([
+    ...blocks([[0, 'BLOCK'], [2, 'TAG'], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 0],
+      ...att(2, 'C', 'CONST-VALUE'), ...att(0, 'P', 'default'), ...att(3, 'H', 'HIDDEN-CONST'), [0, 'ENDBLK']]),
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'INSERT'], [8, '0'], [2, 'TAG'], [10, 0], [20, 0], [66, 1],
+    [0, 'ATTRIB'], [8, '0'], [10, 1], [20, 1], [40, 2], [1, 'P-123'], [2, 'P'], [70, 0], [0, 'SEQEND'],
+    [0, 'INSERT'], [8, '0'], [2, 'TAG'], [10, 50], [20, 0],
+    ...att(2, 'MS', 'MODEL-SPACE-DEF'),
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(t.texts.map((x) => [x.text, x.x]).sort(), [['CONST-VALUE', 1], ['CONST-VALUE', 51], ['P-123', 1]].sort());
+  assert.deepEqual(t.notDrawn || {}, {});
+});
+
 done();

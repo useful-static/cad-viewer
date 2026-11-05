@@ -35,7 +35,9 @@
 //   I20 a failed pick leaves the history as it was before it (its own entries gone, none ahead);
 //   I21 the page leaves only by the visitor's own Back from its first entry;
 //   I22 the address's ?add=s are in the scene exactly when the address at the end names them;
-//   I23 "this file is in" writes ?unit= beside the model it is for.
+//   I23 "this file is in" writes ?unit= beside the model it is for;
+//   I24 after a reload, the model shown is the one the address shown opens fresh (Back onto an entry
+//       from before it read that page's marks as its own: r64 Q3).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -45,8 +47,36 @@
 //   node tests/test-startup-sweep.mjs --list     (every violation, not the first of each)
 
 import assert from 'node:assert/strict';
-import { runStart } from './startup-harness.mjs';
+import { runStart as runOnePage } from './startup-harness.mjs';
 import { test, done } from './harness.mjs';
+
+// One run across the reloads in it: a page that reloads -- the visitor's reload, or a step onto an
+// entry another page wrote -- is followed by the page the browser opens then, on the same history,
+// at the entry shown, with the acts not yet made (r64 Q3). The run's result is the last page's, and
+// pageCase the case it ran -- its address the page's own start, its acts those made on it -- which
+// the invariants are checked against; allEvents: every page's, each after the first marked "page".
+async function runStart(c) {
+  let r = await runOnePage(c);
+  const events = [...r.events];
+  let rest = [].concat(c.after || []).slice(r.afterDone || 0);
+  let page = c;
+  for (let n = 0; r.reloaded && n < 4; n++) {
+    const u = new URL(r.prior.stack[r.prior.at].href);
+    // (the page opens its entry's address: its own search and fragment, the outcome's network as it was)
+    // (the first page's moments are its own; a case's duringNext are the next page's)
+    page = { ...c, q: u.search.slice(1), hash: u.hash, during: n === 0 ? c.duringNext || [] : [], early: undefined, after: rest, prior: r.prior };
+    // (its address's own shape: a tour or a list only where it names one)
+    const addr = { ...c.addr, q: page.q, list: /(?:^|&)list=/.test(page.q) };
+    if (!/(?:^|&)tour=/.test(page.q)) delete addr.tour;
+    page.addr = addr;
+    r = await runOnePage(page);
+    events.push('page', ...r.events);
+    rest = rest.slice(r.afterDone || 0);
+  }
+  r.allEvents = events;
+  r.pageCase = page;
+  return r;
+}
 
 // (each entry with a tour of its own, as a list's models carry them: the entry's tour plays when its
 // model opens, held back by the address's tour and by a view link's view over it -- r58 A3)
@@ -187,6 +217,18 @@ function acts(a, embed) {
     out.push(['Back during the pick\'s load', { slow: ['b.stl'], during: [{ at: 'b.stl', back: true }], after: [{ pick: 2 }] }],
       ['a pick, Back, then Forward', { after: [{ pick: 2 }, { back: true }, { forward: true }] }]);
   }
+  // (r64 Q3: a reload keeps the history, and the entries before it are another page's)
+  out.push(['a reload', { after: [{ reload: true }] }]);
+  if (a.list && embed !== 'poster') {
+    out.push(['a list pick, a reload, then Back', { after: [{ pick: 2 }, { reload: true }, { back: true }] }],
+      ['a list pick, a reload, Back, then Forward', { after: [{ pick: 2 }, { reload: true }, { back: true }, { forward: true }] }],
+      ['a list pick, Back, a reload, then Forward', { after: [{ pick: 2 }, { back: true }, { reload: true }, { forward: true }] }],
+      // (a pick on the reloaded page: its chain must not read the page before's marks on its entry)
+      ['a list pick, a reload, then a list pick that fails', { failsPick: 'd', after: [{ pick: 2 }, { reload: true }, { pick: 3 }] }],
+      // (an edit during it takes its marks from the reloaded entry: the page before's pick depth
+      // there sent the take-back one step too far)
+      ['a list pick, a reload, then a list pick that fails, an edit during it', { failsPick: 'd', slow: ['d.stl'], duringNext: [{ at: 'd.stl', hash: true }], after: [{ pick: 2 }, { reload: true }, { pick: 3 }] }]);
+  }
   // (r62 Q2: "this file is in" inches once the model shows; Q4: a drop, a pick, then Back)
   out.push(['this file is in inches, after', { after: [{ unit: 'in' }] }]);
   if (a.list && embed !== 'poster') {
@@ -204,6 +246,13 @@ function acts(a, embed) {
         ['a drop during the model, a list pick, Back during it', { slow: ['b.stl'], during: [{ at: 'model', file: 'v.stl' }, { at: 'b.stl', back: true }], after: [{ pick: 2 }] }]);
     }
   }
+  // (r64 A4: "this file is in" while something else loads -- a slow ?add=, a list pick, a dropped
+  // file: the wait for the adds, and a re-read begun over a load, never ran)
+  if (addOf(a.q) && embed !== 'poster') out.push(['this file is in inches, during a slow ?add=', { slow: [addOf(a.q)], during: [{ at: addOf(a.q), unit: 'in' }] }]);
+  if (a.list && embed !== 'poster' && !/(?:^|&)(index=2|src=b\.stl)/.test(a.q)) {
+    out.push(['this file is in inches, during a list pick', { slow: ['b.stl'], during: [{ at: 'b.stl', unit: 'in' }], after: [{ pick: 2 }] }]);
+  }
+  out.push(['this file is in inches, during a dropped file', { slow: ['v.stl'], during: [{ at: 'v.stl', unit: 'in' }], after: [{ file: 'v.stl' }] }]);
   // (r63 A1: during a slow ?add=, an edit, then a pick that fails -- the edited first entry's adds put back)
   if (a.list && addOf(a.q) && embed !== 'poster') out.push(['during a slow ?add=, an edit, then a pick that fails', { failsPick: true, slow: [addOf(a.q)], during: [{ at: addOf(a.q), hash: true }, { at: addOf(a.q), pick: 2 }] }]);
   // (r63 Q1: the start's model failing, picked again, Back during the retry -- on an address spelled
@@ -252,7 +301,9 @@ function caseOf(a, embedQ, o, actC) {
 
 // The invariants, each a check of one run: a list of [invariant, what was seen] when broken
 const visitorFiles = new Set(['v.stl', 'e.stl']);
-function check(c, r) {
+function check(c0, r) {
+  // (a run that reloaded: the last page's own start and acts -- runStart)
+  const c = r.pageCase || c0;
   const bad = [];
   const v = (inv, why) => bad.push([inv, why]);
   if (r.threw) v('I8', `threw ${r.threw}`);
@@ -405,7 +456,8 @@ function check(c, r) {
     if (!idx && !hq.get('src') && !hq.get('model') && r.app.addressUrl && shownF !== String(r.app.addressUrl).split('/').pop()) v('I19', `the address names the page as first opened (${String(r.app.addressUrl).split('/').pop()}), ${shownF} shown`);
   }
   // (and the entry's hidden parts laid once per open, not again by a later rule run: r60 Q6 H)
-  const opens = r.events.map((e, i) => [e, i]).filter(([e]) => e.startsWith('load ')).map(([, i]) => i);
+  // (a re-read in another unit is no open: it keeps the visitor's hidden parts, which it lays again -- r64 A4)
+  const opens = r.events.map((e, i) => [e, i]).filter(([e]) => e.startsWith('load ') || e.startsWith('reread ')).map(([, i]) => i);
   opens.forEach((i, k) => {
     const seg = r.events.slice(i, opens[k + 1] ?? r.events.length);
     if (seg.filter((e) => e === 'hide').length > 1) v('I15', `the entry's hidden parts laid ${seg.filter((e) => e === 'hide').length} times in one open`);
@@ -455,6 +507,15 @@ function check(c, r) {
       v('I22', `a failed pick opened again a scene that was whole (${r.events.join(' > ')})`);
     }
   }
+  // I24: after a reload, the model shown is the one the address shown opens fresh -- its ?src, its
+  // ?index, else a tour's own model, else the list's first (unless that one fails, as I19)
+  if ([].concat(c0.after || []).some((d) => d.reload) && r.status === 'ready' && r.app.sourceUrl && !r.left) {
+    const hq = new URL(r.href).searchParams;
+    const fresh = hq.get('src') ? decodeURIComponent(hq.get('src')).split('/').pop() : hq.get('index') ? ['a.stl', 'b.stl', 'd.stl'][+hq.get('index') - 1]
+      : hq.get('model') ? null : hq.get('tour') && c.addr.tour && !/^tour (fails|times out)/.test(c.outcome) ? c.addr.tour : hq.get('list') ? 'a.stl' : null;
+    const shownF = String(r.app.sourceUrl).split('/').pop();
+    if (fresh && shownF !== fresh && !(c.fails || []).includes(fresh)) v('I24', `after a reload ${shownF} shown, the address ${r.href} opens ${fresh}`);
+  }
   // I23: "this file is in" puts ?unit= beside the model it is for: a reload opens that model in that
   // unit (written beside an address naming no model, a reload ignored it and dropped it: r62 Q2)
   if (acts.some((d) => d.unit) && r.app.sourceUrl && !r.left) {
@@ -468,9 +529,17 @@ function check(c, r) {
     const typed = !resolved && qp.get('unit') && !qp.get('index') && !qp.get('src') && !qp.get('model');
     if (hq.get('unit') && resolved !== shownU && !(c.fails || []).includes(resolved) && !typed) v('I23', `?unit= beside an address naming ${resolved || 'no model it has'}, ${shownU} shown: ${r.href}`);
   }
+  // (and the other way: a model alone, from a URL, read in a unit not mm has that ?unit= in the
+  // address, so a reload opens it so -- syncUnitParam beside the model the address names, r64 A4)
+  if (r.status === 'ready' && !r.left && r.app.sourceUrl && (r.app.scene || []).length === 1 && r.unitRead && r.unitRead !== 'mm'
+    && new URL(r.href).searchParams.get('unit') !== r.unitRead) {
+    v('I23', `${String(r.app.sourceUrl).split('/').pop()} read in ${r.unitRead}, the address's ?unit= ${new URL(r.href).searchParams.get('unit') || 'none'}: ${r.href}`);
+  }
   // (and Back to the page as first opened keeps the unit the visitor chose there -- the start's
   // address put back lost it: r63 A2)
-  if (acts.some((d) => d.unit) && acts.some((d) => d.back) && !r.left && r.status === 'ready' && r.app.sourceUrl
+  // (not on a page that opens as a scene -- ?add= --: a scene has no "this file is in", the
+  // harness's copy wrote one there: r64 A4)
+  if (acts.some((d) => d.unit) && acts.some((d) => d.back) && !r.left && r.status === 'ready' && r.app.sourceUrl && !qp.get('add')
     && String(r.app.sourceUrl).split('/').pop() === firstOfAddress(c) && !new URL(r.href).searchParams.get('unit')) {
     v('I23', `Back to the page as first opened dropped the visitor's ?unit=: ${r.href}`);
   }
@@ -544,7 +613,8 @@ function check(c, r) {
     const f = e.slice(6);
     const own = `tour ${f[0]}t.json`;
     const end = k + 1 < shows.length ? shows[k + 1][1] : ev.length;
-    const nextShown = ev.findIndex((x, j) => j > i && x.startsWith('shown '));
+    // (to the next model shown, or the next re-read of this one: it ends the tour, and keeps the visitor's hidden parts)
+    const nextShown = ev.findIndex((x, j) => j > i && (x.startsWith('shown ') || x.startsWith('reread ')));
     const seg = ev.slice(i + 1, nextShown < 0 ? ev.length : nextShown);
     const viewAt = seg.findIndex((x) => x.startsWith('view ')), ownAt = seg.indexOf(own);
     // (a view applied at the load comes before the entry's rules: applied first, then its tour)
@@ -602,6 +672,8 @@ export function endState(r) {
     view: view ? view.slice(5) : null, tour: tour ? tour.slice(5) : null, poster: r.posterUp, entries: r.entries, history: hist,
     // (a take-back left waiting, or a chain left open: the stuck state an end state did not show, r63 Q11)
     stuck: { skipPop: !!r.app.skipPop, chain: !!r.app.pickChain },
+    // (the unit the model shown was read in, a model alone -- r64 Q5)
+    unit: (r.app.scene || []).length === 1 ? r.unitRead || 'mm' : null,
   };
 }
 
@@ -631,6 +703,16 @@ if (exportAt > 0) {
   }
   writeFileSync(process.argv[exportAt + 1], JSON.stringify(out, null, 1));
   console.log(`EXPORT ${out.length} runs of ${cases.length}`);
+  process.exit(0);
+}
+
+// (--one <name>: one run, its events, history and violations, to read a finding by)
+const oneAt = process.argv.indexOf('--one');
+if (oneAt > 0) {
+  const item = cases.find(([n]) => n === process.argv[oneAt + 1]);
+  if (!item) { console.log(`no run named ${process.argv[oneAt + 1]}`); process.exit(2); }
+  const r = await runStart(item[1]);
+  console.log(JSON.stringify({ events: r.events, href: r.href, stack: r.stack, at: r.at, status: r.status, msg: r.msg, unitRead: r.unitRead, threw: r.threw, violations: check(item[1], r) }, null, 1));
   process.exit(0);
 }
 
