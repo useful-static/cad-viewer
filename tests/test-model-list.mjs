@@ -222,6 +222,25 @@ await test('a relative ?src= / ?add= the list names is found by the URL the list
   assert.equal(listedUrlFrom('b.stl', ['https://ex.example/lists/l.json'], plain.entries, base), null);
   // (the entry's own fields unchanged: the URL it was read from is not one of them)
   assert.deepEqual(Object.keys(plain.entries[0]).sort(), ['name', 'url']);
+  // (two lists naming the same file, the second answering from elsewhere: a relative address read
+  // against the second finds it -- the entry kept the first list's URL alone: r56 Q4)
+  const two = await fetchModelLists(['https://ex.example/one/l.json', 'https://ex.example/l.json'], base, async (u) => {
+    const r = new Response(String(u).includes('/one/') ? JSON.stringify({ '../v2/m/a.stl': 'A' }) : JSON.stringify({ 'm/a.stl': 'A' }), { status: 200 });
+    if (!String(u).includes('/one/')) Object.defineProperty(r, 'url', { value: 'https://ex.example/v2/l.json' });
+    return r;
+  });
+  assert.deepEqual(two.entries.map((e) => e.url), ['https://ex.example/v2/m/a.stl'], 'one file, named by both');
+  assert.equal(listedUrlFrom('m/a.stl', ['https://ex.example/one/l.json', 'https://ex.example/l.json'], two.entries, base), 'https://ex.example/v2/m/a.stl');
+});
+
+await test('an address\'s place in the list: one test for its model and its name (r56 A5)', async () => {
+  const { modelUrlFrom, modelNameFrom } = await import('../js/model-list.js');
+  const entries = [{ url: 'https://ex.example/a.stl' }, { url: 'https://ex.example/b.stl' }];
+  const q = new URLSearchParams('index=x&src=2');
+  // (the name said "2"; the model was the raw string "2", read as a URL and 404'd)
+  assert.equal(modelNameFrom(q, ['l.json']), '2');
+  assert.equal(modelUrlFrom(q, ['l.json'], entries, 'https://ex.example/'), 'https://ex.example/b.stl');
+  assert.equal(modelUrlFrom(new URLSearchParams('index=1&src=2'), ['l.json'], entries, 'https://ex.example/'), 'https://ex.example/a.stl', '?index= first');
 });
 
 done();

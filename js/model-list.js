@@ -127,6 +127,10 @@ export function entryByName(entries, name) {
 // example.com/models.json), else against the page. The one rule for the page (main.js modelUrlIn)
 // and for its early fetch (js/early.js), which starts the model's download before main.js runs.
 const isPlace = (raw) => /^\d+$/.test(raw || '');
+// The place in the list an address names: ?index=, else a numeric ?src= (links made before ?index=);
+// one test for the model's URL and for its name (they tested it apart, and ?index=x&src=2 named
+// "2" while the URL was the raw string "2", a 404: r56 A5)
+const placeIn = (search) => [search.get('index'), search.get('src')].find(isPlace) || null;
 // (relative to the page or to a list: not a scheme's URL, not a //host one)
 export const isRelative = (s) => !!s && !/^[a-z][a-z0-9+.-]*:/i.test(s) && !s.startsWith('//');
 // Whether the address asks for an embed's poster (?embed=1&poster=<image>): its picture, and the
@@ -139,14 +143,19 @@ export const READ_TIMEOUT_MS = 20000;
 // Whether a read failed by that time running out -- at the headers or while the body still came (the
 // signal covers both): one test for the page's list and tour reads and check.html's (r55 A5, Q7)
 export const isTimeout = (e) => !!e && e.name === 'TimeoutError';
+// The URL a fetched file was read from, which what it names resolves against: the one that answered
+// (a redirect's target), else the one asked. The one rule for a list's files and a tour's model, on
+// the page and in check.html (a tour resolved against the URL asked, a list against the one that
+// answered: r56 A1)
+export const answeredFrom = (res, asked) => (res && res.url) || asked;
 // (check.html's list check reads lists and tours by it too: without it, a list that answers in 21 s
 // read 🟢 there and "no answer in time" on cad.place -- r54 A2)
 export const timedFetch = (u, init = {}) => fetch(u, typeof AbortSignal.timeout === 'function' ? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : init);
 export function modelUrlFrom(search, lists, entries, base) {
   const listed = lists.length > 0;
   if (listed && search.get('model')) return entryByName(entries, search.get('model'))?.url || null;
-  const place = search.get('index') || (listed && isPlace(search.get('src')) ? search.get('src') : null);
-  if (listed && isPlace(place)) return entries?.[Number(place) - 1]?.url || null;
+  const place = placeIn(search);
+  if (listed && place) return entries?.[Number(place) - 1]?.url || null;
   const src = search.get('src');
   return (listed && listedUrlFrom(src, lists, entries, base)) || src || null;
 }
@@ -160,8 +169,9 @@ export function modelUrlFrom(search, lists, entries, base) {
 export function listedUrlFrom(ref, lists, entries, base) {
   if (!isRelative(ref)) return null;
   for (const e of entries || []) {
-    if (!e.listUrl) continue;
-    try { if (new URL(ref, e.listUrl).href === e.url) return e.url; } catch { /* not a URL */ }
+    for (const from of e.listUrls || []) {
+      try { if (new URL(ref, from).href === e.url) return e.url; } catch { /* not a URL */ }
+    }
   }
   for (const l of lists) {
     let url = null;
@@ -176,7 +186,7 @@ export function listedUrlFrom(ref, lists, entries, base) {
 export function modelNameFrom(search, lists) {
   if (!lists.length) return null;
   if (search.get('model')) return `"${search.get('model')}"`;
-  const place = [search.get('index'), search.get('src')].find(isPlace);
+  const place = placeIn(search);
   if (place) return place;
   return isRelative(search.get('src')) ? `"${search.get('src')}"` : null;
 }
@@ -301,13 +311,19 @@ export function joinModelLists(lists) {
   const out = [];
   for (const l of lists) {
     for (const e of l) {
-      if (seen.has(e.url)) continue;
+      // (a file two lists name keeps its first place -- and the URL the second was read from too, so
+      // a relative address from either list finds it: it was the first list's alone, r56 Q4)
+      if (seen.has(e.url)) {
+        const kept = out.find((x) => x.url === e.url);
+        if (kept?.listUrls && e.listUrls) kept.listUrls.push(...e.listUrls.filter((u) => !kept.listUrls.includes(u)));
+        continue;
+      }
       seen.add(e.url);
       let x = e;
       if ((e.id && named.has(e.id)) || (e.aliases || []).some((a) => named.has(a))) {
         x = { ...e, aliases: (e.aliases || []).filter((a) => !named.has(a)) };
         if (named.has(e.id)) delete x.id;
-        if (e.listUrl) Object.defineProperty(x, 'listUrl', { value: e.listUrl, enumerable: false }); // (not spread)
+        if (e.listUrls) Object.defineProperty(x, 'listUrls', { value: e.listUrls, enumerable: false }); // (not spread)
       }
       for (const n of [x.id, ...(x.aliases || [])].filter(Boolean)) named.add(n);
       out.push(x);
@@ -362,8 +378,8 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
       // (each entry keeps the URL its list was read from -- a share page's file, a redirect's target --
       // which a relative ?src= / ?add= naming it resolves against: listedUrlFrom. Not enumerable: the
       // entry's own fields stay what the list says)
-      const from = res.url || url;
-      return { entries: parseModelList(text, from).map((e) => Object.defineProperty(e, 'listUrl', { value: from, enumerable: false })) };
+      const from = answeredFrom(res, url);
+      return { entries: parseModelList(text, from).map((e) => Object.defineProperty(e, 'listUrls', { value: [from], enumerable: false })) };
     } catch (e) {
       // fetch's own TypeError says only "Failed to fetch": no CORS, or no answer
       const message = e instanceof TypeError && !url ? 'not a URL'

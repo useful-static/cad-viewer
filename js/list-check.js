@@ -7,7 +7,7 @@
 // tried. Pure apart from fetch, which the caller passes (tests pass a fake):
 // tests/test-list-check.mjs.
 
-import { READ_TIMEOUT_MS, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
+import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, SNIFF_BYTES, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
 import { fileUrl } from './open-url.js';
@@ -170,7 +170,7 @@ export async function checkTour(url, fetchFn = timedFetch) {
   }
   if (!res.ok) return { level: 'bad', detail: `${res.status === 404 ? 'not found' : 'refused'} (${res.status})`, url };
   try {
-    const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), url);
+    const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), answeredFrom(res, url));
     return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}`, url };
   } catch (e) {
     // (the time given up while the body still came: a timeout, not a fault of the tour -- it read

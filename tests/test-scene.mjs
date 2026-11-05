@@ -15,7 +15,7 @@ import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
 import { box, washer } from './brep-model.mjs';
-import { entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
+import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
@@ -1596,6 +1596,30 @@ const START_CASES = {
   // which nothing opened: the tour's own model is the first)
   '?list= + an empty ?model= + ?tour= with its model': { q: 'list=l.json&model=&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR('c.stl') },
     want: ['ready', 'ready', [false, ''], [], ['c.stl'], true] },
+  // (r56 A1: a tour that answered from elsewhere names its model from there, as a list does)
+  '?tour= that redirects, with its model': { q: 'tour=latest/t.json', serve: { 'latest/t.json': TOUR('m.stl') }, redirect: { 'latest/t.json': 'v2/t.json' },
+    urls: [`${SITE}v2/m.stl`], want: ['ready', 'ready', [false, ''], [], ['m.stl'], true] },
+  // (r56 A2: the model the page first showed from its address, which Back means: the tour's own, not the list's first)
+  '?list= + ?tour= with its model: the address\'s model': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR('c.stl') }, address: 'c.stl',
+    want: ['ready', 'ready', [false, ''], [], ['c.stl'], true] },
+  // (r56 Q1: a tour that failed did not stop the list's first opening)
+  '?list= + ?tour= unread': { q: 'list=l.json&tour=t.json', serve: { 'l.json': LISTED }, address: 'a.stl',
+    want: ['ready', `ready · ${T404}`, [false, ''], [T404], ['a.stl'], false] },
+  // (r56 A6, Q9: a name the list lacks beside a tour with no model: "its first opens", said as it does)
+  '?list= + a ?model= it lacks + ?tour= with no model': { q: 'list=l.json&model=nope&tour=t.json', serve: { 'l.json': LISTED, 't.json': TOUR() },
+    want: ['ready', 'ready', [false, ''], ['the model list has no model "nope": its first opens'], ['a.stl'], true] },
+  // (r56 A3, Q2: pressed while a tour alone with no model is read: the page as without a poster, as when read before)
+  'View in 3D pressed while an embed\'s ?tour= with no model is read': { q: 'embed=1&tour=t.json&poster=p.png', serve: { 't.json': TOUR() },
+    during: [{ at: 't.json', click: true }], want: ['idle', 'no model to show', [true, ''], [READY_T], [], false] },
+  // (r56 Q5: a refusal during the tour's read behind the poster is told, and the tour's model opens)
+  'View in 3D pressed while an embed\'s ?tour= with its model is read, then a file over the size refused': { q: 'embed=1&tour=t.json&poster=p.png', serve: { 't.json': TOUR('a.stl') },
+    during: [{ at: 't.json', click: true }, { at: 't.json', file: 'big.stl', size: 3e9 }], want: ['ready', 'ready', [false, ''], [BIGO], ['a.stl'], true] },
+  // (r56 Q6: View in 3D with a tour and no model to play over -- the ?src= failed -- says the tour is ready)
+  'an embed\'s poster + a ?src= that fails + ?tour= with no model, View in 3D': { q: 'embed=1&src=a.stl&poster=p.png&tour=t.json', serve: { 't.json': TOUR() },
+    fails: ['a.stl'], click: true, want: ['error', A404, [true, A404], [READY_T], ['a.stl'], false] },
+  // (r56 Q7: Add model… during the tour's read adds to the address's model, which the tour then plays over)
+  'Add model… while the tour is read, beside ?src=': { q: 'src=a.stl&tour=t.json', serve: { 't.json': TOUR('a.stl') }, slow: ['t.json'],
+    during: [{ at: 'loaded a.stl', add: 'e.stl' }], want: ['ready', 'ready', [false, ''], [], ['a.stl', 'e.stl'], true] },
   // (r54 A7, Q5: pressed while the list is read, the card says it is read, then the list's first opens)
   'View in 3D pressed while an embed\'s ?list= is read': { q: 'embed=1&list=l.json&poster=p.png', serve: { 'l.json': LISTED },
     during: [{ at: 'l.json', click: true }], progress: 'reading the model list, no Cancel', want: ['ready', 'ready', [false, ''], [], ['a.stl'], false] },
@@ -1666,8 +1690,8 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
     'function failApart(msg) {', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
     'async function readTour(url) {', 'function listEntry(src) {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
-    'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {'].map(cutIf).join('')
-    + line('const tourPlaysHere = ')
+    'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {'].map(cutIf).join('')
+    + line('const tourPlaysHere = ') + line('const addressModel = ')
     + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {') + line('const isPlace = ') + line('const isRelative = ')
     + line('const autoTourKey = ') + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
     + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
@@ -1696,20 +1720,26 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     // (or presses View in 3D then, through the page's own wired button: r54 Q6, A1)
     const visit = (at) => {
       for (const d of [].concat(c.during || [])) {
-        if (d.at === at) setTimeout(() => (d.click ? dom.posterload.onclick() : run.openFile({ name: d.file, size: d.size || 10 })), 0);
+        if (d.at === at) {
+          setTimeout(() => (d.click ? dom.posterload.onclick() : d.add ? run.addPicked([{ name: d.add, size: 10 }]) : run.openFile({ name: d.file, size: d.size || 10 })), 0);
+        }
       }
     };
     const fetchFake = async (u) => {
       const path = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
       visit(path);
-      for (let i = 0; i < 3; i++) await tick();
+      for (let i = 0; i < ((c.slow || []).includes(path) ? 30 : 3); i++) await tick();
       // (an answer that never comes in time: the fetch's own timeout)
       if (serve[path] === 'TIMEOUT') { const e = new Error('signal timed out'); e.name = 'TimeoutError'; throw e; }
       // (or the headers in time, the body not: the signal covers both -- r55 A5, Q7)
       if (serve[path] === 'BODY-TIMEOUT') {
         return new Response(new ReadableStream({ start(ctl) { ctl.error(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })); } }), { status: 200 });
       }
-      return path in serve ? new Response(serve[path], { status: 200 }) : new Response('', { status: 404 });
+      if (!(path in serve)) return new Response('', { status: 404 });
+      const res = new Response(serve[path], { status: 200 });
+      // (an answer from elsewhere: a redirect's target, the URL that answered)
+      if (c.redirect && c.redirect[path]) Object.defineProperty(res, 'url', { value: SITE + c.redirect[path] });
+      return res;
     };
     // (the load itself: numbered, "loading", then the model shown -- or, added (startAdd), joined to
     // the scene, the first model's URL kept -- or its failure thrown for guard)
@@ -1729,19 +1759,20 @@ await test('the start-up contract: each address, embed, poster and early pick, m
       if (adding) app.scene.push({ url });
       else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: url });
       k.setStatus('ready', k.readyText());
+      visit(`loaded ${file}`); // (a visitor's act once the model is shown)
     };
     run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES', 'params',
       'location', 'document', 'window', 'fetch', 'fetchModelLists', 'fillModelList', 'entryByName', 'fileUrl', 'readCapped', 'parseTour', 'MAX_TOUR_BYTES',
       'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
       'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists', 'posterAsked', 'timedFetch', 'releaseEarly',
-      'isRelative', 'listedUrlFrom', 'isTimeout',
+      'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom',
       `${body}; return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile };`)(
       app, (id) => dom[id], (t) => shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
       { href: `${SITE}?${c.q}${c.hash || ''}`, hash: c.hash || '' }, doc, { addEventListener() {} }, fetchFake, fetchModelLists, (e) => { app.listEntries = e; }, entryByName, fileUrl,
       readCapped, parseTour, MAX_TOUR_BYTES, async () => 'could not be read', fakeLoad, () => { tour = true; }, () => {}, (t, f, d) => progress.push(`${d}${dom.pcancel.hidden ? ', no Cancel' : ''}`), () => {},
       (on) => { embedActive = on; },
       () => { views++; }, () => ({ view: 1 }), orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, () => null,
-      posterAsked, fetchFake, () => { released++; return 0; }, isRelative, listedUrlFrom, isTimeout);
+      posterAsked, fetchFake, () => { released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom);
     try {
       const early = c.early ? run.earlyPick(c.early) : null;
       await run.startFromUrl(early);
@@ -1758,8 +1789,11 @@ await test('the start-up contract: each address, embed, poster and early pick, m
     // (a #view= applied once, after the adds it waits for, and the wait ended: r52 Q4)
     if (c.views !== undefined && (views !== c.views || app.addsPending)) failed.push(`${name}: views applied ${views}, addsPending ${app.addsPending}; want ${c.views}, false`);
     if (c.posterGone && !dom.poster.hidden) failed.push(`${name}: the poster still up over the model`);
-    // (the poster taken down for a file is the embed made active, as View in 3D makes it: r55 Q8 M19)
-    if (c.posterGone && !embedActive) failed.push(`${name}: the embed not made active with the poster down`);
+    // (the poster taken down for a file is the embed made active, as View in 3D makes it: r55 Q8 M19;
+    // and View in 3D's own press -- checked only for drops: r56 A4)
+    if ((c.posterGone || c.click) && !embedActive) failed.push(`${name}: the embed not made active with the poster down`);
+    // (the model the page as first opened shows, which Back to it and a #view= on it mean: r56 A2)
+    if (c.address !== undefined && String(app.addressUrl || '').split('/').pop() !== c.address) failed.push(`${name}: the address's model ${app.addressUrl}, want ${c.address}`);
     // (the address's tour over by the end, played or not: a list model's own tour then plays -- r55 A3, Q2)
     // (a poster still up keeps it, for View in 3D)
     if (app.urlTourPending && dom.poster.hidden) failed.push(`${name}: the address's tour still pending at the end`);
@@ -1799,7 +1833,9 @@ test('a zip\'s companions for its model: its own folder\'s first, a same-named f
   // (<name>/source/ beside <name>/textures/: the other model's textures/ not this one's -- r55 Q6)
   assert.deepEqual(zipCompanions(['red/source/c.obj', 'red/source/c.mtl', 'red/textures/w.png', 'blue/source/c.obj', 'blue/textures/w.png'], 'red/source/c.obj'),
     ['red/source/c.mtl as c.mtl', 'red/textures/w.png as ../textures/w.png']);
-  assert.deepEqual(zipCompanions(['Red/Source/c.obj', 'red/textures/W.png'], 'Red/Source/c.obj'), ['red/textures/W.png as ../textures/W.png'], 'the way up without case');
+  // (the companion's own folder named in another case than the model's: the way up compared without
+  // case -- its path was lower-case already, and the arm could not fail: r56 Q8)
+  assert.deepEqual(zipCompanions(['Red/Source/c.obj', 'RED/Textures/W.png'], 'Red/Source/c.obj'), ['RED/Textures/W.png as ../Textures/W.png'], 'the way up without case');
   // (a model under the first's folder: its folder is its own, and the first's files are not its)
   assert.deepEqual(zipCompanions(['a/x.obj', 'a/x.mtl', 'a/b/y.obj', 'a/b/y.mtl'], 'a/x.obj'), ['a/x.mtl as x.mtl']);
   assert.deepEqual(zipCompanions(['a/x.obj', 'a/x.mtl', 'a/b/y.obj', 'a/b/y.mtl'], 'a/b/y.obj'), ['a/b/y.mtl as y.mtl']);
@@ -1820,6 +1856,29 @@ await test('a mesh\'s companion files together are capped at the size a file may
   // (over it together, though each is under: refused, the mesh never read)
   await assert.rejects(loadMeshFile(new ArrayBuffer(4), 'b.obj', 1, [extra('b.mtl', 60), extra('t.png', 60)]), /^Error: b\.obj: its companion files come to over 0 GB, more than this viewer opens$/);
   assert.equal(read.length, 1);
+});
+
+await test('a list pick ends the address\'s tour, and Back to the first entry opens the model the address opened (r56 Q3, A2)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+  const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
+  const app = { urlTourPending: true, header: {}, sourceUrl: 'https://s.example/c.stl', listEntries: [{ url: 'https://s.example/a.stl' }, { url: 'https://s.example/b.stl' }] };
+  const loaded = [];
+  let pop = null;
+  const loc = { href: 'https://s.example/?list=l.json', search: '?list=l.json', hash: '' };
+  const f = new Function('app', 'setModelParam', 'history', 'closeMenus', 'loadListed', 'syncModelList', 'location', 'window', 'modelUrlIn', 'decodeView', 'autoTourKey',
+    `let listPick = 0;\n${cut('function openListed(url, refocus = false, keepMenu = false) {')}${cut('function wireHistory() {')}${cut('function tourOver() {')}${line('const addressModel = ')}; return { openListed, wireHistory };`)(
+    app, () => {}, { pushState() {}, replaceState() {}, back() {}, state: null }, () => {}, (u) => { loaded.push(u); return Promise.resolve(); }, () => {}, loc,
+    { addEventListener: (ev, fn) => { if (ev === 'popstate') pop = fn; } }, () => null, () => null, () => app.sourceUrl);
+  // (a pick while the address's tour is read: the tour over, the pick's own then plays -- neither did)
+  f.openListed('https://s.example/b.stl');
+  assert.deepEqual([app.urlTourPending, app.autoTourFor], [false, 'https://s.example/c.stl'], 'the address\'s tour over at the pick');
+  // (Back to the first entry, which opened the tour's model c.stl: c.stl, not the list's first)
+  app.addressUrl = 'https://s.example/c.stl';
+  app.sourceUrl = 'https://s.example/b.stl';
+  f.wireHistory();
+  pop();
+  assert.deepEqual(loaded, ['https://s.example/b.stl', 'https://s.example/c.stl']);
 });
 
 // main.js's own loadUrl and readLists take the early downloads, once: a ?src= page downloaded its
@@ -1859,6 +1918,9 @@ await test('loadUrl takes the model\'s early download and readLists the early re
   await assert.rejects(f.loadUrl('b.stl'), /\(the model list gave no models -- the model list names no models -- so/);
   Object.assign(app, { listEntries: [{ url: 'https://s.example/a.stl' }], listNote: '' });
   await assert.rejects(f.loadUrl('b.stl'), /\(a relative address the model list does not name is read from this page's address/);
+  // (one list of two read, the other failed: the failed one may be the one naming it -- r56 A7, Q10)
+  Object.assign(app, { listNote: 'model list https://s.example/two.json: not found (404)' });
+  await assert.rejects(f.loadUrl('b.stl'), /\(no model list that was read names it, so it is read from this page's address -- model list https:\/\/s\.example\/two\.json: not found \(404\): give the full URL\)/);
   globalThis.fetch = realFetch;
 });
 
