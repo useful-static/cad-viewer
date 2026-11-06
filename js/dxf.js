@@ -315,12 +315,14 @@ export function parseDXF(s, opts = {}) {
   const notDrawn = {};
   const counted = new WeakSet();
   const countOnce = (r, k) => { if (counted.has(r)) return; counted.add(r); notDrawn[k] = (notDrawn[k] || 0) + 1; };
-  // (hold: the frozen layer of the outermost block reference being walked, if one is -- each item
-  // drawn under it carries it, and is shown only while that layer is: r64 Q1)
+  // (hold: the frozen layers of the block references being walked, outermost first, if any are --
+  // each item drawn under them carries them, and is shown only while every one is: r64 Q1; the
+  // outermost alone let a frozen reference inside another show, its outer layer turned on: r65 A3)
   const ctxOf = (o) => {
     const c = { layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null };
     c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; addItem(budget, o.paths, p, p.pts.length); } };
-    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (c.hold !== null) t.hold = c.hold; addItem(budget, o.texts, t, 2); } };
+    // (an INSERT's ATTRIB comes held already, by its insert's frozen layer: r65 A2)
+    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; addItem(budget, o.texts, t, 2); } };
     return c;
   };
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -434,7 +436,7 @@ export function parseDXF(s, opts = {}) {
       }
       frame(v, rect);
     }
-    return { name: sheet && sheet.name ? sheet.name : recs === active ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo) };
+    return { name: sheet && sheet.name ? sheet.name : recs === active ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo, layers) };
   });
   // (a layer no table names, in model space or a layout, is a layer too -- one only texts use as
   // well: its texts could not be hidden, and the layer count was short)
@@ -444,7 +446,7 @@ export function parseDXF(s, opts = {}) {
   for (const l of layouts) { untabled(l.paths); untabled(l.texts); }
   const u = UNITS[insunits];
   return { units: u ? u[0] : null, insunits,
-    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out), paperSpace, layouts, notDrawn };
+    layers: [...layers.values()], paths: out.paths, texts: out.texts, extents: extentsOf(out, layers), paperSpace, layouts, notDrawn };
 }
 
 // A drawing text's fields that are lengths in drawing units (the text contract): what a
@@ -654,8 +656,11 @@ function clipped(budget, n) {
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
   walk(ctx.budget, recs.length);
+  // (the hold of the INSERT just walked, for the ATTRIBs after it: r65 A2)
+  let attHold = null;
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
+    if (r.type !== 'ATTRIB' && r.type !== 'SEQEND') attHold = null;
     // an entity marked invisible (60 = 1; a DWG's "invisibility") is not drawn: AutoCAD's dynamic
     // blocks mark every visibility state but the shown one so, and all of them were drawn on top
     // of each other (the records that belong to it -- a POLYLINE's VERTEXes, an INSERT's
@@ -954,6 +959,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           delete item.dir;
           if (!item.fit && sy > 0 && Math.abs(sx / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sx / sy);
         }
+        if (r.type === 'ATTRIB' && attHold) item.hold = attHold;
         ctx.addText(item);
         break;
       }
@@ -983,7 +989,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (ctx.walked) ctx.walked.add(get(q, 2, ''));
         // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
         const held = ctx.hold;
-        if (held === null && L.frozen) ctx.hold = layer;
+        if (L.frozen) ctx.hold = held && held.includes(layer) ? held : [...(held || []), layer];
+        // (and the ATTRIBs that follow it, to its SEQEND: they are the reference's -- r65 A2)
+        attHold = L.frozen ? ctx.hold : null;
         try {
           for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
             const c = Math.cos(rot), s = Math.sin(rot);
@@ -1327,7 +1335,21 @@ export function textCodes(s, codepage = 'windows-1252') {
 }
 const mtextAlign = (a) => ['left', 'center', 'right'][(a - 1) % 3] || 'left';
 
-function extentsOf(out) {
+// The layers an item answers to: its own and every frozen one it is drawn under (its hold). The one
+// rule for the 2D view, the layer list and the info panel (js/main.js) and the extents (r65 A3)
+export const layersOf = (it) => (it.hold ? [it.layer, ...it.hold] : [it.layer]);
+// whether an item is drawn as the drawing opens: every layer it answers to on (not off, not frozen)
+const layerIn = (layers, n) => (layers.get ? layers.get(n) : layers.find((x) => x.name === n));
+export const drawnAtOpen = (it, layers) => layersOf(it).every((n) => { const l = layerIn(layers, n); return !l || l.on; });
+// (the extents leave out what a frozen layer holds, as AutoCAD's Zoom Extents does -- a frozen
+// layer's reference far off made the drawing open at 1% of the view: r65 A4 --; a layer only off
+// still counts, as there; all of it when that leaves nothing)
+const thawed = (it, layers) => layersOf(it).every((n) => { const l = layerIn(layers, n); return !l || !l.frozen; });
+function extentsOf(out, layers) {
+  const kept = layers ? { paths: out.paths.filter((p) => thawed(p, layers)), texts: out.texts.filter((t) => thawed(t, layers)) } : out;
+  return (layers && itemsBox(kept)) || itemsBox(out);
+}
+function itemsBox(out) {
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
   for (const p of out.paths) {
     // (a wide polyline reaches half its width past its points: Fit cut it at the edge)

@@ -113,7 +113,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
-  + line('const autoTourKey = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+  + line('const autoTourKey = ') + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)
@@ -195,7 +195,7 @@ export async function runStart(c) {
     o.acted.push(d); // (an act set for a moment that never comes -- no model loads -- is not one)
     // (a pick needs an entry to pick: before the list has answered there is none)
     o.events.push(d.pick ? (app.listEntries?.[d.pick - 1] ? 'pick' : 'pick (no entry)') : d.add ? `add${app.scene ? '' : ' (no scene)'}`
-      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? 'unit' : `file ${d.file}`);
+      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? (app.header && app.meshSource && app.meshSource.unit !== d.unit && app.addsPending && app.addsChain ? 'unit while adds wait' : app.header && app.meshSource && app.meshSource.unit !== d.unit && !(app.addsPending && app.addsChain) && ['loading', 'tessellating'].includes(app.status) && app.rereadSeq !== app.loadSeq ? 'unit while another opens' : 'unit') : `file ${d.file}`);
     if (d.click) return dom.posterload.onclick && dom.posterload.onclick();
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));

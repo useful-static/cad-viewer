@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { onPaper, textCorners, wrapLines } from './dxf.js';
+import { layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unitWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
@@ -189,7 +189,7 @@ export function snapPoints(paths, o) {
     if (!s) {
       if (made.size > 4096) made.clear();
       s = [xy[2 * i], xy[2 * i + 1], SNAP_KINDS[kind[i]], paths[path[i]].layer, ...(kind[i] === 2 ? [rad.get(i)] : [])];
-      if (paths[path[i]].hold != null) s.hold = paths[path[i]].hold; // (and the frozen layer it is held to: r64 Q1)
+      if (paths[path[i]].hold) s.hold = paths[path[i]].hold; // (and the frozen layers it is held to: r64 Q1)
       made.set(i, s);
     }
     return s;
@@ -203,15 +203,15 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const o = [(ext.min[0] + ext.max[0]) / 2, (ext.min[1] + ext.max[1]) / 2];
   const st = { s: 1, c: [0, 0], selected: null, hover: null, off: new Set(drawing.layers.filter((l) => !l.on).map((l) => l.name)),
     measure: false, pending: null, results: [], snap: null };
-  // an item not shown: its layer off, or the frozen layer of the block reference it is drawn under
-  // (js/dxf.js hold: a reference on a frozen layer draws none of its block -- r64 Q1)
-  const hid = (it) => st.off.has(it.layer) || (it.hold != null && st.off.has(it.hold));
+  // an item not shown: its layer off, or a frozen layer of a block reference it is drawn under
+  // (js/dxf.js layersOf / hold: a reference on a frozen layer draws none of its block -- r64 Q1)
+  const hid = (it) => layersOf(it).some((n) => st.off.has(n));
   // the drawing's unit as written for a reader ("µm"), as the info panel writes it
   const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
-    const key = `${p.layer}\u0000${p.hold ?? ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
+    const key = `${p.layer}\u0000${p.hold ? p.hold.join('\u0001') : ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
     let g = groups.get(key);
     // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
     // drawing units (it scales with the zoom, as on paper)

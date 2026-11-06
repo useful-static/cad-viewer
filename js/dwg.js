@@ -1000,10 +1000,18 @@ const DECODE = {
     o.d = d;
     this.entityHandles(o); d.style = o.h.Ha(o.handle);
   },
-  // (its flags -- a constant one, flags 2, is drawn in every insert of its block: js/dxf.js -- are
-  // not read here: read as an ATTRIB is, every ATTDEF failed its object's check, its own fields after
-  // the flags not read -- r64 Q4, open)
-  ATTDEF(o, r, v) { o.d = text(r, v); },
+  // 20.4.5: an ATTDEF begins as an ATTRIB does -- its text, version, type, tag, field length,
+  // flags -- then its own: (R2007+) the lock-position flag, (R2010+) a second version, its prompt.
+  // Its flags say a constant one (2), drawn in every insert of its block, which has no ATTRIB for
+  // it (js/dxf.js -- r64 Q4). (Decoded through `this.ATTRIB`, every ATTDEF threw: a decoder's
+  // this is the reader, not DECODE -- the "decode ATTDEF" failures of round 64's try.)
+  ATTDEF(o, r, v) {
+    DECODE.ATTRIB.call(this, o, r, v);
+    if (o.d.multi) return;
+    if (v >= 21) o.d.lock = r.B();
+    if (v >= 24) r.RC();
+    o.d.prompt = r.TV();
+  },
   BLOCK(o, r) { o.d = { name: r.TV() }; this.entityHandles(o); },
   ENDBLK(o) { this.entityHandles(o); },
   SEQEND(o) { this.entityHandles(o); },
@@ -1609,6 +1617,22 @@ export function dwgToPairs(dwg) {
         common(o.name);
         d.c.forEach((p, k) => { put(10 + k, p[0]); put(20 + k, p[1]); put(30 + k, d.z); });
         ext(d.ext); break;
+      case 'ATTDEF': {
+        // a constant attribute (flags 2, not invisible 1) is drawn from its definition, in every
+        // insert of its block (r64 Q4); any other is the definition only (js/dxf.js STRUCTURE)
+        if (d.multi || !(d.flags & 2) || (d.flags & 1)) break;
+        common('ATTDEF'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h);
+        put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' ')); put(2, d.tag); put(70, d.flags);
+        if (d.rot) put(50, deg(d.rot));
+        if (d.wf !== 1) put(41, d.wf);
+        if (d.oblique) put(51, deg(d.oblique));
+        if (d.gen) put(71, d.gen);
+        if (d.ha) put(72, d.ha);
+        if (d.ha || d.va) { put(11, d.a[0]); put(21, d.a[1]); put(31, d.elev); }
+        ext(d.ext);
+        if (d.va) put(74, d.va);
+        break;
+      }
       case 'TEXT': {
         // a DXF value is one line: a line break in single-line text becomes a space
         common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' '));

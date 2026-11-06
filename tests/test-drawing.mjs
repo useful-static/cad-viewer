@@ -51,6 +51,10 @@ test('the caption and names are escaped', () => {
   const d = drawingSVG([{ name: 'A & <B>', geom: g }], ...TOP, { title: 'x < y' });
   assert.match(d.svg, /<title>A &amp; &lt;B&gt;<\/title>/);
   assert.match(d.svg, />x &lt; y<\/text>/);
+  // (a character XML does not allow -- a control character -- as U+FFFD, as the 3MF writes it: r65 A1)
+  const c = drawingSVG([{ name: 'Pl\u0001ate', geom: g }], ...TOP, { title: 'cap\u001f' });
+  assert.doesNotMatch(c.svg, /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+  assert.match(c.svg, /<title>Pl�ate<\/title>/);
 });
 
 done();

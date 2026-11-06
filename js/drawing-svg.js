@@ -9,8 +9,9 @@
 
 import { circleOf } from './measure-geom.js';
 import { cross, dot } from './vec3.js';
-
-const esc = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+// (the one XML escape, the 3MF writer's: a body name with a control character went raw into the
+// SVG, which no strict XML parser read, where the 3MF wrote U+FFFD -- r65 A1)
+import { xmlEsc as esc } from './export-mesh.js';
 const n3 = (v) => (Math.abs(v) < 5e-4 ? '0' : v.toFixed(3).replace(/\.?0+$/, ''));
 
 // parts: [{ name, geom }] (geom: bodyGeometry's { edges, circles, a }: a, the

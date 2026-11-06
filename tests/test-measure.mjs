@@ -114,6 +114,18 @@ test('4,000 rims on one axis (fins on a shaft): paired in order along it, fast',
   assert.equal(holesOf({ faces: one, P: new Float32Array(0), I: new Uint32Array(0) }).length, 16000);
   assert.ok(Date.now() - t1 < 600, `one way ${Date.now() - t1} ms`);
 });
+test('far out, a loop 2.8% off a circle is not one, a true rim still is (as float32) (r65 Q3)', () => {
+  const f = (v) => Math.fround(v);
+  // n points round (cx, cy, cz) of radius r, one axis stretched by e (an ellipse e off a circle)
+  const loop = (r, e, o, n = 24) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return [f(o + r * (1 + e) * Math.cos(t)), f(o + r * Math.sin(t)), f(o)]; });
+  for (const o of [5000, 20000]) {
+    assert.equal(circleOf(loop(0.151, 0.028, o), 0.5), null, `a 2.8% loop of Ø0.302 ${o} mm out`);
+    assert.equal(circleOf(loop(0.0865, 0.118, o), 0.5), null, `an 11.8% loop of Ø0.173 ${o} mm out`);
+  }
+  // must accept: a true Ø0.2 rim 5 m out, and a Ø3 one 20 m out
+  assert.ok(circleOf(loop(0.1, 0, 5000), 0.5), 'Ø0.2 at 5 m');
+  assert.ok(circleOf(loop(1.5, 0, 20000), 0.5), 'Ø3 at 20 m');
+});
 test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off the origin, and small 5 m out', () => {
   // a washer about any axis d at o, as float32
   const unit = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l); };

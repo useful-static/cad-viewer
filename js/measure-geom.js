@@ -23,8 +23,15 @@ const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
 // what float32 positions can tell apart near a coordinate of size `far`: 2^-23 of it, eight times
-// over (a sum of a few rounded terms). The one floor for planeOf, circleOf and wallJoins
+// over (a sum of a few rounded terms) -- planeOf's floor, a plane's thickness from many points
 const storedFloor = (far) => 8 * 2 ** -23 * far;
+// a point's distance from a centre, as stored: one unit in the last place (2^-23 of `far`) -- the
+// floor of circleOf and wallJoins. Eight let a loop 2.8% off a circle pass as a hole a few metres
+// out (the RK3399 board 5 m out gained two; six of eight boards more at 20 m: r65 Q3)
+const storedUlp = (far) => 2 ** -23 * far;
+// a rim whose radius the stored positions cannot tell to this share is no circle that can be told:
+// not one (r65 Q3)
+const TELLABLE = 0.05;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
@@ -81,7 +88,8 @@ export function circleOf(pts, angularDeflection) {
   // "not a circle")
   let far = 0;
   for (const p of pts) far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
-  const stored = storedFloor(far);
+  const stored = storedUlp(far);
+  if (stored > TELLABLE * r) return null;
   for (const [x, y, z] of xy) {
     if (Math.abs(z) > Math.max(EPS_PLANAR * r, stored)) return null;
     if (Math.abs(Math.hypot(x - cx, y - cy) - r) > Math.max(RADIUS_TOL * r, stored)) return null;
@@ -412,7 +420,7 @@ function wallJoins(geom, a, b) {
         const d = [P[v] - c[0], P[v + 1] - c[1], P[v + 2] - c[2]];
         const along = dot(d, n);
         const off = len(sub(d, n.map((x) => x * along)));
-        const tol = Math.max(RADIUS_TOL * a.radius, storedFloor(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
+        const tol = Math.max(RADIUS_TOL * a.radius, storedUlp(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
         if (Math.abs(off - a.radius) > tol) { on = false; break; }
         t0 = Math.min(t0, along); t1 = Math.max(t1, along);
       }

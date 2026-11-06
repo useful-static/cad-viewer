@@ -507,6 +507,23 @@ t('round 18: drops counted only where the drawing reaches them; a missing block\
   });
 }
 
+// --- a constant attribute (ATTDEF flags 2) drawn in each insert of its block, as a DXF's is
+// (DWG_CONST_ATTDEF_FILE: a drawing holding one in an inserted block -- r64 Q4, r65) ---
+{
+  const p = process.env.DWG_CONST_ATTDEF_FILE || '';
+  if (!p || !existsSync(p)) skip('a DWG\'s constant ATTDEF drawn', 'DWG_CONST_ATTDEF_FILE unset or absent');
+  else t('a DWG\'s ATTDEFs all decode, and a constant one is drawn in each insert of its block', () => {
+    const d = readDWG(new Uint8Array(readFileSync(p)));
+    const defs = [...d.objects.values()].filter((o) => o.name === 'ATTDEF');
+    assert.deepEqual(defs.filter((o) => o.error).map((o) => o.error), []);
+    const insertsOf = (c) => [...d.objects.values()].filter((o) => o.name === 'INSERT' && o.d && o.d.block === c.e.owner).length;
+    const c = defs.find((o) => o.d && !o.d.multi && (o.d.flags & 3) === 2 && o.d.text.trim() && insertsOf(o) > 0);
+    assert.ok(c, 'the file holds a constant ATTDEF with a value, in a block that is inserted');
+    const inserts = insertsOf(c);
+    assert.ok(parseDXF(dwgToPairs(d)).texts.filter((x) => x.text === c.d.text).length >= inserts);
+  });
+}
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };
@@ -556,5 +573,7 @@ t('not a DWG, and a pre-R13 DWG, are refused by name', () => {
   // a later release is said as later, not "older than R13" (r64 A8); a tag between two read is neither
   assert.throws(() => readDWG(new TextEncoder().encode('AC1035 a later drawing')), /AC1035 DWG \(later than R2018\) is not read/);
   assert.throws(() => readDWG(new TextEncoder().encode('AC1016 a drawing')), /AC1016 DWG \(no release of R13 to 2018\) is not read/);
+  // (a release before R10, its tag with a point: older, not "not a DWG file" -- r65 Q8)
+  assert.throws(() => readDWG(new TextEncoder().encode('AC2.10 an R2.10 drawing')), /^Error: an AC2\.10 DWG \(older than R13\) is not read$/);
 });
 done();

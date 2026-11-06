@@ -37,7 +37,8 @@
 //   I22 the address's ?add=s are in the scene exactly when the address at the end names them;
 //   I23 "this file is in" writes ?unit= beside the model it is for;
 //   I24 after a reload, the model shown is the one the address shown opens fresh (Back onto an entry
-//       from before it read that page's marks as its own: r64 Q3).
+//       from before it read that page's marks as its own: r64 Q3);
+//   I25 "this file is in" while another model opens is refused in words (r64 S1; untested: r65 A6).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -64,7 +65,9 @@ async function runStart(c) {
     const u = new URL(r.prior.stack[r.prior.at].href);
     // (the page opens its entry's address: its own search and fragment, the outcome's network as it was)
     // (the first page's moments are its own; a case's duringNext are the next page's)
-    page = { ...c, q: u.search.slice(1), hash: u.hash, during: n === 0 ? c.duringNext || [] : [], early: undefined, after: rest, prior: r.prior };
+    // (and a case's failsNext, the files that fail from the next page on: a model that loaded
+    // before the reload and fails after it -- every page had the first's network: r65 Q5)
+    page = { ...c, q: u.search.slice(1), hash: u.hash, during: n === 0 ? c.duringNext || [] : [], early: undefined, after: rest, prior: r.prior, fails: c.failsNext || c.fails };
     // (its address's own shape: a tour or a list only where it names one)
     const addr = { ...c.addr, q: page.q, list: /(?:^|&)list=/.test(page.q) };
     if (!/(?:^|&)tour=/.test(page.q)) delete addr.tour;
@@ -132,6 +135,9 @@ const ADDRESSES = {
   // (the list's first named, with a view: a pick that fails returns to it -- r60 A5)
   'list+index1+view': { q: 'list=lists/l.json&index=1', hash: '#view=v', list: true },
   'src+late list+view': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json`, hash: '#view=v', list: true, lateList: true },
+  // (its model shown while its ?add= waits for the list, nothing loading: "this file is in" then
+  // ended the add -- the wait the round-64 audit called shadowed: r65 Q6)
+  'src+late list+add': { q: `src=${encodeURIComponent('https://site.example/v/lists/a.stl')}&list=lists/l.json&add=x.stl`, list: true, lateList: true },
 };
 // the model an address's ?add= names
 const addOf = (q) => (q.match(/(?:^|&)add=([^&]+)/) || [])[1] || null;
@@ -227,7 +233,10 @@ function acts(a, embed) {
       ['a list pick, a reload, then a list pick that fails', { failsPick: 'd', after: [{ pick: 2 }, { reload: true }, { pick: 3 }] }],
       // (an edit during it takes its marks from the reloaded entry: the page before's pick depth
       // there sent the take-back one step too far)
-      ['a list pick, a reload, then a list pick that fails, an edit during it', { failsPick: 'd', slow: ['d.stl'], duringNext: [{ at: 'd.stl', hash: true }], after: [{ pick: 2 }, { reload: true }, { pick: 3 }] }]);
+      ['a list pick, a reload, then a list pick that fails, an edit during it', { failsPick: 'd', slow: ['d.stl'], duringNext: [{ at: 'd.stl', hash: true }], after: [{ pick: 2 }, { reload: true }, { pick: 3 }] }],
+      // (r65 Q5: the pick's model failing after the reload, picked again -- the new page's first
+      // chain, whose number the page before's marks on that entry carry)
+      ['a list pick, a reload, the pick\'s model now failing, picked again', { failsNext: ['b.stl'], after: [{ pick: 2 }, { reload: true }, { pick: 2 }] }]);
   }
   // (r62 Q2: "this file is in" inches once the model shows; Q4: a drop, a pick, then Back)
   out.push(['this file is in inches, after', { after: [{ unit: 'in' }] }]);
@@ -253,6 +262,10 @@ function acts(a, embed) {
     out.push(['this file is in inches, during a list pick', { slow: ['b.stl'], during: [{ at: 'b.stl', unit: 'in' }], after: [{ pick: 2 }] }]);
   }
   out.push(['this file is in inches, during a dropped file', { slow: ['v.stl'], during: [{ at: 'v.stl', unit: 'in' }], after: [{ file: 'v.stl' }] }]);
+  // (r65 Q6: once the model shows, its ?add= still waiting -- for a late list. Only there: with the
+  // list in, the add starts at once, and in the page the act came after it joined -- the
+  // differential, r65)
+  if (addOf(a.q) && a.lateList) out.push(['this file is in inches, once the model shows', { during: [{ at: `loaded ${firstOfAddress({ addr: a })}`, unit: 'in' }] }]);
   // (r63 A1: during a slow ?add=, an edit, then a pick that fails -- the edited first entry's adds put back)
   if (a.list && addOf(a.q) && embed !== 'poster') out.push(['during a slow ?add=, an edit, then a pick that fails', { failsPick: true, slow: [addOf(a.q)], during: [{ at: addOf(a.q), hash: true }, { at: addOf(a.q), pick: 2 }] }]);
   // (r63 Q1: the start's model failing, picked again, Back during the retry -- on an address spelled
@@ -507,14 +520,28 @@ function check(c0, r) {
       v('I22', `a failed pick opened again a scene that was whole (${r.events.join(' > ')})`);
     }
   }
+  // I25: "this file is in" chosen while another model opens is refused, and said so
+  if (r.events.includes('unit while another opens') && !r.shown.some((t) => /^not read in inches: another model is opening$/.test(t))) {
+    v('I25', `"this file is in" while another model opened, no refusal told: ${JSON.stringify(r.shown)}`);
+  }
+  // (and chosen while the ?add=s wait: once they join, a scene has no unit to choose -- said: r65 Q9)
+  if (r.events.includes('unit while adds wait') && (r.app.scene || []).length > 1 && !r.shown.some((t) => /^not read in inches: models were added beside it$/.test(t))) {
+    v('I25', `"this file is in" while the ?add=s waited, the scene made, nothing told: ${JSON.stringify(r.shown)}`);
+  }
   // I24: after a reload, the model shown is the one the address shown opens fresh -- its ?src, its
   // ?index, else a tour's own model, else the list's first (unless that one fails, as I19)
-  if ([].concat(c0.after || []).some((d) => d.reload) && r.status === 'ready' && r.app.sourceUrl && !r.left) {
+  // (and on a failed end, the model whose failure is shown: the take-back went past it, the address
+  // naming the list's first under the pick's failure -- r65 Q5)
+  // (only where the failure is all that is shown -- the card, no model: a failed pick leaves the
+  // model before it shown, which the address names)
+  const failedF = r.status === 'error' && r.card && r.card[0] && !r.app.header ? ((r.msg || '').match(/could not download (\S+):/) || [])[1] : null;
+  if ([].concat(c0.after || []).some((d) => d.reload) && ((r.status === 'ready' && r.app.sourceUrl) || failedF) && !r.left) {
     const hq = new URL(r.href).searchParams;
     const fresh = hq.get('src') ? decodeURIComponent(hq.get('src')).split('/').pop() : hq.get('index') ? ['a.stl', 'b.stl', 'd.stl'][+hq.get('index') - 1]
       : hq.get('model') ? null : hq.get('tour') && c.addr.tour && !/^tour (fails|times out)/.test(c.outcome) ? c.addr.tour : hq.get('list') ? 'a.stl' : null;
-    const shownF = String(r.app.sourceUrl).split('/').pop();
-    if (fresh && shownF !== fresh && !(c.fails || []).includes(fresh)) v('I24', `after a reload ${shownF} shown, the address ${r.href} opens ${fresh}`);
+    const shownF = failedF ? failedF.split('/').pop() : String(r.app.sourceUrl).split('/').pop();
+    // (unless the address's own model fails, as I19: a pick from a start that failed shows its own failure)
+    if (fresh && shownF !== fresh && !(c.fails || []).includes(fresh)) v('I24', `after a reload ${failedF ? `${shownF}'s failure` : shownF} shown, the address ${r.href} opens ${fresh}`);
   }
   // I23: "this file is in" puts ?unit= beside the model it is for: a reload opens that model in that
   // unit (written beside an address naming no model, a reload ignored it and dropped it: r62 Q2)
@@ -684,7 +711,8 @@ const exportAt = process.argv.indexOf('--export');
 if (exportAt > 0) {
   const { readFileSync, writeFileSync } = await import('node:fs');
   const namesAt = process.argv.indexOf('--names');
-  const wanted = namesAt > 0 ? new Set(readFileSync(process.argv[namesAt + 1], 'utf8').split('\n').map((l) => l.trim()).filter(Boolean)) : new Set();
+  // (a "#" line is a comment: tests/ui-diff-pinned.txt's header)
+  const wanted = namesAt > 0 ? new Set(readFileSync(process.argv[namesAt + 1], 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))) : new Set();
   const seen = new Set(), pick = [];
   const take = (key, item) => { if (!seen.has(key)) { seen.add(key); pick.push(item); } };
   const parts = (n) => n.split(' | ');
@@ -695,6 +723,10 @@ if (exportAt > 0) {
   for (const item of cases) { const [, , , act] = parts(item[0]); if (fits(act, item[1].addr)) take(`act ${act}`, item); }
   for (const item of cases) { const [addr, embed] = parts(item[0]); take(`addr ${addr}`, item); take(`embed ${embed}`, item); }
   for (const item of cases) if (wanted.has(item[0])) take(`name ${item[0]}`, item);
+  // (a name given that is no run now -- an act renamed -- is said, not dropped in silence)
+  const runNames = new Set(cases.map(([n]) => n));
+  const gone = [...wanted].filter((n) => !n.startsWith('#') && !runNames.has(n));
+  if (wanted.size) console.log(`NAMES ${wanted.size} given, ${gone.length} no run now${gone.length ? `: ${gone.slice(0, 20).join(' ; ')}` : ''}`);
   const out = [];
   for (const [name, c] of [...new Map(pick.map((p) => [p[0], p])).values()]) {
     const r = await runStart(c);
@@ -703,6 +735,26 @@ if (exportAt > 0) {
   }
   writeFileSync(process.argv[exportAt + 1], JSON.stringify(out, null, 1));
   console.log(`EXPORT ${out.length} runs of ${cases.length}`);
+  process.exit(0);
+}
+
+// (--pin <names file>...: the runs named added to tests/ui-diff-pinned.txt, the sample every round's
+// differential runs whole -- the runs that differed in any round and the rounds' samples, so the
+// sample only grows and its counts compare round to round: r65. A name that is no run now refused.)
+const pinAt = process.argv.indexOf('--pin');
+if (pinAt > 0) {
+  const { readFileSync, writeFileSync, existsSync } = await import('node:fs');
+  const file = new URL('./ui-diff-pinned.txt', import.meta.url);
+  const was = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const have = new Set(was.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')));
+  const runNames = new Set(cases.map(([n]) => n));
+  const add = process.argv.slice(pinAt + 1).filter((a) => !a.startsWith('--'))
+    .flatMap((f) => readFileSync(f, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')));
+  const gone = add.filter((n) => !runNames.has(n));
+  if (gone.length) { console.log(`PIN refused: ${gone.length} names are no run now: ${gone.slice(0, 10).join(' ; ')}`); process.exit(2); }
+  const fresh = [...new Set(add)].filter((n) => !have.has(n));
+  writeFileSync(file, `${was}${was && !was.endsWith('\n') ? '\n' : ''}${fresh.map((n) => `${n}\n`).join('')}`);
+  console.log(`PIN ${fresh.length} added, ${have.size + fresh.length} pinned`);
   process.exit(0);
 }
 
@@ -716,7 +768,7 @@ if (oneAt > 0) {
   process.exit(0);
 }
 
-await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I23 (r57-r62)`, async () => {
+await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I25 (r57-r65)`, async () => {
   const byInv = {};
   const t0 = Date.now();
   let unreached = 0;

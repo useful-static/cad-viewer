@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -1101,9 +1101,10 @@ test('a block reference on a frozen layer: every item it draws is held to that l
   const fz = heldTo(1);
   const F = fz.layers.find((l) => l.name === 'F');
   assert.deepEqual([F.on, F.frozen], [false, true]);
-  const paths = fz.paths.map((p) => [p.layer, p.hold ?? null, p.pts[1]]);
+  const paths = fz.paths.map((p) => [p.layer, (p.hold || []).join(','), p.pts[1]]);
   // B's line on A at y 0 and its layer-0 line at y 5 (which takes F), each twice (the nested one at x 10); the free line on A
-  assert.deepEqual(paths.sort(), [['A', 'F', 0], ['A', 'F', 0], ['A', null, 9], ['F', 'F', 5], ['F', 'F', 5]].sort());
+  // (F once in the nested one's hold, though B there takes F again: r65)
+  assert.deepEqual(paths.sort(), [['A', 'F', 0], ['A', 'F', 0], ['A', '', 9], ['F', 'F', 5], ['F', 'F', 5]].sort());
   // must accept: a layer only off holds nothing
   const off = parseDXF(dxf([
     [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'], [0, 'LAYER'], [2, 'F'], [70, 0], [62, -2], [0, 'ENDTAB'], [0, 'ENDSEC'],
@@ -1111,6 +1112,33 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, 'F'], [2, 'B'], [10, 0], [20, 0], [0, 'ENDSEC'], [0, 'EOF']]));
   assert.deepEqual(off.paths.map((p) => [p.layer, p.hold ?? null]), [['A', null]]);
   assert.equal(off.layers.find((l) => l.name === 'F').frozen, false);
+});
+// (r65 A2, A3, A4: an INSERT's ATTRIBs held as its block is; a frozen reference inside another held
+// to both; the extents leave out what frozen layers hold, as Zoom Extents does)
+test('a frozen reference holds its ATTRIBs and every frozen layer above it; the extents leave out what frozen layers hold (r65 A2-A4)', () => {
+  const d2 = parseDXF(dxf([
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [2, 'T'], [70, 0], [62, 1], [0, 'LAYER'], [2, 'F1'], [70, 1], [62, 2], [0, 'LAYER'], [2, 'F2'], [70, 1], [62, 3], [0, 'LAYER'], [2, 'OFF'], [70, 0], [62, -4],
+    [0, 'ENDTAB'], [0, 'ENDSEC'],
+    ...blocks([[0, 'BLOCK'], [2, 'IN'], [10, 0], [20, 0], [0, 'LINE'], [8, 'T'], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'ENDBLK']],
+      [[0, 'BLOCK'], [2, 'OUT'], [10, 0], [20, 0], [0, 'INSERT'], [8, 'F2'], [2, 'IN'], [10, 0], [20, 0], [0, 'ENDBLK']]),
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'T'], [10, 0], [20, 0], [11, 10], [21, 10],
+    // (an off layer's line far off: off still counts in the extents)
+    [0, 'LINE'], [8, 'OFF'], [10, -50], [20, 0], [11, -49], [21, 0],
+    [0, 'INSERT'], [8, 'F1'], [2, 'OUT'], [10, 1000], [20, 1000],
+    [0, 'INSERT'], [8, 'F1'], [2, 'IN'], [10, 500], [20, 500], [66, 1],
+    [0, 'ATTRIB'], [8, 'T'], [10, 500], [20, 500], [40, 2], [1, 'SHEET-7'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
+    // (a thawed reference after it: its ATTRIB is held by nothing)
+    [0, 'INSERT'], [8, 'T'], [2, 'IN'], [10, 5], [20, 5], [66, 1],
+    [0, 'ATTRIB'], [8, 'T'], [10, 5], [20, 5], [40, 2], [1, 'FREE'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  const text = (s) => d2.texts.find((t) => t.text === s);
+  assert.deepEqual(layersOf(text('SHEET-7')), ['T', 'F1']);
+  assert.deepEqual(layersOf(text('FREE')), ['T']);
+  const nested = d2.paths.find((p) => p.pts[0] === 1000);
+  assert.deepEqual(layersOf(nested), ['T', 'F1', 'F2']);
+  assert.deepEqual([d2.extents.min, d2.extents.max], [[-50, 0], [10, 10]], 'neither frozen reference, the off line kept');
 });
 // (r64 Q4: a constant attribute has no ATTRIB on the insert: its value is drawn from its definition)
 test('a constant ATTDEF (70 bit 2) is drawn in every insert of its block; a plain one, an invisible constant one, one outside a block are not (r64 Q4)', () => {

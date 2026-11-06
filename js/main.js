@@ -5087,19 +5087,25 @@ function addressUnit(url) {
   } catch { return 'mm'; }
 }
 
+// a unit as words read it ("read in in" -- r65 A8)
+const unitName = (u) => (u === 'in' ? 'inches' : u);
 // the units row's "file is in": the same bytes read again in that unit
 function setMeshUnit(u) {
   const src = app.meshSource;
   if (!src || u === src.unit || !MM_PER[u]) return Promise.resolve();
   // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
   // the add under way, the address naming a model the scene lacked -- r63 A3)
-  if (app.addsPending && app.addsChain) return app.addsChain.then(() => setMeshUnit(u));
+  // (and with them joined, a scene has no unit to choose: that is said -- the choice was dropped
+  // without a word: r65 Q9)
+  if (app.addsPending && app.addsChain) {
+    return app.addsChain.then(() => (app.meshSource ? setMeshUnit(u) : tell(`not read in ${unitName(u)}: models were added beside it`)));
+  }
   // (nor over another model opening -- a list pick, a dropped file: the re-read is a load, and it
   // ended that one, the visitor's pick lost and its entry taken back under the unit just written --
   // r64 A4. A re-read of this one under way is replaced, as a second choice means.)
   if (PROGRESS_STATES.has(app.status) && app.rereadSeq !== app.loadSeq) {
     $('meshunit').value = src.unit;
-    tell(`not read in ${u}: another model is opening`);
+    tell(`not read in ${unitName(u)}: another model is opening`);
     return Promise.resolve();
   }
   // (a tour shown is left first, the visitor's view put back: the re-read ends it anyway, and the
@@ -5112,13 +5118,13 @@ function setMeshUnit(u) {
     const seq = beginLoad();
     app.rereadSeq = seq;
     if (url) app.urlOfLoad = { seq, url };
-    setStatus('loading', `reading ${src.name} in ${u}`);
+    setStatus('loading', `reading ${src.name} in ${unitName(u)}`);
     // (the same bodies, at another size: the visitor's hidden parts stay hidden)
     const hidden = new Set(app.hidden);
     return meshFromSource(src, u, seq).then(() => {
       if (stale(seq)) return;
       if (hidden.size) { app.hidden = hidden; syncTreeChecks(); pushState(); updateButtons(); viewChanged(); }
-      announce(`${src.name} read in ${u}`);
+      announce(`${src.name} read in ${unitName(u)}`);
     });
   });
 }
@@ -5333,8 +5339,11 @@ function buildLayerList() {
   // (the sheet shown: a layout lists the layers it draws)
   const d = app.dxf.shown || app.dxf.drawing;
   const count = new Map();
-  for (const p of d.paths) if (!p.outline) count.set(p.layer, (count.get(p.layer) || 0) + 1); // (an outline is its polyline's)
-  for (const t of d.texts) count.set(t.layer, (count.get(t.layer) || 0) + 1);
+  // (an item under each layer it answers to -- its own and a frozen reference's it is drawn under:
+  // a frozen layer holding only a reference had no row, and what it holds could not be shown -- r65 A3)
+  const tally = (it) => { for (const n of dxfLib.layersOf(it)) count.set(n, (count.get(n) || 0) + 1); };
+  for (const p of d.paths) if (!p.outline) tally(p); // (an outline is its polyline's)
+  for (const t of d.texts) tally(t);
   for (const l of d.layers) {
     if (!count.get(l.name)) continue; // an empty layer: nothing to show or hide
     const li = document.createElement('li');
@@ -5389,7 +5398,12 @@ function fillInfo2D(el) {
   row('layers', `${fmtInt(d.layers.length)}`);
   // (a wide polyline's outline is its polyline's, a viewport's frame is not the drawing's: neither
   // a shape -- the layer list still counts a frame, so its layer can be hidden)
-  row('contents', `${fmtInt(d.paths.filter(dxfLib.isShape).length)} lines and shapes, ${fmtInt(d.texts.length)} texts`);
+  // (what the drawing draws as it opens; what a layer off or frozen holds said apart -- a frozen
+  // reference's line counted as drawn: r65 A3)
+  const shapes = d.paths.filter(dxfLib.isShape);
+  const ns = shapes.filter((p) => dxfLib.drawnAtOpen(p, full.layers)).length, nt = d.texts.filter((t) => dxfLib.drawnAtOpen(t, full.layers)).length;
+  const hidden = shapes.length - ns + d.texts.length - nt;
+  row('contents', `${fmtInt(ns)} lines and shapes, ${fmtInt(nt)} texts${hidden ? ` (and ${fmtInt(hidden)} on layers off or frozen)` : ''}`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));

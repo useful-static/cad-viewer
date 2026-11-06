@@ -29,10 +29,12 @@ const DWG_TAGS = Object.keys(DWG_RELEASES);
 // one as later (every unread tag was "older than R13", a 2024 drawing too -- r64 A8)
 export function dwgRefusal(tag) {
   if (DWG_RELEASES[tag]) return null;
-  if (!/^AC\d{4}$/.test(tag)) return 'not a DWG file';
+  // (a release before R10 writes its tag with a point -- AC1.50, AC2.10 --: a DWG, older; it was
+  // "not a DWG file" -- r65 Q8)
+  if (!/^AC(\d{4}|\d\.\d\d)$/.test(tag)) return 'not a DWG file';
   const first = DWG_TAGS[0], last = DWG_TAGS[DWG_TAGS.length - 1];
-  const where = tag < first ? `older than ${DWG_RELEASES[first][0]}` : tag > last ? `later than ${DWG_RELEASES[last][0]}` : `no release of ${dwgRange()}`;
-  return `a ${tag} DWG (${where}) is not read`;
+  const where = tag.includes('.') || tag < first ? `older than ${DWG_RELEASES[first][0]}` : tag > last ? `later than ${DWG_RELEASES[last][0]}` : `no release of ${dwgRange()}`;
+  return `an ${tag} DWG (${where}) is not read`; // ("an AC1009", as it is said: r65 A8)
 }
 const dwgRange = () => `${DWG_RELEASES[DWG_TAGS[0]][0]} to ${DWG_RELEASES[DWG_TAGS[DWG_TAGS.length - 1]][0].replace(/^R(?=\d{4})/, '')}`;
 
