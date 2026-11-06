@@ -384,6 +384,8 @@ test('facts written under rule 3 (no clamp: crossing cavities read 771.75 for 10
   // (rule 4 differs only in a body flagged unchecked: such facts rebuilt, others kept -- r68 Q5)
   assert.equal(factsCurrent({ facts: { closed: [true, true], unchecked: [false, true] }, factsRule: 4 }), false, 'rule 4, a body unchecked: rebuilt (must fire)');
   assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: 4 }), true, 'rule 4, none unchecked: kept');
+  // (a net body of 4: past the budget with a branched shell 4 said net, not unchecked, and added its cavities -- r69 A1)
+  assert.equal(factsCurrent({ facts: { closed: [true, true], net: [false, true] }, factsRule: 4 }), false, 'rule 4, a body net: rebuilt (must fire)');
   for (const f of BODY_FACTS) if (f.kind === 'flag' && !f.always) assert.equal(typeof f.said, 'string', `${f.key} has its words`);
 });
 test('flagCounts: each flag with its words counted over the closed bodies asked, the one count the panel and stp2mesh say (r38 A5, Q5)', () => {

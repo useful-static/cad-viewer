@@ -49,10 +49,13 @@ export const SILHOUETTE_CAP = 2_000_000;
 // r68 Q5). The facts are versioned by this alone: a change of it needs no CACHE_VERSION bump
 // (js/mesh-cache.js)
 export const FACTS_RULE = 5;
-// (a rule's facts that read as today's: 4's differ from 5's only in a body flagged `unchecked`, so
-// a file or kept conversion of 4 with none is current -- kept conversions' rebuilt facts are not
-// written back, round 38 Q8, and each would be rebuilt at every open)
-export const factsRuleHolds = (rule, facts) => rule === FACTS_RULE || (rule === 4 && !(facts?.unchecked || []).some(Boolean));
+// (a rule's facts that read as today's: 4's differ from 5's only in a body past the nesting budget,
+// which 4 flagged `unchecked` -- or, with a branched shell, `net`, the stop not said: so a file or
+// kept conversion of 4 with neither flag is current, kept conversions' rebuilt facts not written
+// back, round 38 Q8, and each rebuilt at every open. A net body of 4 cannot be told from a stopped
+// one, and is built again -- r69 A1)
+const anyFlag = (facts, key) => (facts?.[key] || []).some(Boolean);
+export const factsRuleHolds = (rule, facts) => rule === FACTS_RULE || (rule === 4 && !anyFlag(facts, 'unchecked') && !anyFlag(facts, 'net'));
 // whether a header's facts can be shown as they are: present, and built by today's rule (main.js
 // rebuilds them otherwise: an older file's volume was the signed sum, unflagged)
 export const factsCurrent = (header) => !!header?.facts && factsRuleHolds(header.factsRule, header.facts);

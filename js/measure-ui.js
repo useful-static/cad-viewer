@@ -16,13 +16,22 @@
 // escape() first.
 
 import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
-// The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
-// (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5)
 // A hole row's diameter as the table, its summary and the picked row's words write it -- with its
 // countersink, one text (the summary grouped a countersunk Ø3 with plain ones, and the announcement
-// left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer
-export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (countersunk ${fmt(r.head)})` : ''}`;
-export const untoldText = (n) => (n ? `${n} ${n === 1 ? 'rim' : 'rims'} too small to tell this far from the origin (the file's positions are rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius): not listed` : '');
+// left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer.
+// (what is measured: the wider rim's Ø, a countersink's or a chamfer's alike -- "countersunk" named
+// a 0.3 deburr one: r69 A4)
+export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at its rim)` : ''}`;
+// The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
+// (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5), and
+// the through-holes left out as their other rim is one of them, their own rim told (counted among
+// the rims, it was one too small to tell that was not: r69 Q7)
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+export const untoldText = (n, holes = 0) => {
+  const rims = n ? `${plural(n, 'rim', 'rims')} too small to tell this far from the origin (the file's positions are rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius)` : '';
+  const more = holes ? `${plural(holes, 'through-hole', 'through-holes')} whose other rim is ${n === 1 ? 'that one' : 'one of them'}` : '';
+  return rims || more ? `${[rims, more].filter(Boolean).join(', and ')}: not listed` : '';
+};
 import { faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
@@ -674,8 +683,9 @@ export function createMeasure(deps) {
     const holesFor = (g) => g.holes || (g.holes = holesOf(g));
     // (and the rims the stored positions cannot tell, this far from the origin: said, not left out
     // without a word -- js/measure-geom.js untold, r66)
-    let untold = 0;
-    for (const id of ids) { const hs = holesFor(geomOf(id - 1, Infinity)); untold += hs.untold || 0; for (const h of hs) list.push({ ...h, mesh: id - 1 }); }
+    // (and the through-holes left out as their other rim is one of those: r69 Q7)
+    let untold = 0, unpaired = 0;
+    for (const id of ids) { const hs = holesFor(geomOf(id - 1, Infinity)); untold += hs.untold || 0; unpaired += hs.unpaired || 0; for (const h of hs) list.push({ ...h, mesh: id - 1 }); }
     list.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
     // the axes across each hole: the same for all (a board's X, Y) puts them
     // in the column's head, numbers only in the cells (the 300 px panel
@@ -704,7 +714,7 @@ export function createMeasure(deps) {
       g.n++;
       for (let j = 0; j < 3; j++) { g.lo[j] = Math.min(g.lo[j], h.centre[j]); g.hi[j] = Math.max(g.hi[j], h.centre[j]); }
     }
-    return { list, rows, groups: [...groups.values()], posHead, untold };
+    return { list, rows, groups: [...groups.values()], posHead, untold, unpaired };
   }
   function showHoles(ids, ref = null, name = '') {
     const box = $('holes');
@@ -727,9 +737,9 @@ export function createMeasure(deps) {
     const from = document.createElement('li');
     from.textContent = `positions from the corner of ${ref.name || 'the whole model'}`;
     sum.prepend(from);
-    if (t.untold) {
+    if (t.untold || t.unpaired) {
       const un = document.createElement('li');
-      un.textContent = untoldText(t.untold);
+      un.textContent = untoldText(t.untold, t.unpaired);
       sum.append(un);
     }
     const tb = $('holesrows');
@@ -739,7 +749,7 @@ export function createMeasure(deps) {
       tr.tabIndex = 0;
       // depth: through holes' (rim to rim); "–" for one rim (blind, or a
       // sheet's hole)
-      // (a countersunk one: its countersink's diameter after the bore's)
+      // (a countersunk or chamfered one: its wider rim's diameter after the bore's)
       for (const c of [String(r.n), holeDia(r, deps.num), r.at, r.through ? deps.num(r.depth) : '–']) {
         const td = document.createElement('td');
         td.textContent = c;
@@ -758,14 +768,14 @@ export function createMeasure(deps) {
     }
     $('holescsv').onclick = () => {
       const u = deps.unit();
-      const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u}),countersink (${u})`,
+      const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u}),rim diameter (${u})`,
         ...t.rows.map((r) => `${r.n},${deps.num(r.d)},"${r.at}",${r.through ? deps.num(r.depth) : ''},${r.head ? deps.num(r.head) : ''}`),
-        ...(t.untold ? [`# ${untoldText(t.untold)}`] : [])].join('\n');
+        ...(t.untold || t.unpaired ? [`# ${untoldText(t.untold, t.unpaired)}`] : [])].join('\n');
       copyText(csv, 'hole table copied');
     };
     box.hidden = false;
     deps.queueFrame();
-    deps.announce(`${t.list.length} holes${t.untold ? `; ${untoldText(t.untold)}` : ''}`);
+    deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);
     return t;
   }
 

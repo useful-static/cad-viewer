@@ -5091,9 +5091,11 @@ const autoTourKey = () => app.sourceUrl || app.header;
 // menu's did not wait for the ?add=s, so the model joining ended it and the entry's first tour
 // started in its place): it first waits for the address's ?add=s -- a model joining ends a tour
 // over the scene (showScene) -- and starts only over the model it was asked for, by its URL's key
-// and its open, and not while the visitor's pick downloads
+// and its open, and not while the model is on its way out: the visitor's pick downloading, or its
+// re-read in another unit, which ends the tour as it lands (it started, scaled to the old reading,
+// and was gone without a word: r69 A3)
 const entryTourWait = () => (app.addsPending && app.addsChain ? app.addsChain : null);
-const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending;
+const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending && !rereading();
 // the unit the address asks a URL load to be read in: only for the model the address names
 function addressUnit(url) {
   const q = new URLSearchParams(location.search);
@@ -6308,22 +6310,26 @@ function syncUnitsRow() {
   sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
   sel.value = app.unitChoice;
   // a mesh file that stores no unit: which unit it is in, chosen here
-  const src = syncMeshUnitRow();
-  if (src) {
+  const unit = syncMeshUnitRow();
+  if (unit) {
     $('unitsrc').textContent = 'not stored in the file';
     // (its title says the reading it is: it said "read as mm" whatever was chosen)
-    $('meshunit').title = `This mesh file stores no unit: it is read as ${unitWord(src.unit)}. Pick the unit it was made in and it is read again at that size`;
+    $('meshunit').title = `This mesh file stores no unit: it is read as ${unitWord(unit)}. Pick the unit it was made in and it is read again at that size`;
   }
 }
 // The "this file is in" row: shown for a mesh that stores no unit, its select saying the unit it is
-// read in -- the one writer of the select, at every showInfo and where a re-read is refused or ends
-// without landing (written in three places, r66 A2 and r67 Q3 each a mismatch among them: r68 A6;
-// the start-up harness runs this, main.js's own -- r68 Q6). -> the mesh's source, or null
+// read in -- during a re-read, the unit being read, the one setMeshUnit compares a choice with (a
+// showInfo meanwhile, a part clicked, put the select back to the unit still shown: r69 A5) -- the
+// one writer of the select, at every showInfo and where a re-read is refused or ends without
+// landing (written in three places, r66 A2 and r67 Q3 each a mismatch among them: r68 A6; the
+// start-up harness runs this, main.js's own -- r68 Q6). -> the unit written, or null
 function syncMeshUnitRow() {
   const src = app.meshSource;
   $('meshunitrow').hidden = !src;
-  if (src) $('meshunit').value = src.unit;
-  return src;
+  if (!src) return null;
+  const unit = rereading() ? app.rereadUnit : src.unit;
+  $('meshunit').value = unit;
+  return unit;
 }
 
 function setUnitChoice(u) {

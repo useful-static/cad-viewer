@@ -394,7 +394,8 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   const body = src.slice(at + head.length, src.indexOf('\n    };\n', at));
   // (the one rule both tours start by, main.js's own lines: r68 A2)
   const lineOf = (h) => { const i = src.indexOf(h); assert.ok(i > 0, `main.js has ${h}`); return src.slice(i, src.indexOf('\n', i)); };
-  const rules = `${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn];`;
+  const rules = `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn];`;
+  const PROGRESS = new Set(['loading', 'tessellating']); // (main.js PROGRESS_STATES)
   // during: what happens while the tour is read -- 'pick' (another model shown, a new open), 'reopen'
   // (the same URL opened again), 'picking' (the visitor's pick downloading); adds: an ?add= on its way
   const run = async (outcome, during, adds = false) => {
@@ -405,7 +406,7 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
     let answer;
     const readTour = () => new Promise((res) => { answer = res; });
     const autoTourKey = () => app.sourceUrl;
-    const [entryTourWait, entryTourOn] = new Function('app', 'autoTourKey', rules)(app, autoTourKey);
+    const [entryTourWait, entryTourOn] = new Function('app', 'autoTourKey', 'PROGRESS_STATES', rules)(app, autoTourKey, PROGRESS);
     const onclick = new Function('app', 't', 'readTour', 'startTourIn', 'failApart', 'tell', 'closeMenus', 'autoTourKey', 'entryTourWait', 'entryTourOn', `return async () => {\n${body}\n};`)(
       app, { name: 'tour of A', url: 'A.cadtour.json' }, readTour,
       (tour) => log.push(`plays over ${app.sourceUrl}`), (msg) => log.push(`in the line: ${msg}`), (msg) => log.push(`told: ${msg}`), () => {}, autoTourKey, entryTourWait, entryTourOn);
@@ -413,6 +414,7 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
     if (during === 'pick') Object.assign(app, { sourceUrl: 'B.stl', header: { name: 'B' }, openCount: 2 });
     if (during === 'reopen') app.openCount = 2;
     if (during === 'picking') app.pickPending = 1;
+    if (during === 'reread') Object.assign(app, { status: 'loading', loadSeq: 4, rereadSeq: 4 });
     answer(outcome === 'ok' ? { tour: { steps: [] } } : { error: 'not found (404): A.cadtour.json' });
     await new Promise((r) => setTimeout(r, 1));
     if (adds) { log.push('read'); joined(); }
@@ -424,6 +426,8 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   // (each clause on its own: the same URL opened again, and the visitor's pick downloading -- r68 Q9)
   assert.deepEqual((await run('ok', 'reopen')).log, [], 'not played over a new open of the same URL (must fire)');
   assert.deepEqual((await run('ok', 'picking')).log, [], 'not played while the visitor\'s pick downloads (must fire)');
+  // (nor while the model is read again in another unit: it lands ending the tour -- r69 A3)
+  assert.deepEqual((await run('ok', 'reread')).log, [], 'not played during a re-read (must fire)');
   // (after the address's ?add=s: the model joining would end it -- r68 A2)
   assert.deepEqual((await run('ok', null, true)).log, ['read', 'b.stl joins', 'plays over A.stl'], 'plays after the ?add= joins, not before it (must fire)');
   // must accept: A still shown -- played, and the entry's own tour told to step aside; failed -- in A's line
@@ -431,6 +435,22 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   assert.deepEqual(ok.log, ['plays over A.stl']);
   assert.equal(ok.picked, 1, 'the open the visitor picked a tour on, for the entry\'s own tour to step aside');
   assert.deepEqual((await run('error', null)).log, ['in the line: the tour not found (404): A.cadtour.json']);
+});
+await test('the units select during a re-read says the unit being read, after it the unit read (main.js syncMeshUnitRow, as written: r69 A5)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const lineOf = (h) => { const i = src.indexOf(h); assert.ok(i > 0, `main.js has ${h}`); return src.slice(i, src.indexOf('\n', i)); };
+  const h = 'function syncMeshUnitRow() {';
+  const fn = src.slice(src.indexOf(h), src.indexOf('\n}\n', src.indexOf(h)) + 2);
+  const dom = { meshunitrow: { hidden: true }, meshunit: { value: '' } };
+  const app = { meshSource: { name: 'a.stl', unit: 'mm' }, status: 'loading', loadSeq: 5, rereadSeq: 5, rereadUnit: 'in' };
+  const sync = new Function('app', '$', 'PROGRESS_STATES', `${lineOf('const rereading = ')}\n${fn}\nreturn syncMeshUnitRow;`)(app, (id) => dom[id], new Set(['loading', 'tessellating']));
+  assert.equal(sync(), 'in');
+  assert.equal(dom.meshunit.value, 'in', 'a showInfo during the inches re-read (must fire: it put back mm)');
+  Object.assign(app, { status: 'ready' });
+  assert.equal(sync(), 'mm', 'once it ends without landing, the unit read');
+  // another model loading is not this one's re-read
+  Object.assign(app, { status: 'loading', loadSeq: 6 });
+  assert.equal(sync(), 'mm');
 });
 await test('the entry\'s own tour, waiting for the ?add=s, steps aside for a tour the visitor picked from File meanwhile; with none picked it plays (main.js, as written: r68 A2)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -444,9 +464,9 @@ await test('the entry\'s own tour, waiting for the ?add=s, steps aside for a tou
     let joined;
     const app = { sourceUrl: 'L.stl', header: { name: 'L' }, openCount: 3, pickPending: 0, autoTourFor: null, tour: null, addsPending: 1,
       addsChain: new Promise((res) => { joined = res; }) };
-    const f = new Function('app', 'e', 'readTour', 'startTourIn', 'linkViewOver', 'autoTourKey',
-      `${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
-    f(app, { tours: [{ url: 'own.json' }, { url: 'second.json' }] }, async (u) => ({ tour: { u } }), (tour, u) => log.push(`plays ${u}`), () => false, () => app.sourceUrl);
+    const f = new Function('app', 'e', 'readTour', 'startTourIn', 'linkViewOver', 'autoTourKey', 'PROGRESS_STATES',
+      `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
+    f(app, { tours: [{ url: 'own.json' }, { url: 'second.json' }] }, async (u) => ({ tour: { u } }), (tour, u) => log.push(`plays ${u}`), () => false, () => app.sourceUrl, new Set(['loading']));
     if (picked) app.tourPicked = app.openCount; // (File > "Tour: second" clicked during the ?add=s)
     app.addsPending = 0; joined();
     await new Promise((r) => setTimeout(r, 5));
