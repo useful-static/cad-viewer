@@ -14,7 +14,7 @@ const APP_JS = ['box-tree.js', 'cadmesh.js', 'camera.js', 'check-page.js', 'clea
   'drawing-svg.js', 'dwg.js', 'dxf-view.js', 'dxf.js', 'early-fetch.js', 'early.js', 'edges-worker.js', 'edges.js', 'export-mesh.js', 'face-order.js', 'formats.js',
   'import-progress.js', 'list-check.js', 'main.js', 'mat4.js', 'measure-geom.js', 'measure-ui.js', 'mesh-cache.js', 'mesh-formats.js',
   'model-list.js', 'open-url.js', 'orient.js', 'palettes.js', 'prefs.js', 'raycast.js', 'read-file.js', 'read-worker.js', 'renderer-webgl.js',
-  'renderer-webgpu.js', 'same-place.js', 'scene.js', 'solid.js', 'source-units.js', 'step-features.js', 'step-meta.js', 'step-text.js', 'step-worker.js',
+  'renderer-webgpu.js', 'same-place.js', 'scene.js', 'snap-worker.js', 'solid.js', 'source-units.js', 'step-features.js', 'step-meta.js', 'step-text.js', 'step-worker.js',
   'styles.js', 'tour-path.js', 'tour-recorder.js', 'tour-sight.js', 'tour.js', 'tri-distance.js', 'units.js', 'vec3.js', 'view-link.js'];
 const SHELL = ['./', 'index.html', 'check.html', 'favicon.svg', 'manifest.webmanifest', ...APP_JS.map((f) => `js/${f}`)];
 // the cache's name follows the list (a client keeps an old cache until the name changes: written by

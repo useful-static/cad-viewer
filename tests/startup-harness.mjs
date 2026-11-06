@@ -196,7 +196,7 @@ export async function runStart(c) {
     // (a pick needs an entry to pick: before the list has answered there is none)
     // (a pick's event once it is made, or not: it waits for its entry -- below)
     if (!d.pick) o.events.push(d.add ? `add${app.scene ? '' : ' (no scene)'}`
-      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? (app.header && app.meshSource && app.meshSource.unit !== d.unit && app.addsPending && app.addsChain ? 'unit while adds wait' : app.header && app.meshSource && app.meshSource.unit !== d.unit && !(app.addsPending && app.addsChain) && o.opening != null && o.opening === app.loadSeq ? 'unit while another opens' : 'unit') : `file ${d.file}`);
+      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? (app.header && app.meshSource && app.meshSource.unit !== d.unit && params.getAll('add').length > (o.addsDone || 0) ? 'unit while adds wait' : app.header && app.meshSource && app.meshSource.unit !== d.unit && !(params.getAll('add').length > (o.addsDone || 0)) && o.opening != null && o.opening === app.loadSeq ? 'unit while another opens' : 'unit') : `file ${d.file}`);
     if (d.click) return dom.posterload.onclick && dom.posterload.onclick();
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));
@@ -230,10 +230,16 @@ export async function runStart(c) {
     // re-read itself, a load of the same bodies, stood in for by syncUnitParam: r63 A3, Q6)
     // (main.js's own setMeshUnit, the units row's handler: shown only while a model is -- r64 A4)
     // (andThen: a second choice in the same task, the first's re-read just begun -- r66 A2)
+    // (the select set as the visitor sets it, before its change event: the units row's state -- r67 Q4;
+    // thenCancel: Cancel pressed in the same task, the re-read just begun -- r67 Q3)
     if (d.unit) {
       if (!app.header) return null;
+      dom.meshunit.value = d.unit;
       const first = run.setMeshUnit(d.unit);
-      return d.andThen ? Promise.all([first, run.setMeshUnit(d.andThen)]) : first;
+      if (d.thenCancel) { if (dom.pcancel.onclick) dom.pcancel.onclick(); return first; }
+      if (!d.andThen) return first;
+      dom.meshunit.value = d.andThen;
+      return Promise.all([first, run.setMeshUnit(d.andThen)]);
     }
     // (Cancel on the load's card, as wired)
     if (d.cancel) return dom.pcancel.onclick && dom.pcancel.onclick();
@@ -292,7 +298,7 @@ export async function runStart(c) {
     o.events.push(`load ${String(url).split('/').pop()}`);
     const seq = k.beginLoad();
     o.opening = seq;
-    try { return await loadBody(url, k, extras, fromFile, adding, seq); } finally { if (o.opening === seq) o.opening = null; }
+    try { return await loadBody(url, k, extras, fromFile, adding, seq); } finally { if (o.opening === seq) o.opening = null; if (adding) o.addsDone = (o.addsDone || 0) + 1; }
   };
   const loadBody = async (url, k, extras, fromFile, adding, seq) => {
     if (dom.pcancel.hidden) o.cancelHidden.push(String(url));
@@ -332,7 +338,8 @@ export async function runStart(c) {
     }
     else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: fromFile ? null : url });
     if (!adding && (app.listEntries || []).some((e) => e.url === url)) o.pendingAtList.push([file, !!app.urlTourPending]);
-    if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); app.meshSource = { name: file, unit: k.readUnit() }; }
+    // (and the units row shows its reading: showInfo's, stood in for -- r67 Q4)
+    if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); app.meshSource = { name: file, unit: k.readUnit() }; dom.meshunit.value = app.meshSource.unit; }
     k.setStatus('ready', k.readyText());
     if (!adding) k.entryShown();
     visit(`loaded ${file}`);
@@ -354,6 +361,7 @@ export async function runStart(c) {
     k.loadShown();
     k.setUnitRead(unit);
     app.meshSource = { ...s, unit };
+    dom.meshunit.value = unit; // (showInfo's, stood in for: r67 Q4)
     k.setStatus('ready', k.readyText());
     k.entryShown();
   };

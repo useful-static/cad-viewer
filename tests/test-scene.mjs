@@ -386,6 +386,54 @@ test('a board inside its case, the two turned 30 degrees about z and 20 about x:
   assert.ok(r.pairs < 5000, `${r.pairs} triangle pairs`);
   assert.ok(ms < 3000, `${ms.toFixed(0)} ms`);
 });
+await test('File > "Tour: X" (main.js, as written): read while the visitor picks another model, it does not play over it, and its failure is told, not written into that model\'s line; with the model still shown it plays (r67 A1)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const head = '    b.onclick = async () => {\n';
+  const at = src.indexOf(head);
+  assert.ok(at > 0, 'main.js has the tour button');
+  const body = src.slice(at + head.length, src.indexOf('\n    };\n', at));
+  const run = async (outcome, pickDuring) => {
+    const log = [];
+    const app = { status: 'ready', sourceUrl: 'A.stl', header: { name: 'A' }, openCount: 1, pickPending: 0 };
+    let answer;
+    const readTour = () => new Promise((res) => { answer = res; });
+    const onclick = new Function('app', 't', 'readTour', 'startTourIn', 'failApart', 'tell', 'closeMenus', 'autoTourKey', `return async () => {\n${body}\n};`)(
+      app, { name: 'tour of A', url: 'A.cadtour.json' }, readTour,
+      (tour) => log.push(`plays over ${app.sourceUrl}`), (msg) => log.push(`in the line: ${msg}`), (msg) => log.push(`told: ${msg}`), () => {}, () => app.sourceUrl);
+    const clicked = onclick();
+    if (pickDuring) Object.assign(app, { sourceUrl: 'B.stl', header: { name: 'B' }, openCount: 2 });
+    answer(outcome === 'ok' ? { tour: { steps: [] } } : { error: 'not found (404): A.cadtour.json' });
+    await clicked;
+    return log;
+  };
+  assert.deepEqual(await run('ok', true), [], 'not played over B (must fire)');
+  assert.deepEqual(await run('error', true), ['told: the tour not found (404): A.cadtour.json'], 'told, not in B\'s line (must fire)');
+  // must accept: A still shown -- played; failed -- in A's line, as before
+  assert.deepEqual(await run('ok', false), ['plays over A.stl']);
+  assert.deepEqual(await run('error', false), ['in the line: the tour not found (404): A.cadtour.json']);
+});
+await test('Clearance waits for the facts, not the value: a scene\'s edges in hand and its facts on their way are waited for; facts in hand, or none coming, at once; a failed build settles (r67, round 40 Q3)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const head = 'const factsReady = ';
+  const line = src.slice(src.indexOf(head), src.indexOf('\n', src.indexOf(head)));
+  assert.ok(line.startsWith(head), 'main.js has factsReady');
+  const factsReady = new Function(`${line}; return factsReady;`)();
+  const later = (v, fail) => { let go; const p = new Promise((res, rej) => { go = () => (fail ? rej(new Error('build failed')) : res(v)); }); return { p, go }; };
+  const settled = async (p) => { let done = false; p.then(() => { done = true; }); await new Promise((r) => setTimeout(r, 5)); return done; };
+  // the value without its facts, the facts on their way: waited for, until they come
+  const w = later({ facts: {} });
+  const wait = factsReady({ edgeInfo: { value: { edges: [] }, ready: w.p } });
+  assert.equal(await settled(wait), false, 'waits while the facts are on their way (must fire)');
+  w.go();
+  assert.equal(await settled(wait), true, 'and goes on once they come');
+  // facts in hand: at once; nothing on its way: at once; a build that fails: settles all the same
+  assert.equal(await settled(factsReady({ edgeInfo: { value: { facts: {} }, ready: new Promise(() => {}) } })), true);
+  assert.equal(await settled(factsReady({ edgeInfo: { value: null } })), true);
+  const f = later(null, true);
+  const failing = factsReady({ edgeInfo: { value: { edges: [] }, ready: f.p } });
+  f.go();
+  assert.equal(await settled(failing), true, 'a failed build settles: no facts, no containment');
+});
 await test('Clearance off the page (main.js clearanceOffPage, with a stand-in worker): a failed run says its error and is not run again on the page; only a worker that cannot start hands it over; the promise always settles (r32 Q1, A6)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const body = src.slice(src.indexOf('const STOPPED = Symbol'), src.indexOf('async function runClearance')).replaceAll('import.meta.url', "'file:///x/js/main.js'");

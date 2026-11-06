@@ -3316,9 +3316,14 @@ function applyListEntry() {
     b.title = `Play the tour "${t.name}" of this model`;
     b.onclick = async () => {
       closeMenus();
+      // (the model the tour is for, by its open, as the entry's own tour checks it: picked away
+      // during the read, the tour played over the next model, and its failure went into that
+      // model's ready line -- told only then, as the address's tour's is: r67 A1)
+      const key = autoTourKey(), open = app.openCount;
       const r = await readTour(t.url);
-      if (r.error) { failApart(`the tour ${r.error}`); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
-      startTourIn(r.tour, t.url);
+      const still = app.header && autoTourKey() === key && app.openCount === open && !app.pickPending;
+      if (r.error) { if (still) failApart(`the tour ${r.error}`); else tell(`the tour ${r.error}`, 6000); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
+      if (still) startTourIn(r.tour, t.url);
     };
     tl.append(b);
   }
@@ -4684,6 +4689,10 @@ function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
 // Clearance: the smallest gap between the selected parts (when they all lie in one model; else
 // the first model) and the other models' shown parts, on the tessellation (js/clearance.js), drawn
 // as a Measure distance.
+// The model's facts, waited for when they are on their way: on the facts, not the value -- a scene's
+// edges in hand are its value before its facts arrive, and a run on the value alone knew no body
+// closed, a pin inside a block read as its gap (round 40 Q3; the wait had no test: r67)
+const factsReady = (base) => (!base.edgeInfo?.value?.facts && base.edgeInfo?.ready ? base.edgeInfo.ready.then(() => {}, () => {}) : Promise.resolve());
 async function runClearance() {
   if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
   if (app.explode.on) setExplode(false); // the gap is measured where the parts are
@@ -4709,7 +4718,7 @@ async function runClearance() {
   // (each set's closed bodies, for a part lying wholly inside one: closedOf -- the facts awaited
   // when they are on their way: skipped, a pin inside a block read 4 mm after every scene change)
   // (on the facts, not the value: a scene's edges in hand are its value before its facts arrive)
-  if (!base.edgeInfo?.value?.facts && base.edgeInfo?.ready) { try { await base.edgeInfo.ready; } catch { /* no facts: no containment */ } }
+  await factsReady(base);
   // (the scene changed while it waited: said, not left at "checking …")
   const stopped = () => { if (app.baseMesh !== base) { say('stopped: the scene changed'); return true; } return false; };
   if (stopped()) return;
@@ -5130,6 +5139,12 @@ function setMeshUnit(u) {
       if (stale(seq)) return;
       if (hidden.size) { app.hidden = hidden; syncTreeChecks(); pushState(); updateButtons(); viewChanged(); }
       announce(`${src.name} read in ${unitName(u)}`);
+    }).finally(() => {
+      // (a re-read that ended without landing -- Cancel, a newer load, a failure -- and none other
+      // under way: the select says the reading again; it kept the choice, inches, the model in mm and
+      // every size 25.4x off what the row said -- r67 Q3)
+      const src2 = app.meshSource;
+      if (src2 && !(PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq) && $('meshunit').value !== src2.unit) $('meshunit').value = src2.unit;
     });
   });
 }
@@ -5217,7 +5232,7 @@ async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `reading ${name}`);
-  // a DWG by its bytes ("AC10..": an unread version is refused by name by the reader), or by
+  // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), or by
   // its name (a .dwg that is not one is refused by the reader as "not a DWG file")
   const dwg = isDWGBytes(new Uint8Array(buf, 0, Math.min(6, buf.byteLength))) || /\.dwg$/i.test(name);
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${dwg ? 'DWG' : 'DXF'}`);
@@ -5405,13 +5420,9 @@ function fillInfo2D(el) {
   // a shape -- the layer list still counts a frame, so its layer can be hidden)
   // (what the drawing draws as it opens; what a layer off or frozen holds said apart -- a frozen
   // reference's line counted as drawn: r65 A3)
-  const shapes = d.paths.filter(dxfLib.isShape);
-  // (the layers by name, once: an array searched per item per layer took 6 s a select on a drawing of
-  // 1000 layers and a million items -- r66 A10)
-  const byName = new Map(full.layers.map((x) => [x.name, x]));
-  const ns = shapes.filter((p) => dxfLib.drawnAtOpen(p, byName)).length, nt = d.texts.filter((t) => dxfLib.drawnAtOpen(t, byName)).length;
-  const hidden = shapes.length - ns + d.texts.length - nt;
-  row('contents', `${fmtInt(ns)} lines and shapes, ${fmtInt(nt)} texts${hidden ? ` (and ${fmtInt(hidden)} on layers off or frozen)` : ''}`);
+  // (dxf.js openCounts, dwg-check's count too: r67 A5)
+  const oc = dxfLib.openCounts(d, full.layers);
+  row('contents', `${fmtInt(oc.shapes)} lines and shapes, ${fmtInt(oc.texts)} texts${oc.hidden ? ` (and ${fmtInt(oc.hidden)} on layers off or frozen)` : ''}`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));
@@ -5426,7 +5437,8 @@ function fillInfo2D(el) {
     const l = app.dxf.view.selected;
     // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines";
     // and, as the row does, what a frozen reference on it holds -- dxf.js layersOf: the row said 461,
-    // the selection "0 lines and shapes" -- r66 A1, Q2)
+    // the selection "0 lines and shapes" -- r66 A1, Q2. Unlike the row, no viewport frame: the row
+    // counts a frame so its layer can be hidden; a frame is no line or shape of the drawing -- r67 A10)
     const of = (it) => dxfLib.layersOf(it).includes(l);
     const np = d.paths.filter((p) => of(p) && dxfLib.isShape(p)).length, nt = d.texts.filter(of).length;
     row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);

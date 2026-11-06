@@ -653,6 +653,9 @@ function clipped(budget, n) {
   }
 }
 
+// the hold under a reference on frozen layer `layer`, from the hold it is walked under: that layer
+// added once (the one rule for a reference and its ATTRIBs, a missing block's too: r67 A6)
+const holdUnder = (held, layer) => (held && held.includes(layer) ? held : [...(held || []), layer]);
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
   walk(ctx.budget, recs.length);
@@ -972,7 +975,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)
-        if (!b) { attHold = L.frozen ? (ctx.hold && ctx.hold.includes(layer) ? ctx.hold : [...(ctx.hold || []), layer]) : null; ctx.count(r, r.type); break; }
+        if (!b) { attHold = L.frozen ? holdUnder(ctx.hold, layer) : null; ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -991,7 +994,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (ctx.walked) ctx.walked.add(get(q, 2, ''));
         // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
         const held = ctx.hold;
-        if (L.frozen) ctx.hold = held && held.includes(layer) ? held : [...(held || []), layer];
+        if (L.frozen) ctx.hold = holdUnder(held, layer);
         // (and the ATTRIBs that follow it, to its SEQEND: they are the reference's -- r65 A2)
         attHold = L.frozen ? ctx.hold : null;
         try {
@@ -1343,6 +1346,15 @@ export const layersOf = (it) => (it.hold ? [it.layer, ...it.hold] : [it.layer]);
 // whether an item is drawn as the drawing opens: every layer it answers to on (not off, not frozen)
 const layerIn = (layers, n) => (layers.get ? layers.get(n) : layers.find((x) => x.name === n));
 export const drawnAtOpen = (it, layers) => layersOf(it).every((n) => { const l = layerIn(layers, n); return !l || l.on; });
+// What a sheet draws as the drawing opens -- its lines and shapes, its texts -- and how many more its
+// layers off or frozen hold: the one count for the info panel and dwg-check (two copies: r67 A5).
+// layers: the drawing's (an array or a Map by name).
+export function openCounts(sheet, layers) {
+  const byName = layers instanceof Map ? layers : new Map(layers.map((x) => [x.name, x]));
+  const shapes = sheet.paths.filter(isShape);
+  const ns = shapes.filter((p) => drawnAtOpen(p, byName)).length, nt = sheet.texts.filter((t) => drawnAtOpen(t, byName)).length;
+  return { shapes: ns, texts: nt, hidden: shapes.length - ns + sheet.texts.length - nt };
+}
 // (the extents leave out what a frozen layer holds, as AutoCAD's Zoom Extents does -- a frozen
 // layer's reference far off made the drawing open at 1% of the view: r65 A4 --; a layer only off
 // still counts, as there; all of it when that leaves nothing)

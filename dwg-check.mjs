@@ -6,7 +6,7 @@
 import { writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
-import { drawnAtOpen, drawsNothing, isShape, sheetsOf } from './js/dxf.js';
+import { drawsNothing, openCounts, sheetsOf } from './js/dxf.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
@@ -57,10 +57,8 @@ async function check(f) {
       // (drawn at open, as the info panel counts it -- on layers on, frozen ones' references left
       // out -- with what layers off or frozen hold apart: every item was "drawn", 4206 paths where the
       // page drew 1651 of 4855 -- r66 A4)
-      const byName = new Map(dr.layers.map((x) => [x.name, x]));
-      const shapes = dr.paths.filter(isShape), open = (it) => drawnAtOpen(it, byName);
-      const np = shapes.filter(open).length, nt = dr.texts.filter(open).length;
-      rep.drawn = { paths: np, texts: nt, hidden: shapes.length - np + dr.texts.length - nt, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
+      const oc = openCounts(dr, dr.layers); // (the info panel's count: js/dxf.js, r67 A5)
+      rep.drawn = { paths: oc.shapes, texts: oc.texts, hidden: oc.hidden, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
     return { rep, P, bad: !!(d.failures.length || rep.drawError), why: '' };

@@ -110,6 +110,24 @@ test('4,000 concentric rings, none holding another: under 5 s (r29 Q5: 2,000 of 
     const turned = (a, b) => (flip ? flip.subarray(a, b).reduce((s, x) => s + x, 0) : 0);
     assert.deepEqual([turned(0, n0), turned(n0, n0 + 12), turned(n0 + 12, n0 + 24), turned(n0 + 24, H.length)], [0, 12, 12, 32], 'rings, box, cube, small ring');
   }
+  // (past NEST_BUDGET -- 3,000 rings, 9 M candidates asked -- nesting stops, under 2 s, says so, and
+  // no shell is turned: unbounded, 8,000 rings took 11 s in the worker -- round 31 Q4, carried open; r67)
+  {
+    const T3 = [];
+    for (let k = 0; k < 3000; k++) T3.push(...ring(10 + k, 0.5, 1));
+    const { P, I } = meshOf(T3);
+    const t0 = performance.now();
+    const r = shellTurns(P, I);
+    const ms = performance.now() - t0;
+    assert.equal(r.stopped, true, 'stopped past the budget');
+    assert.equal(r.flip, null, 'nothing turned');
+    assert.ok(ms < 2000, `${ms.toFixed(0)} ms`);
+    // must accept: 1,000 rings are within it, placed whole
+    const T1 = [];
+    for (let k = 0; k < 1000; k++) T1.push(...ring(10 + k, 0.5, 1));
+    const m1 = meshOf(T1);
+    assert.equal(shellTurns(m1.P, m1.I).stopped, undefined);
+  }
   // (4,000 of them under 5 s: the counts by shell in Maps and Sets, 9.3 s, r31 Q4)
   const T = [];
   for (let k = 0; k < 4000; k++) T.push(...ring(10 + k, 0.5, 1));
@@ -350,8 +368,8 @@ test('flagCounts: each flag with its words counted over the closed bodies asked,
   assert.deepEqual(flagCounts(facts, [1]).map(({ fact, n }) => [fact.key, n]), [['unchecked', 1]], 'only the bodies asked');
   assert.deepEqual(flagCounts({ closed: [true] }, [0]), [], 'no flags written: none');
   // (the words the panel and stp2mesh write, one text a separator each: r39 Q7)
-  assert.equal(flagsSaid(facts, [0, 1, 2, 3], ', '), ', 2 with shells that touch or cross: the volume may be off there, 1 too large to check for overlapping shells');
-  assert.equal(flagsSaid(facts, [1], ' · '), ' · 1 too large to check for overlapping shells');
+  assert.equal(flagsSaid(facts, [0, 1, 2, 3], ', '), ', 2 with shells that touch or cross: the volume may be off there, 1 too large to check how its shells lie in and over one another');
+  assert.equal(flagsSaid(facts, [1], ' · '), ' · 1 too large to check how its shells lie in and over one another');
   // (the writer rounds a number fact to 7 significant digits, KINDS.number.rounded: r39 Q8)
   const { P, I } = meshOf(cubeT([0, 0, 0], [1 / 3, 1 / 3, 1 / 3]));
   const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });

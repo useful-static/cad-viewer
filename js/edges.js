@@ -202,7 +202,7 @@ export const BODY_FACTS = [
   { key: 'volume', kind: 'number', always: true },
   // (said: what the info panel and stp2mesh say of a body with the flag, the one wording)
   { key: 'net', kind: 'flag', said: 'with shells that touch or cross: the volume may be off there' },
-  { key: 'unchecked', kind: 'flag', said: 'too large to check for overlapping shells' },
+  { key: 'unchecked', kind: 'flag', said: 'too large to check how its shells lie in and over one another' },
 ];
 
 function body(pos, bits, index, m, edges, sil, budget) {
@@ -331,7 +331,9 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   const nest = nesting(pos, local, shell, ns, shellOpen, shellBranched);
   const { parent, root, V: Vs, lo, hi } = nest;
   const { start, list, tree } = nest;
-  let net = anyBranched, unchecked = false;
+  // (nesting stopped past its budget -- shells it never placed: which holds which not known, the
+  // volume as the shells' sum of the ones it did place, and said so -- r67, round 31 Q4)
+  let net = anyBranched, unchecked = !!nest.stopped;
   // (a part in two outer shells)
   for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
   // Which shells' surfaces meet. Asked of each shell and its parent, and of two shells whose boxes
@@ -574,6 +576,9 @@ export function shellTurns(position, index) {
   // when the body is one shell)
   const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen, shellBranched) : null;
   const V = nest ? nest.V : null; // (each shell's signed volume: nesting's, the one count)
+  // (nesting stopped past its budget: no shell turned -- a shell it never placed read as outer, and a
+  // cavity wound inward would be turned inside out -- kept as written, and said: r67, round 31 Q4)
+  if (nest && nest.stopped) return { shell, flip: null, stopped: true };
   // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
   // the other way). A shell inside another is turned with its outer shell, never by its own sign:
   // a cavity is wound inward and a part embedded in another (a pin in a connector's body) outward,

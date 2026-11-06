@@ -135,7 +135,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       level = 'bad';
     } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
       // the viewer opens a mesh or a 2D drawing by its bytes where they are conclusive
-      // (js/mesh-formats.js meshFormatOf; a DWG by its "AC10" whatever its name), so a .stl
+      // (js/mesh-formats.js meshFormatOf; a DWG by its tag, js/formats.js DWG_TAG, whatever its name), so a .stl
       // holding a PLY opens as a PLY, a .dxf holding a DWG as a DWG
       const kind = (label) => BY_LABEL.get(label)?.kind;
       const opens = sure(got) && kind(got) === kind(want) && ['mesh', '2d'].includes(kind(got));

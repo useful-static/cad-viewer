@@ -1113,6 +1113,23 @@ test('a block reference on a frozen layer: every item it draws is held to that l
   assert.deepEqual(off.paths.map((p) => [p.layer, p.hold ?? null]), [['A', null]]);
   assert.equal(off.layers.find((l) => l.name === 'F').frozen, false);
 });
+// (r67, round 28 Q7: the snap tree built in js/snap-worker.js is the page's own tree)
+{
+  let got = null;
+  globalThis.self = { postMessage: (t) => { got = t; } };
+  await import('../js/snap-worker.js');
+  const paths = [{ pts: Float64Array.of(0, 0, 10, 0, 10, 10) }, { pts: Float64Array.of(5, 5, 7, 9) }, { pts: Float64Array.of(NaN, 1, 2, 3) }];
+  const pts = snapPoints(paths, [0, 0]);
+  const { finitePointIds } = await import('../js/dxf-view.js');
+  globalThis.self.onmessage({ data: { xy: pts.xy, ids: finitePointIds(pts.xy, pts.n) } });
+  const page = pointTree(pts).tree;
+  test('the snap tree built in the worker is the page\'s own (r67, round 28 Q7)', () => {
+    assert.deepEqual([...got.order], [...page.order]);
+    assert.deepEqual([...got.box], [...page.box]);
+    assert.deepEqual([got.m, got.P, got.D], [page.m, page.P, page.D]);
+  });
+  delete globalThis.self;
+}
 // (r65 A2, A3, A4: an INSERT's ATTRIBs held as its block is; a frozen reference inside another held
 // to both; the extents leave out what frozen layers hold, as Zoom Extents does)
 test('a frozen reference holds its ATTRIBs and every frozen layer above it; the extents leave out what frozen layers hold (r65 A2-A4)', () => {

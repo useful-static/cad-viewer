@@ -46,6 +46,16 @@ test('without faces\' circles, a closed edge is a circle by its own body\'s angl
   assert.equal(at(0.5), 2);
   assert.equal(at(0.1), 0, 'a 0.1 file needs 62 points for a circle');
 });
+test('a rim the stored positions cannot tell is drawn as its edge, not a true circle: a Ø0.08 hole in a Ø0.6 ring, at the origin two circles, 20 m out the outer alone and the hole as lines (r67 A7)', () => {
+  const at = (o) => {
+    const m = model([{ name: 'via', faces: [washer(0.04, 0.3, 0.1, 48, o, o, 0)[0]] }], 0.5);
+    m.faces = null;
+    const d = drawingSVG([{ name: 'via', geom: bodyGeometry(m, 0) }], ...TOP);
+    return [d.circles, d.lines > 0];
+  };
+  assert.deepEqual(at(0), [2, false]);
+  assert.deepEqual(at(20000), [1, true], 'the Ø0.08 untold: drawn as the edge it is (must fire)');
+});
 test('the caption and names are escaped', () => {
   const g = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 1, 1]) }]), 0);
   const d = drawingSVG([{ name: 'A & <B>', geom: g }], ...TOP, { title: 'x < y' });

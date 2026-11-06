@@ -15,7 +15,10 @@
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
 // escape() first.
 
-import { angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
+import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
+// The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
+// (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5)
+export const untoldText = (n) => (n ? `${n} ${n === 1 ? 'rim' : 'rims'} too small to tell this far from the origin (the file's positions are rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius): not listed` : '');
 import { faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
@@ -682,7 +685,8 @@ export function createMeasure(deps) {
     const shared = list.every((h) => axesOf(h).join() === first);
     const rows = list.map((h, i) => {
       const at = axesOf(h).map((j) => `${shared ? '' : `${'XYZ'[j]} `}${deps.num(h.centre[j] - ref.min[j])}`).join(shared ? ', ' : ' · ');
-      return { n: i + 1, d: h.diameter, at, through: h.rims > 1, depth: h.depth };
+      // (head: a countersunk hole's countersink diameter -- js/measure-geom.js holesOf, r67)
+      return { n: i + 1, d: h.diameter, at, through: h.rims > 1, depth: h.depth, head: h.head || 0 };
     });
     const posHead = list.length && shared ? `${first.split(',').map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
     // per diameter as shown: how many, and how far apart their centres spread
@@ -720,7 +724,7 @@ export function createMeasure(deps) {
     sum.prepend(from);
     if (t.untold) {
       const un = document.createElement('li');
-      un.textContent = `${t.untold} ${t.untold === 1 ? 'rim' : 'rims'} too small to tell this far from the origin (the file's positions are rounded coarser than 1.5% of ${t.untold === 1 ? 'its' : 'their'} radius): not listed`;
+      un.textContent = untoldText(t.untold);
       sum.append(un);
     }
     const tb = $('holesrows');
@@ -730,7 +734,8 @@ export function createMeasure(deps) {
       tr.tabIndex = 0;
       // depth: through holes' (rim to rim); "–" for one rim (blind, or a
       // sheet's hole)
-      for (const c of [String(r.n), deps.num(r.d), r.at, r.through ? deps.num(r.depth) : '–']) {
+      // (a countersunk one: its countersink's diameter after the bore's)
+      for (const c of [String(r.n), `${deps.num(r.d)}${r.head ? ` (countersunk ${deps.num(r.head)})` : ''}`, r.at, r.through ? deps.num(r.depth) : '–']) {
         const td = document.createElement('td');
         td.textContent = c;
         tr.append(td);
@@ -748,13 +753,14 @@ export function createMeasure(deps) {
     }
     $('holescsv').onclick = () => {
       const u = deps.unit();
-      const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u})`,
-        ...t.rows.map((r) => `${r.n},${deps.num(r.d)},"${r.at}",${r.through ? deps.num(r.depth) : ''}`)].join('\n');
+      const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u}),countersink (${u})`,
+        ...t.rows.map((r) => `${r.n},${deps.num(r.d)},"${r.at}",${r.through ? deps.num(r.depth) : ''},${r.head ? deps.num(r.head) : ''}`),
+        ...(t.untold ? [`# ${untoldText(t.untold)}`] : [])].join('\n');
       copyText(csv, 'hole table copied');
     };
     box.hidden = false;
     deps.queueFrame();
-    deps.announce(`${t.list.length} holes`);
+    deps.announce(`${t.list.length} holes${t.untold ? `; ${untoldText(t.untold)}` : ''}`);
     return t;
   }
 

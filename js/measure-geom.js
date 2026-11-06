@@ -22,13 +22,16 @@
 const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
+const FLAT_SHARE = 3e-5; // and to this share of its size (planeOf: measured, r67)
 // what float32 positions can tell apart near a coordinate of size `far`: 2^-23 of it, eight times
 // over (a sum of a few rounded terms) -- planeOf's floor, a plane's thickness from many points
 const storedFloor = (far) => 8 * 2 ** -23 * far;
 // a point's distance from a centre, as stored: one unit in the last place (2^-23 of `far`) -- the
 // floor of circleOf and wallJoins. Eight let a loop 2.8% off a circle pass as a hole a few metres
 // out (the RK3399 board 5 m out gained two; six of eight boards more at 20 m: r65 Q3)
-const storedUlp = (far) => 2 ** -23 * far;
+// (the real step, the power of two a float32 of that size moves by: 2^-23 x far overstated it up to
+// twice, and 32 m out the RK3399 lost 14 rims as untold that are stored as finely as at 20 m: r67 Q1)
+const storedUlp = (far) => (far > 0 ? 2 ** (Math.floor(Math.log2(far)) - 23) : 0);
 // A loop the stored positions cannot tell: a stored coordinate's rounding, half a unit in its last
 // place, more than this many times the radius test. Such a loop is "untold": no circle, and
 // counted, so the hole table says what it cannot tell. The line is measured, not derived: the eight
@@ -38,6 +41,9 @@ const storedUlp = (far) => 2 ** -23 * far;
 // itself 12 of the RK3399's.
 const TELL_SHARE = 1.5;
 export const untoldAt = (far, r) => storedUlp(far) / 2 > TELL_SHARE * RADIUS_TOL * r;
+// (the rounding past which a rim is untold, as a share of its radius: the hole table's words say
+// this, not a number of their own -- r67 A8, Q6)
+export const UNTOLD_SHARE = TELL_SHARE * RADIUS_TOL;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
@@ -140,7 +146,12 @@ function planeOf(P, I, t0, nt) {
   // the positions are stored -- float32 rounds a coordinate to 2^-23 of itself. At 1e-6 a flat
   // tilted face 1 m out read "not flat", and a board's bottom whose 4 vertices of 1,873 sit 0.3 um
   // off lost its 38 holes' depths)
-  if (hi - lo > Math.max(1e-5 * ext, PLANE_FLOOR_MM, storedFloor(far))) return null;
+  // (3e-5, measured: the faces holding a circle that read not flat, over the eight boards and the
+  // three largest private models, are either off by 1-2e-5 of their size -- an 802 mm plate face 8.87
+  // um, whose 18 through-holes read as one-rim at the origin and as through 20 m out, the floor
+  // there looser -- or curved, 5e-5 and up; none between. At 1e-5 that plate's placement decided:
+  // r67 Q2)
+  if (hi - lo > Math.max(FLAT_SHARE * ext, PLANE_FLOOR_MM, storedFloor(far))) return null;
   return { normal: n, d: dot(n, p0) };
 }
 
@@ -441,6 +452,48 @@ function wallJoins(geom, a, b) {
   return at >= hi - eps;
 }
 
+// Whether a countersunk hole's wall joins rim a (its wide top, radius R) to rim b (the bore's other
+// end, radius r < R): curved faces about a's axis, each a cylinder or a cone -- a vertex's distance
+// from the axis a straight line of its place along it, between r and R -- spanning a to b (round
+// 23 Q5, carried open; r67). The test that keeps two coaxial blind holes drilled from either side,
+// material between, from reading as one.
+function revolutionJoins(geom, a, b) {
+  const { P, I } = geom;
+  const n = a.normal, c = a.centre, R = a.radius, r = b.radius;
+  const end = dot(sub(b.centre, c), n);
+  const lo = Math.min(0, end), hi = Math.max(0, end);
+  const m = R * (1 + 2 * RADIUS_TOL) + PLANE_FLOOR_MM;
+  const hlo = [0, 1, 2].map((k) => Math.min(a.centre[k], b.centre[k]) - m), hhi = [0, 1, 2].map((k) => Math.max(a.centre[k], b.centre[k]) + m);
+  const spans = [];
+  for (const fi of curvedNear(geom, hlo, hhi)) {
+    const f = geom.faces[fi];
+    const at = [];
+    let ok = true;
+    for (let t = f.tri0; t < f.tri0 + f.ntri && ok; t++) {
+      for (let j = 0; j < 3; j++) {
+        const v = I[3 * t + j] * 3;
+        const d = [P[v] - c[0], P[v + 1] - c[1], P[v + 2] - c[2]];
+        const along = dot(d, n), off = len(sub(d, n.map((x) => x * along)));
+        const tol = Math.max(RADIUS_TOL * r, storedUlp(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
+        if (off < r - tol || off > R + tol) { ok = false; break; }
+        at.push([along, off, tol]);
+      }
+    }
+    if (!ok || !at.length) continue;
+    // (a line through its two ends along the axis; every vertex on it: a cylinder or a cone)
+    let p0 = at[0], p1 = at[0];
+    for (const p of at) { if (p[0] < p0[0]) p0 = p; if (p[0] > p1[0]) p1 = p; }
+    const slope = p1[0] > p0[0] ? (p1[1] - p0[1]) / (p1[0] - p0[0]) : 0;
+    if (!at.every(([t, o, tol]) => Math.abs(o - (p0[1] + slope * (t - p0[0]))) <= tol)) continue;
+    if (p1[0] > lo && p0[0] < hi) spans.push([p0[0], p1[0]]);
+  }
+  spans.sort((x, y) => x[0] - y[0]);
+  const eps = 1e-3 * (hi - lo) + PLANE_FLOOR_MM;
+  let at = lo;
+  for (const [s0, s1] of spans) { if (s0 > at + eps) break; at = Math.max(at, s1); }
+  return at >= hi - eps;
+}
+
 // The holes of a body: circles on its planar faces that bound an inner loop
 // (a face's loops other than its outer one), merged where the two rims of one
 // through-hole meet the top and bottom faces (same axis, same radius).
@@ -508,7 +561,7 @@ export function holesOf(geom) {
     const [a, p] = place.get(j), sk2 = skips.get(a);
     sk2.up[p] = p + 1; sk2.down[p + 1] = p;
   };
-  const out = [];
+  const out = [], single = []; // (single: [rim, its row] of those no rim paired with)
   // whether rim j can be rim r's other end: its radius, its axis, facing the other way, on the
   // line, behind r's face (into the material: the nearest either way crossed an air gap thinner than
   // an arm -- a fork's arms 10 thick and 1 apart read as holes 1 and 21 deep) -> its distance, or -1
@@ -552,7 +605,38 @@ export function holesOf(geom) {
     markUsed(i);
     if (best >= 0) markUsed(best);
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
+    if (best < 0) single.push([i, out.length - 1]);
   }
+  // A countersunk through-hole: its two rims of different radii -- the wide top, the bore's other end
+  // -- left single by the pairing above, as its bore begins at a cone, not a flat face: one row, the
+  // bore's diameter, through, its depth, the countersink's diameter as `head` (it was two one-rim
+  // rows: round 23 Q5, carried open; r67). Paired by the axis line's cell, whatever the radius,
+  // facing apart, the narrow one behind the wide one's face, and a wall of cones and cylinders
+  // between (revolutionJoins).
+  const byLine = new Map();
+  for (const [i] of single) { const k = keys[i]; const key = `${k.f}|${k.q.join(',')}`; (byLine.get(key) || byLine.set(key, []).get(key)).push(i); }
+  const merged = new Set(), drop = new Set();
+  for (const [i, row] of single) {
+    if (merged.has(i)) continue;
+    const wide = rims[i], k = keys[i];
+    let best = -1, bestAlong = Infinity;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      for (const j of byLine.get(`${-k.f}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`) || []) {
+        const nar = rims[j];
+        if (merged.has(j) || !(nar.radius < wide.radius * (1 - 2 * RADIUS_TOL))) continue;
+        if (Math.abs(Math.abs(dot(nar.normal, wide.normal)) - 1) > 1e-3 || dot(faceN(nar), faceN(wide)) > -0.999) continue;
+        const d = sub(nar.centre, wide.centre), along = dot(d, wide.normal);
+        if (len(sub(d, wide.normal.map((v) => v * along))) > 0.01 * nar.radius + 1e-6 || dot(d, faceN(wide)) >= 0) continue;
+        if (Math.abs(along) < bestAlong && revolutionJoins(geom, wide, nar)) { bestAlong = Math.abs(along); best = j; }
+      }
+    }
+    if (best < 0) continue;
+    const nar = rims[best];
+    merged.add(i); merged.add(best);
+    drop.add(row); drop.add(single.find(([j]) => j === best)[1]);
+    out.push({ centre: wide.centre, normal: wide.normal, diameter: 2 * nar.radius, depth: bestAlong, rims: 2, head: 2 * wide.radius });
+  }
+  if (drop.size) { const kept = out.filter((_, q) => !drop.has(q)); out.length = 0; out.push(...kept); }
   out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
   // (and how many rims of flat faces the stored positions cannot tell, so far from the origin: the
   // table says so -- r66)

@@ -42,7 +42,9 @@
 //   I26 the address's tour failing after the visitor left that address is told, never written into
 //       the shown model's ready line (which way it went was the order of two answers: r66);
 //   I27 "this file is in", chosen more than once, reads the model in the last unit chosen, and a
-//       re-read ends the tour (r66 A2, Q1, Q4, Q5).
+//       re-read ends the tour (r66 A2, Q1, Q4, Q5);
+//   I28 the units row's select says the unit the model is read in (a re-read cancelled left it on
+//       the choice: r67 Q3, Q4).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -52,6 +54,7 @@
 //   node tests/test-startup-sweep.mjs --list     (every violation, not the first of each)
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { runStart as runOnePage } from './startup-harness.mjs';
 import { test, done } from './harness.mjs';
 
@@ -271,6 +274,8 @@ function acts(a, embed) {
   // (the second choice in the same task as the first, its re-read just begun: a moment the page can be
   // acted at too -- a re-read asks for nothing, and ui-diff never saw a "reread" moment: r66)
   out.push(['this file is in inches, then mm during its re-read', { after: [{ unit: 'in', andThen: 'mm' }] }]);
+  // (r67 Q3: inches, then Cancel during the re-read -- the select must say the reading again)
+  out.push(['this file is in inches, then Cancel during its re-read', { after: [{ unit: 'in', thenCancel: true }] }]);
   if (addOf(a.q) && a.lateList) out.push(['this file is in inches then mm, once the model shows', { during: [{ at: `loaded ${firstOfAddress({ addr: a })}`, unit: 'in' }, { at: `loaded ${firstOfAddress({ addr: a })}`, unit: 'mm' }] }]);
   // (r65 Q6: once the model shows, its ?add= still waiting -- for a late list. Only there: with the
   // list in, the add starts at once, and in the page the act came after it joined -- the
@@ -532,7 +537,7 @@ function check(c0, r) {
   }
   // I27: the last unit chosen is the reading, when every act was a unit choice and one model, read
   // from its bytes, is shown (a choice back to mm during the inches re-read was nothing: r66 A2)
-  if (acts.length && acts.every((d) => d.unit) && r.status === 'ready' && r.app.meshSource && (r.app.scene || []).length === 1) {
+  if (acts.length && acts.every((d) => d.unit && !d.thenCancel) && r.status === 'ready' && r.app.meshSource && (r.app.scene || []).length === 1) {
     const last = acts[acts.length - 1].andThen || acts[acts.length - 1].unit;
     if (r.unitRead !== last) v('I27', `the last unit chosen ${last}, the model read in ${r.unitRead}`);
   }
@@ -542,9 +547,20 @@ function check(c0, r) {
     if (rr >= 0 && ev.slice(0, rr).some((e) => e.startsWith('tour ')) && !ev.slice(rr).some((e) => e === 'tour-end' || e.startsWith('tour ') || e.startsWith('shown '))
       && !ev.slice(0, rr).some((e) => e === 'tour-end')) v('I27', `a tour left playing over the re-read (${ev.join(' > ')})`);
   }
+  // I28: the units row says what the model is read in, once settled
+  if (r.app.meshSource && !['loading', 'tessellating'].includes(r.status) && r.dom.meshunit.value && r.dom.meshunit.value !== r.app.meshSource.unit) {
+    v('I28', `the units row says ${r.dom.meshunit.value}, the model read in ${r.app.meshSource.unit}`);
+  }
   // I26: the start's tour, failing after a pick left its address, is not the picked model's line
   if (qp.get('tour') && !new URL(r.href).searchParams.get('tour') && r.status === 'ready' && /the tour (not found|gave no answer)/.test(r.msg || '')) {
     v('I26', `the start's tour's failure in the ready line of an address naming no tour: ${r.msg}`);
+  }
+  // (and told: the line's half alone passed a page that said nothing -- r67 A2)
+  // (when the visitor left during the start, before the tour's answer; one made after, the failure
+  // was said on the card or the line before it)
+  if (qp.get('tour') && /^tour (fails|times out)/.test(c.outcome) && [].concat(c.during || []).some((d) => d.pick || d.file || d.early) && !new URL(r.href).searchParams.get('tour') && r.status === 'ready'
+    && !/the tour (not found|gave no answer)/.test(r.msg || '') && !r.shown.some((t) => /^the tour (not found|gave no answer)/.test(t))) {
+    v('I26', `the start's tour failed, the visitor elsewhere, and nothing said: ${JSON.stringify(r.shown)}`);
   }
   // I25: "this file is in" chosen while another model opens is refused, and said so
   if (r.events.includes('unit while another opens') && !r.shown.some((t) => /^not read in inches: another model is opening$/.test(t))) {
@@ -728,6 +744,8 @@ export function endState(r) {
     stuck: { skipPop: !!r.app.skipPop, chain: !!r.app.pickChain },
     // (the unit the model shown was read in, a model alone -- r64 Q5)
     unit: (r.app.scene || []).length === 1 ? r.unitRead || 'mm' : null,
+    // (the units row's select, while it is shown: it said inches over a model in mm -- r67 Q3, Q4)
+    meshUnit: r.app.meshSource ? r.dom.meshunit.value || null : null,
   };
 }
 
@@ -795,7 +813,10 @@ if (oneAt > 0) {
   process.exit(0);
 }
 
-await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I25 (r57-r65)`, async () => {
+// (the invariants' range from this file's own header, not written in the title: it went stale three
+// times -- r67 A9)
+const lastInvariant = Math.max(...[...readFileSync(new URL(import.meta.url), 'utf8').matchAll(/^\/\/\s+I(\d+) /gm)].map((m) => +m[1]));
+await test(`the start-up sweep: ${cases.length} runs of main.js's own start, each against the invariants I1-I${lastInvariant}`, async () => {
   const byInv = {};
   const t0 = Date.now();
   let unreached = 0;

@@ -143,7 +143,11 @@ export function windingAt(index, p) {
   return { inside: !touch && (w[0] > 0) + (w[1] > 0) + (w[2] > 0) >= 2, touch };
 }
 
-export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = new Uint8Array(ns)) {
+// How many candidates nesting asks of, point by point, before it stops asking (stopped). Measured
+// in round 67: the time follows it (1,000 nested rings 1.0 M, 0.38 s; 2,000 4.0 M, 0.87 s; 4,000
+// 16 M, 2.9 s; 8,000 64 M, 11 s), and every body of the eight boards asks 12 at most.
+export const NEST_BUDGET = 4_000_000;
+export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = new Uint8Array(ns), budget = NEST_BUDGET) {
   const nt = shell.length;
   // per shell: its box, its triangles (a typed list, grouped by shell), its 8 largest triangles,
   // its signed volume (centred on the body's box)
@@ -206,6 +210,7 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = n
   // cast a point against the whole body (2,000 concentric rings, none holding another, asked
   // each against each: 30 s), the counts typed (Maps and Sets of them: 4,000 turned rings 28.9 s).
   let body = null, shellOfK = null;
+  let work = 0, stopped = false; // (the candidates asked, point by point: NEST_BUDGET's count, r67)
   const slot = new Int32Array(ns).fill(-1);
   const ask = (s, cands, idx, slotOfK) => {
     const m = cands.length, cnt = new Int32Array(3 * m), touched = new Uint8Array(m);
@@ -226,6 +231,7 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = n
         return eps[q];
       };
       const hit = (r, k, f) => { const q = slotOfK(k); if (q >= 0) cnt[3 * q + r] += branched[cands[q]] ? f : 1; };
+      work += m; // (the candidates a point is asked of: the cost grows with them, not with the crossings)
       const touch = (k) => { const q = slotOfK(k); if (q >= 0) touched[q] = 1; };
       walkRays(idx, p, hit, touch, epsOfK);
       for (let q = 0; q < m; q++) {
@@ -266,6 +272,10 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = n
       if (open[o]) inOpen[cur] = 1; else cands.push(o);
     };
     for (const s of order) {
+      // (past its budget, nothing more asked: the shells not yet placed are left as outer shells,
+      // and the result says it stopped -- a stack of shells a ray runs along cost the square of
+      // their number, 8,000 rings 9.9 s in the worker, with no bound: round 31 Q4, carried open; r67)
+      if (work > budget) { stopped = true; break; }
       if (open[s]) continue;
       for (let k = 0; k < 3; k++) c[k] = (lo[3 * s + k] + hi[3 * s + k]) / 2;
       cur = s;
@@ -313,5 +323,5 @@ export function nesting(P, I, shell, ns, open = new Uint8Array(ns), branched = n
   const roots = (s) => [...new Set([root[s], ...(others[s] || []).map((o) => root[o])])];
   // (and the grouping and the box tree it built, so a caller asking more of the same shells --
   // js/edges.js materialVolume -- builds neither again)
-  return { parent, root, roots, inOpen, V, lo, hi, start, list, tree };
+  return { parent, root, roots, inOpen, V, lo, hi, start, list, tree, work, stopped };
 }

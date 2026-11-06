@@ -33,13 +33,19 @@ const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 // The snaps: the nearest point within r that accept(point) takes. pts: snapPoints' typed set
 // ({ n, xy, at(i) -> the point as an array }), the points held by the tree as they are
 // (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
-export function pointTree(pts) {
-  const { n, xy, at } = pts;
+// (the points a tree holds: the finite ones -- one rule for the page's build and the worker's)
+export function finitePointIds(xy, n) {
   const ids = new Uint32Array(n);
   let m = 0;
   for (let i = 0; i < n; i++) if (Number.isFinite(xy[2 * i] + xy[2 * i + 1])) ids[m++] = i;
-  return { xy, at, tree: boxTree(xy, ids.subarray(0, m), 2, true) };
+  return ids.slice(0, m);
 }
+export function pointTree(pts) {
+  const { n, xy, at } = pts;
+  return { xy, at, tree: boxTree(xy, finitePointIds(xy, n), 2, true) };
+}
+// (a drawing of this many points or more has its tree built in js/snap-worker.js: r67)
+export const SNAP_WORKER_MIN = 200000;
 export function nearestPoint(index, x, y, r, accept = () => true) {
   const { xy, at } = index;
   const i = nearestItem([index.tree], [x, y], r, (k) => (xy[2 * k] - x) ** 2 + (xy[2 * k + 1] - y) ** 2, (k) => accept(at(k)));
@@ -263,14 +269,15 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // every frozen layer is still off; with one the visitor turned on, what its layers then show too --
   // Fit framed the opening extents always, and 158 of 022-FORKLIFT's 159 ASHADE items fell outside
   // its frame once that layer was on (r66 Q3)
-  const frozen = drawing.layers.filter((l) => l.frozen).map((l) => l.name);
+  const frozen = drawing.layers.filter((l) => l.frozen).map((l) => l.name), frozenSet = new Set(frozen);
   const framed = new Map(); // (by the frozen layers on: one box each)
   const frame = () => {
     const on = frozen.filter((n) => !st.off.has(n));
     if (!on.length) return ext;
     const key = on.join('\u0000');
     if (!framed.has(key)) {
-      const keep = (it) => layersOf(it).every((n) => !frozen.includes(n) || !st.off.has(n));
+      // (by a Set: the array searched per item took 6.7 s on 1 M paths of 5,000 frozen layers -- r67 A4)
+      const keep = (it) => layersOf(it).every((n) => !frozenSet.has(n) || !st.off.has(n));
       framed.set(key, itemsBox({ paths: drawing.paths.filter(keep), texts: drawing.texts.filter(keep) }) || ext);
     }
     return framed.get(key);
@@ -416,10 +423,30 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // move and not at every open
   let tree = null;
   const SNAP_PX = 10;
-  const snapTree = () => tree || (tree = pointTree(snapPoints(drawing.paths, o)));
+  // (a large drawing's tree built in a worker -- js/snap-worker.js --, the page answering meanwhile and
+  // snapping nothing until it is in; built here, the 1.5 million paths of 091-FEDERAL_POLY_ILARO held
+  // the page 1.6 s as Measure turned on: round 28 Q7, carried open, r67. A small one, or no worker:
+  // here, at once.)
+  let building = false;
+  const buildSnaps = () => {
+    if (tree || building) return;
+    const pts = snapPoints(drawing.paths, o);
+    if (pts.n < SNAP_WORKER_MIN || typeof Worker === 'undefined') { tree = pointTree(pts); return; }
+    let w;
+    try { w = new Worker(new URL('./snap-worker.js', import.meta.url), { type: 'module' }); } catch { tree = pointTree(pts); return; }
+    building = true;
+    const done = (t) => { building = false; tree = t; w.terminate(); if (st.measure) draw(); };
+    w.onmessage = (e) => done({ xy: pts.xy, at: pts.at, tree: e.data });
+    w.onerror = () => done(pointTree(pts));
+    const ids = finitePointIds(pts.xy, pts.n);
+    w.postMessage({ xy: pts.xy, ids }, [ids.buffer]);
+  };
+  const snapTree = () => { if (!tree) buildSnaps(); return tree; };
   function snapAt(px, py) {
     const [ux, uy] = toUnits(px, py);
-    return nearestPoint(snapTree(), ux, uy, SNAP_PX / st.s, (s) => !hid({ layer: s[3], hold: s.hold }));
+    const t = snapTree();
+    if (!t) return null; // (its tree still being built: no snap yet, the click measuring where it is)
+    return nearestPoint(t, ux, uy, SNAP_PX / st.s, (s) => !hid({ layer: s[3], hold: s.hold }));
   }
   // the lines, indexed once for the hover and a click's layer: built just after the drawing is
   // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)

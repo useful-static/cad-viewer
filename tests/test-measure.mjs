@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
-import { KIND_NAME, MARK, SNAP_KINDS } from '../js/measure-ui.js';
+import { KIND_NAME, MARK, SNAP_KINDS, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
 
 import { test, done } from './harness.mjs';
@@ -126,6 +126,38 @@ test('far out, a loop 2.8% off a circle is not one, a true rim still is (as floa
   assert.ok(circleOf(loop(0.1, 0, 5000), 0.5), 'Ø0.2 at 5 m');
   assert.ok(circleOf(loop(1.5, 0, 20000), 0.5), 'Ø3 at 20 m');
 });
+test('the stored step is float32\'s own: a Ø0.2 rim 32 m out is told as 20 m out; a plate 15 um off flat over 800 mm is flat at the origin as 20 m out (r67 Q1, Q2)', () => {
+  const f = (v) => Math.fround(v);
+  const loop = (r, o, n = 24) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return [f(o + r * Math.cos(t)), f(o + r * Math.sin(t)), f(o)]; });
+  for (const o of [20000, 32000]) {
+    const c = circleOf(loop(0.1, o), 0.5);
+    assert.ok(c && !c.untold, `Ø0.2 at ${o} told (2^-23 x far called it untold at 32 m)`);
+  }
+  // a 2.5 mm plate 800 mm across, a Ø4 hole through it, its back face's outer edge 15 um up
+  const n = 48;
+  const ring = (r, z, o) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(o + r * Math.cos(t), o + r * Math.sin(t), z); });
+  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+  const plate = (o) => [band(ring(2, 2.5, o), ring(400, 2.5, o)), band(ring(400, 0.015, o), ring(2, 0, o)), band(ring(2, 0, o), ring(2, 2.5, o)), band(ring(400, 2.5, o), ring(400, 0.015, o))];
+  for (const o of [0, 20000]) {
+    const h = holesOf(bodyGeometry(model([{ name: 'plate', faces: plate(o) }]), 0));
+    assert.deepEqual(h.map((x) => [Math.round(x.diameter * 100) / 100, x.rims]), [[4, 2]], `at ${o}: ${JSON.stringify(h.map((x) => [x.diameter, x.rims]))}`);
+  }
+});
+test('a countersunk through-hole is one row (the bore\'s Ø, through, head the countersink\'s); two coaxial blind holes from either side stay two (r67, round 23 Q5)', () => {
+  const n = 48;
+  const ring = (r, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(r * Math.cos(t), r * Math.sin(t), z); });
+  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+  const disc = (r, z, up) => { const c = P(0, 0, z), e = ring(r, z), t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push(up ? [c, e[i], e[j]] : [c, e[j], e[i]]); } return t; };
+  const R = 3, r = 1.5, ro = 8, H = 4, hc = 1.5;
+  // a plate H thick, the countersink R wide at the top narrowing to the bore r at H - hc
+  const sunk = [band(ring(R, H), ring(ro, H)), band(ring(ro, 0), ring(r, 0)), band(ring(r, 0), ring(r, H - hc)), band(ring(r, H - hc), ring(R, H)), band(ring(ro, H), ring(ro, 0))];
+  const h = holesOf(bodyGeometry(model([{ name: 'plate', faces: sunk }]), 0));
+  assert.deepEqual(h.map((x) => [Math.round(x.diameter * 100) / 100, x.rims, Math.round(x.depth * 100) / 100, x.head && Math.round(x.head * 100) / 100]), [[3, 2, 4, 6]], JSON.stringify(h));
+  // must accept: an R-wide hole 1 deep from the top, an r-wide one 1 deep from the bottom, material between
+  const blind = [band(ring(R, H), ring(ro, H)), band(ring(ro, 0), ring(r, 0)), band(ring(R, H - 1), ring(R, H)), disc(R, H - 1, true), band(ring(r, 0), ring(r, 1)), disc(r, 1, false), band(ring(ro, H), ring(ro, 0))];
+  const b = holesOf(bodyGeometry(model([{ name: 'plate', faces: blind }]), 0));
+  assert.deepEqual(b.map((x) => [Math.round(x.diameter * 100) / 100, x.rims]).sort(), [[3, 1], [6, 1]], JSON.stringify(b));
+});
 test('a rim the stored positions cannot tell is no row but counted (untold), and the same rim at the origin is a hole (r66)', () => {
   // a Ø0.08 through-hole (rounding at 20 m: 2.43% of its radius, as the boards' vias), and a Ø3 one
   const at = (x) => holesOf(bodyGeometry(model([{ name: 'w', faces: [...washer(0.04, 0.3, 0.1, 48, x, x, 0), ...washer(1.5, 3, 0.1, 48, x + 10, x, 0)] }]), 0));
@@ -134,6 +166,9 @@ test('a rim the stored positions cannot tell is no row but counted (untold), and
   assert.equal(h0.untold, 0);
   assert.deepEqual(h20.map((h) => [Math.round(h.diameter * 100) / 100, h.rims]), [[3, 2]], 'the Ø3 hole still told 20 m out');
   assert.equal(h20.untold, 2, 'the Ø0.08 hole\'s two rims said untold, not left out without a word');
+  // (the one sentence for the summary, the CSV and the announcement, its share the rule's own: r67 A3, A8)
+  assert.equal(untoldText(2), '2 rims too small to tell this far from the origin (the file\'s positions are rounded coarser than 1.5% of their radius): not listed');
+  assert.equal(untoldText(0), '');
 });
 test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off the origin, and small 5 m out', () => {
   // a washer about any axis d at o, as float32
