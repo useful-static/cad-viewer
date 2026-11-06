@@ -128,6 +128,20 @@ test('4,000 concentric rings, none holding another: under 5 s (r29 Q5: 2,000 of 
     const m1 = meshOf(T1);
     assert.equal(shellTurns(m1.P, m1.I).stopped, undefined);
   }
+  // (and the volume past it: a block with the 3,000 rings as cavities, wound in, is the block less
+  // them -- a shell nesting never placed read as outer, and the cavities were added, 4.5% over: r68 Q5)
+  {
+    const rings = [];
+    for (let k = 0; k < 3000; k++) rings.push(...ring(10 + k, 0.5, 1));
+    const S = 3015, block = cubeT([-S, -S, -1], [S, S, 2]);
+    const { P, I } = meshOf([...block, ...rings.map(([a, b, c]) => [a, c, b])]);
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < P.length; i++) { const k = i % 3; min[k] = Math.min(min[k], P[i]); max[k] = Math.max(max[k], P[i]); }
+    const { facts } = buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min, max } }] });
+    const want = vol(block) - vol(rings);
+    assert.equal(facts.unchecked[0], true, 'past the budget: said');
+    assert.ok(Math.abs(facts.volume[0] - want) < 1e-6 * want, `volume ${facts.volume[0]} for ${want} (must fire: ${vol(block) + vol(rings)} adds them)`);
+  }
   // (4,000 of them under 5 s: the counts by shell in Maps and Sets, 9.3 s, r31 Q4)
   const T = [];
   for (let k = 0; k < 4000; k++) T.push(...ring(10 + k, 0.5, 1));
@@ -241,7 +255,14 @@ test('the volume\'s overlap test is the shells\' surfaces, not their boxes; one 
   assert.deepEqual([s.header.factsRule, s.header.facts.net], [FACTS_RULE, [true, false]]);
   // (and merged with a model of no rule, or an older one: no rule, so rebuilt -- the first model's
   // rule taken would show the other's old signed sum as today's, r33 Q4)
-  for (const old of [undefined, FACTS_RULE - 1]) {
+  // (rule 4 with no body unchecked holds as today's, a scene of it too: r68)
+  {
+    const c = one(cube);
+    c.header = { ...c.header, factsRule: 4 };
+    const m = mergeModels([{ base: a, name: 'a' }, { base: c, name: 'c' }]);
+    assert.deepEqual([m.header.factsRule, factsCurrent(m.header)], [FACTS_RULE, true], 'merged with a model of rule 4, none unchecked');
+  }
+  for (const old of [undefined, 3]) {
     const c = one(cube);
     c.header = { ...c.header, factsRule: old };
     const m = mergeModels([{ base: a, name: 'a' }, { base: c, name: 'c' }]);
@@ -360,6 +381,9 @@ test('two cavities crossing each other in a cube: no region below 0, the volume 
 test('facts written under rule 3 (no clamp: crossing cavities read 771.75 for 1000) are not today\'s and are rebuilt; every flag fact has its words for the panel and stp2mesh (r37 Q1, A7)', () => {
   assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: 3 }), false, 'rule 3: rebuilt');
   assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: FACTS_RULE }), true);
+  // (rule 4 differs only in a body flagged unchecked: such facts rebuilt, others kept -- r68 Q5)
+  assert.equal(factsCurrent({ facts: { closed: [true, true], unchecked: [false, true] }, factsRule: 4 }), false, 'rule 4, a body unchecked: rebuilt (must fire)');
+  assert.equal(factsCurrent({ facts: { closed: [true] }, factsRule: 4 }), true, 'rule 4, none unchecked: kept');
   for (const f of BODY_FACTS) if (f.kind === 'flag' && !f.always) assert.equal(typeof f.said, 'string', `${f.key} has its words`);
 });
 test('flagCounts: each flag with its words counted over the closed bodies asked, the one count the panel and stp2mesh say (r38 A5, Q5)', () => {
@@ -368,8 +392,8 @@ test('flagCounts: each flag with its words counted over the closed bodies asked,
   assert.deepEqual(flagCounts(facts, [1]).map(({ fact, n }) => [fact.key, n]), [['unchecked', 1]], 'only the bodies asked');
   assert.deepEqual(flagCounts({ closed: [true] }, [0]), [], 'no flags written: none');
   // (the words the panel and stp2mesh write, one text a separator each: r39 Q7)
-  assert.equal(flagsSaid(facts, [0, 1, 2, 3], ', '), ', 2 with shells that touch or cross: the volume may be off there, 1 too large to check how its shells lie in and over one another');
-  assert.equal(flagsSaid(facts, [1], ' · '), ' · 1 too large to check how its shells lie in and over one another');
+  assert.equal(flagsSaid(facts, [0, 1, 2, 3], ', '), ', 2 with shells that touch or cross: the volume may be off there, 1 too large to check how its shells lie in and over one another: the volume may be off there');
+  assert.equal(flagsSaid(facts, [1], ' · '), ' · 1 too large to check how its shells lie in and over one another: the volume may be off there');
   // (the writer rounds a number fact to 7 significant digits, KINDS.number.rounded: r39 Q8)
   const { P, I } = meshOf(cubeT([0, 0, 0], [1 / 3, 1 / 3, 1 / 3]));
   const r = encodeCadmesh({ units: 'mm', meshes: [{ name: 'c', color: [0.5, 0.5, 0.5], positions: P, normals: null, colors: null, indices: I }], root: { name: 'm', meshes: [0], children: [] } });

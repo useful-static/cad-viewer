@@ -80,7 +80,7 @@ await test('an edge build that throws: refused by default (a CLI\'s, a generator
   const moment = () => { throw new RangeError('Array buffer allocation failed'); };
   const mh = decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list: moment }, onEdgesError: KEEP_WITHOUT_EDGES })).header;
   assert.deepEqual([mh.edgesFailed.error, writtenSizeLimit(mh)], ['Array buffer allocation failed', false], 'one of the moment: the viewer tries');
-  assert.deepEqual([writtenSizeLimit({ edgesFailed: { error: 'Out of memory', factsRule: FACTS_RULE } }), writtenSizeLimit({ edgesFailed: { error: 'Invalid array length', factsRule: FACTS_RULE - 1 } }), writtenSizeLimit({})],
+  assert.deepEqual([writtenSizeLimit({ edgesFailed: { error: 'Out of memory', factsRule: FACTS_RULE } }), writtenSizeLimit({ edgesFailed: { error: 'Invalid array length', factsRule: 3 } }), writtenSizeLimit({})],
     [false, false, false], 'Safari\'s words, another rule, none');
   const raw = encodeCadmesh({ meshes: [quad('a', 0)] }, { edgeOptions: { list }, onEdgesError: KEEP_WITHOUT_EDGES });
   // (its error not a string: refused by name)

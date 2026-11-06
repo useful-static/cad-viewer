@@ -23,9 +23,11 @@ const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
 const FLAT_SHARE = 3e-5; // and to this share of its size (planeOf: measured, r67)
-// what float32 positions can tell apart near a coordinate of size `far`: 2^-23 of it, eight times
-// over (a sum of a few rounded terms) -- planeOf's floor, a plane's thickness from many points
-const storedFloor = (far) => 8 * 2 ** -23 * far;
+// what float32 positions can tell apart near a coordinate of size `far`: its step, sixteen times
+// over (a sum of a few rounded terms) -- planeOf's floor, a plane's thickness from many points. (By
+// storedUlp, the one step: it was 8 x 2^-23 x far, the step's other spelling, which this is at or
+// over, up to twice just past a power of two -- r68 A9; the position test holds it)
+const storedFloor = (far) => 16 * storedUlp(far);
 // a point's distance from a centre, as stored: one unit in the last place (2^-23 of `far`) -- the
 // floor of circleOf and wallJoins. Eight let a loop 2.8% off a circle pass as a hole a few metres
 // out (the RK3399 board 5 m out gained two; six of eight boards more at 20 m: r65 Q3)
@@ -129,8 +131,8 @@ function planeOf(P, I, t0, nt) {
   const sl = len(sum);
   if (!p0 || !(sl > 0)) return null;
   const n = sum.map((v) => v / sl);
-  // every vertex on that plane, to 1e-5 of the face's size (at least a micrometre, and no finer than
-  // the positions are stored)
+  // every vertex on that plane, to FLAT_SHARE of the face's size (at least a micrometre, and no
+  // finer than the positions are stored)
   let lo = Infinity, hi = -Infinity, ext = 0, far = 0;
   for (let t = t0; t < t0 + nt; t++) {
     for (let j = 0; j < 3; j++) {
@@ -142,8 +144,8 @@ function planeOf(P, I, t0, nt) {
       far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
     }
   }
-  // (a tolerance the files meet: 1e-5 of the face's size, at least a micrometre, and no finer than
-  // the positions are stored -- float32 rounds a coordinate to 2^-23 of itself. At 1e-6 a flat
+  // (a tolerance the files meet: FLAT_SHARE of the face's size, at least a micrometre, and no finer
+  // than the positions are stored -- float32 rounds a coordinate to its step, storedUlp. At 1e-6 a flat
   // tilted face 1 m out read "not flat", and a board's bottom whose 4 vertices of 1,873 sit 0.3 um
   // off lost its 38 holes' depths)
   // (3e-5, measured: the faces holding a circle that read not flat, over the eight boards and the
@@ -198,7 +200,8 @@ function faceLoops(I, t0, nt, span = 2 ** 26) {
 }
 
 // One body's measurable geometry:
-// { faces: [{ tri0, ntri, plane|null, circles: [{centre, normal, radius}] }],
+// { faces: [{ tri0, ntri, plane|null, circles: [{centre, normal, radius, face, inner, nodes}],
+//             untold?: the inner loops it cannot tell, bnodes: its boundary's welded nodes }],
 //   corners: [[x,y,z]], edges: [[[x,y,z], ...]] (b-rep edges as polylines),
 //   edgeClosed: [bool] (an edge back at its start: its last point is its first),
 //   circles: all the faces' circles }
@@ -254,16 +257,20 @@ export function bodyGeometry(model, meshIndex) {
       return Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
     });
     const outer = ext.indexOf(Math.max(...ext));
+    // (the face's boundary nodes: which faces adjoin which, for a hole's wall -- holeWall)
+    f.bnodes = [];
     loops.forEach((loop, li) => {
+      const ids = loop.map(idOf);
+      for (const k of ids) f.bnodes.push(k);
       const pts = loop.map((v) => [P[3 * v], P[3 * v + 1], P[3 * v + 2]]);
       if (!f.whole) {
         const c = circleOf(pts, a);
         // (its face by index: faces.indexOf for each circle was 1.3 s of 11,444 faces)
         // (an untold one is no circle, and its face's count of what cannot be told: r66)
-        if (c && c.untold) { if (li !== outer) f.untold = (f.untold || 0) + 1; } else if (c) { c.face = fi; c.inner = li !== outer; f.circles.push(c); circles.push(c); }
+        if (c && c.untold) { if (li !== outer) f.untold = (f.untold || 0) + 1; } else if (c) { c.face = fi; c.inner = li !== outer; c.nodes = ids; f.circles.push(c); circles.push(c); }
       }
-      for (let i = 0; i < loop.length; i++) {
-        const ka = idOf(loop[i]), kb = idOf(loop[(i + 1) % loop.length]);
+      for (let i = 0; i < ids.length; i++) {
+        const ka = ids[i], kb = ids[(i + 1) % ids.length];
         if (ka === kb) continue;
         nodeNb[ka].add(kb);
         nodeNb[kb].add(ka);
@@ -452,52 +459,101 @@ function wallJoins(geom, a, b) {
   return at >= hi - eps;
 }
 
-// Whether a countersunk hole's wall joins rim a (its wide top, radius R) to rim b (the bore's other
-// end, radius r < R): curved faces about a's axis, each a cylinder or a cone -- a vertex's distance
-// from the axis a straight line of its place along it, between r and R -- spanning a to b (round
-// 23 Q5, carried open; r67). The test that keeps two coaxial blind holes drilled from either side,
-// material between, from reading as one.
-function revolutionJoins(geom, a, b) {
+// The faces about each boundary node of a body, made once: [face index, ...] per node
+function nodeFaces(geom) {
+  if (geom.nodeFaces) return geom.nodeFaces;
+  const m = new Map();
+  geom.faces.forEach((f, fi) => {
+    for (const k of f.bnodes || []) { let a = m.get(k); if (!a) m.set(k, (a = [])); if (!a.includes(fi)) a.push(fi); }
+  });
+  geom.nodeFaces = m;
+  return m;
+}
+
+// A curved face as a surface of revolution about the axis (c, n): a cylinder or a cone -- each
+// vertex's distance from the axis a straight line of its place along it, to the radius test (and
+// no finer than the positions are stored), and none wider than rMax. -> { t0, r0, t1, r1 } (its two
+// ends along n, their radii) | null
+function revolution(geom, f, c, n, rMax) {
   const { P, I } = geom;
-  const n = a.normal, c = a.centre, R = a.radius, r = b.radius;
-  const end = dot(sub(b.centre, c), n);
-  const lo = Math.min(0, end), hi = Math.max(0, end);
-  const m = R * (1 + 2 * RADIUS_TOL) + PLANE_FLOOR_MM;
-  const hlo = [0, 1, 2].map((k) => Math.min(a.centre[k], b.centre[k]) - m), hhi = [0, 1, 2].map((k) => Math.max(a.centre[k], b.centre[k]) + m);
-  const spans = [];
-  for (const fi of curvedNear(geom, hlo, hhi)) {
-    const f = geom.faces[fi];
-    const at = [];
-    let ok = true;
-    for (let t = f.tri0; t < f.tri0 + f.ntri && ok; t++) {
-      for (let j = 0; j < 3; j++) {
-        const v = I[3 * t + j] * 3;
-        const d = [P[v] - c[0], P[v + 1] - c[1], P[v + 2] - c[2]];
-        const along = dot(d, n), off = len(sub(d, n.map((x) => x * along)));
-        const tol = Math.max(RADIUS_TOL * r, storedUlp(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
-        if (off < r - tol || off > R + tol) { ok = false; break; }
-        at.push([along, off, tol]);
-      }
+  const at = [];
+  for (let t = f.tri0; t < f.tri0 + f.ntri; t++) {
+    for (let j = 0; j < 3; j++) {
+      const v = I[3 * t + j] * 3;
+      const d = [P[v] - c[0], P[v + 1] - c[1], P[v + 2] - c[2]];
+      const along = dot(d, n), off = len(sub(d, n.map((x) => x * along)));
+      const tol = Math.max(RADIUS_TOL * off, storedUlp(Math.max(Math.abs(P[v]), Math.abs(P[v + 1]), Math.abs(P[v + 2]))));
+      if (off > rMax + tol) return null;
+      at.push([along, off, tol]);
     }
-    if (!ok || !at.length) continue;
-    // (a line through its two ends along the axis; every vertex on it: a cylinder or a cone)
-    let p0 = at[0], p1 = at[0];
-    for (const p of at) { if (p[0] < p0[0]) p0 = p; if (p[0] > p1[0]) p1 = p; }
-    const slope = p1[0] > p0[0] ? (p1[1] - p0[1]) / (p1[0] - p0[0]) : 0;
-    if (!at.every(([t, o, tol]) => Math.abs(o - (p0[1] + slope * (t - p0[0]))) <= tol)) continue;
-    if (p1[0] > lo && p0[0] < hi) spans.push([p0[0], p1[0]]);
   }
-  spans.sort((x, y) => x[0] - y[0]);
-  const eps = 1e-3 * (hi - lo) + PLANE_FLOOR_MM;
-  let at = lo;
-  for (const [s0, s1] of spans) { if (s0 > at + eps) break; at = Math.max(at, s1); }
-  return at >= hi - eps;
+  if (!at.length) return null;
+  let p0 = at[0], p1 = at[0];
+  for (const p of at) { if (p[0] < p0[0]) p0 = p; if (p[0] > p1[0]) p1 = p; }
+  const slope = p1[0] > p0[0] ? (p1[1] - p0[1]) / (p1[0] - p0[0]) : 0;
+  if (!at.every(([t, o, tol]) => Math.abs(o - (p0[1] + slope * (t - p0[0]))) <= tol)) return null;
+  return { t0: p0[0], r0: p0[1], t1: p1[0], r1: p1[1] };
+}
+
+// A hole's wall from rim a, as the body's faces join it: the curved faces that adjoin the rim, and
+// those that adjoin them, until the planar faces it ends on. Each a cylinder or a cone about a's
+// axis, no wider than a; the cylinders one radius, the bore; the cones narrowing from a rim to it.
+// -> null when it is no such wall (a counterbore's step, a stepped or undercut hole, a fillet, a
+// face that is not of revolution, a wall that runs on past WALL_FACES), else { bore, end } with
+// end: { face } of the planar face it comes out on, facing the other way (a through-hole's), or
+// null where it stops inside (a blind hole's bottom, or a drill point) (round 23 Q5, carried open;
+// r67; r68: two separate coaxial faces were taken as a wall, merging across a web, and a hole
+// chamfered at both ends listed its bore nowhere)
+const WALL_FACES = 64;
+function holeWall(geom, a, faceN) {
+  const nf = nodeFaces(geom);
+  const out = faceN(a);
+  // (into the material: against the rim's face's outside)
+  const n = out.map((v) => -v), c = a.centre;
+  const seen = new Set([a.face]), queue = [];
+  const visit = (k) => { for (const fi of nf.get(k) || []) if (!seen.has(fi)) { seen.add(fi); queue.push(fi); } };
+  for (const k of a.nodes) visit(k);
+  const walls = [], ends = [], nodes = [];
+  while (queue.length) {
+    const fi = queue.pop(), f = geom.faces[fi];
+    if (f.plane) { ends.push(fi); continue; }
+    if (walls.length >= WALL_FACES) return null;
+    const rv = revolution(geom, f, c, n, a.radius);
+    if (!rv) return null;
+    walls.push(rv);
+    for (const k of f.bnodes) { nodes.push(k); visit(k); }
+  }
+  // (behind the rim's face, as a through-hole's two rims are paired: a wall on the side its face
+  // looks to is no hole of this face's -- the RK3399's layer whose normals look into its 0.27 mm,
+  // read through by this walk and not by the pairing: r68)
+  if (walls.some((w) => w.t0 < -PLANE_FLOOR_MM)) return null;
+  const cyl = walls.filter((w) => Math.abs(w.r1 - w.r0) <= RADIUS_TOL * Math.max(w.r0, w.r1));
+  if (!cyl.length || ends.length > 1) return null;
+  // (the bore: the cylinders' one radius -- two of different radii meet only across a step, a face
+  // that ends the walk, or a cone, which the test below refuses between them)
+  const bore = Math.min(...cyl.map((w) => (w.r0 + w.r1) / 2));
+  // the cones: each between a rim and the bore -- narrowing toward the bore's part of the axis
+  const lo = Math.min(...cyl.map((w) => w.t0)), hi = Math.max(...cyl.map((w) => w.t1));
+  for (const w of walls) {
+    if (cyl.includes(w)) continue;
+    const before = w.t1 <= lo + PLANE_FLOOR_MM, after = w.t0 >= hi - PLANE_FLOOR_MM;
+    if (before ? !(w.r0 >= w.r1) : after ? !(w.r1 >= w.r0) : true) return null;
+    if (Math.min(w.r0, w.r1) < bore * (1 - 2 * RADIUS_TOL)) return null;
+  }
+  if (!ends.length) return { bore, end: null, nodes };
+  const e = geom.faces[ends[0]];
+  const d = dot(e.plane.normal, out);
+  if (d < -0.999) return { bore, end: { face: ends[0] }, nodes };
+  // (facing the way a's does: a blind hole's bottom -- a disc -- or a step, holding the next bore)
+  if (d > 0.999 && !e.untold && !e.circles.some((x) => x.inner)) return { bore, end: null, nodes };
+  return null;
 }
 
 // The holes of a body: circles on its planar faces that bound an inner loop
 // (a face's loops other than its outer one), merged where the two rims of one
 // through-hole meet the top and bottom faces (same axis, same radius).
-// -> [{ centre, normal, diameter, depth, rims }] sorted by diameter, then position
+// -> [{ centre, normal, diameter, depth, rims, head? }] sorted by diameter, then position, with
+// .untold: how many rims it cannot tell (head: a countersunk or chamfered hole's wider rim's Ø)
 export function holesOf(geom) {
   // a planar face's circle is a hole rim when it is not the face's outer
   // loop: the face lies outside it. A boss's top (a disc, the circle its
@@ -607,39 +663,57 @@ export function holesOf(geom) {
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
     if (best < 0) single.push([i, out.length - 1]);
   }
-  // A countersunk through-hole: its two rims of different radii -- the wide top, the bore's other end
-  // -- left single by the pairing above, as its bore begins at a cone, not a flat face: one row, the
-  // bore's diameter, through, its depth, the countersink's diameter as `head` (it was two one-rim
-  // rows: round 23 Q5, carried open; r67). Paired by the axis line's cell, whatever the radius,
-  // facing apart, the narrow one behind the wide one's face, and a wall of cones and cylinders
-  // between (revolutionJoins).
-  const byLine = new Map();
-  for (const [i] of single) { const k = keys[i]; const key = `${k.f}|${k.q.join(',')}`; (byLine.get(key) || byLine.set(key, []).get(key)).push(i); }
-  const merged = new Set(), drop = new Set();
+  // The rims left single, each read by its wall as the body's faces join it (holeWall):
+  //   - a wall out to a rim on a face looking the other way: a through-hole whose rims differ --
+  //     countersunk, chamfered at either end or both -- one row: the bore's diameter, through, its
+  //     depth, and the wider rim's diameter as `head` when wider than the bore (it was two one-rim
+  //     rows: round 23 Q5, carried open; r67);
+  //   - a wall out to such a face with no rim on it told, the face holding rims it cannot tell: a
+  //     through-hole whose other rim cannot be told so far out -- untold too, not a blind hole
+  //     (1 km out, a countersunk hole's narrow rim untold left its head a "blind" row: r68);
+  //   - a wall that stops inside, from a rim wider than its bore: a countersunk blind hole, its
+  //     bore's diameter (its bore was in no row: r68).
+  // Each is the rim's own few faces, so a body of many is a walk per rim, not a search among all
+  // that share its axis (r68 Q3: 16,000 such rims, 20 s).
+  const singleOf = new Map(single.map(([i, row]) => [i, row]));
+  const rimAt = new Map(); // a single rim's every node -> the rim
+  for (const [i] of single) for (const k of rims[i].nodes || []) rimAt.set(k, i);
+  const drop = new Set();
+  let untoldMore = 0;
   for (const [i, row] of single) {
-    if (merged.has(i)) continue;
-    const wide = rims[i], k = keys[i];
-    let best = -1, bestAlong = Infinity;
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      for (const j of byLine.get(`${-k.f}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`) || []) {
-        const nar = rims[j];
-        if (merged.has(j) || !(nar.radius < wide.radius * (1 - 2 * RADIUS_TOL))) continue;
-        if (Math.abs(Math.abs(dot(nar.normal, wide.normal)) - 1) > 1e-3 || dot(faceN(nar), faceN(wide)) > -0.999) continue;
-        const d = sub(nar.centre, wide.centre), along = dot(d, wide.normal);
-        if (len(sub(d, wide.normal.map((v) => v * along))) > 0.01 * nar.radius + 1e-6 || dot(d, faceN(wide)) >= 0) continue;
-        if (Math.abs(along) < bestAlong && revolutionJoins(geom, wide, nar)) { bestAlong = Math.abs(along); best = j; }
-      }
+    if (drop.has(row)) continue;
+    const a = rims[i];
+    const w = a.nodes && holeWall(geom, a, faceN);
+    if (!w) continue;
+    const wider = (r) => r > w.bore * (1 + 2 * RADIUS_TOL);
+    if (!w.end) {
+      if (wider(a.radius)) out[row] = { ...out[row], diameter: 2 * w.bore, head: 2 * a.radius };
+      continue;
     }
-    if (best < 0) continue;
-    const nar = rims[best];
-    merged.add(i); merged.add(best);
-    drop.add(row); drop.add(single.find(([j]) => j === best)[1]);
-    out.push({ centre: wide.centre, normal: wide.normal, diameter: 2 * nar.radius, depth: bestAlong, rims: 2, head: 2 * wide.radius });
+    const slack = (c) => 0.01 * c.radius + storedUlp(Math.max(...c.centre.map(Math.abs))) + 1e-6;
+    let best = -1, bestAlong = Infinity;
+    // (the rims the wall's own nodes reach, on its end face)
+    const near = new Set();
+    for (const k of w.nodes) { const j = rimAt.get(k); if (j !== undefined) near.add(j); }
+    for (const j of near) {
+      const c = rims[j];
+      if (j === i || c.face !== w.end.face || !singleOf.has(j) || drop.has(singleOf.get(j))) continue;
+      const d = sub(c.centre, a.centre), along = dot(d, a.normal);
+      if (len(sub(d, a.normal.map((v) => v * along))) > slack(c) || c.radius < w.bore * (1 - 2 * RADIUS_TOL)) continue;
+      if (Math.abs(along) < bestAlong) { bestAlong = Math.abs(along); best = j; }
+    }
+    if (best < 0) {
+      if (geom.faces[w.end.face].untold) { drop.add(row); untoldMore++; }
+      continue;
+    }
+    const b = rims[best], top = b.radius > a.radius ? b : a;
+    drop.add(singleOf.get(best));
+    out[row] = { centre: top.centre, normal: top.normal, diameter: 2 * w.bore, depth: bestAlong, rims: 2, ...(wider(top.radius) ? { head: 2 * top.radius } : {}) };
   }
   if (drop.size) { const kept = out.filter((_, q) => !drop.has(q)); out.length = 0; out.push(...kept); }
   out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
   // (and how many rims of flat faces the stored positions cannot tell, so far from the origin: the
-  // table says so -- r66)
-  out.untold = geom.faces.reduce((n, f) => n + (f.plane && f.untold ? f.untold : 0), 0);
+  // table says so -- r66 -- with those whose other end it cannot tell)
+  out.untold = geom.faces.reduce((n, f) => n + (f.plane && f.untold ? f.untold : 0), 0) + untoldMore;
   return out;
 }

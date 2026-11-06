@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret } from '../js/dxf.js';
+import { parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -1128,8 +1128,100 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.deepEqual([...got.box], [...page.box]);
     assert.deepEqual([got.m, got.P, got.D], [page.m, page.P, page.D]);
   });
+  const handler = globalThis.self.onmessage;
   delete globalThis.self;
+  // (r68 A1, Q4, A5, Q7: the view's worker path, run with a Worker that answers by snap-worker.js's
+  // own handler a turn later -- or fails, as onerror -- on a canvas every view shares)
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+  const saved = { window: globalThis.window, Path2D: globalThis.Path2D, ResizeObserver: globalThis.ResizeObserver, Worker: globalThis.Worker };
+  globalThis.window = { devicePixelRatio: 1 };
+  globalThis.Path2D = class { moveTo() {} lineTo() {} closePath() {} rect() {} arc() {} };
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  const made = [];
+  let fail = false;
+  globalThis.Worker = class {
+    constructor(url) { this.url = String(url); this.dead = false; made.push(this); }
+    postMessage(d) {
+      setTimeout(() => {
+        if (this.dead) return;
+        if (fail) { this.onerror({}); return; }
+        let out = null;
+        globalThis.self = { postMessage: (t) => { out = t; } };
+        handler({ data: d });
+        delete globalThis.self;
+        this.onmessage({ data: out });
+      }, 5);
+    }
+    terminate() { this.dead = true; }
+  };
+  const canvas = { getContext: () => ctx, clientWidth: 800, clientHeight: 600, width: 0, height: 0, addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ left: 0, top: 0 }) };
+  const { createDxfView, SNAP_WORKER_MIN } = await import('../js/dxf-view.js');
+  // (a drawing of SNAP_WORKER_MIN snap points and over: each 2-point line gives its 2 ends and its middle)
+  const lines = (n) => Array.from({ length: n }, (_, i) => ({ pts: [i, 0, i, 1], layer: '0', colour: { r: 0, g: 0, b: 0, aci: 7 } }));
+  const big = lines(Math.ceil(SNAP_WORKER_MIN / 3) + 10);
+  const drawingOf = (paths) => ({ layers: [{ name: '0', on: true }], paths, texts: [], extents: { min: [0, 0], max: [paths.length, 1] } });
+  const later = () => new Promise((r) => setTimeout(r, 60));
+  await test('a large drawing\'s snaps: none while the worker builds, the worker\'s tree once in; a small one at once, no worker (r68 A5, Q7)', async () => {
+    made.length = 0;
+    const small = createDxfView(canvas, drawingOf(lines(10)), {});
+    small.setMeasure(true);
+    assert.ok(small.snapAt(400, 300), 'a small drawing snaps at once');
+    assert.equal(made.length, 0, 'and makes no worker');
+    small.destroy();
+    const v = createDxfView(canvas, drawingOf(big), {});
+    v.setMeasure(true);
+    assert.equal(made.length, 1);
+    assert.match(made[0].url, /snap-worker\.js$/);
+    assert.equal(v.snapAt(400, 300), null, 'no snap while the tree builds');
+    await later();
+    assert.ok(v.snapAt(400, 300), 'a snap once the worker\'s tree is in');
+    assert.equal(made[0].dead, true, 'the worker ended after its answer');
+    v.destroy();
+  });
+  await test('a view destroyed while its snap tree builds ends its worker and draws nothing after, on the canvas the next view has (r68 A1, Q4)', async () => {
+    made.length = 0;
+    let after = 0, destroyed = false;
+    const a = createDxfView(canvas, drawingOf(big), { onDraw: () => { if (destroyed) after++; } });
+    a.setMeasure(true);
+    a.destroy(); destroyed = true;
+    assert.equal(made[0].dead, true, 'destroy ends the worker');
+    const b = createDxfView(canvas, drawingOf(lines(5)), {});
+    // (must fire: the answer, had the worker answered anyway, is dropped by the view that is gone)
+    made[0].dead = false;
+    made[0].postMessage({ xy: new Float64Array(0), ids: new Uint32Array(0) });
+    await later();
+    assert.equal(after, 0, 'the old view drew after it was destroyed');
+    b.destroy();
+  });
+  await test('a worker that fails: the tree built on the page, the snaps there (r68 A5)', async () => {
+    made.length = 0;
+    fail = true;
+    const v = createDxfView(canvas, drawingOf(big), {});
+    v.setMeasure(true);
+    await later();
+    assert.ok(v.snapAt(400, 300));
+    v.destroy();
+    fail = false;
+  });
+  Object.assign(globalThis, saved);
+  for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
+// (r68 Q8: openCounts, the info panel's and dwg-check's "drawn at open", had no test)
+test('what a drawing draws as it opens: the lines and texts on layers on; those on a layer off, a frozen one, or under a frozen reference counted apart (r68 Q8)', () => {
+  const T = (layer, y) => [[0, 'TEXT'], [8, layer], [10, 0], [20, y], [40, 1], [1, `t${y}`]];
+  const L = (layer, y) => [[0, 'LINE'], [8, layer], [10, 0], [20, y], [11, 5], [21, y]];
+  const d = parseDXF(dxf([
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [2, 'A'], [70, 0], [62, 1], [0, 'LAYER'], [2, 'OFF'], [70, 0], [62, -2], [0, 'LAYER'], [2, 'F'], [70, 1], [62, 3],
+    [0, 'ENDTAB'], [0, 'ENDSEC'],
+    ...blocks([[0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0], ...L('A', 20), ...T('A', 21), [0, 'ENDBLK']]),
+    [0, 'SECTION'], [2, 'ENTITIES'], ...L('A', 0), ...L('OFF', 1), ...L('F', 2), ...T('A', 3), ...T('OFF', 4), ...T('F', 5),
+    [0, 'INSERT'], [8, 'F'], [2, 'B'], [10, 0], [20, 0], [0, 'ENDSEC'], [0, 'EOF']]));
+  // (each must fire: a text on a layer off counted as drawn; every shape counted as drawn)
+  assert.deepEqual(openCounts(d, d.layers), { shapes: 1, texts: 1, hidden: 6 });
+  // the same by a Map of the layers, as dwg-check passes them
+  assert.deepEqual(openCounts(d, new Map(d.layers.map((l) => [l.name, l]))), { shapes: 1, texts: 1, hidden: 6 });
+});
 // (r65 A2, A3, A4: an INSERT's ATTRIBs held as its block is; a frozen reference inside another held
 // to both; the extents leave out what frozen layers hold, as Zoom Extents does)
 test('a frozen reference holds its ATTRIBs and every frozen layer above it; the extents leave out what frozen layers hold (r65 A2-A4)', () => {

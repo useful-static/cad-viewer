@@ -44,12 +44,18 @@ export const SILHOUETTE_CAP = 2_000_000;
 // a fact changes meaning, so the viewer rebuilds the facts of a file or kept conversion made by
 // an older one (2: the volume by the material's rule, and `net`; before it, the signed sum. 3:
 // `unchecked` beside `net`, which no longer covers an overlap test past its budget. 4: no
-// region's share of the volume below 0 -- a body read 771.75 under 3 that today reads 1000). The
-// facts are versioned by this alone: a change of it needs no CACHE_VERSION bump (js/mesh-cache.js)
-export const FACTS_RULE = 4;
+// region's share of the volume below 0 -- a body read 771.75 under 3 that today reads 1000. 5: past
+// the nesting budget, the shells' signed sum -- under 4 a block's 3,000 cavities were added to it,
+// r68 Q5). The facts are versioned by this alone: a change of it needs no CACHE_VERSION bump
+// (js/mesh-cache.js)
+export const FACTS_RULE = 5;
+// (a rule's facts that read as today's: 4's differ from 5's only in a body flagged `unchecked`, so
+// a file or kept conversion of 4 with none is current -- kept conversions' rebuilt facts are not
+// written back, round 38 Q8, and each would be rebuilt at every open)
+export const factsRuleHolds = (rule, facts) => rule === FACTS_RULE || (rule === 4 && !(facts?.unchecked || []).some(Boolean));
 // whether a header's facts can be shown as they are: present, and built by today's rule (main.js
 // rebuilds them otherwise: an older file's volume was the signed sum, unflagged)
-export const factsCurrent = (header) => !!header?.facts && header.factsRule === FACTS_RULE;
+export const factsCurrent = (header) => !!header?.facts && factsRuleHolds(header.factsRule, header.facts);
 
 // The body table the renderers read in the vertex shader, indexed by body id
 // (mesh index + 1; slot 0 unused): two vec4 per body, the explode direction
@@ -202,7 +208,9 @@ export const BODY_FACTS = [
   { key: 'volume', kind: 'number', always: true },
   // (said: what the info panel and stp2mesh say of a body with the flag, the one wording)
   { key: 'net', kind: 'flag', said: 'with shells that touch or cross: the volume may be off there' },
-  { key: 'unchecked', kind: 'flag', said: 'too large to check how its shells lie in and over one another' },
+  // (and, as net's, that the volume may be off: past the nesting budget it is the shells' sum as
+  // wound, which a shell wound wrong puts off -- r68 Q5)
+  { key: 'unchecked', kind: 'flag', said: 'too large to check how its shells lie in and over one another: the volume may be off there' },
 ];
 
 function body(pos, bits, index, m, edges, sil, budget) {
@@ -331,9 +339,12 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   const nest = nesting(pos, local, shell, ns, shellOpen, shellBranched);
   const { parent, root, V: Vs, lo, hi } = nest;
   const { start, list, tree } = nest;
-  // (nesting stopped past its budget -- shells it never placed: which holds which not known, the
-  // volume as the shells' sum of the ones it did place, and said so -- r67, round 31 Q4)
-  let net = anyBranched, unchecked = !!nest.stopped;
+  // (nesting stopped past its budget -- shells it never placed: which holds which not known. The
+  // volume then the shells' signed sum, as they are wound -- a cavity wound inward taken off --, and
+  // said so: a shell never placed read as outer, and 3,000 cavities in a block were added to it, 4.5%
+  // over -- r67, round 31 Q4; r68 Q5)
+  if (nest.stopped) return { volume: Math.abs(V), net: anyBranched, unchecked: !anyBranched };
+  let net = anyBranched, unchecked = false;
   // (a part in two outer shells)
   for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
   // Which shells' surfaces meet. Asked of each shell and its parent, and of two shells whose boxes
@@ -577,7 +588,9 @@ export function shellTurns(position, index) {
   const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen, shellBranched) : null;
   const V = nest ? nest.V : null; // (each shell's signed volume: nesting's, the one count)
   // (nesting stopped past its budget: no shell turned -- a shell it never placed read as outer, and a
-  // cavity wound inward would be turned inside out -- kept as written, and said: r67, round 31 Q4)
+  // cavity wound inward would be turned inside out -- kept as written: r67, round 31 Q4. Said by
+  // the facts of a closed body, whose own nesting stops at the same budget and flags it `unchecked`;
+  // an open body's facts nest nothing, and nothing says its shells were kept as written: r68 A7)
   if (nest && nest.stopped) return { shell, flip: null, stopped: true };
   // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
   // the other way). A shell inside another is turned with its outer shell, never by its own sign:

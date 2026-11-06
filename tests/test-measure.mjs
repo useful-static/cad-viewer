@@ -5,9 +5,9 @@
 //   node tests/test-measure.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid } from '../js/measure-geom.js';
+import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid, untoldAt } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
-import { KIND_NAME, MARK, SNAP_KINDS, untoldText } from '../js/measure-ui.js';
+import { KIND_NAME, MARK, SNAP_KINDS, holeDia, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
 
 import { test, done } from './harness.mjs';
@@ -158,6 +158,46 @@ test('a countersunk through-hole is one row (the bore\'s Ø, through, head the c
   const b = holesOf(bodyGeometry(model([{ name: 'plate', faces: blind }]), 0));
   assert.deepEqual(b.map((x) => [Math.round(x.diameter * 100) / 100, x.rims]).sort(), [[3, 1], [6, 1]], JSON.stringify(b));
 });
+test('a hole read by its wall as the faces join it: chamfered at either end or both, countersunk from both sides, over a blind bore -- one row, the bore\'s Ø; a counterbore, a stepped hole, an inside-out body not merged; the same 20 m out (r68 Q1, Q2, A3, Q10)', () => {
+  const n = 48;
+  let O = 0;
+  const ring = (r, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(O + r * Math.cos(t), O + r * Math.sin(t), z); });
+  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+  const disc = (r, z, up) => { const c = P(O, O, z), e = ring(r, z), t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push(up ? [c, e[i], e[j]] : [c, e[j], e[i]]); } return t; };
+  const ro = 8, H = 4, r = 1.5;
+  // (a plate H thick: its top's rim tr, its bottom's br, and the wall between, faces bottom to top)
+  const plate = (tr, br, wall) => [band(ring(tr, H), ring(ro, H)), band(ring(ro, 0), ring(br, 0)), ...wall, band(ring(ro, H), ring(ro, 0))];
+  const cases = [
+    ['chamfered 1 top, 0.5 bottom', () => plate(r + 1, r + 0.5, [band(ring(r + 0.5, 0), ring(r, 0.5)), band(ring(r, 0.5), ring(r, H - 1)), band(ring(r, H - 1), ring(r + 1, H))]), [[3, 2, 4, 5]]],
+    ['chamfered 0.5 both ends', () => plate(r + 0.5, r + 0.5, [band(ring(r + 0.5, 0), ring(r, 0.5)), band(ring(r, 0.5), ring(r, H - 0.5)), band(ring(r, H - 0.5), ring(r + 0.5, H))]), [[3, 2, 4, 4]]],
+    ['countersunk, deburred 0.3 at the bottom', () => plate(3, r + 0.3, [band(ring(r + 0.3, 0), ring(r, 0.3)), band(ring(r, 0.3), ring(r, H - 1.5)), band(ring(r, H - 1.5), ring(3, H))]), [[3, 2, 4, 6]]],
+    ['countersunk from both sides, heads Ø6 and Ø5', () => plate(3, 2.5, [band(ring(2.5, 0), ring(r, 1)), band(ring(r, 1), ring(r, H - 1.5)), band(ring(r, H - 1.5), ring(3, H))]), [[3, 2, 4, 6]]],
+    ['a countersink over a blind bore', () => [band(ring(3, H), ring(ro, H)), band(ring(r, 1), ring(r, H - 1.5)), band(ring(r, H - 1.5), ring(3, H)), disc(r, 1, true), disc(ro, 0, false), band(ring(ro, H), ring(ro, 0))], [[3, 1, 0, 6]]],
+    // must accept: a counterbore and a stepped hole -- their step a face of their own -- are two rows, as before
+    ['a counterbore', () => plate(3, r, [band(ring(r, 0), ring(r, 2)), band(ring(r, 2), ring(3, 2)), band(ring(3, 2), ring(3, H))]), [[3, 2, 2, 0], [6, 1, 0, 0]]],
+    ['a stepped hole, a drill-point step', () => plate(3, r, [band(ring(r, 0), ring(r, 1.5)), band(ring(r, 1.5), ring(3, 2)), band(ring(3, 2), ring(3, H))]), [[3, 1, 0, 0], [6, 1, 0, 0]]],
+    // must accept: the same body inside out -- its faces looking into its thickness -- is no hole of theirs, as the pairing reads it
+    ['a chamfered hole in a body wound inside out', () => plate(r + 1, r + 0.5, [band(ring(r + 0.5, 0), ring(r, 0.5)), band(ring(r, 0.5), ring(r, H - 1)), band(ring(r, H - 1), ring(r + 1, H))]).map((f) => f.map(([a, b, c]) => [a, c, b])), [[4, 1, 0, 0], [5, 1, 0, 0]]],
+  ];
+  const show = (h) => h.map((x) => [Math.round(x.diameter * 100) / 100, x.rims, Math.round(x.depth * 100) / 100, x.head ? Math.round(x.head * 100) / 100 : 0]);
+  for (const o of [0, 20000]) {
+    O = o;
+    for (const [name, mk, want] of cases) {
+      const h = holesOf(bodyGeometry(model([{ name: 'p', faces: mk() }]), 0));
+      assert.deepEqual(show(h), want, `${name} at ${o}: ${JSON.stringify(show(h))}`);
+    }
+  }
+});
+test('a through-hole whose other rim cannot be told is untold, both rims counted -- not a blind hole of the rim that can (r68: 1 km out, a hole\'s head read as a blind Ø10.8)', () => {
+  // a Ø3 bore countersunk to Ø6 at the top; 2^19 mm out the Ø3 bottom rim's rounding passes the line, the Ø6 top's not
+  const n = 48, ro = 8, H = 4, r = 1.5, O = 2 ** 19 + 30;
+  const ring = (rr, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(O + rr * Math.cos(t), rr * Math.sin(t), z); });
+  const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+  const faces = [band(ring(3, H), ring(ro, H)), band(ring(ro, 0), ring(r, 0)), band(ring(r, 0), ring(r, H - 1.5)), band(ring(r, H - 1.5), ring(3, H)), band(ring(ro, H), ring(ro, 0))];
+  assert.ok(untoldAt(O, r) && !untoldAt(O, 3), 'the case: the bore\'s rim untold there, the head\'s told');
+  const h = holesOf(bodyGeometry(model([{ name: 'p', faces }]), 0));
+  assert.deepEqual([h.length, h.untold], [0, 2], `${JSON.stringify(h.map((x) => [x.diameter, x.rims]))}, untold ${h.untold} (must fire: the head a blind row, 1 untold)`);
+});
 test('a rim the stored positions cannot tell is no row but counted (untold), and the same rim at the origin is a hole (r66)', () => {
   // a Ø0.08 through-hole (rounding at 20 m: 2.43% of its radius, as the boards' vias), and a Ø3 one
   const at = (x) => holesOf(bodyGeometry(model([{ name: 'w', faces: [...washer(0.04, 0.3, 0.1, 48, x, x, 0), ...washer(1.5, 3, 0.1, 48, x + 10, x, 0)] }]), 0));
@@ -169,6 +209,10 @@ test('a rim the stored positions cannot tell is no row but counted (untold), and
   // (the one sentence for the summary, the CSV and the announcement, its share the rule's own: r67 A3, A8)
   assert.equal(untoldText(2), '2 rims too small to tell this far from the origin (the file\'s positions are rounded coarser than 1.5% of their radius): not listed');
   assert.equal(untoldText(0), '');
+  // (a row's diameter in one text, with its countersink, for the cell, the summary and the words: r68 A8, Q11)
+  const mm = (v) => `${v.toFixed(2)} mm`;
+  assert.equal(holeDia({ d: 3, head: 6 }, mm), '3.00 mm (countersunk 6.00 mm)');
+  assert.equal(holeDia({ d: 3, head: 0 }, mm), '3.00 mm');
 });
 test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off the origin, and small 5 m out', () => {
   // a washer about any axis d at o, as float32

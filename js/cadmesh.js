@@ -59,7 +59,7 @@
 // Pure ES module, no DOM: imported by the browser viewer, the STEP worker and
 // the Node converter.
 
-import { buildEdges, FACTS_RULE, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
+import { buildEdges, FACTS_RULE, factsRuleHolds, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -110,7 +110,8 @@ export const refuseWithoutEdges = (input) => (e) => { throw new Error(`${input}:
 export const KEEP_WITHOUT_EDGES = (e) => ({ error: String(e?.message || e), factsRule: FACTS_RULE });
 // a written failure the viewer may take as the model's own, not built again: a size limit by today's
 // rule, met under today's facts rule (main.js edgesOf)
-export const writtenSizeLimit = (h) => !!h?.edgesFailed && h.edgesFailed.factsRule === FACTS_RULE && !momentaryFailure(h.edgesFailed.error);
+// (a rule's that still holds: no facts, so no flagged body -- r68's rule 5 left 4's size limits as they were)
+export const writtenSizeLimit = (h) => !!h?.edgesFailed && factsRuleHolds(h.edgesFailed.factsRule, null) && !momentaryFailure(h.edgesFailed.error);
 
 // (edgeOptions: passed to js/edges.js buildEdges as they are -- its list maker, for a test)
 export function encodeCadmesh(model, { edges: withEdges = true, overlapBudget, onEdgesError = REFUSE_WITHOUT_EDGES, edgeOptions = {} } = {}) {

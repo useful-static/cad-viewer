@@ -427,15 +427,19 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // snapping nothing until it is in; built here, the 1.5 million paths of 091-FEDERAL_POLY_ILARO held
   // the page 1.6 s as Measure turned on: round 28 Q7, carried open, r67. A small one, or no worker:
   // here, at once.)
-  let building = false;
+  // (gone: destroyed. Every 2D view draws on the one #view2d canvas, so a view replaced while its
+  // tree was built -- the Sheet changed, another drawing opened -- painted its drawing over the
+  // next view's when the tree came: destroy ends the worker, and an answer after is dropped: r68)
+  let building = false, gone = false, worker = null;
   const buildSnaps = () => {
-    if (tree || building) return;
+    if (tree || building || gone) return;
     const pts = snapPoints(drawing.paths, o);
     if (pts.n < SNAP_WORKER_MIN || typeof Worker === 'undefined') { tree = pointTree(pts); return; }
     let w;
     try { w = new Worker(new URL('./snap-worker.js', import.meta.url), { type: 'module' }); } catch { tree = pointTree(pts); return; }
     building = true;
-    const done = (t) => { building = false; tree = t; w.terminate(); if (st.measure) draw(); };
+    worker = w;
+    const done = (t) => { if (gone) return; building = false; worker = null; tree = t; w.terminate(); if (st.measure) draw(); };
     w.onmessage = (e) => done({ xy: pts.xy, at: pts.at, tree: e.data });
     w.onerror = () => done(pointTree(pts));
     const ids = finitePointIds(pts.xy, pts.n);
@@ -578,6 +582,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
     measureClick, snapAt,
     layerOn: (name) => !st.off.has(name),
     destroy() {
+      gone = true;
+      if (worker) { worker.terminate(); worker = null; }
       clearTimeout(segTimer);
       ro.disconnect();
       canvas.removeEventListener('wheel', onWheel);

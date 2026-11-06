@@ -40,7 +40,10 @@
 // hint; a model's unit is the one its address asks for (addressUnit), else millimetres -- its file
 // says nothing of its own (r61 Q8, Q9); "this file is in" is main.js's own setMeshUnit, its re-read
 // (meshFromSource) stood in for by the same file shown again, the load's rules run, then read in the
-// unit -- no new header, nothing parsed (r64 A4); a tour ends (endTour) as an event, nothing put back.
+// unit -- no new header, nothing parsed (r64 A4); a tour ends (endTour) as an event, nothing put back;
+// showInfo, at a model shown and at a re-read's end, is its units row alone -- main.js's own writer,
+// syncMeshUnitRow, called where showInfo's syncUnitsRow would call it (that call itself not run:
+// r67 Q4, r68 Q6, A12).
 
 import { readFileSync } from 'node:fs';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
@@ -92,7 +95,7 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
   // the harness's copy, which a mutant taking the wait out of main.js passed: r64 A4 -- with the
   // re-read stood in for: the same file loaded again, the load's rules run, then read in the unit)
   + 'function endTour() { app.tour = null; tourEnded(); }\n'
-  + 'async function meshFromSource(s, unit, seq) { return fakeReread(s, unit, seq, { stale, setStatus, readyText, loadShown, entryShown, setUnitRead }); }\n'
+  + 'async function meshFromSource(s, unit, seq) { return fakeReread(s, unit, seq, { stale, setStatus, readyText, loadShown, entryShown, setUnitRead, unitRow }); }\n'
   + 'function loadShown() {\n  const asked = addressUnit(app.sourceUrl);\n  forgetAddressModel();\n  unitRead = \'mm\';\n  syncUnitParam();\n  unitRead = asked;\n  syncUnitParam();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {', true) || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {', true)) + '}\n'
   + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {')
   // (and its hidden parts, held back as its tour is: r59 Q4)
@@ -113,12 +116,15 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
-  + line('const autoTourKey = ') + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+  + line('const autoTourKey = ') + line('const entryTourWait = ', true) + line('const entryTourOn = ', true) + line('const rereading = ', true) + cutIf('function syncMeshUnitRow() {', true) + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)
-  + 'async function loadUrl(url) { loadOpens(); return fakeLoad(url, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown, readUnit }, [], false); }\n'
-  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown, readUnit }, extras, true); }\n'
+  // (showInfo's units row, main.js's own writer where it has one -- r68 Q6 -- else the select set
+  // as showInfo set it, for an older main.js)
+  + `const unitRow = ${src.includes('function syncMeshUnitRow() {') ? '() => syncMeshUnitRow()' : '() => { if (app.meshSource) $(\'meshunit\').value = app.meshSource.unit; }'};\n`
+  + 'async function loadUrl(url) { loadOpens(); return fakeLoad(url, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown, readUnit, unitRow }, [], false); }\n'
+  + 'async function loadFile(f, extras = companionsOf.get(f) || []) { return fakeLoad(f.name, { beginLoad, stale, setStatus, readyText, loadShown, entryShown, addShown, readUnit, unitRow }, extras, true); }\n'
   + `function addShown() {\n${ADD_TAIL}\n}\n`;
 
 // (Cancel on the load's card, as main.js wires it)
@@ -338,8 +344,8 @@ export async function runStart(c) {
     }
     else Object.assign(app, { header: { meshes: [{}] }, mesh: {}, scene: [{ url }], sourceUrl: fromFile ? null : url });
     if (!adding && (app.listEntries || []).some((e) => e.url === url)) o.pendingAtList.push([file, !!app.urlTourPending]);
-    // (and the units row shows its reading: showInfo's, stood in for -- r67 Q4)
-    if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); app.meshSource = { name: file, unit: k.readUnit() }; dom.meshunit.value = app.meshSource.unit; }
+    // (and the units row shows its reading: showInfo's, by main.js's own writer -- r67 Q4, r68 Q6)
+    if (!adding) { o.events.push(`shown ${file}`); k.loadShown(); app.meshSource = { name: file, unit: k.readUnit() }; k.unitRow(); }
     k.setStatus('ready', k.readyText());
     if (!adding) k.entryShown();
     visit(`loaded ${file}`);
@@ -361,7 +367,7 @@ export async function runStart(c) {
     k.loadShown();
     k.setUnitRead(unit);
     app.meshSource = { ...s, unit };
-    dom.meshunit.value = unit; // (showInfo's, stood in for: r67 Q4)
+    k.unitRow(); // (showInfo's, by main.js's own writer: r67 Q4, r68 Q6)
     k.setStatus('ready', k.readyText());
     k.entryShown();
   };

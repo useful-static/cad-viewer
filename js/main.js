@@ -3318,10 +3318,12 @@ function applyListEntry() {
       closeMenus();
       // (the model the tour is for, by its open, as the entry's own tour checks it: picked away
       // during the read, the tour played over the next model, and its failure went into that
-      // model's ready line -- told only then, as the address's tour's is: r67 A1)
+      // model's ready line -- told only then, as the address's tour's is: r67 A1. After the
+      // ?add=s, and the entry's own tour stepping aside for the visitor's: r68 A2)
       const key = autoTourKey(), open = app.openCount;
-      const r = await readTour(t.url);
-      const still = app.header && autoTourKey() === key && app.openCount === open && !app.pickPending;
+      app.tourPicked = open;
+      const [r] = await Promise.all([readTour(t.url), entryTourWait()]);
+      const still = entryTourOn(key, open);
       if (r.error) { if (still) failApart(`the tour ${r.error}`); else tell(`the tour ${r.error}`, 6000); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
       if (still) startTourIn(r.tour, t.url);
     };
@@ -3343,16 +3345,16 @@ function applyListEntry() {
       // (after the address's ?add=s, as the link's view waits for them: a model joining ends the tour
       // over the scene -- showScene --, and the entry's tour started, then was ended at once by the
       // ?add= it was opened with: r60, the differential against the real page)
-      const adds = app.addsPending && app.addsChain ? app.addsChain : null;
       // (and still this open's: an older open's wait, ending once Back had opened the model again,
       // started its tour over the new open, under its ?add= -- r62)
       const open = app.openCount;
       // (and held back, when it would start, by a link's view landed meanwhile -- a #view= edited in
       // during the ?add=s landed, then the tour took the camera: r61 Q2)
-      Promise.all([readTour(t.url), adds]).then(([r]) => {
+      Promise.all([readTour(t.url), entryTourWait()]).then(([r]) => {
         // (nor while the visitor's pick downloads: the model shown is on its way out -- the tour
-        // started over it, waiting for an ?add= the pick had cancelled: r62)
-        if (!r.error && app.header && app.autoTourFor === key && autoTourKey() === key && !app.tour && !linkViewOver() && !app.pickPending && app.openCount === open) startTourIn(r.tour, t.url);
+        // started over it, waiting for an ?add= the pick had cancelled: r62 -- nor over a tour the
+        // visitor picked from File meanwhile: r68 A2)
+        if (!r.error && app.autoTourFor === key && entryTourOn(key, open) && !app.tour && !linkViewOver() && app.tourPicked !== open) startTourIn(r.tour, t.url);
       });
     }
   }
@@ -5085,6 +5087,13 @@ function syncUnitParam() {
 }
 // which model a list's tour auto-played for: the URL it was opened from (else its data)
 const autoTourKey = () => app.sourceUrl || app.header;
+// An entry's tour, File > "Tour: X" and the one the entry plays itself, by one rule (r68 A2: the
+// menu's did not wait for the ?add=s, so the model joining ended it and the entry's first tour
+// started in its place): it first waits for the address's ?add=s -- a model joining ends a tour
+// over the scene (showScene) -- and starts only over the model it was asked for, by its URL's key
+// and its open, and not while the visitor's pick downloads
+const entryTourWait = () => (app.addsPending && app.addsChain ? app.addsChain : null);
+const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending;
 // the unit the address asks a URL load to be read in: only for the model the address names
 function addressUnit(url) {
   const q = new URLSearchParams(location.search);
@@ -5098,14 +5107,16 @@ function addressUnit(url) {
 
 // a unit as words read it ("read in in" -- r65 A8)
 const unitName = (u) => (u === 'in' ? 'inches' : u);
+// whether a re-read of the shown mesh is under way (the load under way is setMeshUnit's): the one
+// test, written three times in setMeshUnit -- r68 A6
+const rereading = () => PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq;
 // the units row's "file is in": the same bytes read again in that unit
 function setMeshUnit(u) {
   const src = app.meshSource;
   // (against the unit it is in -- or, a re-read of it under way, the unit that is being read: a
   // choice back to mm during the inches re-read compared with mm, the unit it was still in, and was
   // nothing; the model ended in inches, the visitor's last choice mm -- r66 A2, Q1)
-  const rereading = PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq;
-  if (!src || u === (rereading ? app.rereadUnit : src.unit) || !MM_PER[u]) return Promise.resolve();
+  if (!src || u === (rereading() ? app.rereadUnit : src.unit) || !MM_PER[u]) return Promise.resolve();
   // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
   // the add under way, the address naming a model the scene lacked -- r63 A3)
   // (and with them joined, a scene has no unit to choose: that is said -- the choice was dropped
@@ -5116,8 +5127,8 @@ function setMeshUnit(u) {
   // (nor over another model opening -- a list pick, a dropped file: the re-read is a load, and it
   // ended that one, the visitor's pick lost and its entry taken back under the unit just written --
   // r64 A4. A re-read of this one under way is replaced, as a second choice means.)
-  if (PROGRESS_STATES.has(app.status) && app.rereadSeq !== app.loadSeq) {
-    $('meshunit').value = src.unit;
+  if (PROGRESS_STATES.has(app.status) && !rereading()) {
+    syncMeshUnitRow();
     tell(`not read in ${unitName(u)}: another model is opening`);
     return Promise.resolve();
   }
@@ -5143,8 +5154,7 @@ function setMeshUnit(u) {
       // (a re-read that ended without landing -- Cancel, a newer load, a failure -- and none other
       // under way: the select says the reading again; it kept the choice, inches, the model in mm and
       // every size 25.4x off what the row said -- r67 Q3)
-      const src2 = app.meshSource;
-      if (src2 && !(PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq) && $('meshunit').value !== src2.unit) $('meshunit').value = src2.unit;
+      if (!rereading()) syncMeshUnitRow();
     });
   });
 }
@@ -6298,14 +6308,22 @@ function syncUnitsRow() {
   sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
   sel.value = app.unitChoice;
   // a mesh file that stores no unit: which unit it is in, chosen here
-  const src = app.meshSource;
-  $('meshunitrow').hidden = !src;
+  const src = syncMeshUnitRow();
   if (src) {
     $('unitsrc').textContent = 'not stored in the file';
-    $('meshunit').value = src.unit;
     // (its title says the reading it is: it said "read as mm" whatever was chosen)
     $('meshunit').title = `This mesh file stores no unit: it is read as ${unitWord(src.unit)}. Pick the unit it was made in and it is read again at that size`;
   }
+}
+// The "this file is in" row: shown for a mesh that stores no unit, its select saying the unit it is
+// read in -- the one writer of the select, at every showInfo and where a re-read is refused or ends
+// without landing (written in three places, r66 A2 and r67 Q3 each a mismatch among them: r68 A6;
+// the start-up harness runs this, main.js's own -- r68 Q6). -> the mesh's source, or null
+function syncMeshUnitRow() {
+  const src = app.meshSource;
+  $('meshunitrow').hidden = !src;
+  if (src) $('meshunit').value = src.unit;
+  return src;
 }
 
 function setUnitChoice(u) {

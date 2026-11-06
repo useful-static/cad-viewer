@@ -18,6 +18,10 @@
 import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holesOf, polyLength, polyMid } from './measure-geom.js';
 // The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
 // (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5)
+// A hole row's diameter as the table, its summary and the picked row's words write it -- with its
+// countersink, one text (the summary grouped a countersunk Ø3 with plain ones, and the announcement
+// left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer
+export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (countersunk ${fmt(r.head)})` : ''}`;
 export const untoldText = (n) => (n ? `${n} ${n === 1 ? 'rim' : 'rims'} too small to tell this far from the origin (the file's positions are rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius): not listed` : '');
 import { faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, dot, len, mul, sub } from './vec3.js';
@@ -691,10 +695,11 @@ export function createMeasure(deps) {
     const posHead = list.length && shared ? `${first.split(',').map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
     // per diameter as shown: how many, and how far apart their centres spread
     // (keyed on the printed value: 0.508 and 0.511 mm read as two "0.51" lines)
+    // (and its countersink: a countersunk Ø3 and a plain one read "Ø 3.00 mm × 2" -- r68 A8, Q11)
     const groups = new Map();
     for (const h of list) {
-      const key = deps.num(h.diameter);
-      if (!groups.has(key)) groups.set(key, { d: h.diameter, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
+      const key = `${deps.num(h.diameter)}|${h.head ? deps.num(h.head) : ''}`;
+      if (!groups.has(key)) groups.set(key, { d: h.diameter, head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;
       for (let j = 0; j < 3; j++) { g.lo[j] = Math.min(g.lo[j], h.centre[j]); g.hi[j] = Math.max(g.hi[j], h.centre[j]); }
@@ -714,7 +719,7 @@ export function createMeasure(deps) {
       const k = ax.indexOf(Math.max(...ax));
       const spread = [0, 1, 2].filter((j) => j !== k).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
       const li = document.createElement('li');
-      li.textContent = `Ø ${deps.lenText(g.d)} × ${g.n}${g.n > 1 ? ` · centres span ${spread}` : ''}`;
+      li.textContent = `Ø ${holeDia(g, deps.lenText)} × ${g.n}${g.n > 1 ? ` · centres span ${spread}` : ''}`;
       sum.append(li);
     }
     $('holesdia').textContent = `Ø (${deps.unit()})`;
@@ -735,7 +740,7 @@ export function createMeasure(deps) {
       // depth: through holes' (rim to rim); "–" for one rim (blind, or a
       // sheet's hole)
       // (a countersunk one: its countersink's diameter after the bore's)
-      for (const c of [String(r.n), `${deps.num(r.d)}${r.head ? ` (countersunk ${deps.num(r.head)})` : ''}`, r.at, r.through ? deps.num(r.depth) : '–']) {
+      for (const c of [String(r.n), holeDia(r, deps.num), r.at, r.through ? deps.num(r.depth) : '–']) {
         const td = document.createElement('td');
         td.textContent = c;
         tr.append(td);
@@ -743,7 +748,7 @@ export function createMeasure(deps) {
       const pick = () => {
         st.holes.pick = r.n - 1;
         for (const x of tb.children) x.classList.toggle('pick', x === tr);
-        const said = `hole ${r.n}: Ø ${deps.lenText(r.d)} at ${t.posHead} ${r.at}`;
+        const said = `hole ${r.n}: Ø ${holeDia(r, deps.lenText)} at ${t.posHead} ${r.at}`;
         deps.tell(said, 3000);
         deps.queueFrame();
       };

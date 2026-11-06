@@ -8,7 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, idToBytes } from './cadmesh.js';
-import { SILHOUETTE_CAP, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
+import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 
@@ -157,8 +157,11 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
   delete header.facts; delete header.factsRule; delete header.silhouettesOmitted;
   if (facts) {
     header.facts = facts;
+    // (every model's facts current, whatever rule each was written under, the scene's are: one of
+    // rule 4 beside one of 5 read as stale, and the scene's facts were built again -- r68)
     const rules = new Set(models.map((m) => m.base.header.factsRule));
-    if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
+    if (models.every((m) => factsCurrent(m.base.header))) header.factsRule = FACTS_RULE;
+    else if (rules.size === 1 && [...rules][0] !== undefined) header.factsRule = [...rules][0];
   }
   if (omitted) header.silhouettesOmitted = omitted;
   return out;
