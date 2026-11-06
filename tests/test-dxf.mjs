@@ -1206,6 +1206,39 @@ test('a block reference on a frozen layer: every item it draws is held to that l
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
+// (r70 Q6: 2D Measure's centre, with its Ø, only for what the reader drew from a circle)
+test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-gon, an ellipse, or a circle inserted at 1 x 0.985 (r70 Q6)', () => {
+  const lw = (pts) => [[0, 'LWPOLYLINE'], [8, '0'], [90, pts.length], [70, 1], ...pts.flatMap(([x, y]) => [[10, x], [20, y]])];
+  const ngon = (n, r) => Array.from({ length: n }, (_, i) => [r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n)]);
+  const centres = (ents, blk = []) => {
+    const d = parseDXF(dxf([...(blk.length ? blocks(...blk) : []), [0, 'SECTION'], [2, 'ENTITIES'], ...ents, [0, 'ENDSEC'], [0, 'EOF']]));
+    const s = snapPoints(d.paths, [0, 0]);
+    const c = [];
+    for (let i = 0; i < s.n; i++) if (s.kind[i] === 2) c.push(+(2 * s.at(i)[4]).toFixed(3));
+    return c;
+  };
+  assert.deepEqual(centres(lw(ngon(12, 10))), [], 'a 12-gon (must fire: "centre (Ø 20.000)")');
+  assert.deepEqual(centres(lw(ngon(72, 10).map(([x, y]) => [x, 0.985 * y]))), [], 'an ellipse');
+  const C = [[0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 10]];
+  const blk = [[[0, 'BLOCK'], [2, 'C'], [10, 0], [20, 0], ...C, [0, 'ENDBLK']]];
+  assert.deepEqual(centres([[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, 1], [42, 0.985]], blk), [], 'a circle inserted at 1 x 0.985');
+  // must accept: a CIRCLE, alone and in a block turned and scaled evenly; a polyline written as a
+  // circle (two vertices, each segment a half circle)
+  assert.deepEqual(centres(C), [20]);
+  assert.deepEqual(centres([[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 1], [10, -5], [20, 0], [42, 1], [10, 5], [20, 0], [42, 1]]), [10]);
+  assert.deepEqual(centres([[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 5], [20, 5], [41, 2], [42, 2], [50, 30]], blk), [40]);
+});
+// (r70 Q5: an ASCII DXF past the text readers' one limit is refused in their words before it is decoded)
+await test('an ASCII DXF past the text limit is refused in the text readers\' words, not the engine\'s (r70 Q5)', async () => {
+  const { MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } = await import('../js/formats.js');
+  const { dxfText } = await import('../js/dxf.js');
+  assert.equal(MAX_TEXT_BYTES, 500 * 2 ** 20);
+  const b = new TextEncoder().encode('0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n');
+  // (the limit's own refusal, at a limit this size: the default is MAX_TEXT_BYTES)
+  assert.throws(() => dxfText(b, 'big.dxf', 16), (e) => e.message === `big.dxf is 0 MB of text, ${TEXT_LIMIT_WORDS}`);
+  assert.equal(typeof dxfText(b), 'string', 'under it, decoded');
+  assert.match(dxfText.toString(), /max = MAX_TEXT_BYTES/, 'the default is the one limit (must fire: none)');
+});
 // (r68 Q8: openCounts, the info panel's and dwg-check's "drawn at open", had no test)
 test('what a drawing draws as it opens: the lines and texts on layers on; those on a layer off, a frozen one, or under a frozen reference counted apart (r68 Q8)', () => {
   const T = (layer, y) => [[0, 'TEXT'], [8, layer], [10, 0], [20, y], [40, 1], [1, `t${y}`]];

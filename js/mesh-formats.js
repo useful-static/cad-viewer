@@ -16,9 +16,10 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
-import { FORMATS, SNIFF_BYTES, extOf, sniffFormat } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, sniffFormat, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
+import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
 
 // the mesh extensions, from the viewer's one format table (js/formats.js)
 export const MESH_EXTS = FORMATS.filter((f) => f.kind === 'mesh').flatMap((f) => f.ext);
@@ -123,12 +124,11 @@ export async function parseMesh(format, buf, name, files = new Map()) {
 // A text file or zip part becomes one string, and an engine string holds at most ~512 M
 // characters: a larger one is refused in words before it is decoded (a 3MF part inflating to
 // 600 MB met the engine's "Cannot create a string longer than 0x1fffffe8 characters")
-const MAX_TEXT_BYTES = 500 * 2 ** 20;
+// (the limit and its words js/formats.js's, the DXF reader's too: r70 Q5)
 const mb = (n) => `${big(Math.round(n / 2 ** 20))} MB`;
-const TEXT_LIMIT_WORDS = `more than the ${mb(MAX_TEXT_BYTES)} of text this viewer reads`;
 // (buf: an ArrayBuffer or a byte view; encoding: an ASCII PLY body is latin1)
 const text = (buf, what = 'the file', encoding = 'utf-8') => {
-  if (buf.byteLength > MAX_TEXT_BYTES) throw new Error(`${what} is ${mb(buf.byteLength)} of text, ${TEXT_LIMIT_WORDS}`);
+  if (buf.byteLength > MAX_TEXT_BYTES) throw tooMuchText(what, buf.byteLength);
   return new TextDecoder(encoding).decode(buf);
 };
 
@@ -1484,7 +1484,6 @@ async function parseGLTF(buf, format, base, files) {
 // decoded here (no createImageBitmap / OffscreenCanvas: Node, an old browser)
 // or is not found. The image is drawn at 32 x 32 and its pixels (sRGB, as glTF
 // base colour textures are) averaged in linear light, weighted by alpha.
-const SRGB_TO_LINEAR = Array.from({ length: 256 }, (_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
 async function imageAverage(json, buffers, si, files) {
   try {
     if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return null;
@@ -1542,5 +1541,4 @@ function localMatrix(nd, bad) {
     2 * (xz + wy) * sz, 2 * (yz - wx) * sz, (1 - 2 * (xx + yy)) * sz, 0, tx, ty, tz, 1];
 }
 const det3 = (m) => m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
-// glTF colours are linear; the viewer's are sRGB
-const linearToSrgb = (f) => f.slice(0, 3).map((c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055));
+// (glTF colours are linear; the viewer's are sRGB: js/srgb.js, the writer's rule too)

@@ -229,7 +229,7 @@ test('a through-hole whose other rim cannot be told is untold, both rims counted
   const h = holesOf(bodyGeometry(model([{ name: 'p', faces }]), 0));
   // (the bore's rim untold, the head's told: one rim untold, one through-hole left out for it -- r69 Q7)
   assert.deepEqual([h.length, h.untold, h.unpaired], [0, 1, 1], `${JSON.stringify(h.map((x) => [x.diameter, x.rims]))}, untold ${h.untold}, unpaired ${h.unpaired} (must fire: the head a blind row)`);
-  assert.equal(untoldText(h.untold, h.unpaired), '1 rim too small to tell this far from the origin (the file\'s positions are rounded coarser than 0.5% of its radius), and 1 through-hole whose other rim is that one: not listed');
+  assert.equal(untoldText(h.untold, h.unpaired), '1 rim this far from the origin that the file\'s rounded positions cannot tell from a shape that is not a circle (rounded coarser than 0.5% of its radius, or within that rounding of the circle test), and 1 through-hole whose other rim is that one: not listed');
 });
 test('a rim the stored positions cannot tell is no row but counted (untold), and the same rim at the origin is a hole (r66)', () => {
   // a Ø0.08 through-hole (rounding at 20 m: 2.43% of its radius, as the boards' vias), and a Ø3 one
@@ -240,7 +240,14 @@ test('a rim the stored positions cannot tell is no row but counted (untold), and
   assert.deepEqual(h20.map((h) => [Math.round(h.diameter * 100) / 100, h.rims]), [[3, 2]], 'the Ø3 hole still told 20 m out');
   assert.equal(h20.untold, 2, 'the Ø0.08 hole\'s two rims said untold, not left out without a word');
   // (the one sentence for the summary, the CSV and the announcement, its share the rule's own: r67 A3, A8)
-  assert.equal(untoldText(2), '2 rims too small to tell this far from the origin (the file\'s positions are rounded coarser than 0.5% of their radius): not listed');
+  assert.equal(untoldText(2), '2 rims this far from the origin that the file\'s rounded positions cannot tell from a shape that is not a circle (rounded coarser than 0.5% of their radius, or within that rounding of the circle test): not listed');
+  // (r70 A4: round 69's band -- a loop past the 1% test by less than a step, 2^17 mm out, its step
+  // within the test, is untold, not "no circle"; at the origin the same loop is none)
+  const f2 = (v) => Math.fround(v);
+  const ellipse = (rr, e, o, k = 48) => Array.from({ length: k }, (_, i) => { const t = (2 * Math.PI * i) / k; return [f2(o + rr * (1 + e) * Math.cos(t)), f2(rr * Math.sin(t)), f2(0)]; });
+  const near = circleOf(ellipse(3, 0.021, 2 ** 17 + 20), 0.5);
+  assert.ok(near && near.untold === true, `a loop 1.05% off a circle 2^17 mm out: ${JSON.stringify(near && { dev: near.dev / 3, untold: near.untold })} (must fire: no circle)`);
+  assert.equal(circleOf(ellipse(3, 0.021, 0), 0.5), null, 'and at the origin, no circle');
   assert.equal(untoldText(0), '');
   // (a row's diameter in one text, with its countersink, for the cell, the summary and the words: r68 A8, Q11)
   const mm = (v) => `${v.toFixed(2)} mm`;

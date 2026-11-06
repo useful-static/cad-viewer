@@ -36,7 +36,7 @@
 //
 // Pure ES module, no DOM.
 
-import { BINARY_DXF_SENTINEL, looksLikeDxf } from './formats.js';
+import { BINARY_DXF_SENTINEL, MAX_TEXT_BYTES, looksLikeDxf, tooMuchText } from './formats.js';
 import { MBCS, codePageLabel, decoderFor, dxfDecoder, isDoubleByte } from './codepages.js';
 import { LENGTH_MM } from './units.js';
 import { PAPER, contrast } from './styles.js';
@@ -181,8 +181,11 @@ function indexOfBytes(u8, name, from = 0) {
   }
   return -1;
 }
-export function dxfText(buf) {
+export function dxfText(buf, what = 'the drawing', max = MAX_TEXT_BYTES) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  // (one string: past the text readers' one limit, refused in their words -- a 600 MB DXF met the
+  // engine's "Cannot create a string longer than 0x1fffffe8 characters": r70 Q5)
+  if (u8.length > max) throw tooMuchText(what, u8.length);
   // the header variables, wherever the header is: the name as a group-9 value (the line before it
   // "9"), so a comment naming it is passed over -- the first occurrence, a comment's, missed the
   // header; then the decoder js/codepages.js chooses for both DXF forms
@@ -718,7 +721,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         outlines = taperOutlines(xs, ys, bul, w, w, closed);
         width = 0;
       }
-      path(sh.pts, sh.closed, false, width);
+      path(sh.pts, sh.closed, false, width, sh.circle && conformal ? { circle: true } : null);
       if (outlines) for (const o of outlines) if (o.every(Number.isFinite)) path(o, true, true, 0, { outline: true });
     };
     switch (r.type) {
@@ -733,7 +736,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         ctx.add({ layer, colour, ...sty,pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
         break;
       }
-      case 'CIRCLE': path(arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI), true); break;
+      // (marked a circle where it is drawn as one -- a turn and a uniform scale -- for 2D Measure's
+      // centre and its Ø, which a 12-gon or a circle inserted at 1 x 0.985 read as: r70 Q6)
+      case 'CIRCLE': path(arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI), true, false, 0, conformal ? { circle: true } : null); break;
       case 'ARC': {
         // (angles taken within one turn: 370° is 10°; an arc runs counter-clockwise from a0)
         const turn = (deg) => (((deg % 360) + 360) % 360) * Math.PI / 180;
@@ -782,7 +787,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           }
           const closed = (num(r, 70) & 1) === 1;
           const pts = bulgePts(xs, ys, bul, closed);
-          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed, ...widthsOf(xs, ys, bul, w0, w1, closed) };
+          r.shape = { pts: pts.every(Number.isFinite) ? pts : null, closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) };
         }
         if (r.shape.pts) drawWide(r.shape);
         break;
@@ -808,7 +813,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.count(r, k); break; }
         const closed = (flags & 1) === 1;
         if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
-        else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, ...widthsOf(xs, ys, bul, w0, w1, closed) });
+        else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
         break;
       }
       case 'SPLINE': {
@@ -1042,6 +1047,12 @@ function arcPts(cx, cy, r, a0, a1) {
 
 // A polyline's widths, per segment start (w0) and end (w1): { width } when every segment has the
 // one width (0: none), else { outlines } (taperOutlines)
+// A polyline that is a full circle: closed, two vertices, each segment a half circle the same way
+// (bulge 1, the tangent of a quarter turn) -- how a CAD program writes a circle as a polyline (r70 Q6)
+function bulgeCircle(xs, ys, bul, closed) {
+  return closed && xs.length === 2 && (xs[0] !== xs[1] || ys[0] !== ys[1])
+    && Math.abs(Math.abs(bul[0]) - 1) < 1e-9 && Math.abs(bul[1] - bul[0]) < 1e-9;
+}
 function widthsOf(xs, ys, bul, w0, w1, closed) {
   const segs = closed ? xs.length : xs.length - 1;
   let one = segs > 0 ? w0[0] : 0, same = true;

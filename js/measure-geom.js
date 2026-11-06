@@ -15,7 +15,9 @@
 //     ceil(2π / a) - 1 points, a being the angular deflection the file was
 //     meshed at (squares and hexes have 4 and 6), is planar, and its points
 //     lie within 1 % of one radius. Off for a >= 2π/9, where 8 points would
-//     do and an octagon could pass.
+//     do and an octagon could pass. Far from the origin a loop the stored
+//     positions cannot tell -- their step past the test, or the loop within a
+//     step of it -- is "untold": no circle, and counted (circleOf, untoldAt).
 //
 // Coordinates are the model's (mm).
 
@@ -596,7 +598,8 @@ function holeWall(geom, a, faceN) {
 
 // The holes of a body: circles on its planar faces that bound an inner loop
 // (a face's loops other than its outer one), merged where the two rims of one
-// through-hole meet the top and bottom faces (same axis, same radius).
+// through-hole meet the top and bottom faces (same axis, same radius), and those of other radii where
+// the wall between joins them (holeWall: countersunk, chamfered, filleted).
 // -> [{ centre, normal, diameter, depth, rims, head? }] sorted by diameter, then position, with
 // .untold / .untoldAt: how many rims it cannot tell and their centres, .unpaired / .unpairedAt the
 // through-holes left out as their other rim is one of them (head: a countersunk or chamfered hole's
@@ -676,7 +679,7 @@ export function holesOf(geom) {
     if (dot(faceN(s), faceN(r)) > -0.999) return -1;
     const d = sub(s.centre, r.centre);
     const along = dot(d, r.normal);
-    if (len(sub(d, r.normal.map((v) => v * along))) > 0.01 * r.radius + 1e-6) return -1;
+    if (len(sub(d, r.normal.map((v) => v * along))) > RADIUS_TOL * r.radius + 1e-6) return -1;
     if (dot(d, faceN(r)) >= 0) return -1;
     return Math.abs(along);
   };
@@ -741,7 +744,7 @@ export function holesOf(geom) {
     }
     // (off the axis by the stored step of either rim, the farther: a plate across 2^18 mm, its top
     // stored twice as coarsely as its bottom, split its chamfered holes in two -- r69, the position test)
-    const slack = (c) => 0.01 * c.radius + 2 * storedUlp(Math.max(...c.centre.map(Math.abs), ...a.centre.map(Math.abs))) + 1e-6;
+    const slack = (c) => RADIUS_TOL * c.radius + 2 * storedUlp(Math.max(...c.centre.map(Math.abs), ...a.centre.map(Math.abs))) + 1e-6;
     let best = -1, bestAlong = Infinity;
     // (the rims the wall's own nodes reach, on its end face)
     const near = new Set();

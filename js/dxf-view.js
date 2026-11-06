@@ -175,7 +175,9 @@ export function snapPoints(paths, o) {
     }
     const m = n2 > 1 && same(q[0], q[(n2 - 1) * 2]) && same(q[1], q[(n2 - 1) * 2 + 1]) ? n2 - 1 : n2;
     if (p.closed && m === n2 && n2 > 2) mid(n2 - 1, 0);
-    if (p.closed && m >= 12) {
+    // (a centre with its Ø only for what the reader drew from a circle: a 12-gon or a 16-gon hovered
+    // as "centre (Ø 20.000)", an ellipse 10 x 9.85 as Ø 19.850 -- r70 Q6)
+    if (p.closed && p.circle && m >= 12) {
       let cx = 0, cy = 0;
       for (let i = 0; i < m; i++) { cx += q[i * 2]; cy += q[i * 2 + 1]; }
       cx /= m; cy /= m;

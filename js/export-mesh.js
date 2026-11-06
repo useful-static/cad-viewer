@@ -13,6 +13,7 @@
 // which glTF fixes in metres.
 
 import { crc32 } from './crc32.js';
+import { SRGB_TO_LINEAR } from './srgb.js';
 import { orientBasis } from './orient.js';
 import { windsAgainstNormals } from './raycast.js';
 
@@ -83,20 +84,25 @@ export function toSTL(model, ids0, basis, name = 'model') {
 
 // ---- a zip (3MF's container): deflated entries, CRC-32 ----
 export { crc32 };
-async function deflateRaw(bytes) {
-  const s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+async function deflateRaw(chunks) {
+  const s = new Blob(chunks).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
-// files: [[name, Uint8Array]] -> the zip's bytes
+// files: [[name, Uint8Array | [Uint8Array, ...]]] -> the zip's bytes. An entry may come in chunks,
+// so no one string or array holds a large part whole (a 3MF of 9 M triangles, one string, ran past
+// the engine's string limit: "Invalid string length" -- r70 Q4)
 export async function zip(files) {
   const enc = new TextEncoder();
   const parts = [];
   const central = [];
   let offset = 0;
-  for (const [name, data] of files) {
+  for (const [name, entry] of files) {
+    const chunks = Array.isArray(entry) ? entry : [entry];
     const nm = enc.encode(name);
-    const crc = crc32(data);
-    const comp = await deflateRaw(data);
+    let crc = 0, size = 0;
+    for (const c of chunks) { crc = crc32(c, 0, c.length, crc); size += c.length; }
+    const data = { length: size };
+    const comp = await deflateRaw(chunks);
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
     local.setUint16(4, 20, true);
@@ -159,6 +165,8 @@ function withTriangles(model, ids, names) {
   return [kept.map((x) => x[0]), kept.map((x) => x[1])];
 }
 
+// a turn for the page: a task, not a microtask, so its input and painting run between
+const turn = () => new Promise((res) => setTimeout(res, 0));
 export async function to3MF(model, ids0, basis, names0 = []) {
   const [ids, names] = withTriangles(model, ids0, names0);
   // one base material per distinct colour (each triangle takes its first
@@ -166,28 +174,43 @@ export async function to3MF(model, ids0, basis, names0 = []) {
   const colours = new Map();
   const C = model.color;
   const colourOf = (v) => { const k = `#${hex2(C[4 * v])}${hex2(C[4 * v + 1])}${hex2(C[4 * v + 2])}`; if (!colours.has(k)) colours.set(k, colours.size); return colours.get(k); };
-  const objects = [];
-  ids.forEach((id, j) => {
-    const { m, pos, idx } = bodyOf(model, id, basis, 1);
-    const verts = [];
-    for (let v = 0; v < m.vtxCount; v++) verts.push(`<vertex x="${num(pos[3 * v])}" y="${num(pos[3 * v + 1])}" z="${num(pos[3 * v + 2])}"/>`);
-    const tris = [];
-    for (let t = 0; t < idx.length; t += 3) tris.push(`<triangle v1="${idx[t]}" v2="${idx[t + 1]}" v3="${idx[t + 2]}" pid="1" p1="${colourOf(m.vtxStart + idx[t])}"/>`);
-    objects.push(`<object id="${j + 2}" type="model" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>${verts.join('')}</vertices><triangles>${tris.join('')}</triangles></mesh></object>`);
-  });
-  const mats = [...colours.keys()].map((c, i) => `<base name="colour ${i + 1}" displaycolor="${c}"/>`).join('');
-  const modelXml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    + '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
-    + `<resources><basematerials id="1">${mats}</basematerials>${objects.join('')}</resources>`
-    + `<build>${ids.map((_, j) => `<item objectid="${j + 2}"/>`).join('')}</build></model>`;
+  // (the objects as bytes, a batch of vertices or triangles at a time: r70 Q4)
   const enc = new TextEncoder();
+  const objects = [];
+  // (and the page given a turn between batches: 5 M triangles held its thread 16.8 s, the tab frozen
+  // with "exporting…" -- r70 Q4)
+  const BATCH = 20000;
+  let batch = [];
+  const flush = () => { if (batch.length) { objects.push(enc.encode(batch.join(''))); batch = []; } };
+  const put = async (s) => { batch.push(s); if (batch.length >= BATCH) { flush(); await turn(); } };
+  for (const [j, id] of ids.entries()) {
+    const { m, pos, idx } = bodyOf(model, id, basis, 1);
+    await put(`<object id="${j + 2}" type="model" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>`);
+    for (let v = 0; v < m.vtxCount; v++) {
+      batch.push(`<vertex x="${num(pos[3 * v])}" y="${num(pos[3 * v + 1])}" z="${num(pos[3 * v + 2])}"/>`);
+      if (batch.length >= BATCH) { flush(); await turn(); }
+    }
+    await put('</vertices><triangles>');
+    for (let t = 0; t < idx.length; t += 3) {
+      batch.push(`<triangle v1="${idx[t]}" v2="${idx[t + 1]}" v3="${idx[t + 2]}" pid="1" p1="${colourOf(m.vtxStart + idx[t])}"/>`);
+      if (batch.length >= BATCH) { flush(); await turn(); }
+    }
+    await put('</triangles></mesh></object>');
+  }
+  flush();
+  // (the materials are known once every triangle has been: written before the objects in the file)
+  const mats = [...colours.keys()].map((c, i) => `<base name="colour ${i + 1}" displaycolor="${c}"/>`).join('');
+  const modelXml = [enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+    + `<resources><basematerials id="1">${mats}</basematerials>`), ...objects,
+  enc.encode(`</resources><build>${ids.map((_, j) => `<item objectid="${j + 2}"/>`).join('')}</build></model>`)];
   return zip([
     ['[Content_Types].xml', enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
       + '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>')],
     ['_rels/.rels', enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       + '<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')],
-    ['3D/3dmodel.model', enc.encode(modelXml)],
+    ['3D/3dmodel.model', modelXml],
   ]);
 }
 
@@ -209,7 +232,9 @@ export function toGLB(model, ids0, basis, names0 = []) {
   ids.forEach((id, j) => {
     const { m, pos, idx } = bodyOf(model, id, basis, 0.001);
     const nrm = new Float32Array(m.vtxCount * 3);
-    const col = new Uint8Array(m.vtxCount * 4);
+    // (linear, as glTF's COLOR_0 is, in normalized 16 bits -- in 8 the darks band: r70 Q1)
+    const col = new Uint16Array(m.vtxCount * 4);
+    const lin = (b) => Math.round(SRGB_TO_LINEAR[b] * 65535);
     const N = model.normal, C = model.color;
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let v = 0; v < m.vtxCount; v++) {
@@ -222,12 +247,12 @@ export function toGLB(model, ids0, basis, names0 = []) {
         lo[k] = Math.min(lo[k], pos[3 * v + k]);
         hi[k] = Math.max(hi[k], pos[3 * v + k]);
       }
-      col.set([C[4 * g], C[4 * g + 1], C[4 * g + 2], 255], 4 * v);
+      col.set([lin(C[4 * g]), lin(C[4 * g + 1]), lin(C[4 * g + 2]), 65535], 4 * v);
     }
     const a0 = accessors.length;
     accessors.push({ bufferView: add(pos, 34962), componentType: 5126, count: m.vtxCount, type: 'VEC3', min: lo, max: hi });
     accessors.push({ bufferView: add(nrm, 34962), componentType: 5126, count: m.vtxCount, type: 'VEC3' });
-    accessors.push({ bufferView: add(col, 34962), componentType: 5121, normalized: true, count: m.vtxCount, type: 'VEC4' });
+    accessors.push({ bufferView: add(col, 34962), componentType: 5123, normalized: true, count: m.vtxCount, type: 'VEC4' });
     accessors.push({ bufferView: add(idx, 34963), componentType: 5125, count: idx.length, type: 'SCALAR' });
     const name = names[j] || m.name || `body ${id}`;
     meshes.push({ name, primitives: [{ attributes: { POSITION: a0, NORMAL: a0 + 1, COLOR_0: a0 + 2 }, indices: a0 + 3, material: 0 }] });

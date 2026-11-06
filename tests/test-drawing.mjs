@@ -56,6 +56,17 @@ test('a rim the stored positions cannot tell is drawn as its edge, not a true ci
   assert.deepEqual(at(0), [2, false]);
   assert.deepEqual(at(20000), [1, true], 'the Ø0.08 untold: drawn as the edge it is (must fire)');
 });
+test('an edge whose ends touch a circle drawn is drawn too: a chord, an inscribed hexagon\'s sides; the circle\'s own edge is not (r70 Q3)', () => {
+  const R = 10;
+  const hex = Array.from({ length: 6 }, (_, i) => [R * Math.cos((Math.PI / 3) * i), R * Math.sin((Math.PI / 3) * i), 0]);
+  const edges = [], edgeClosed = [];
+  for (let i = 0; i < 6; i++) { edges.push([hex[i], hex[(i + 1) % 6]]); edgeClosed.push(false); }
+  // (must accept: the circle's own edge, its 48 points on it, left to the circle)
+  edges.push(Array.from({ length: 49 }, (_, i) => [R * Math.cos((2 * Math.PI * i) / 48), R * Math.sin((2 * Math.PI * i) / 48), 0])); edgeClosed.push(true);
+  const geom = { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges, edgeClosed, a: 0.5 };
+  const d = drawingSVG([{ name: 'part', geom }], ...TOP);
+  assert.deepEqual([d.lines, d.circles], [6, 1], 'the six sides and the circle (must fire: the sides dropped)');
+});
 test('the caption and names are escaped', () => {
   const g = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 1, 1]) }]), 0);
   const d = drawingSVG([{ name: 'A & <B>', geom: g }], ...TOP, { title: 'x < y' });

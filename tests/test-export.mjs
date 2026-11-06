@@ -118,8 +118,36 @@ await test('GLB: the header and chunks; per body a node, positions in metres wit
   assert.deepEqual([...new Uint32Array(g.buffer.slice(binOff + iv.byteOffset, binOff + iv.byteOffset + iv.byteLength))], [0, 1, 2], 'local indices');
   const ca = j.accessors[j.meshes[1].primitives[0].attributes.COLOR_0];
   const cv = j.bufferViews[ca.bufferView];
-  assert.deepEqual([...g.slice(binOff + cv.byteOffset, binOff + cv.byteOffset + 4)], [0, 0, 255, 255]);
+  // (linear, normalized 16 bits: r70 Q1)
+  assert.deepEqual([ca.componentType, ca.normalized], [5123, true]);
+  assert.deepEqual([...new Uint16Array(g.buffer.slice(binOff + cv.byteOffset, binOff + cv.byteOffset + 8))], [0, 0, 65535, 65535]);
   for (const v of j.bufferViews) assert.equal(v.byteOffset % 4, 0);
+});
+await test('3MF of a large body: written in batches, the page given turns between them -- no hold of the thread past a fraction of a second (r70 Q4: 5 M triangles held it 16.8 s, 9 M ran past the string limit)', async () => {
+  const W = 500, rows = 501, V = W * rows;
+  const P2 = new Float32Array(3 * V), N2 = new Int16Array(4 * V), C2 = new Uint8Array(4 * V).fill(200);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < W; c++) { const v = r * W + c; P2[3 * v] = c * 0.1; P2[3 * v + 1] = r * 0.1; N2[4 * v + 2] = 32767; }
+  const I2 = [];
+  for (let r = 0; r + 1 < rows; r++) for (let c = 0; c + 1 < W; c++) { const v = r * W + c; I2.push(v, v + 1, v + W, v + 1, v + W + 1, v + W); }
+  const big = { position: P2, normal: N2, color: C2, index: Uint32Array.from(I2), header: { meshes: [{ name: 'grid', vtxStart: 0, vtxCount: V, idxStart: 0, idxCount: I2.length }] } };
+  let last = performance.now(), gap = 0;
+  const tick = setInterval(() => { const t = performance.now(); gap = Math.max(gap, t - last); last = t; }, 5);
+  const t0 = performance.now();
+  const z = await to3MF(big, [1], IDENT);
+  const ms = performance.now() - t0;
+  clearInterval(tick);
+  const x = unzip(z)['3D/3dmodel.model'];
+  assert.equal((x.match(/<triangle /g) || []).length, I2.length / 3, 'every triangle written');
+  assert.match(x, /<\/triangles><\/mesh><\/object><\/resources><build><item objectid="2"\/><\/build><\/model>$/);
+  assert.ok(gap < 400, `the longest hold ${gap.toFixed(0)} ms of ${ms.toFixed(0)} ms (must fire: the whole part built in one)`);
+});
+await test('GLB: a mid-tone body exported and read back by the viewer\'s own glTF reader is the colour it was drawn, as 3MF\'s (r70 Q1: rgb(128,64,200) came back rgb(188,137,229))', async () => {
+  const c2 = new Uint8Array(7 * 4);
+  for (let v = 0; v < 7; v++) c2.set(v < 4 ? [128, 64, 200, 255] : [20, 200, 90, 255], 4 * v);
+  const g = toGLB({ ...model, color: c2 }, [1, 2], YUP);
+  const r = await parseMesh('glb', g.buffer.slice(g.byteOffset, g.byteOffset + g.byteLength), 'a.glb');
+  const cols = r.meshes.map((m) => m.color.map((c) => Math.round(c * 255)).join(','));
+  assert.deepEqual(cols, ['128,64,200', '20,200,90'], `read back: ${cols.join(' | ')}`);
 });
 
 await test('a body wound inward with its normals out (a mirrored placement) is written with its outside out: STL, 3MF and GLB as the view shows it (r25 A3)', async () => {

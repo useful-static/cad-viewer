@@ -28,7 +28,9 @@ export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at i
 // the rims, it was one too small to tell that was not: r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 export const untoldText = (n, holes = 0) => {
-  const rims = n ? `${plural(n, 'rim', 'rims')} too small to tell this far from the origin (the file's positions are rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius)` : '';
+  // (both kinds: the rounding coarser than the share, or the loop within that rounding of the circle
+  // test -- it said "too small" of a Ø7.28 rim 131 m out whose rounding was 0.215% of its radius: r70 A3)
+  const rims = n ? `${plural(n, 'rim', 'rims')} this far from the origin that the file's rounded positions cannot tell from a shape that is not a circle (rounded coarser than ${+(100 * UNTOLD_SHARE).toFixed(2)}% of ${n === 1 ? 'its' : 'their'} radius, or within that rounding of the circle test)` : '';
   const more = holes ? `${plural(holes, 'through-hole', 'through-holes')} whose other rim is ${n === 1 ? 'that one' : 'one of them'}` : '';
   return rims || more ? `${[rims, more].filter(Boolean).join(', and ')}: not listed` : '';
 };

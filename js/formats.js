@@ -123,6 +123,14 @@ function dxfHead(text) {
 // how much of a file's start the sniff reads (every caller passes this much): room for a DXF's
 // 999 comments or an OBJ's comment header, which ran past 400 bytes and left a valid file unnamed
 export const SNIFF_BYTES = 4096;
+// A text file or zip part becomes one string, and an engine string holds at most ~512 M
+// characters: a larger one is refused in words before it is decoded (a 3MF part inflating to
+// 600 MB met the engine's "Cannot create a string longer than 0x1fffffe8 characters"). One limit for
+// every text reader -- the mesh formats' and the ASCII DXF's, which had none: r70 Q5
+export const MAX_TEXT_BYTES = 500 * 2 ** 20;
+const textMb = (n) => `${Math.round(n / 2 ** 20).toLocaleString('en-US')} MB`;
+export const TEXT_LIMIT_WORDS = `more than the ${textMb(MAX_TEXT_BYTES)} of text this viewer reads`;
+export const tooMuchText = (what, bytes) => new Error(`${what} is ${textMb(bytes)} of text, ${TEXT_LIMIT_WORDS}`);
 export const looksLikeDxf = (text) => dxfHead(text);
 // a binary DXF's first 22 bytes: the one sentinel for the sniff here and the reader (js/dxf.js)
 export const BINARY_DXF_SENTINEL = 'AutoCAD Binary DXF\r\n\x1a\x00';

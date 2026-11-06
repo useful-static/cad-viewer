@@ -1339,11 +1339,17 @@ function closedOf(mesh, mi) {
   const c = mesh?.edgeInfo?.value?.facts?.closed;
   return c ? !!c[mi] : false;
 }
+// What an export writes: the visitor's own parts shown and colours -- while a tour plays, those kept
+// under app.tour.base, not the step's (a step's highlight and its grey went into the file, and a part
+// it isolated others from was all that was written: r70 Q2. The tour keeps them as an Array --
+// startTour's base -- and .has on it threw, every export during a tour writing nothing: r71 A1)
+const exportState = () => (app.tour ? { hidden: new Set(app.tour.base.hidden), color: inScheme(app.baseMesh, ownOverrides(), ownFaces() || new Map()).color } : { hidden: app.hidden, color: app.mesh.color });
 async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
-  const model = { ...app.baseMesh, color: app.mesh.color };
+  const own = exportState();
+  const model = { ...app.baseMesh, color: own.color };
   // (the bodies shown that have a triangle: what is written, counted and said -- js/export-mesh.js)
-  const ids = exportable(model, app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id)));
+  const ids = exportable(model, app.header.meshes.map((_, i) => i + 1).filter((id) => !own.hidden.has(id)));
   if (!ids.length) { tell(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
@@ -3323,6 +3329,8 @@ function applyListEntry() {
       const key = autoTourKey(), open = app.openCount;
       app.tourPicked = open;
       const [r] = await Promise.all([readTour(t.url), entryTourWait()]);
+      // (and for one begun while the tour was read: a few rounds, each a load's end)
+      for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
       const still = entryTourOn(key, open);
       if (r.error) { if (still) failApart(`the tour ${r.error}`); else tell(`the tour ${r.error}`, 6000); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
       if (still) startTourIn(r.tour, t.url);
@@ -5094,7 +5102,9 @@ const autoTourKey = () => app.sourceUrl || app.header;
 // and its open, and not while the model is on its way out: the visitor's pick downloading, or its
 // re-read in another unit, which ends the tour as it lands (it started, scaled to the old reading,
 // and was gone without a word: r69 A3)
-const entryTourWait = () => (app.addsPending && app.addsChain ? app.addsChain : null);
+// (and for the shown model's re-read in another unit: a File > "Tour: X" clicked during it was
+// dropped without a word when its tour came first, and played when the re-read did -- r70 A1)
+const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
 const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending && !rereading();
 // the unit the address asks a URL load to be read in: only for the model the address names
 function addressUnit(url) {
@@ -5148,7 +5158,8 @@ function setMeshUnit(u) {
     setStatus('loading', `reading ${src.name} in ${unitName(u)}`);
     // (the same bodies, at another size: the visitor's hidden parts stay hidden)
     const hidden = new Set(app.hidden);
-    return meshFromSource(src, u, seq).then(() => {
+    // (its end, what an entry's tour asked for meanwhile waits for: entryTourWait)
+    return (app.rereadChain = meshFromSource(src, u, seq)).then(() => {
       if (stale(seq)) return;
       if (hidden.size) { app.hidden = hidden; syncTreeChecks(); pushState(); updateButtons(); viewChanged(); }
       announce(`${src.name} read in ${unitName(u)}`);
@@ -5246,7 +5257,8 @@ async function loadDxf(buf, name, seq) {
   setStatus('loading', `reading ${name}`);
   // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), or by
   // its name (a .dwg that is not one is refused by the reader as "not a DWG file")
-  const dwg = isDWGBytes(new Uint8Array(buf, 0, Math.min(6, buf.byteLength))) || /\.dwg$/i.test(name);
+  // (its name by the formats table, the one rule: an extension added to the DWG row was read as a DXF -- r70 A5)
+  const dwg = isDWGBytes(new Uint8Array(buf, 0, Math.min(6, buf.byteLength))) || formatOfName(name)?.label === 'DWG';
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${dwg ? 'DWG' : 'DXF'}`);
   await nextPaint();
   if (stale(seq)) return;

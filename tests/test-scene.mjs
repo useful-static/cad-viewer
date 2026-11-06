@@ -410,14 +410,20 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
     const onclick = new Function('app', 't', 'readTour', 'startTourIn', 'failApart', 'tell', 'closeMenus', 'autoTourKey', 'entryTourWait', 'entryTourOn', `return async () => {\n${body}\n};`)(
       app, { name: 'tour of A', url: 'A.cadtour.json' }, readTour,
       (tour) => log.push(`plays over ${app.sourceUrl}`), (msg) => log.push(`in the line: ${msg}`), (msg) => log.push(`told: ${msg}`), () => {}, autoTourKey, entryTourWait, entryTourOn);
+    // (a re-read with its end, as setMeshUnit keeps it: app.rereadChain -- r70 A1)
+    let landed = null;
+    const reread = () => Object.assign(app, { status: 'loading', loadSeq: 4, rereadSeq: 4, rereadChain: new Promise((res) => { landed = () => { app.status = 'ready'; log.push('re-read lands'); res(); }; }) });
+    if (during === 'reread-at-click') reread();
     const clicked = onclick();
     if (during === 'pick') Object.assign(app, { sourceUrl: 'B.stl', header: { name: 'B' }, openCount: 2 });
     if (during === 'reopen') app.openCount = 2;
     if (during === 'picking') app.pickPending = 1;
     if (during === 'reread') Object.assign(app, { status: 'loading', loadSeq: 4, rereadSeq: 4 });
+    if (during === 'reread-lands') reread();
     answer(outcome === 'ok' ? { tour: { steps: [] } } : { error: 'not found (404): A.cadtour.json' });
     await new Promise((r) => setTimeout(r, 1));
     if (adds) { log.push('read'); joined(); }
+    if (landed) { log.push('read'); landed(); }
     await clicked;
     return { log, picked: app.tourPicked };
   };
@@ -428,6 +434,10 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   assert.deepEqual((await run('ok', 'picking')).log, [], 'not played while the visitor\'s pick downloads (must fire)');
   // (nor while the model is read again in another unit: it lands ending the tour -- r69 A3)
   assert.deepEqual((await run('ok', 'reread')).log, [], 'not played during a re-read (must fire)');
+  // (but after it: waited for, whether under way at the click or begun while the tour was read, not
+  // dropped by which came first -- r70 A1)
+  assert.deepEqual((await run('ok', 'reread-at-click')).log, ['read', 're-read lands', 'plays over A.stl'], 'a re-read under way at the click (must fire: dropped without a word)');
+  assert.deepEqual((await run('ok', 'reread-lands')).log, ['read', 're-read lands', 'plays over A.stl'], 'a re-read begun while the tour was read (must fire)');
   // (after the address's ?add=s: the model joining would end it -- r68 A2)
   assert.deepEqual((await run('ok', null, true)).log, ['read', 'b.stl joins', 'plays over A.stl'], 'plays after the ?add= joins, not before it (must fire)');
   // must accept: A still shown -- played, and the entry's own tour told to step aside; failed -- in A's line
@@ -435,6 +445,40 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   assert.deepEqual(ok.log, ['plays over A.stl']);
   assert.equal(ok.picked, 1, 'the open the visitor picked a tour on, for the entry\'s own tour to step aside');
   assert.deepEqual((await run('error', null)).log, ['in the line: the tour not found (404): A.cadtour.json']);
+});
+await test('an export during a tour writes the visitor\'s own parts and colours, not the step\'s (main.js exportState, as written: r70 Q2)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const head = 'const exportState = ';
+  const i = src.indexOf(head);
+  assert.ok(i > 0, 'main.js has exportState');
+  const line = src.slice(i, src.indexOf('\n', i));
+  const lineOf2 = (h) => { const j = src.indexOf(h); assert.ok(j > 0, `main.js has ${h}`); return src.slice(j, src.indexOf('\n', j)); };
+  const own = { color: 'the visitor\'s colours' };
+  const run = (app) => new Function('app', 'inScheme', 'ownOverrides', 'ownFaces', `${line}\nreturn exportState();`)(
+    app, (base, ov) => (ov === app.tour?.base.overrides ? own : { color: 'other' }), () => (app.tour ? app.tour.base.overrides : app.overrides), () => null);
+  // a step that greys all but one part and isolates it (the visitor's hidden parts kept as startTour
+  // keeps them, an Array: as a Set here the arm passed while the page threw -- r71 A1)
+  const base = lineOf2('  const base = prev ? prev.base : { view: saved, hidden: ');
+  assert.match(base, /hidden: \[\.\.\.app\.hidden\]/, 'startTour keeps them as an Array');
+  const step = { tour: { base: { hidden: [3], overrides: new Map([[0, [1, 2, 3]]]) } }, hidden: new Set([1, 2, 3, 4]), overrides: new Map([[1, [9, 9, 9]]]), mesh: { color: 'the step\'s greys' } };
+  const s = run(step);
+  // (asked as exportMesh asks it: .has -- r71 A1)
+  assert.deepEqual([[1, 2, 3, 4].filter((id) => s.hidden.has(id)), s.color], [[3], 'the visitor\'s colours'], 'must fire: the step\'s isolate and grey written');
+  // must accept: no tour, what is shown
+  const plain = run({ tour: null, hidden: new Set([2]), mesh: { color: 'shown' } });
+  assert.deepEqual([[1, 2, 3].filter((id) => plain.hidden.has(id)), plain.color], [[2], 'shown']);
+});
+await test('a 2D file is a DWG by its bytes or by the formats table\'s DWG row, whatever extensions the row holds (main.js loadDxf, as written: r70 A5)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const head = '  const dwg = isDWGBytes(';
+  const i = src.indexOf(head);
+  assert.ok(i > 0, 'main.js has the line');
+  const line = src.slice(i, src.indexOf('\n', i));
+  const isDwg = (name, extra = []) => new Function('isDWGBytes', 'formatOfName', 'buf', 'name', `${line}\nreturn dwg;`)(
+    () => false, (n) => ([...['dwg'], ...extra].some((e) => n.toLowerCase().endsWith(`.${e}`)) ? { label: 'DWG' } : { label: 'DXF' }), new ArrayBuffer(8), name);
+  assert.equal(isDwg('a.dwg'), true);
+  assert.equal(isDwg('a.dxf'), false);
+  assert.equal(isDwg('a.dwt', ['dwt']), true, 'an extension added to the DWG row (must fire: read as a DXF)');
 });
 await test('the units select during a re-read says the unit being read, after it the unit read (main.js syncMeshUnitRow, as written: r69 A5)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -1405,7 +1449,7 @@ await test('the note contract: each page state against each writer of a note or 
     'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {', 'function cannotHold() {', 'function refusedForSize(f) {',
     'function rewriteReady(change) {'].map(cutIf).join('')
     + line('const listNote = ') + line('const posterUp = ')
-    + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
+    + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
