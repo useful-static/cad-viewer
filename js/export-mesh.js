@@ -15,8 +15,11 @@
 import { crc32 } from './crc32.js';
 import { SRGB_TO_LINEAR } from './srgb.js';
 import { orientBasis } from './orient.js';
+import { MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } from './formats.js';
 import { windsAgainstNormals } from './raycast.js';
 
+// a turn for the page: a task, not a microtask, so its input and painting run between
+const turn = () => new Promise((res) => setTimeout(res, 0));
 const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 
 // one body's vertices (in the basis, scaled) and triangles (local numbers). A triangle whose
@@ -24,21 +27,40 @@ const dot3 = (P, i, b) => P[i] * b[0] + P[i + 1] * b[1] + P[i + 2] * b[2];
 // the body's outside to the view and to Measure (js/measure-geom.js facingNormals), and STL and
 // 3MF carry the winding alone, so a mirrored placement -- wound inward, normals out -- went to a
 // slicer inside out while the view showed it right.
-function bodyOf(model, id, basis, scale) {
-  const m = model.header.meshes[id - 1];
+// (the vertices [v0, v1) and the triangles' indices [t0, t1) of it, so a writer that gives the page
+// turns can take it in pieces: bodyOfInTurns -- r71 A6, Q3)
+function bodyRange(model, m, basis, scale, pos, idx, v0, v1, t0, t1) {
   const P = model.position, N = model.normal;
-  const pos = new Float32Array(m.vtxCount * 3);
-  for (let v = 0; v < m.vtxCount; v++) {
+  for (let v = v0; v < v1; v++) {
     const i = (m.vtxStart + v) * 3;
     for (let k = 0; k < 3; k++) pos[v * 3 + k] = dot3(P, i, basis[k]) * scale;
   }
-  const idx = new Uint32Array(m.idxCount);
-  for (let t = 0; t < m.idxCount; t += 3) {
+  for (let t = t0; t < t1; t += 3) {
     const a = model.index[m.idxStart + t], b = model.index[m.idxStart + t + 1], c = model.index[m.idxStart + t + 2];
     const turn = windsAgainstNormals(P, N, a, b, c);
     idx[t] = a - m.vtxStart;
     idx[t + 1] = (turn ? c : b) - m.vtxStart;
     idx[t + 2] = (turn ? b : c) - m.vtxStart;
+  }
+}
+function bodyOf(model, id, basis, scale) {
+  const m = model.header.meshes[id - 1];
+  const pos = new Float32Array(m.vtxCount * 3), idx = new Uint32Array(m.idxCount);
+  bodyRange(model, m, basis, scale, pos, idx, 0, m.vtxCount, 0, m.idxCount);
+  return { m, pos, idx };
+}
+// (the same, a turn between pieces: a 5 M-triangle body's took 223 ms in one task)
+const BODY_PIECE = 200000;
+async function bodyOfInTurns(model, id, basis, scale) {
+  const m = model.header.meshes[id - 1];
+  const pos = new Float32Array(m.vtxCount * 3), idx = new Uint32Array(m.idxCount);
+  for (let v = 0; v < m.vtxCount; v += BODY_PIECE) {
+    bodyRange(model, m, basis, scale, pos, idx, v, Math.min(m.vtxCount, v + BODY_PIECE), 0, 0);
+    await turn();
+  }
+  for (let t = 0; t < m.idxCount; t += 3 * BODY_PIECE) {
+    bodyRange(model, m, basis, scale, pos, idx, 0, 0, t, Math.min(m.idxCount, t + 3 * BODY_PIECE));
+    await turn();
   }
   return { m, pos, idx };
 }
@@ -100,8 +122,14 @@ export async function zip(files) {
     const chunks = Array.isArray(entry) ? entry : [entry];
     const nm = enc.encode(name);
     let crc = 0, size = 0;
-    for (const c of chunks) { crc = crc32(c, 0, c.length, crc); size += c.length; }
-    const data = { length: size };
+    // (a turn between chunks of an entry in many: the CRC over a 436 MB part, one task, held the page
+    // 1.4 s after to3MF's batches had let it answer -- r71 A6, Q3)
+    // (every 8 MB, about 25 ms of it: not after each chunk, a turn's 4 ms each of 378)
+    let since = 0;
+    for (const c of chunks) {
+      if (since >= 8 * 2 ** 20) { await turn(); since = 0; }
+      crc = crc32(c, 0, c.length, crc); size += c.length; since += c.length;
+    }
     const comp = await deflateRaw(chunks);
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
@@ -109,7 +137,7 @@ export async function zip(files) {
     local.setUint16(8, 8, true); // deflate
     local.setUint32(14, crc, true);
     local.setUint32(18, comp.length, true);
-    local.setUint32(22, data.length, true);
+    local.setUint32(22, size, true);
     local.setUint16(26, nm.length, true);
     parts.push(new Uint8Array(local.buffer), nm, comp);
     const cd = new DataView(new ArrayBuffer(46));
@@ -119,7 +147,7 @@ export async function zip(files) {
     cd.setUint16(10, 8, true);
     cd.setUint32(16, crc, true);
     cd.setUint32(20, comp.length, true);
-    cd.setUint32(24, data.length, true);
+    cd.setUint32(24, size, true);
     cd.setUint16(28, nm.length, true);
     cd.setUint32(42, offset, true);
     central.push(new Uint8Array(cd.buffer), nm);
@@ -165,9 +193,8 @@ function withTriangles(model, ids, names) {
   return [kept.map((x) => x[0]), kept.map((x) => x[1])];
 }
 
-// a turn for the page: a task, not a microtask, so its input and painting run between
-const turn = () => new Promise((res) => setTimeout(res, 0));
-export async function to3MF(model, ids0, basis, names0 = []) {
+// (maxText: the reader's limit, a test's smaller one)
+export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_BYTES) {
   const [ids, names] = withTriangles(model, ids0, names0);
   // one base material per distinct colour (each triangle takes its first
   // vertex's), so a body's per-face colours survive
@@ -180,11 +207,20 @@ export async function to3MF(model, ids0, basis, names0 = []) {
   // (and the page given a turn between batches: 5 M triangles held its thread 16.8 s, the tab frozen
   // with "exporting…" -- r70 Q4)
   const BATCH = 20000;
-  let batch = [];
-  const flush = () => { if (batch.length) { objects.push(enc.encode(batch.join(''))); batch = []; } };
+  let batch = [], bytes = 0;
+  // (no larger a model part than the viewer's own reader takes: past it, a 7.6 M-triangle plate wrote
+  // a 3MF the viewer then refused to open, "unpacks to 618 MB, more than the 500 MB of text this
+  // viewer reads" -- r71 A5. Refused as soon as the text passes it, the other two named)
+  const flush = () => {
+    if (!batch.length) return;
+    const b = enc.encode(batch.join(''));
+    batch = [];
+    if ((bytes += b.length) > maxText) throw new Error(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
+    objects.push(b);
+  };
   const put = async (s) => { batch.push(s); if (batch.length >= BATCH) { flush(); await turn(); } };
   for (const [j, id] of ids.entries()) {
-    const { m, pos, idx } = bodyOf(model, id, basis, 1);
+    const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 1);
     await put(`<object id="${j + 2}" type="model" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>`);
     for (let v = 0; v < m.vtxCount; v++) {
       batch.push(`<vertex x="${num(pos[3 * v])}" y="${num(pos[3 * v + 1])}" z="${num(pos[3 * v + 2])}"/>`);
@@ -204,6 +240,8 @@ export async function to3MF(model, ids0, basis, names0 = []) {
     + '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
     + `<resources><basematerials id="1">${mats}</basematerials>`), ...objects,
   enc.encode(`</resources><build>${ids.map((_, j) => `<item objectid="${j + 2}"/>`).join('')}</build></model>`)];
+  // (the whole part, its materials and build too, as the reader counts it)
+  if (modelXml.reduce((s, p) => s + p.length, 0) > maxText) throw new Error(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
   return zip([
     ['[Content_Types].xml', enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'

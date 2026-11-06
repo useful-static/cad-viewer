@@ -55,6 +55,11 @@ export const untoldAt = (far, r) => storedUlp(far) / 2 > TELL_SHARE * RADIUS_TOL
 export const UNTOLD_SHARE = TELL_SHARE * RADIUS_TOL;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
+// how far a segment's middle may sag inside a circle circleOf takes under deflection a, as a share
+// of its radius: the coarsest loop it takes, circleMinPoints(a) sides (r71 A4: Save drawing tested
+// each middle without it, and drew a rim of 13 segments at a = 0.5, 2.9 % of r sagging, as its
+// circle and as its polygon)
+export const circleSagShare = (a) => { const n = circleMinPoints(a); return Number.isFinite(n) ? 1 - Math.cos(Math.PI / n) : 0; };
 
 import { cross, dot, len, sub, unit } from './vec3.js';
 import { bodyAngle } from './cadmesh.js';

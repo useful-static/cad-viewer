@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { drawingSVG } from '../js/drawing-svg.js';
-import { bodyGeometry } from '../js/measure-geom.js';
+import { bodyGeometry, circleMinPoints } from '../js/measure-geom.js';
 
 import { test, done } from './harness.mjs';
 
@@ -66,6 +66,22 @@ test('an edge whose ends touch a circle drawn is drawn too: a chord, an inscribe
   const geom = { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges, edgeClosed, a: 0.5 };
   const d = drawingSVG([{ name: 'part', geom }], ...TOP);
   assert.deepEqual([d.lines, d.circles], [6, 1], 'the six sides and the circle (must fire: the sides dropped)');
+});
+test('a rim as coarse as the part\'s deflection lets circleOf take is left to its circle, its segments\' middles sagging as far as that allows (r71 A4: at a = 0.5, a 13-segment rim drawn twice)', () => {
+  const R = 10;
+  for (const n of [circleMinPoints(0.5), 13, 16, 24]) {
+    // (two half rims, a seam splitting it, as a face's loop is often cut)
+    const half = (k0) => Array.from({ length: n / 2 + 1 }, (_, i) => [R * Math.cos((2 * Math.PI * (k0 + i)) / n), R * Math.sin((2 * Math.PI * (k0 + i)) / n), 0]);
+    const edges = n % 2 ? [Array.from({ length: n + 1 }, (_, i) => [R * Math.cos((2 * Math.PI * i) / n), R * Math.sin((2 * Math.PI * i) / n), 0])] : [half(0), half(n / 2)];
+    const geom = { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges, edgeClosed: edges.map(() => n % 2 === 1), a: 0.5 };
+    const d = drawingSVG([{ name: 'part', geom }], ...TOP);
+    assert.deepEqual([d.lines, d.circles], [0, 1], `${n} segments (must fire at 13, 16: the rim drawn as its polygon too)`);
+  }
+  // must reject still: an inscribed hexagon's sides under the same deflection (above), and a 12-gon
+  // where the deflection is finer, 0.1
+  const hex12 = [Array.from({ length: 13 }, (_, i) => [R * Math.cos((2 * Math.PI * i) / 12), R * Math.sin((2 * Math.PI * i) / 12), 0])];
+  const fine = drawingSVG([{ name: 'part', geom: { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges: hex12, edgeClosed: [false], a: 0.1 } }], ...TOP);
+  assert.deepEqual([fine.lines, fine.circles], [1, 1]);
 });
 test('the caption and names are escaped', () => {
   const g = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 1, 1]) }]), 0);

@@ -151,8 +151,8 @@ export function addedReversed(p) {
 // 2D Measure's snap points (drawing units, relative to o): every line end, every segment's middle
 // -- a closed path's closing side too, the side segmentIndex draws and hovers back to its first
 // point (a 3DFACE, a closed 3D polyline: 58,632 such paths in the dozens had none there) -- and
-// the centre of each closed path that is a circle (its points all within 1 % of one distance from
-// their mean). -> a typed set { n, xy, kind, path, r, at(i) -> [x, y, kind, layer, radius?] }
+// the centre of each path the reader drew from a circle (its `circle` mark: js/dxf.js, a CIRCLE, a
+// polyline or hatch boundary of arcs about one centre, a ratio-1 ELLIPSE). -> a typed set { n, xy, kind, path, r, at(i) -> [x, y, kind, layer, radius?] }
 // (a JS array a snap held 808 MB for 9 M of them, built at every open: the view builds the set
 // when Measure is first turned on)
 const SNAP_KINDS = ['end', 'middle', 'centre'];
@@ -177,16 +177,16 @@ export function snapPoints(paths, o) {
     if (p.closed && m === n2 && n2 > 2) mid(n2 - 1, 0);
     // (a centre with its Ø only for what the reader drew from a circle: a 12-gon or a 16-gon hovered
     // as "centre (Ø 20.000)", an ellipse 10 x 9.85 as Ø 19.850 -- r70 Q6)
-    if (p.closed && p.circle && m >= 12) {
+    // (the mark alone decides: the old 1 % roundness test and its 12 points stayed after r70 Q6 made
+    // the mark the rule, a fourth 0.01 beside RADIUS_TOL -- r71 A8)
+    if (p.closed && p.circle && m >= 3) {
       let cx = 0, cy = 0;
       for (let i = 0; i < m; i++) { cx += q[i * 2]; cy += q[i * 2 + 1]; }
       cx /= m; cy /= m;
       let r = 0;
       for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - cx, q[i * 2 + 1] - cy);
       r /= m;
-      let round = r > 0;
-      for (let i = 0; round && i < m; i++) if (!(Math.abs(Math.hypot(q[i * 2] - cx, q[i * 2 + 1] - cy) - r) < 0.01 * r)) round = false;
-      if (round) put(cx, cy, 2, pi, r);
+      if (r > 0) put(cx, cy, 2, pi, r);
     }
   });
   // (the same array for the same snap, so a hover that stays on it is no change: those made kept,

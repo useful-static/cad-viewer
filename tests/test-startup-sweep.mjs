@@ -294,6 +294,16 @@ function acts(a, embed) {
   if ('tour' in a) out.push(['a drop during the tour, then Add model…', { slow: ['t.json'], during: [{ at: 't.json', file: 'v.stl' }, { at: 'loaded v.stl', add: 'e.stl' }] }]);
   out.push(['a #view= edit after', { after: [{ hash: true }] }]);
   if (embed === 'poster') out.push(['View in 3D, then a #view= edit', { after: [{ click: true }, { hash: true }] }]);
+  // (r71 Q4: "this file is in" inches while the list entry's own tour is read, the re-read quick and
+  // slow -- which answer came first decided whether the tour played)
+  if (a.list && !('tour' in a) && embed !== 'poster' && !/(?:^|&)(index=2|src=b\.stl)/.test(a.q)) {
+    out.push(['this file is in inches, during the entry\'s tour read', { slow: ['lists/at.json'], during: [{ at: 'lists/at.json', unit: 'in' }] }],
+      ['this file is in inches, during the entry\'s tour read, the re-read slow', { slow: ['lists/at.json', 'a.stl'], during: [{ at: 'lists/at.json', unit: 'in' }] }],
+      // (and an Add model… then: the tour started, and the model joining ended it, or played after it
+      // -- the differential's src+late list run, r71)
+      ['Add model… during the entry\'s tour read', { slow: ['lists/at.json'], during: [{ at: 'lists/at.json', add: 'e.stl' }] }],
+      ['Add model… during the entry\'s tour read, the model slow', { slow: ['lists/at.json', 'e.stl'], during: [{ at: 'lists/at.json', add: 'e.stl' }] }]);
+  }
   return out;
 }
 
@@ -702,6 +712,21 @@ function check(c0, r) {
     if (end === ev.length && nextShown < 0 && pending === false && viewAt < 0 && ownAt < 0 && !seg.includes('tour t.json') && !acts.some((d) => d.hash)
       && !(c.addr.lateList && c.redirect)) { // (two models of one name: see I6)
       v('I15', `${f} opened with no link's view over it and the address's tour over, and ${own} never played`);
+    }
+    // (and a re-read chosen while its tour was read: the tour plays once it lands, not dropped or
+    // played by which of the two answers came first -- r71 Q4. The cut at the next "reread" above
+    // exempted every such run)
+    const rr = ev.indexOf(`reread ${f}`, i + 1);
+    if (rr >= 0 && acts.some((d) => d.unit && String(d.at).endsWith(`/${f[0]}t.json`)) && pending === false && viewAt < 0 && !acts.some((d) => d.hash)
+      && !ev.slice(i + 1, rr).some((x) => x.startsWith('shown ')) && !ev.slice(rr + 1).includes(own)) {
+      v('I15', `${own} never played after the re-read chosen during its read (${ev.join(' > ')})`);
+    }
+    // (an Add model… chosen while its tour was read: the tour plays once the model joins, not ended
+    // by it -- r71, the differential)
+    const ad = ev.indexOf('added', i + 1);
+    if (ad >= 0 && acts.some((d) => d.add && String(d.at).endsWith(`/${f[0]}t.json`)) && pending === false && viewAt < 0 && !acts.some((d) => d.hash)
+      && !ev.slice(i + 1, ad).some((x) => x.startsWith('shown ') || x.startsWith('reread ')) && !ev.slice(ad + 1).includes(own)) {
+      v('I15', `${own} never played after the Add model… chosen during its read (${ev.join(' > ')})`);
     }
   });
   return bad;

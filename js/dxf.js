@@ -712,8 +712,7 @@ function emit(recs, M, byBlock, depth, ctx) {
     // 4 x 1 -- is no longer one width: drawn as its outlines, through the transform exactly, as a
     // tapering one is; stroked at sqrt|det| it was 4 wide where it is 8)
     // (its axes the same length and square to each other)
-    const ax2 = O[0] * O[0] + O[1] * O[1], ay2 = O[2] * O[2] + O[3] * O[3];
-    const conformal = Math.abs(ax2 - ay2) <= 1e-9 * (ax2 + ay2) && Math.abs(O[0] * O[2] + O[1] * O[3]) <= 1e-9 * (ax2 + ay2);
+    const conformal = conformalOf(O);
     const drawWide = (sh) => {
       let outlines = sh.outlines, width = sh.width || 0;
       if (width && !conformal && sh.src) {
@@ -765,7 +764,11 @@ function emit(recs, M, byBlock, depth, ctx) {
           const [x, y] = ap(M, cx + mx * c - my * ratio * s, cy + my * c + mx * ratio * s);
           pts.push(x, y);
         }
-        ctx.add({ layer, colour, ...sty,pts: Float64Array.from(pts), closed: Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9, fill: false });
+        const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
+        // (one of ratio 1, a full turn, is a circle, some exporters' way to write one: marked as a
+        // CIRCLE is -- 677 at hand had no centre since r70 -- r71 A7, Q2)
+        const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && conformalOf(M) && (mx || my);
+        ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -842,8 +845,8 @@ function emit(recs, M, byBlock, depth, ctx) {
           // (one counter for the drawing -- model space and every layout: counted per sheet, a model
           // hatch seen through a viewport and the sheet's own shared an id, and cancelled)
           const id = (ctx.budget.hatches = (ctx.budget.hatches || 0) + 1);
-          for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id });
-        } else for (const loop of r.loops) path(loop, true, solid);
+          for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id, ...(loop.circle && conformal ? { circle: true } : {}) });
+        } else for (const loop of r.loops) path(loop, true, solid, 0, loop.circle && conformal ? { circle: true } : null);
         break;
       }
       case '3DFACE': {
@@ -1047,11 +1050,38 @@ function arcPts(cx, cy, r, a0, a1) {
 
 // A polyline's widths, per segment start (w0) and end (w1): { width } when every segment has the
 // one width (0: none), else { outlines } (taperOutlines)
-// A polyline that is a full circle: closed, two vertices, each segment a half circle the same way
-// (bulge 1, the tangent of a quarter turn) -- how a CAD program writes a circle as a polyline (r70 Q6)
+// A polyline that is a full circle: closed, and every segment an arc the same way about one centre at
+// one radius, a full turn in all -- how a CAD program writes a circle as a polyline (r70 Q6). Its
+// segments of no length are passed over (a PCB export writes a pad's circle as four vertices, each
+// end doubled, bulges 0 1 0 1: two vertices only, 87 such a drawing had no centre -- r71 Q2)
+// (what a written number's rounding may leave of a circle's sameness, as a share: an INSERT scaled
+// 41=-0.0010000000002037268 42=0.000999999996565748, a unit conversion's, is 1.8e-9 apart, and its
+// 240 circles lost their centre under 1e-9 -- r71 Q2. A 1 x 0.985 insert stays an ellipse)
+const CIRCLE_ROUNDING = 1e-6;
+// a transform that draws a circle as a circle: its axes the same length and square to each other
+function conformalOf(O) {
+  const ax2 = O[0] * O[0] + O[1] * O[1], ay2 = O[2] * O[2] + O[3] * O[3];
+  return Math.abs(ax2 - ay2) <= CIRCLE_ROUNDING * (ax2 + ay2) && Math.abs(O[0] * O[2] + O[1] * O[3]) <= CIRCLE_ROUNDING * (ax2 + ay2);
+}
 function bulgeCircle(xs, ys, bul, closed) {
-  return closed && xs.length === 2 && (xs[0] !== xs[1] || ys[0] !== ys[1])
-    && Math.abs(Math.abs(bul[0]) - 1) < 1e-9 && Math.abs(bul[1] - bul[0]) < 1e-9;
+  if (!closed || xs.length < 2) return false;
+  let cx0 = NaN, cy0 = NaN, r0 = NaN, sweep = 0;
+  for (let k = 0; k < xs.length; k++) {
+    const x0 = xs[k], y0 = ys[k], x1 = xs[(k + 1) % xs.length], y1 = ys[(k + 1) % xs.length];
+    const dx = x1 - x0, dy = y1 - y0, d = Math.hypot(dx, dy);
+    if (d === 0) continue;
+    const b = bul[k] || 0;
+    if (b === 0 || !Number.isFinite(b) || !Number.isFinite(d)) return false;
+    const th = 4 * Math.atan(b); // its included angle, signed
+    const r = d / (2 * Math.sin(Math.abs(th) / 2));
+    // its centre: off the chord's middle, toward the side it turns to
+    const h = (d / 2) / Math.tan(th / 2);
+    const cx = (x0 + x1) / 2 - (dy / d) * h, cy = (y0 + y1) / 2 + (dx / d) * h;
+    // (to the CIRCLE_ROUNDING a file's written bulges keep: four quarter turns of 0.41421356)
+    if (Number.isNaN(r0)) { cx0 = cx; cy0 = cy; r0 = r; } else if (Math.hypot(cx - cx0, cy - cy0) > CIRCLE_ROUNDING * r0 || Math.abs(r - r0) > CIRCLE_ROUNDING * r0 || Math.sign(th) !== Math.sign(sweep)) return false;
+    sweep += th;
+  }
+  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < CIRCLE_ROUNDING * 2 * Math.PI;
 }
 function widthsOf(xs, ys, bul, w0, w1, closed) {
   const segs = closed ? xs.length : xs.length - 1;
@@ -1193,12 +1223,17 @@ function hatchLoops(r) {
       // (a hatch boundary is closed whatever its 73 says; appended, not spread: a 200k-vertex
       // boundary spread into call arguments overflowed the stack)
       append(pts, bulgePts(xs, ys, bs, true));
+      // (a boundary that is a circle marked one, as a polyline's is: 590 hatch circles at hand had
+      // no centre since r70 -- r71 Q2)
+      if (hasB && bulgeCircle(xs, ys, bs, true)) pts.circle = true;
     } else {
       const ne = count(at(93));
       for (let e = 0; e < ne; e++) {
         const et = at(72);
         if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
           const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
+          // (its one edge a full turn: a circle, marked -- r71 Q2)
+          if (ne === 1 && Math.abs(Math.abs(a1 - a0) - 2 * Math.PI) < 1e-9 && rr > 0) pts.circle = true;
           if (at(73)) {
             // counter-clockwise from a0 to a1
             append(pts, arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));

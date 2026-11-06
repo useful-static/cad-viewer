@@ -1227,6 +1227,26 @@ test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-go
   assert.deepEqual(centres(C), [20]);
   assert.deepEqual(centres([[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 1], [10, -5], [20, 0], [42, 1], [10, 5], [20, 0], [42, 1]]), [10]);
   assert.deepEqual(centres([[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 5], [20, 5], [41, 2], [42, 2], [50, 30]], blk), [40]);
+  // (r71 Q2, A7: circles as real drawings write them -- each must fire on r70's marks -- and what
+  // stays no circle; one table, so a failure names every row that differs)
+  const hatch = (loop) => [[0, 'HATCH'], [8, '0'], [70, 0], [91, 1], ...loop];
+  const rows = [
+    // an insert scaled by a unit conversion's rounding, 1.8e-9 apart
+    ['a noisy insert scale', [[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, -0.0010000000002037268], [42, 0.000999999996565748]], blk, [0.02]],
+    // a PCB pad: four vertices, each end doubled, bulges 0 1 0 1
+    ['a doubled-vertex circle', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], [10, 0.5207], [20, 0], [10, 0.5207], [20, 0], [42, 1], [10, -0.5207], [20, 0], [10, -0.5207], [20, 0], [42, 1]], [], [1.041]],
+    // four quarter turns, as written to eight places
+    ['four quarter arcs', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], ...ngon(4, 5).flatMap(([x, y]) => [[10, x], [20, y], [42, 0.41421356]])], [], [10]],
+    ['a ratio-1 ELLIPSE, a full turn', [[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 1], [41, 0], [42, 2 * Math.PI]], [], [10]],
+    ['a hatch of one full-turn arc edge', hatch([[92, 1], [93, 1], [72, 2], [10, 0], [20, 0], [40, 5], [50, 0], [51, 360], [73, 1]]), [], [10]],
+    ['a hatch boundary a bulged circle', hatch([[92, 2], [72, 1], [73, 1], [93, 2], [10, -5], [20, 0], [42, 1], [10, 5], [20, 0], [42, 1]]), [], [10]],
+    // must reject still
+    ['a slot', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], [10, 0], [20, -5], [42, 0], [10, 10], [20, -5], [42, 1], [10, 10], [20, 5], [42, 0], [10, 0], [20, 5], [42, 1]], [], []],
+    ['an ELLIPSE of ratio 0.985', [[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 0.985], [41, 0], [42, 2 * Math.PI]], [], []],
+    ['half an ELLIPSE of ratio 1', [[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 1], [41, 0], [42, Math.PI]], [], []],
+    ['a half disc hatch', hatch([[92, 1], [93, 2], [72, 2], [10, 0], [20, 0], [40, 5], [50, 0], [51, 180], [73, 1], [72, 1], [10, -5], [20, 0], [11, 5], [21, 0]]), [], []],
+  ];
+  assert.deepEqual(rows.map(([name, ents, b]) => [name, centres(ents, b)]), rows.map(([name, , , want]) => [name, want]));
 });
 // (r70 Q5: an ASCII DXF past the text readers' one limit is refused in their words before it is decoded)
 await test('an ASCII DXF past the text limit is refused in the text readers\' words, not the engine\'s (r70 Q5)', async () => {

@@ -141,6 +141,31 @@ await test('3MF of a large body: written in batches, the page given turns betwee
   assert.match(x, /<\/triangles><\/mesh><\/object><\/resources><build><item objectid="2"\/><\/build><\/model>$/);
   assert.ok(gap < 400, `the longest hold ${gap.toFixed(0)} ms of ${ms.toFixed(0)} ms (must fire: the whole part built in one)`);
 });
+await test('the zip takes a part\'s CRC with turns between, not in one task (r71 A6, Q3: 436 MB of 3MF text held the page 1.4 s in its CRC alone)', async () => {
+  const { zip } = await import('../js/export-mesh.js');
+  // 160 MB in 2 MB chunks, about half a second of CRC in one task
+  const chunk = new Uint8Array(2 * 2 ** 20);
+  for (let i = 0; i < chunk.length; i++) chunk[i] = (i * 31) & 0xff;
+  const chunks = Array.from({ length: 80 }, () => chunk);
+  let last = performance.now(), gap = 0;
+  const tick = setInterval(() => { const t = performance.now(); gap = Math.max(gap, t - last); last = t; }, 5);
+  const t0 = performance.now();
+  const z = await zip([['a.bin', chunks]]);
+  const ms = performance.now() - t0;
+  clearInterval(tick);
+  const dv = new DataView(z.buffer, z.byteOffset, z.byteLength);
+  let want = 0;
+  for (const c of chunks) want = crc32(c, 0, c.length, want);
+  assert.deepEqual([dv.getUint32(14, true), dv.getUint32(22, true)], [want, 80 * chunk.length], 'the CRC and size of the whole');
+  assert.ok(gap < 250, `the longest hold ${gap.toFixed(0)} ms of ${ms.toFixed(0)} ms (must fire: the CRC in one task)`);
+});
+await test('3MF: a model part past the text the viewer reads is refused, naming the formats that write it; under it written (r71 A5: a 7.6 M-triangle plate wrote a 3MF the viewer refused)', async () => {
+  const ok = await to3MF(model, [1, 2], IDENT, [], 4000);
+  assert.ok(unzip(ok)['3D/3dmodel.model'].length < 4000);
+  await assert.rejects(to3MF(model, [1, 2], IDENT, [], 600), /^Error: not written as 3MF: its model part would be more than the 500 MB of text this viewer reads \(STL or GLB writes it\)$/, 'must fire: written past it');
+  // (by the reader's own limit, by default: the reader's 3MF counts its model parts against it)
+  assert.match(to3MF.toString(), /maxText = MAX_TEXT_BYTES\)/, 'the default is the reader\'s limit (must fire: none)');
+});
 await test('GLB: a mid-tone body exported and read back by the viewer\'s own glTF reader is the colour it was drawn, as 3MF\'s (r70 Q1: rgb(128,64,200) came back rgb(188,137,229))', async () => {
   const c2 = new Uint8Array(7 * 4);
   for (let v = 0; v < 7; v++) c2.set(v < 4 ? [128, 64, 200, 255] : [20, 200, 90, 255], 4 * v);

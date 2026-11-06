@@ -394,7 +394,9 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   const body = src.slice(at + head.length, src.indexOf('\n    };\n', at));
   // (the one rule both tours start by, main.js's own lines: r68 A2)
   const lineOf = (h) => { const i = src.indexOf(h); assert.ok(i > 0, `main.js has ${h}`); return src.slice(i, src.indexOf('\n', i)); };
-  const rules = `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn];`;
+  // (a main.js before the shared helper has none: its click's own wait is what runs -- r71)
+  const fnOf = (h) => { const i = src.indexOf(h); return i < 0 ? 'const entryTourRead = null;' : src.slice(i, src.indexOf('\n}\n', i) + 2); };
+  const rules =`${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn, entryTourRead];`;
   const PROGRESS = new Set(['loading', 'tessellating']); // (main.js PROGRESS_STATES)
   // during: what happens while the tour is read -- 'pick' (another model shown, a new open), 'reopen'
   // (the same URL opened again), 'picking' (the visitor's pick downloading); adds: an ?add= on its way
@@ -406,10 +408,10 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
     let answer;
     const readTour = () => new Promise((res) => { answer = res; });
     const autoTourKey = () => app.sourceUrl;
-    const [entryTourWait, entryTourOn] = new Function('app', 'autoTourKey', 'PROGRESS_STATES', rules)(app, autoTourKey, PROGRESS);
-    const onclick = new Function('app', 't', 'readTour', 'startTourIn', 'failApart', 'tell', 'closeMenus', 'autoTourKey', 'entryTourWait', 'entryTourOn', `return async () => {\n${body}\n};`)(
+    const [entryTourWait, entryTourOn, entryTourRead] = new Function('app', 'autoTourKey', 'PROGRESS_STATES', 'readTour', rules)(app, autoTourKey, PROGRESS, (u) => readTour(u));
+    const onclick = new Function('app', 't', 'readTour', 'startTourIn', 'failApart', 'tell', 'closeMenus', 'autoTourKey', 'entryTourWait', 'entryTourOn', 'entryTourRead', `return async () => {\n${body}\n};`)(
       app, { name: 'tour of A', url: 'A.cadtour.json' }, readTour,
-      (tour) => log.push(`plays over ${app.sourceUrl}`), (msg) => log.push(`in the line: ${msg}`), (msg) => log.push(`told: ${msg}`), () => {}, autoTourKey, entryTourWait, entryTourOn);
+      (tour) => log.push(`plays over ${app.sourceUrl}`), (msg) => log.push(`in the line: ${msg}`), (msg) => log.push(`told: ${msg}`), () => {}, autoTourKey, entryTourWait, entryTourOn, entryTourRead);
     // (a re-read with its end, as setMeshUnit keeps it: app.rereadChain -- r70 A1)
     let landed = null;
     const reread = () => Object.assign(app, { status: 'loading', loadSeq: 4, rereadSeq: 4, rereadChain: new Promise((res) => { landed = () => { app.status = 'ready'; log.push('re-read lands'); res(); }; }) });
@@ -420,6 +422,8 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
     if (during === 'picking') app.pickPending = 1;
     if (during === 'reread') Object.assign(app, { status: 'loading', loadSeq: 4, rereadSeq: 4 });
     if (during === 'reread-lands') reread();
+    // (the visitor's Add model… begun while the tour was read: app.addLoad, as startAdd holds it -- r71)
+    if (during === 'add') app.addLoad = new Promise((res) => { landed = () => { app.addLoad = null; log.push('c.stl joins'); res(); }; });
     answer(outcome === 'ok' ? { tour: { steps: [] } } : { error: 'not found (404): A.cadtour.json' });
     await new Promise((r) => setTimeout(r, 1));
     if (adds) { log.push('read'); joined(); }
@@ -440,6 +444,7 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   assert.deepEqual((await run('ok', 'reread-lands')).log, ['read', 're-read lands', 'plays over A.stl'], 'a re-read begun while the tour was read (must fire)');
   // (after the address's ?add=s: the model joining would end it -- r68 A2)
   assert.deepEqual((await run('ok', null, true)).log, ['read', 'b.stl joins', 'plays over A.stl'], 'plays after the ?add= joins, not before it (must fire)');
+  assert.deepEqual((await run('ok', 'add')).log, ['read', 'c.stl joins', 'plays over A.stl'], 'plays after the visitor\'s Add model… joins (must fire: the join ended it)');
   // must accept: A still shown -- played, and the entry's own tour told to step aside; failed -- in A's line
   const ok = await run('ok', null);
   assert.deepEqual(ok.log, ['plays over A.stl']);
@@ -503,21 +508,34 @@ await test('the entry\'s own tour, waiting for the ?add=s, steps aside for a tou
   assert.ok(at > 0, 'main.js has the entry\'s own tour');
   const auto = src.slice(at, src.indexOf('\n  }\n', at) + 4);
   const lineOf = (h) => { const i = src.indexOf(h); return src.slice(i, src.indexOf('\n', i)); };
-  const run = async (picked) => {
+  const fnOf = (h) => { const i = src.indexOf(h); return i < 0 ? '' : src.slice(i, src.indexOf('\n}\n', i) + 2); }; // (none before r71)
+  // added: the visitor's Add model… begun while the tour file is read, no ?add= (the differential's
+  // src+late list run: the tour started, then the join ended it -- r71)
+  const run = async (picked, added = false) => {
     const log = [];
-    let joined;
-    const app = { sourceUrl: 'L.stl', header: { name: 'L' }, openCount: 3, pickPending: 0, autoTourFor: null, tour: null, addsPending: 1,
+    let joined, answer, landed;
+    const app = { sourceUrl: 'L.stl', header: { name: 'L' }, openCount: 3, pickPending: 0, autoTourFor: null, tour: null, addsPending: added ? 0 : 1,
       addsChain: new Promise((res) => { joined = res; }) };
+    const readTour = (u) => (added ? new Promise((res) => { answer = () => res({ tour: { u } }); }) : Promise.resolve({ tour: { u } }));
     const f = new Function('app', 'e', 'readTour', 'startTourIn', 'linkViewOver', 'autoTourKey', 'PROGRESS_STATES',
-      `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
-    f(app, { tours: [{ url: 'own.json' }, { url: 'second.json' }] }, async (u) => ({ tour: { u } }), (tour, u) => log.push(`plays ${u}`), () => false, () => app.sourceUrl, new Set(['loading']));
-    if (picked) app.tourPicked = app.openCount; // (File > "Tour: second" clicked during the ?add=s)
-    app.addsPending = 0; joined();
+      `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
+    f(app, { tours: [{ url: 'own.json' }, { url: 'second.json' }] }, readTour, (tour, u) => log.push(`plays ${u}`), () => false, () => app.sourceUrl, new Set(['loading']));
+    if (added) {
+      app.addLoad = new Promise((res) => { landed = () => { app.addLoad = null; log.push('e.stl joins'); res(); }; });
+      answer();
+      await new Promise((r) => setTimeout(r, 1));
+      log.push('read');
+      landed();
+    } else {
+      if (picked) app.tourPicked = app.openCount; // (File > "Tour: second" clicked during the ?add=s)
+      app.addsPending = 0; joined();
+    }
     await new Promise((r) => setTimeout(r, 5));
     return log;
   };
   assert.deepEqual(await run(true), [], 'the entry\'s first tour started over the one the visitor picked (must fire)');
   assert.deepEqual(await run(false), ['plays own.json']);
+  assert.deepEqual(await run(false, true), ['read', 'e.stl joins', 'plays own.json'], 'an Add model… begun during the read (must fire: played, then the join ended it)');
 });
 await test('Clearance waits for the facts, not the value: a scene\'s edges in hand and its facts on their way are waited for; facts in hand, or none coming, at once; a failed build settles (r67, round 40 Q3)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');

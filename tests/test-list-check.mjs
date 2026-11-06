@@ -89,7 +89,7 @@ await test('file-good', async () => {
 // never the part's own Content-Length (live bug: every board read 0.07 MB)
 await test('file-size-beyond-the-part', async () => {
   const total = Buffer.byteLength(FILES[`${B}big.cadmesh.gz`]);
-  const want = `${(total / 1e6).toFixed(1)} MB`;
+  const want = `${(total / 2 ** 20).toFixed(1)} MB`; // (MB of 2^20, as the page counts: r71 A11)
   for (const hide of [false, true]) {
     fakeFetch.hideRange = hide;
     const r = await checkFile(`${B}big.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
@@ -224,6 +224,21 @@ await test('whole-list', async () => {
   assert.equal(summary(r), '4 models, 8 checks: 4 failed, 0 to look at');
 });
 
+await test('a file the page refuses for its size is said so: past the file limit, and a text format past the text limit (r71 A3)', async () => {
+  // (a fetch that says a size it does not send: the start of the file, its total in Content-Range)
+  const sized = (start, total) => async () => new Response(Buffer.from(start), { status: 206, headers: { 'content-length': String(start.length), 'content-range': `bytes 0-${start.length - 1}/${total}` } });
+  const big = await checkFile(`${B}huge.stl`, { fetchFn: sized('\0'.repeat(84), 3e9), sniff: true });
+  assert.equal(big.level, 'bad', `a 3 GB STL: ${big.detail} (must fire: ok)`);
+  assert.match(big.detail, /more than the 2048\.0 MB of file this viewer opens/);
+  const text = await checkFile(`${B}ascii.stl`, { fetchFn: sized('solid x\n facet normal 0 0 1\n', 700 * 2 ** 20 + 1), sniff: true });
+  assert.equal(text.level, 'bad', `a 700 MB ASCII STL: ${text.detail}`);
+  assert.match(text.detail, /of text, more than the 500 MB of text this viewer reads/);
+  const dxf = await checkFile(`${B}plan.dxf`, { fetchFn: sized('  0\nSECTION\n  2\nHEADER\n', 700 * 2 ** 20), sniff: true });
+  assert.equal(dxf.level, 'bad', `a 700 MB ASCII DXF: ${dxf.detail}`);
+  // must accept: a binary STL of that size (84 + 50 n bytes), read as bytes, not text
+  const bin = await checkFile(`${B}binary.stl`, { fetchFn: sized('\0'.repeat(84), 84 + 50 * 14680064), sniff: true });
+  assert.notEqual(bin.level, 'bad', `a 700 MB binary STL: ${bin.detail}`);
+});
 await test('list-not-read', async () => {
   const r = await checkLists([`${B}missing.json`], 'https://cad.place/', { fetchFn: fakeFetch });
   assert.equal(r.entries.length, 0);

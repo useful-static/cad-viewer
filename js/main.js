@@ -3328,9 +3328,7 @@ function applyListEntry() {
       // ?add=s, and the entry's own tour stepping aside for the visitor's: r68 A2)
       const key = autoTourKey(), open = app.openCount;
       app.tourPicked = open;
-      const [r] = await Promise.all([readTour(t.url), entryTourWait()]);
-      // (and for one begun while the tour was read: a few rounds, each a load's end)
-      for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
+      const r = await entryTourRead(t.url);
       const still = entryTourOn(key, open);
       if (r.error) { if (still) failApart(`the tour ${r.error}`); else tell(`the tour ${r.error}`, 6000); return; } // (as ?tour='s: one handling, failApart -- r46 A5, r48 A1)
       if (still) startTourIn(r.tour, t.url);
@@ -3358,7 +3356,7 @@ function applyListEntry() {
       const open = app.openCount;
       // (and held back, when it would start, by a link's view landed meanwhile -- a #view= edited in
       // during the ?add=s landed, then the tour took the camera: r61 Q2)
-      Promise.all([readTour(t.url), entryTourWait()]).then(([r]) => {
+      entryTourRead(t.url).then((r) => {
         // (nor while the visitor's pick downloads: the model shown is on its way out -- the tour
         // started over it, waiting for an ?add= the pick had cancelled: r62 -- nor over a tour the
         // visitor picked from File meanwhile: r68 A2)
@@ -4327,13 +4325,16 @@ function askBigConversion(buf, name, seq) {
 // Start a load whose model joins the scene instead of replacing it
 function startAdd(fn) {
   if (!app.scene) return Promise.resolve();
-  return startLoad(() => {
+  const p = startLoad(() => {
     app.startingAdd = true; // (loadUrl, run by fn: an added model's load keeps the first's list keys)
-    let p;
-    try { p = fn(); } finally { app.startingAdd = false; }
+    let q;
+    try { q = fn(); } finally { app.startingAdd = false; }
     app.adding = { seq: app.loadSeq }; // (fn's beginLoad numbered it; loadBuffer reads this later)
-    return p;
+    return q;
   });
+  // (held while it loads, for an entry's tour to wait for: entryTourWait)
+  const held = (app.addLoad = p.then(() => { if (app.addLoad === held) app.addLoad = null; }));
+  return p;
 }
 
 async function addToScene(base, name, seq) {
@@ -5104,7 +5105,19 @@ const autoTourKey = () => app.sourceUrl || app.header;
 // and was gone without a word: r69 A3)
 // (and for the shown model's re-read in another unit: a File > "Tour: X" clicked during it was
 // dropped without a word when its tour came first, and played when the re-read did -- r70 A1)
-const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
+// (and for the visitor's own Add model…: its model joining ended the entry's tour when the tour's
+// read came first, and the tour played when the add did -- the one act, two end states: r71, the
+// differential's src+late list run)
+const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain, app.addLoad].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
+// The tour's file read, and then every load it waits for ended -- one begun during the read too, a few
+// rounds, each a load's end: the menu's and the entry's own by one helper (the entry's waited once,
+// before the read: r71 A2, Q4). Four rounds, not until none: a visitor adding model after model would
+// hold the tour for good; past them it starts, and the next model joining ends it as any join does (A9)
+async function entryTourRead(url) {
+  const [r] = await Promise.all([readTour(url), entryTourWait()]);
+  for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
+  return r;
+}
 const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending && !rereading();
 // the unit the address asks a URL load to be read in: only for the model the address names
 function addressUnit(url) {

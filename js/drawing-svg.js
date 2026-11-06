@@ -7,7 +7,7 @@
 // (choose the parts: a board alone gives its outline and its holes). Pure, no
 // DOM.
 
-import { RADIUS_TOL, circleOf } from './measure-geom.js';
+import { RADIUS_TOL, circleOf, circleSagShare } from './measure-geom.js';
 import { cross, dot } from './vec3.js';
 // (the one XML escape, the 3MF writer's: a body name with a control character went raw into the
 // SVG, which no strict XML parser read, where the 3MF wrote U+FFFD -- r65 A1)
@@ -44,9 +44,11 @@ export function drawingSVG(parts, right, up, { title = '', margin = 5 } = {}) {
     // (the circle test's own share, measure-geom.js RADIUS_TOL: written here as 0.01 it would not follow it -- r70 A2)
     // (each segment's middle too: a chord's two ends lie on the circle, and every edge so drawn was
     // dropped -- an inscribed hexagon's six sides, 20 to 106 package edges a board's view: r70 Q3)
-    const onR = (r, x, y) => Math.abs(Math.hypot(x - r.x, y - r.y) - r.r) <= RADIUS_TOL * r.r + 1e-4;
+    // (a middle by the sag the part's deflection allows, as circleOf takes its loops: r71 A4)
+    const onR = (r, x, y, sag = 0) => Math.abs(Math.hypot(x - r.x, y - r.y) - r.r) <= (RADIUS_TOL + sag) * r.r + 1e-4;
+    const sag = circleSagShare(part.geom.a);
     const onCircle = (pts) => round.some((r) => pts.every(([x, y]) => onR(r, x, y))
-      && pts.every(([x, y], i) => i === 0 || onR(r, (x + pts[i - 1][0]) / 2, (y + pts[i - 1][1]) / 2)));
+      && pts.every(([x, y], i) => i === 0 || onR(r, (x + pts[i - 1][0]) / 2, (y + pts[i - 1][1]) / 2, sag)));
     for (const [ei, e] of part.geom.edges.entries()) {
       if (part.geom.edgeClosed[ei] && !round.length) {
         // a closed edge that is a circle seen face on (geometry without its
