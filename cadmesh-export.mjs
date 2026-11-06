@@ -40,7 +40,8 @@ const USAGE = `usage: cadmesh-export.mjs <in.cadmesh[.gz]> [--to ${KINDS.join(',
 const usage = (msg) => { throw new CliError(msg); };
 
 // orient: the model's orientation ("+z-y"); modelUp ('z' | 'y') names one, for callers before orient
-export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp = 'z', orient = MODEL_UP[modelUp], skip = null, base = 'model' } = {}) {
+// (table: the writers, EXPORTS -- a test's own, to make one refuse)
+export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp = 'z', orient = MODEL_UP[modelUp], skip = null, base = 'model', table = EXPORTS } = {}) {
   const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const model = decodeCadmesh(await inflateCadmesh(ab));
   // (bodies labelled as the page labels them, "owner › body"; --skip matches the label or the name;
@@ -52,9 +53,12 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
   const names = ids.map((id) => labels[id - 1]);
   const out = [];
   for (const kind of to) {
-    const ex = EXPORTS[kind];
+    const ex = table[kind];
     if (!ex) throw new Error(`unknown format "${kind}" ${KIND_WORDS}`);
-    const data = await ex.write(model, ids, exportBasis(orient, ex.up), { base, names });
+    // (a format that refuses -- a 3MF past the reader's text, "STL or GLB writes it" -- is that
+    // format's result: the others still written, as its words say; one refusal wrote none -- r72 A10)
+    let data;
+    try { data = await ex.write(model, ids, exportBasis(orient, ex.up), { base, names }); } catch (e) { out.push({ kind, error: e.message }); continue; }
     const buf = data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     out.push({ kind, bytes: buf, bodies: ids.length, of: model.header.meshes.length });
   }
@@ -96,12 +100,16 @@ async function main() {
     // the options -- said by runCli in the five tools' one shape, "cadmesh-export: ...")
     throw new Error(`${inp}: ${e.message}`);
   }
+  const refused = [];
   for (const f of files) {
     const path = `${base}.${f.kind}`;
+    if (f.error) { refused.push(`${path}: ${f.error}`); continue; }
     // (a write that fails is said in one line, exit 1: node's stack trace was all it printed)
     try { writeFileSync(path, f.bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
     console.log(`${path}: ${f.bodies} of ${f.of} bodies, ${f.bytes.length} bytes`);
   }
+  // (the formats written said first, then each refusal: exit 1, as a refusal is)
+  if (refused.length) throw new Error(refused.join('; '));
 }
 
 // run as a command (a path with a space, or through a symlink, included: the plain

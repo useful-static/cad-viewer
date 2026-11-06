@@ -1058,6 +1058,8 @@ function arcPts(cx, cy, r, a0, a1) {
 // 41=-0.0010000000002037268 42=0.000999999996565748, a unit conversion's, is 1.8e-9 apart, and its
 // 240 circles lost their centre under 1e-9 -- r71 Q2. A 1 x 0.985 insert stays an ellipse)
 const CIRCLE_ROUNDING = 1e-6;
+// (and a polyline's bulges, written to as few as five digits: its arcs one circle to this share)
+const BULGE_ROUNDING = 1e-4;
 // a transform that draws a circle as a circle: its axes the same length and square to each other
 function conformalOf(O) {
   const ax2 = O[0] * O[0] + O[1] * O[1], ay2 = O[2] * O[2] + O[3] * O[3];
@@ -1077,11 +1079,12 @@ function bulgeCircle(xs, ys, bul, closed) {
     // its centre: off the chord's middle, toward the side it turns to
     const h = (d / 2) / Math.tan(th / 2);
     const cx = (x0 + x1) / 2 - (dy / d) * h, cy = (y0 + y1) / 2 + (dx / d) * h;
-    // (to the CIRCLE_ROUNDING a file's written bulges keep: four quarter turns of 0.41421356)
-    if (Number.isNaN(r0)) { cx0 = cx; cy0 = cy; r0 = r; } else if (Math.hypot(cx - cx0, cy - cy0) > CIRCLE_ROUNDING * r0 || Math.abs(r - r0) > CIRCLE_ROUNDING * r0 || Math.sign(th) !== Math.sign(sweep)) return false;
+    // (to the rounding a file's written bulges keep: 0.414214, six digits, moves each arc's radius by
+    // 2e-6 of it, past CIRCLE_ROUNDING -- r72 Q7. Every segment an arc already, so no polygon passes)
+    if (Number.isNaN(r0)) { cx0 = cx; cy0 = cy; r0 = r; } else if (Math.hypot(cx - cx0, cy - cy0) > BULGE_ROUNDING * r0 || Math.abs(r - r0) > BULGE_ROUNDING * r0 || Math.sign(th) !== Math.sign(sweep)) return false;
     sweep += th;
   }
-  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < CIRCLE_ROUNDING * 2 * Math.PI;
+  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < BULGE_ROUNDING * 2 * Math.PI;
 }
 function widthsOf(xs, ys, bul, w0, w1, closed) {
   const segs = closed ? xs.length : xs.length - 1;
@@ -1194,6 +1197,18 @@ function evalSpline(r) {
   return out;
 }
 
+// arcs: [cx, cy, r, sweep, ccw] of a hatch boundary's edges -> whether they are one circle
+function hatchCircle(arcs) {
+  if (!arcs.length) return false;
+  const [cx, cy, r, , ccw] = arcs[0];
+  if (!(r > 0)) return false;
+  let sweep = 0;
+  for (const [x, y, rr, s, w] of arcs) {
+    if (Math.hypot(x - cx, y - cy) > CIRCLE_ROUNDING * r || Math.abs(rr - r) > CIRCLE_ROUNDING * r || w !== ccw) return false;
+    sweep += s;
+  }
+  return Math.abs(sweep - 2 * Math.PI) < CIRCLE_ROUNDING * 2 * Math.PI;
+}
 // HATCH boundary loops as point lists (polyline loops, and line / arc /
 // ellipse edges); its pattern lines are not drawn
 function hatchLoops(r) {
@@ -1228,13 +1243,17 @@ function hatchLoops(r) {
       if (hasB && bulgeCircle(xs, ys, bs, true)) pts.circle = true;
     } else {
       const ne = count(at(93));
+      const arcs = [];
+      let others = 0;
       for (let e = 0; e < ne; e++) {
         const et = at(72);
+        if (et !== 2) others++;
         if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
           const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
-          // (its one edge a full turn: a circle, marked -- r71 Q2)
-          if (ne === 1 && Math.abs(Math.abs(a1 - a0) - 2 * Math.PI) < 1e-9 && rr > 0) pts.circle = true;
-          if (at(73)) {
+          const ccwArc = at(73);
+          // (each arc kept, its sweep within one turn, to mark the boundary a circle: hatchCircle)
+          arcs.push([cx, cy, rr, ((a1 - a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI, !!ccwArc]);
+          if (ccwArc) {
             // counter-clockwise from a0 to a1
             append(pts, arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));
           } else {
@@ -1267,6 +1286,10 @@ function hatchLoops(r) {
           for (let k = 0; k < nc; k++) pts.push(at(10), at(20));
         }
       }
+      // (a boundary of arc edges alone, one centre, one radius, one way round, a full turn in all: a
+      // circle, marked as a polyline's is -- one edge of a full turn, or two halves or four quarters,
+      // which some exporters write: r71 Q2, r72 A5)
+      if (!others && hatchCircle(arcs)) pts.circle = true;
     }
     if (pts.length >= 6) loops.push(pts);
   }

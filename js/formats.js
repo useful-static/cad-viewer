@@ -128,9 +128,35 @@ export const SNIFF_BYTES = 4096;
 // 600 MB met the engine's "Cannot create a string longer than 0x1fffffe8 characters"). One limit for
 // every text reader -- the mesh formats' and the ASCII DXF's, which had none: r70 Q5
 export const MAX_TEXT_BYTES = 500 * 2 ** 20;
-const textMb = (n) => `${Math.round(n / 2 ** 20).toLocaleString('en-US')} MB`;
-export const TEXT_LIMIT_WORDS = `more than the ${textMb(MAX_TEXT_BYTES)} of text this viewer reads`;
-export const tooMuchText = (what, bytes) => new Error(`${what} is ${textMb(bytes)} of text, ${TEXT_LIMIT_WORDS}`);
+// The most triangles the mesh readers place (js/mesh-formats.js): a few hundred bytes can ask for
+// billions. Here, beside the text limit, as the exports keep to it too: a file the viewer wrote it
+// then refused to open (r72 A6)
+export const MAX_PLACED_TRIANGLES = 10_000_000;
+// and the most parts and placements -- a 3MF's base materials counted by it too
+export const MAX_PLACED_PARTS = 2_000_000;
+// a size as the viewer says one: whole MB of 2^20 (the text readers', the mesh readers' and the list
+// check's -- four formatters in three units: r72 A8)
+export const sizeMb = (n) => `${Math.round(n / 2 ** 20).toLocaleString('en-US')} MB`;
+export const TEXT_LIMIT_WORDS = `more than the ${sizeMb(MAX_TEXT_BYTES)} of text this viewer reads`;
+export const tooMuchText = (what, bytes) => new Error(`${what} is ${sizeMb(bytes)} of text, ${TEXT_LIMIT_WORDS}`);
+// An STL is binary when its size is 84 + 50 n for the n its header counts (bytes 80-83), even if it
+// starts "solid", or that plus a surplus under one record (padding, an appended byte or two); else
+// it is read as text. The one rule for the reader (js/mesh-formats.js parseSTL) and the list check,
+// which kept its own and disagreed both ways (r72 A2)
+export const stlIsBinary = (size, n) => size >= 84 && 84 + 50 * n <= size && size - (84 + 50 * n) < 50;
+// Whether the viewer reads a file of this format as one string -- held to MAX_TEXT_BYTES -- from its
+// first bytes (at least 84) and its size: by the format's own rule beside the table, so a text format
+// added is said here once (r72 A2)
+export function readsAsText(label, start, size) {
+  const head = start ? String.fromCharCode(...start.subarray(0, Math.min(start.length, 512))) : '';
+  switch (label) {
+    case 'OBJ': case 'OFF': case 'glTF': return true;
+    case 'STL': return start && start.length >= 84 ? !stlIsBinary(size, new DataView(start.buffer, start.byteOffset, start.byteLength).getUint32(80, true)) : false;
+    case 'PLY': return start ? /format\s+ascii/.test(head) : false;
+    case 'DXF': return start ? !head.startsWith(BINARY_DXF_SENTINEL) : true;
+    default: return false;
+  }
+}
 export const looksLikeDxf = (text) => dxfHead(text);
 // a binary DXF's first 22 bytes: the one sentinel for the sniff here and the reader (js/dxf.js)
 export const BINARY_DXF_SENTINEL = 'AutoCAD Binary DXF\r\n\x1a\x00';

@@ -1458,5 +1458,12 @@ await test('r10-9 a quantized instance ROTATION is renormalised: normalized byte
     assert.ok(Math.abs(d - 1000) < 1e-6 || Math.abs(d - 1000 * Math.SQRT2) < 1e-6, `edge ${a}-${b}: ${d} mm`);
   }
 });
+await test('a binary STL cut short past the text limit is damaged, not "N MB of text" (r72 Q6)', async () => {
+  // (12 M triangles counted, 600 MB of them there: 84 + 50 n is 600,000,084 bytes)
+  const n = 12e6, size = 572 * 2 ** 20;
+  const buf = new ArrayBuffer(size);
+  new DataView(buf).setUint32(80, n, true);
+  await assert.rejects(parseMesh('stl', buf, 'cut.stl'), /^Error: cut\.stl is damaged: its header counts 12,000,000 triangles, so it should be 600,000,084 bytes, but it is 599,785,472 bytes$/, 'must fire: "572 MB of text"');
+});
 
 done();

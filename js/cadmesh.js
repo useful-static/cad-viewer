@@ -327,6 +327,9 @@ const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThr
 // browser hands out. A few MB of gzip can inflate to many GB; past this it
 // stops and says why, instead of the tab being killed with no message.
 export const MAX_FILE_BYTES = 2 * 2 ** 30;
+// (said one way, by the page refusing a file and by the list check calling it bad -- "2048.0 MB" there
+// beside "over 2 GB" here: r72 A8)
+export const OVERSIZE_WORDS = `over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
 // The largest coordinate a model may hold, in mm (the mesh readers check it in the file's numbers
 // and in mm after a unit's scale; decodeCadmesh checks it as stored): the view squares distances in
 // float32 (its matrices, the depth range), so float32's range is not the bound -- a model at 1e38

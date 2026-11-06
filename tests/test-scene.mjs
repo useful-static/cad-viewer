@@ -9,6 +9,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { encodeCadmesh, decodeCadmesh, bytesToId, writtenSizeLimit } from '../js/cadmesh.js';
+import * as CADMESH from '../js/cadmesh.js';
+const OVERSIZE_WORDS = CADMESH.OVERSIZE_WORDS || ''; // (main.js imports it since r72 A8; none in an older tree)
 import { mergeModels, modelRanges, staleModels, sceneEdgesFacts } from '../js/scene.js';
 import { buildEdges, FACTS_RULE, factsCurrent, momentaryFailure, overSilhouetteCap } from '../js/edges.js';
 import { clearance } from '../js/clearance.js';
@@ -459,7 +461,8 @@ await test('an export during a tour writes the visitor\'s own parts and colours,
   const line = src.slice(i, src.indexOf('\n', i));
   const lineOf2 = (h) => { const j = src.indexOf(h); assert.ok(j > 0, `main.js has ${h}`); return src.slice(j, src.indexOf('\n', j)); };
   const own = { color: 'the visitor\'s colours' };
-  const run = (app) => new Function('app', 'inScheme', 'ownOverrides', 'ownFaces', `${line}\nreturn exportState();`)(
+  const own2 = src.includes('const ownHidden = ') ? lineOf2('const ownHidden = ') : ''; // (r72 A4)
+  const run = (app) => new Function('app', 'inScheme', 'ownOverrides', 'ownFaces', `${own2}\n${line}\nreturn exportState();`)(
     app, (base, ov) => (ov === app.tour?.base.overrides ? own : { color: 'other' }), () => (app.tour ? app.tour.base.overrides : app.overrides), () => null);
   // a step that greys all but one part and isolates it (the visitor's hidden parts kept as startTour
   // keeps them, an Array: as a Set here the arm passed while the page threw -- r71 A1)
@@ -472,6 +475,29 @@ await test('an export during a tour writes the visitor\'s own parts and colours,
   // must accept: no tour, what is shown
   const plain = run({ tour: null, hidden: new Set([2]), mesh: { color: 'shown' } });
   assert.deepEqual([[1, 2, 3].filter((id) => plain.hidden.has(id)), plain.color], [[2], 'shown']);
+});
+await test('the page\'s progress counts MB of 2^20, as its limits and their words do (main.js mb, as written: r72 Q8)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const i = src.indexOf('const mb = (n) => ');
+  assert.ok(i > 0, 'main.js has mb');
+  const mb = new Function(`${src.slice(i, src.indexOf('\n', i))}; return mb;`)();
+  assert.equal(mb(546.4e6), '521.1', 'must fire: "546.4", then refused as 521 MB of text');
+});
+await test('Save drawing during a tour draws the visitor\'s own parts, not the step\'s isolate (main.js saveDrawing, as written: r72 A4)', () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const lineOf = (h) => { const i = src.indexOf(h); assert.ok(i > 0, `main.js has ${h}`); return src.slice(i, src.indexOf('\n', i)); };
+  const at = src.indexOf('function saveDrawing() {');
+  const body = src.slice(at, src.indexOf("  if (!ids.length) { tell('nothing shown to draw'); return; }", at));
+  const ids = body.slice(body.indexOf('\n', body.indexOf('return;')) + 1);
+  const own = src.includes('const ownHidden = ') ? lineOf('const ownHidden = ') : '';
+  const drawn = (app) => new Function('app', `${own}\n${ids}\nreturn ids;`)(app);
+  const header = { meshes: [{}, {}, {}, {}] };
+  // a step isolating part 3 (the others hidden by it), the visitor having hidden part 4 (startTour keeps an Array)
+  const touring = { header, selected: new Set(), hidden: new Set([1, 2, 4]), tour: { base: { hidden: [4] } } };
+  assert.deepEqual(drawn(touring), [1, 2, 3], 'must fire: [3], the step\'s subject alone');
+  // must accept: no tour, what is shown; a selection, as it is
+  assert.deepEqual(drawn({ header, selected: new Set(), hidden: new Set([2]), tour: null }), [1, 3, 4]);
+  assert.deepEqual(drawn({ header, selected: new Set([2]), hidden: new Set([2]), tour: null }), [2]);
 });
 await test('a 2D file is a DWG by its bytes or by the formats table\'s DWG row, whatever extensions the row holds (main.js loadDxf, as written: r70 A5)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -1467,7 +1493,8 @@ await test('the note contract: each page state against each writer of a note or 
     'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {', 'function cannotHold() {', 'function refusedForSize(f) {',
     'function rewriteReady(change) {'].map(cutIf).join('')
     + line('const listNote = ') + line('const posterUp = ')
-    + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
+    + `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n` // (main.js imports it: r72 A8)
+    + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const ownHidden = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
@@ -1596,7 +1623,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
       'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS',
-      `${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
+      `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
       app, 2 * 2 ** 30, isCompanion, () => {}, () => {}, () => false, (fn) => fn(), () => {}, () => {}, () => '0',

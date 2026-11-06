@@ -94,5 +94,12 @@ await test('a bad option is refused with exit 2', () => {
   assert.equal(rb.status, 1, rb.stderr);
   assert.match(rb.stderr, /bad\.cadmesh: cadmesh:/);
 });
+await test('a format that refuses is that format\'s result: the others still written (r72 A10: one refusal wrote none, and "STL or GLB writes it" was untrue)', async () => {
+  const { exportCadmesh } = await import('../cadmesh-export.mjs');
+  const { EXPORTS } = await import('../js/export-mesh.js');
+  const table = { ...EXPORTS, '3mf': { ...EXPORTS['3mf'], write: async () => { throw new Error('not written as 3MF: too much'); } } };
+  const out = await exportCadmesh(readFileSync(inp), { modelUp: 'y', table });
+  assert.deepEqual(out.map((f) => [f.kind, f.error || (f.bytes.length > 0)]), [['stl', true], ['3mf', 'not written as 3MF: too much'], ['glb', true]], 'must fire: thrown, nothing written');
+});
 
 done();

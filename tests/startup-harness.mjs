@@ -51,6 +51,7 @@ import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
 import { isCompanion } from '../js/formats.js';
+import * as CADMESH from '../js/cadmesh.js'; // (OVERSIZE_WORDS, main.js's import since r72 A8; none in an older tree)
 import { MM_PER } from '../js/units.js';
 
 export const SITE = 'https://site.example/v/';
@@ -110,13 +111,14 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   src.includes('async function unwindPick(c) {') ? 'async function unwindPick(c) {' : 'async function unwindPick(n, before) {',
   'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
-  'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', 'function addressTourEnds(r, ownFailed) {',
+  'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', src.includes('async function addressTourEnds(r, ownFailed) {') ? 'async function addressTourEnds(r, ownFailed) {' : 'function addressTourEnds(r, ownFailed) {',
   'function viewIsFor(search) {', 'function linkViewOf(hash) {', 'function setModelParam(u, url) {', 'function setMeshUnit(u) {',
   src.includes('function lackingNote(place, opened) {') ? 'function lackingNote(place, opened) {' : 'function lackingNote(place, firstOpens) {'].map((h) => cutIf(h)).join('')
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
   + line('const autoTourKey = ') + line('const entryTourWait = ', true) + cutIf('async function entryTourRead(url) {', true) + line('const entryTourOn = ', true) + line('const rereading = ', true) + cutIf('function syncMeshUnitRow() {', true) + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+  + `const OVERSIZE_WORDS = ${JSON.stringify(CADMESH.OVERSIZE_WORDS || '')};\n`
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))
   // (as the real ones: a URL brings no companions; a file takes those its pick kept for it)

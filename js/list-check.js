@@ -9,8 +9,8 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, BINARY_DXF_SENTINEL, dwgRefusal, fileNameOfUrl, formatOfName, sniffFormat as sniffBytes } from './formats.js';
-import { MAX_FILE_BYTES } from './cadmesh.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, readsAsText, sizeMb, sniffFormat as sniffBytes } from './formats.js';
+import { MAX_FILE_BYTES, OVERSIZE_WORDS } from './cadmesh.js';
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -117,7 +117,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   }
   const bits = [total ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
-  let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz');
+  let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null;
   if (sniff) {
     // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
     // threw through the whole list check, which stopped with no verdict)
@@ -153,8 +153,18 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       if (!got && !want) level = 'warn';
     }
     sizeFormat = got || want;
-    sizeStart = gz ? null : inner;
+    sizeStart = inner;
     sizeGz = gz;
+    // (a gzip's unpacked size, its last four bytes (ISIZE, mod 4 GiB), asked with a range: the page
+    // holds what it unpacks to the same limits, and "ok · gzip · STL" said a 1.8 MB file unpacking to
+    // 546 MB of ASCII STL would open -- r72 Q1)
+    if (gz && inner && total > 4) {
+      try {
+        const t = await fetchFn(fetchUrl, { headers: { Range: `bytes=${total - 4}-${total - 1}` }, cache: 'no-store' });
+        const b = t.status === 206 ? new Uint8Array(await t.arrayBuffer()) : null;
+        if (b && b.length === 4) unpacked = new DataView(b.buffer, b.byteOffset, 4).getUint32(0, true);
+      } catch { /* not asked: the unpacked size stays unknown */ }
+    }
     // named .gz but not gzip: a server that sends it with Content-Encoding: gzip has the browser
     // unpack it on the way, and the viewer opens what arrives (main.js loadAny) -- so it is a
     // fault only when what arrived is not the file its name says
@@ -171,27 +181,22 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   }
   // (and the page's own size limits, by the same numbers: "ok" said a 3 GB STL and a 700 MB ASCII
   // DXF would open, which the page refuses -- r71 A3)
+  // (in the page's own words, one string each: js/cadmesh.js OVERSIZE_WORDS, js/formats.js
+  // tooMuchText's -- "2048.0 MB" here beside "over 2 GB" there: r72 A8; and by the readers' own rule
+  // for what is text, js/formats.js readsAsText -- this check's own disagreed both ways: r72 A2)
+  // (a gzip by what it unpacks to, when its trailer was read; else by its own size, as before)
+  const size = sizeGz ? unpacked : total;
   if (total && total > MAX_FILE_BYTES) {
-    bits.push(`more than the ${mb(MAX_FILE_BYTES)} MB of file this viewer opens`);
+    bits.push(OVERSIZE_WORDS);
     level = 'bad';
-  } else if (total && total > MAX_TEXT_BYTES && !sizeGz && readAsText(sizeFormat, sizeStart, total)) {
-    bits.push(`${mb(total)} MB of text, ${TEXT_LIMIT_WORDS}`);
+  } else if (sizeGz && unpacked > MAX_FILE_BYTES) {
+    bits.push(`unpacks to ${OVERSIZE_WORDS}`);
+    level = 'bad';
+  } else if (size && size > MAX_TEXT_BYTES && readsAsText(sizeFormat, sizeStart, size)) {
+    bits.push(`${sizeGz ? 'unpacks to ' : ''}${sizeMb(size)} of text, ${TEXT_LIMIT_WORDS}`);
     level = 'bad';
   }
   return { level, detail: bits.join(' · '), url };
-}
-// Whether the page reads a file of this format as one text (js/mesh-formats.js text, js/dxf.js
-// dxfText): OBJ, OFF and glTF always; an STL that starts "solid" and is not 84 + 50 n bytes; a PLY
-// whose header says ascii; a DXF that is not binary. start: its first bytes, when read (else by name)
-export function readAsText(label, start, size) {
-  const head = start ? String.fromCharCode(...start.subarray(0, Math.min(start.length, 512))) : '';
-  switch (label) {
-    case 'OBJ': case 'OFF': case 'glTF': return true;
-    case 'STL': return start ? /^\s*solid/.test(head) && (size - 84) % 50 !== 0 : false;
-    case 'PLY': return start ? /format\s+ascii/.test(head) : false;
-    case 'DXF': return start ? !head.startsWith(BINARY_DXF_SENTINEL) : true;
-    default: return false;
-  }
 }
 
 // One tour: read, parsed as cad.place parses it

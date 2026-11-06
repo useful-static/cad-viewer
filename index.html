@@ -36,6 +36,9 @@
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
+<!-- Before the modules, listening as they are fetched: a page whose main.js never ran (a module
+     not downloaded) says so, with a Reload button, instead of staying on "loading" (r72). -->
+<script src="js/boot-check.js"></script>
 <!-- Every module js/early.js and js/main.js import, asked for at once: the browser found each level
      of imports only when the level above had arrived (main.js's three levels on a 3G link, 7.4 to
      15.4 s). early.js's own first, so the address's downloads start soonest. The list is the import

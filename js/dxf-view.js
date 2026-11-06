@@ -156,6 +156,26 @@ export function addedReversed(p) {
 // (a JS array a snap held 808 MB for 9 M of them, built at every open: the view builds the set
 // when Measure is first turned on)
 const SNAP_KINDS = ['end', 'middle', 'centre'];
+// The circle through m points of q (x, y pairs), least squares (Kåsa), taken about their mean; null
+// when they lie on a line. Exact for points on a circle, however unevenly they are spaced.
+export function circleThrough(q, m) {
+  let mx = 0, my = 0;
+  for (let i = 0; i < m; i++) { mx += q[i * 2]; my += q[i * 2 + 1]; }
+  mx /= m; my /= m;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (let i = 0; i < m; i++) {
+    const u = q[i * 2] - mx, v = q[i * 2 + 1] - my;
+    suu += u * u; svv += v * v; suv += u * v;
+    suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+  }
+  const det = suu * svv - suv * suv;
+  if (!(Math.abs(det) > 1e-18 * (suu + svv) ** 2)) return null;
+  const a = (suuu + suvv) / 2, b = (svvv + svuu) / 2;
+  const uc = (a * svv - b * suv) / det, vc = (b * suu - a * suv) / det;
+  let r = 0;
+  for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - mx - uc, q[i * 2 + 1] - my - vc);
+  return { x: mx + uc, y: my + vc, r: r / m };
+}
 export function snapPoints(paths, o) {
   let cap = 0;
   for (const p of paths) if (!p.outline) cap += p.pts.length + 1; // (at most 2 a point and a centre)
@@ -179,14 +199,12 @@ export function snapPoints(paths, o) {
     // as "centre (Ø 20.000)", an ellipse 10 x 9.85 as Ø 19.850 -- r70 Q6)
     // (the mark alone decides: the old 1 % roundness test and its 12 points stayed after r70 Q6 made
     // the mark the rule, a fourth 0.01 beside RADIUS_TOL -- r71 A8)
+    // (its centre the circle through its points, not their mean: drawn as arcs of different sweeps,
+    // a 1° + 359° circle was sampled unevenly and its mean put the centre 0.24 off, Ø 19.991 for 20 --
+    // r72 A3. A least-squares fit, about their mean for the numbers' sake, is the circle itself)
     if (p.closed && p.circle && m >= 3) {
-      let cx = 0, cy = 0;
-      for (let i = 0; i < m; i++) { cx += q[i * 2]; cy += q[i * 2 + 1]; }
-      cx /= m; cy /= m;
-      let r = 0;
-      for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - cx, q[i * 2 + 1] - cy);
-      r /= m;
-      if (r > 0) put(cx, cy, 2, pi, r);
+      const c = circleThrough(q, m);
+      if (c && c.r > 0) put(c.x, c.y, 2, pi, c.r);
     }
   });
   // (the same array for the same snap, so a hover that stays on it is no change: those made kept,

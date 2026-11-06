@@ -44,7 +44,9 @@
 //   I27 "this file is in", chosen more than once, reads the model in the last unit chosen, and a
 //       re-read ends the tour (r66 A2, Q1, Q4, Q5);
 //   I28 the units row's select says the unit the model is read in (a re-read cancelled left it on
-//       the choice: r67 Q3, Q4).
+//       the choice: r67 Q3, Q4);
+//   I29 the address's ?tour=, read while the visitor adds a model, plays once the model has joined
+//       (the join ended it when the tour came first: r72 A1).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -291,6 +293,12 @@ function acts(a, embed) {
   if (a.list) out.push(['a #view= edit during the list', { during: [{ at: LP, hash: true }] }]);
   // (two acts: the visitor's file during the tour's read, then Add model… once it shows -- the tour's
   // own model opened over both under a mutant one act never reaches: r57 Q7 m6)
+  // (r72 A1: Add model… while the address's ?tour= is read -- the add quick and slow: the tour
+  // played, or the model joining ended it, by which answer came first)
+  if ('tour' in a && /(?:^|&)src=a\.stl/.test(a.q) && embed !== 'poster') {
+    out.push(['Add model… during the address\'s tour read', { slow: ['t.json'], during: [{ at: 'loaded a.stl', add: 'e.stl' }] }],
+      ['Add model… during the address\'s tour read, the model slow', { slow: ['t.json', 'e.stl'], during: [{ at: 'loaded a.stl', add: 'e.stl' }] }]);
+  }
   if ('tour' in a) out.push(['a drop during the tour, then Add model…', { slow: ['t.json'], during: [{ at: 't.json', file: 'v.stl' }, { at: 'loaded v.stl', add: 'e.stl' }] }]);
   out.push(['a #view= edit after', { after: [{ hash: true }] }]);
   if (embed === 'poster') out.push(['View in 3D, then a #view= edit', { after: [{ click: true }, { hash: true }] }]);
@@ -729,6 +737,12 @@ function check(c0, r) {
       v('I15', `${own} never played after the Add model… chosen during its read (${ev.join(' > ')})`);
     }
   });
+  // I29: the address's tour, read while the visitor's Add model… loads, plays once the model joins
+  if (c0.outcome === 'all ok' && 'tour' in c0.addr && /(?:^|&)src=a\.stl/.test(c0.addr.q) && (c0.slow || []).includes('t.json')
+    && acts.some((d) => d.add === 'e.stl' && d.at === 'loaded a.stl') && !acts.some((d) => d.hash || d.pick || d.file || d.back)) {
+    const ad = ev.lastIndexOf('added'), ta = ev.lastIndexOf('tour t.json');
+    if (ad >= 0 && !(ta > ad && !ev.slice(ta + 1).includes('tour-end'))) v('I29', `the address's tour not playing once e.stl joined (${ev.join(' > ')})`);
+  }
   return bad;
 }
 

@@ -83,6 +83,15 @@ test('a rim as coarse as the part\'s deflection lets circleOf take is left to it
   const fine = drawingSVG([{ name: 'part', geom: { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges: hex12, edgeClosed: [false], a: 0.1 } }], ...TOP);
   assert.deepEqual([fine.lines, fine.circles], [1, 1]);
 });
+test('an edge of one straight segment is a rim piece only within the part\'s deflection: a 30° chord at a = 0.5 drawn, a 7° piece of a 52-gon left to the circle (r72 Q2)', () => {
+  const R = 5;
+  const at = (deg) => [R * Math.cos((deg * Math.PI) / 180), R * Math.sin((deg * Math.PI) / 180), 0];
+  const draw = (edge) => drawingSVG([{ name: 'part', geom: { circles: [{ centre: [0, 0, 0], normal: [0, 0, 1], radius: R }], edges: [edge], edgeClosed: [false], a: 0.5 } }], ...TOP);
+  const flat = draw([at(-15), at(15)]);
+  assert.deepEqual([flat.lines, flat.circles], [1, 1], 'a D-flat of 30° (must fire: left out)');
+  const piece = draw([at(0), at(360 / 52)]);
+  assert.deepEqual([piece.lines, piece.circles], [0, 1], 'one segment of a 52-gon rim');
+});
 test('the caption and names are escaped', () => {
   const g = bodyGeometry(model([{ name: 'b', faces: box([0, 0, 0], [1, 1, 1]) }]), 0);
   const d = drawingSVG([{ name: 'A & <B>', geom: g }], ...TOP, { title: 'x < y' });

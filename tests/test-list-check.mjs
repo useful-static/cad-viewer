@@ -227,17 +227,54 @@ await test('whole-list', async () => {
 await test('a file the page refuses for its size is said so: past the file limit, and a text format past the text limit (r71 A3)', async () => {
   // (a fetch that says a size it does not send: the start of the file, its total in Content-Range)
   const sized = (start, total) => async () => new Response(Buffer.from(start), { status: 206, headers: { 'content-length': String(start.length), 'content-range': `bytes 0-${start.length - 1}/${total}` } });
-  const big = await checkFile(`${B}huge.stl`, { fetchFn: sized('\0'.repeat(84), 3e9), sniff: true });
+  // (an STL's first 84 bytes: its 80-byte header, then the triangle count bytes 80-83 say)
+  const stlStart = (head, n) => { const b = Buffer.alloc(84); b.write(head, 'latin1'); b.writeUInt32LE(n, 80); return b; };
+  const asciiStart = 'solid x\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n';
+  const big = await checkFile(`${B}huge.stl`, { fetchFn: sized(stlStart('', 60e6), 3e9), sniff: true });
   assert.equal(big.level, 'bad', `a 3 GB STL: ${big.detail} (must fire: ok)`);
-  assert.match(big.detail, /more than the 2048\.0 MB of file this viewer opens/);
-  const text = await checkFile(`${B}ascii.stl`, { fetchFn: sized('solid x\n facet normal 0 0 1\n', 700 * 2 ** 20 + 1), sniff: true });
+  // (in the page's words: js/cadmesh.js OVERSIZE_WORDS -- r72 A8)
+  assert.match(big.detail, /over 2 GB, more than this viewer opens/);
+  const text = await checkFile(`${B}ascii.stl`, { fetchFn: sized(asciiStart, 700 * 2 ** 20 + 1), sniff: true });
   assert.equal(text.level, 'bad', `a 700 MB ASCII STL: ${text.detail}`);
-  assert.match(text.detail, /of text, more than the 500 MB of text this viewer reads/);
+  assert.match(text.detail, /700 MB of text, more than the 500 MB of text this viewer reads/);
   const dxf = await checkFile(`${B}plan.dxf`, { fetchFn: sized('  0\nSECTION\n  2\nHEADER\n', 700 * 2 ** 20), sniff: true });
   assert.equal(dxf.level, 'bad', `a 700 MB ASCII DXF: ${dxf.detail}`);
-  // must accept: a binary STL of that size (84 + 50 n bytes), read as bytes, not text
-  const bin = await checkFile(`${B}binary.stl`, { fetchFn: sized('\0'.repeat(84), 84 + 50 * 14680064), sniff: true });
+  // must accept: a binary STL of that size (84 + 50 n bytes, n in its header), read as bytes, not text
+  const bin = await checkFile(`${B}binary.stl`, { fetchFn: sized(stlStart('', 14680064), 84 + 50 * 14680064), sniff: true });
   assert.notEqual(bin.level, 'bad', `a 700 MB binary STL: ${bin.detail}`);
+  // (by the reader's own rule, js/formats.js stlIsBinary -- r72 A2): an ASCII STL whose size happens
+  // to be 84 + 50 k is text to the page, refused (must fire: "ok"); a binary one whose header starts
+  // "solid", 2 bytes over, opens (must fire: bad)
+  const k = 12e6;
+  const ascii50 = await checkFile(`${B}ascii50.stl`, { fetchFn: sized(asciiStart, 84 + 50 * k), sniff: true });
+  assert.equal(ascii50.level, 'bad', `a ${84 + 50 * k}-byte ASCII STL: ${ascii50.detail}`);
+  const solidBin = await checkFile(`${B}solid-bin.stl`, { fetchFn: sized(stlStart('solid exported by a CAD program', k), 84 + 50 * k + 2), sniff: true });
+  assert.notEqual(solidBin.level, 'bad', `a binary STL whose header says "solid", 2 bytes over: ${solidBin.detail}`);
+});
+await test('a gzip is held to the limits by what it unpacks to, its trailer read with a range (r72 Q1: a 1.8 MB .stl.gz of 546 MB ASCII STL said "ok")', async () => {
+  const { gzipSync } = await import('node:zlib');
+  // (a server answering each range: the file's start, a real gzip, and its last 4 bytes, ISIZE)
+  const served = (start, total, isize) => async (u, o = {}) => {
+    const r = (o.headers && o.headers.Range) || '';
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32LE(isize >>> 0, 0);
+    const body = r.startsWith(`bytes=${total - 4}-`) ? tail : start;
+    const from = body === tail ? total - 4 : 0;
+    return new Response(body, { status: 206, headers: { 'content-length': String(body.length), 'content-range': `bytes ${from}-${from + body.length - 1}/${total}` } });
+  };
+  const ascii = gzipSync(Buffer.from('solid x\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\n'));
+  const big = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 546 * 2 ** 20), sniff: true });
+  assert.equal(big.level, 'bad', `546 MB of ASCII STL in 1.8 MB of gzip: ${big.detail} (must fire: ok)`);
+  assert.match(big.detail, /unpacks to 546 MB of text, more than the 500 MB of text this viewer reads/);
+  const huge = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 3 * 2 ** 30), sniff: true });
+  assert.match(huge.detail, /unpacks to over 2 GB, more than this viewer opens/);
+  // must accept: under the limit; and a binary STL unpacking past the text limit (read as bytes)
+  const small = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 40 * 2 ** 20), sniff: true });
+  assert.notEqual(small.level, 'bad', small.detail);
+  const n = 14680064, hd = Buffer.alloc(84);
+  hd.writeUInt32LE(n, 80);
+  const bin = await checkFile(`${B}part.stl.gz`, { fetchFn: served(gzipSync(hd), 1.8e6, 84 + 50 * n), sniff: true });
+  assert.notEqual(bin.level, 'bad', `a 700 MB binary STL in gzip: ${bin.detail}`);
 });
 await test('list-not-read', async () => {
   const r = await checkLists([`${B}missing.json`], 'https://cad.place/', { fetchFn: fakeFetch });

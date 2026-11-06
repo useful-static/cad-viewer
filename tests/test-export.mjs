@@ -26,8 +26,8 @@ const IDENT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 // Z up as Y up (the glTF convention): x stays, y = model z, z = -model y
 const YUP = [[1, 0, 0], [0, 0, 1], [0, -1, 0]];
 
-await test('STL: 84 + 50 n bytes, a header that is not "solid", the triangles in the basis', () => {
-  const b = toSTL(model, [1, 2], YUP, 'plate');
+await test('STL: 84 + 50 n bytes, a header that is not "solid", the triangles in the basis', async () => {
+  const b = await toSTL(model, [1, 2], YUP, 'plate');
   assert.equal(b.length, 84 + 50 * 3);
   assert.ok(!new TextDecoder().decode(b.slice(0, 5)).startsWith('solid'));
   const dv = new DataView(b.buffer);
@@ -36,7 +36,7 @@ await test('STL: 84 + 50 n bytes, a header that is not "solid", the triangles in
   const o = 84 + 2 * 50 + 12 + 12;
   assert.deepEqual([dv.getFloat32(o, true), dv.getFloat32(o + 4, true), Math.abs(dv.getFloat32(o + 8, true))], [4, 5, 0]);
   // only the bodies asked for
-  assert.equal(toSTL(model, [2], IDENT).length, 84 + 50);
+  assert.equal((await toSTL(model, [2], IDENT)).length, 84 + 50);
 });
 
 // a zip's entries, read from its central directory
@@ -75,9 +75,9 @@ await test('3MF: a zip with the three parts; mm; one object per body; a colour p
   assert.match(x, /name="Tri &amp; &lt;co&gt;"/);
   assert.match(x, /<vertex x="10" y="20" z="0"\/>/);
 });
-await test('a long non-ASCII name: the STL header is at most 80 bytes, cut at a whole character (r64 A1)', () => {
+await test('a long non-ASCII name: the STL header is at most 80 bytes, cut at a whole character (r64 A1)', async () => {
   for (const name of ['板'.repeat(21), 'é'.repeat(70), '😀'.repeat(30), 'a'.repeat(200)]) {
-    const b = toSTL(model, [1, 2], IDENT, name);
+    const b = await toSTL(model, [1, 2], IDENT, name);
     assert.equal(b.length, 84 + 50 * 3, name);
     const head = b.slice(0, 80);
     const end = head.indexOf(0) < 0 ? 80 : head.indexOf(0);
@@ -98,8 +98,8 @@ await test('3MF: a character XML does not allow in a body name is written as U+F
   assert.match(ok, /name="😀"/);
   assert.match(ok, /name="tab\tok"/);
 });
-await test('GLB: the header and chunks; per body a node, positions in metres with bounds, normals, colours, indices', () => {
-  const g = toGLB(model, [1, 2], YUP);
+await test('GLB: the header and chunks; per body a node, positions in metres with bounds, normals, colours, indices', async () => {
+  const g = await toGLB(model, [1, 2], YUP);
   const dv = new DataView(g.buffer);
   assert.equal(dv.getUint32(0, true), 0x46546c67);
   assert.equal(dv.getUint32(8, true), g.length);
@@ -135,11 +135,52 @@ await test('3MF of a large body: written in batches, the page given turns betwee
   const t0 = performance.now();
   const z = await to3MF(big, [1], IDENT);
   const ms = performance.now() - t0;
+  await new Promise((r) => setTimeout(r, 20)); // (a tick after it: the last hold seen too -- r72)
   clearInterval(tick);
   const x = unzip(z)['3D/3dmodel.model'];
   assert.equal((x.match(/<triangle /g) || []).length, I2.length / 3, 'every triangle written');
   assert.match(x, /<\/triangles><\/mesh><\/object><\/resources><build><item objectid="2"\/><\/build><\/model>$/);
   assert.ok(gap < 400, `the longest hold ${gap.toFixed(0)} ms of ${ms.toFixed(0)} ms (must fire: the whole part built in one)`);
+});
+// a W x rows grid of one body, its triangles 2 (W - 1)(rows - 1); colours: per vertex
+const grid = (W, rows, colour = () => [200, 200, 200]) => {
+  const V = W * rows;
+  const P2 = new Float32Array(3 * V), N2 = new Int16Array(4 * V), C2 = new Uint8Array(4 * V);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < W; c++) { const v = r * W + c; P2[3 * v] = c * 0.1; P2[3 * v + 1] = r * 0.1; N2[4 * v + 2] = 32767; C2.set([...colour(v), 255], 4 * v); }
+  const I2 = new Uint32Array(6 * (W - 1) * (rows - 1));
+  let k = 0;
+  for (let r = 0; r + 1 < rows; r++) for (let c = 0; c + 1 < W; c++) { const v = r * W + c; I2.set([v, v + 1, v + W, v + 1, v + W + 1, v + W], k); k += 6; }
+  return { position: P2, normal: N2, color: C2, index: I2, header: { meshes: [{ name: 'grid', vtxStart: 0, vtxCount: V, idxStart: 0, idxCount: I2.length }] } };
+};
+await test('STL and GLB of a large body give the page turns, as 3MF does (r72 A7: 2 M triangles held it 422 ms in STL, 1,179 ms in GLB)', async () => {
+  const big = grid(2001, 501); // (2,000,000 triangles: at 1 M one task's hold here was 164 ms, under the bound)
+  for (const fmt of ['stl', 'glb']) {
+    let last = performance.now(), gap = 0;
+    const tick = setInterval(() => { const t = performance.now(); gap = Math.max(gap, t - last); last = t; }, 5);
+    const t0 = performance.now();
+    const b = await EXPORTS[fmt].write(big, [1], IDENT, { names: ['grid'], base: 'grid' });
+    const ms = performance.now() - t0;
+    // (a tick after it, to see the last hold: a write in one task leaves none between, and read 0 ms)
+    await new Promise((r) => setTimeout(r, 20));
+    clearInterval(tick);
+    if (fmt === 'stl') assert.equal(b.length, 84 + 50 * 2e6);
+    assert.ok(gap < 150, `${fmt}: the longest hold ${gap.toFixed(0)} ms of ${ms.toFixed(0)} ms (must fire: one task)`);
+  }
+});
+await test('no export writes what the viewer\'s readers refuse: more triangles than they place, a 3MF of more colours than its base materials take (r72 A6, Q5)', async () => {
+  const { tooManyToExport } = await import('../js/export-mesh.js');
+  const { MAX_PLACED_TRIANGLES, MAX_PLACED_PARTS } = await import('../js/formats.js');
+  // (a header claiming one more triangle than the cap: refused before anything is built)
+  const over = { ...model, header: { meshes: [{ name: 'huge', vtxStart: 0, vtxCount: 4, idxStart: 0, idxCount: 3 * (MAX_PLACED_TRIANGLES + 1) }] } };
+  for (const fmt of Object.keys(EXPORTS)) {
+    await assert.rejects(EXPORTS[fmt].write(over, [1], IDENT, { names: ['huge'], base: 'huge' }), (e) => e.message === tooManyToExport(MAX_PLACED_TRIANGLES + 1), `${fmt} (must fire: written)`);
+  }
+  // 3MF's colours: by the reader's cap, here a smaller one
+  const many = grid(40, 40, (v) => [v & 255, (v >> 8) & 255, 7]); // (1,600 colours)
+  await assert.rejects(to3MF(many, [1], IDENT, [], undefined, 1000), /^Error: not written as 3MF: its 1,\d{3} colours are more than the 1,000 this viewer reads \(GLB writes them\)$/);
+  assert.ok(unzip(await to3MF(many, [1], IDENT, [], undefined, 2000))['3D/3dmodel.model'].includes('<base '), 'under it, written');
+  assert.match(to3MF.toString(), /maxColours = MAX_PLACED_PARTS\)/, 'the default is the reader\'s cap (must fire: none)');
+  assert.equal(MAX_PLACED_PARTS, 2_000_000);
 });
 await test('the zip takes a part\'s CRC with turns between, not in one task (r71 A6, Q3: 436 MB of 3MF text held the page 1.4 s in its CRC alone)', async () => {
   const { zip } = await import('../js/export-mesh.js');
@@ -152,6 +193,7 @@ await test('the zip takes a part\'s CRC with turns between, not in one task (r71
   const t0 = performance.now();
   const z = await zip([['a.bin', chunks]]);
   const ms = performance.now() - t0;
+  await new Promise((r) => setTimeout(r, 20)); // (a tick after it: the last hold seen too -- r72)
   clearInterval(tick);
   const dv = new DataView(z.buffer, z.byteOffset, z.byteLength);
   let want = 0;
@@ -164,12 +206,12 @@ await test('3MF: a model part past the text the viewer reads is refused, naming 
   assert.ok(unzip(ok)['3D/3dmodel.model'].length < 4000);
   await assert.rejects(to3MF(model, [1, 2], IDENT, [], 600), /^Error: not written as 3MF: its model part would be more than the 500 MB of text this viewer reads \(STL or GLB writes it\)$/, 'must fire: written past it');
   // (by the reader's own limit, by default: the reader's 3MF counts its model parts against it)
-  assert.match(to3MF.toString(), /maxText = MAX_TEXT_BYTES\)/, 'the default is the reader\'s limit (must fire: none)');
+  assert.match(to3MF.toString(), /maxText = MAX_TEXT_BYTES[,)]/, 'the default is the reader\'s limit (must fire: none)');
 });
 await test('GLB: a mid-tone body exported and read back by the viewer\'s own glTF reader is the colour it was drawn, as 3MF\'s (r70 Q1: rgb(128,64,200) came back rgb(188,137,229))', async () => {
   const c2 = new Uint8Array(7 * 4);
   for (let v = 0; v < 7; v++) c2.set(v < 4 ? [128, 64, 200, 255] : [20, 200, 90, 255], 4 * v);
-  const g = toGLB({ ...model, color: c2 }, [1, 2], YUP);
+  const g = await toGLB({ ...model, color: c2 }, [1, 2], YUP);
   const r = await parseMesh('glb', g.buffer.slice(g.byteOffset, g.byteOffset + g.byteLength), 'a.glb');
   const cols = r.meshes.map((m) => m.color.map((c) => Math.round(c * 255)).join(','));
   assert.deepEqual(cols, ['128,64,200', '20,200,90'], `read back: ${cols.join(' | ')}`);
@@ -202,7 +244,7 @@ await test('a body wound inward with its normals out (a mirrored placement) is w
     return k;
   };
   // STL: the facet normals and the corner order
-  const s = toSTL(mirrored, [1], IDENT, 'cube');
+  const s = await toSTL(mirrored, [1], IDENT, 'cube');
   const dv = new DataView(s.buffer);
   const sp = [], si = [];
   let facets = 0;
@@ -222,7 +264,7 @@ await test('a body wound inward with its normals out (a mirrored placement) is w
   const tx = [...xml.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"/g)].flatMap((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
   assert.equal(windOut(vx, tx), 12, '3MF winding out');
   // GLB: its indices' winding (glTF's front face)
-  const g = toGLB(mirrored, [1], IDENT);
+  const g = await toGLB(mirrored, [1], IDENT);
   const jl = new DataView(g.buffer).getUint32(12, true);
   const j = JSON.parse(new TextDecoder().decode(g.slice(20, 20 + jl)));
   const bin = g.slice(20 + jl + 8);
@@ -245,7 +287,7 @@ await test('EXPORTS: each row writes its own format through the one call shape',
 
 await test('an empty body is left out of the GLB and the 3MF (it made a count-0 accessor with null bounds)', async () => {
   const m3 = { ...model, header: { meshes: [...model.header.meshes, { name: 'empty', vtxStart: 7, vtxCount: 0, idxStart: 9, idxCount: 0 }] } };
-  const g = toGLB(m3, [1, 2, 3], YUP, ['plate', 'tri', 'empty']);
+  const g = await toGLB(m3, [1, 2, 3], YUP, ['plate', 'tri', 'empty']);
   const jl = new DataView(g.buffer).getUint32(12, true);
   const j = JSON.parse(new TextDecoder().decode(g.slice(20, 20 + jl)));
   assert.equal(j.nodes.length, 2);
@@ -256,8 +298,8 @@ await test('an empty body is left out of the GLB and the 3MF (it made a count-0 
   assert.deepEqual(back.meshes.map((x) => x.name), ['plate', 'tri']);
   // the one count the page and the CLI say and refuse by; none left: refused, not an empty file
   assert.deepEqual(exportable(m3, [1, 2, 3]), [1, 2]);
-  assert.throws(() => toGLB(m3, [3], YUP, ['empty']), /nothing to export/);
-  assert.throws(() => toSTL(m3, [3], IDENT, 'empty'), /nothing to export/); // (it wrote an 84-byte STL)
+  await assert.rejects(toGLB(m3, [3], YUP, ['empty']), /nothing to export/);
+  await assert.rejects(toSTL(m3, [3], IDENT, 'empty'), /nothing to export/); // (it wrote an 84-byte STL)
   await assert.rejects(to3MF(m3, [3], IDENT, ['empty']), /nothing to export/);
 });
 

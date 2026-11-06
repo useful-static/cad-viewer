@@ -1235,11 +1235,17 @@ test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-go
     ['a noisy insert scale', [[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, -0.0010000000002037268], [42, 0.000999999996565748]], blk, [0.02]],
     // a PCB pad: four vertices, each end doubled, bulges 0 1 0 1
     ['a doubled-vertex circle', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], [10, 0.5207], [20, 0], [10, 0.5207], [20, 0], [42, 1], [10, -0.5207], [20, 0], [10, -0.5207], [20, 0], [42, 1]], [], [1.041]],
-    // four quarter turns, as written to eight places
+    // four quarter turns, as written to eight places; and to six (r72 Q7)
     ['four quarter arcs', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], ...ngon(4, 5).flatMap(([x, y]) => [[10, x], [20, y], [42, 0.41421356]])], [], [10]],
+    ['four quarter arcs, six digits', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], ...ngon(4, 5).flatMap(([x, y]) => [[10, x], [20, y], [42, 0.414214]])], [], [10]],
     ['a ratio-1 ELLIPSE, a full turn', [[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 1], [41, 0], [42, 2 * Math.PI]], [], [10]],
     ['a hatch of one full-turn arc edge', hatch([[92, 1], [93, 1], [72, 2], [10, 0], [20, 0], [40, 5], [50, 0], [51, 360], [73, 1]]), [], [10]],
     ['a hatch boundary a bulged circle', hatch([[92, 2], [72, 1], [73, 1], [93, 2], [10, -5], [20, 0], [42, 1], [10, 5], [20, 0], [42, 1]]), [], [10]],
+    // (r72 A5: a hatch circle of two halves, and of four quarters, as some exporters write it)
+    ['a hatch of two half-circle edges', hatch([[92, 1], [93, 2], ...[[0, 180], [180, 360]].flatMap(([a0, a1]) => [[72, 2], [10, 0], [20, 0], [40, 5], [50, a0], [51, a1], [73, 1]])]), [], [10]],
+    ['a hatch of four quarter edges', hatch([[92, 1], [93, 4], ...[[0, 90], [90, 180], [180, 270], [270, 360]].flatMap(([a0, a1]) => [[72, 2], [10, 0], [20, 0], [40, 5], [50, a0], [51, a1], [73, 1]])]), [], [10]],
+    // (r72 A3: a circle of a 1° arc and a 359° one, sampled unevenly -- Ø 19.991 by the points' mean)
+    ['a circle of 1° + 359° arcs', [[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 1], [10, 10], [20, 0], [42, Math.tan(Math.PI / 720)], [10, 10 * Math.cos(Math.PI / 180)], [20, 10 * Math.sin(Math.PI / 180)], [42, Math.tan((359 * Math.PI) / 720)]], [], [20]],
     // must reject still
     ['a slot', [[0, 'LWPOLYLINE'], [8, '0'], [90, 4], [70, 1], [10, 0], [20, -5], [42, 0], [10, 10], [20, -5], [42, 1], [10, 10], [20, 5], [42, 0], [10, 0], [20, 5], [42, 1]], [], []],
     ['an ELLIPSE of ratio 0.985', [[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 0.985], [41, 0], [42, 2 * Math.PI]], [], []],

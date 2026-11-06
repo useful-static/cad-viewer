@@ -15,7 +15,7 @@
 import { crc32 } from './crc32.js';
 import { SRGB_TO_LINEAR } from './srgb.js';
 import { orientBasis } from './orient.js';
-import { MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } from './formats.js';
+import { MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } from './formats.js';
 import { windsAgainstNormals } from './raycast.js';
 
 // a turn for the page: a task, not a microtask, so its input and painting run between
@@ -43,24 +43,27 @@ function bodyRange(model, m, basis, scale, pos, idx, v0, v1, t0, t1) {
     idx[t + 2] = (turn ? b : c) - m.vtxStart;
   }
 }
-function bodyOf(model, id, basis, scale) {
-  const m = model.header.meshes[id - 1];
-  const pos = new Float32Array(m.vtxCount * 3), idx = new Uint32Array(m.idxCount);
-  bodyRange(model, m, basis, scale, pos, idx, 0, m.vtxCount, 0, m.idxCount);
-  return { m, pos, idx };
-}
-// (the same, a turn between pieces: a 5 M-triangle body's took 223 ms in one task)
+// (in pieces, a turn when the export's work since its last turn reaches BODY_PIECE vertices or
+// triangles -- one pacer for the whole export: a 5 M-triangle body took 223 ms in one task, and a
+// turn after every body's piece cost 4 ms a body, seconds over an assembly of small ones -- r72)
 const BODY_PIECE = 200000;
-async function bodyOfInTurns(model, id, basis, scale) {
+// pacer() -> step(n): true when n more units bring the work since the last turn to BODY_PIECE
+function pacer() {
+  let left = BODY_PIECE;
+  return (n = 1) => ((left -= n) <= 0 ? ((left = BODY_PIECE), true) : false);
+}
+async function bodyOfInTurns(model, id, basis, scale, pace) {
   const m = model.header.meshes[id - 1];
   const pos = new Float32Array(m.vtxCount * 3), idx = new Uint32Array(m.idxCount);
   for (let v = 0; v < m.vtxCount; v += BODY_PIECE) {
-    bodyRange(model, m, basis, scale, pos, idx, v, Math.min(m.vtxCount, v + BODY_PIECE), 0, 0);
-    await turn();
+    const v1 = Math.min(m.vtxCount, v + BODY_PIECE);
+    bodyRange(model, m, basis, scale, pos, idx, v, v1, 0, 0);
+    if (pace(v1 - v)) await turn();
   }
   for (let t = 0; t < m.idxCount; t += 3 * BODY_PIECE) {
-    bodyRange(model, m, basis, scale, pos, idx, 0, 0, t, Math.min(m.idxCount, t + 3 * BODY_PIECE));
-    await turn();
+    const t1 = Math.min(m.idxCount, t + 3 * BODY_PIECE);
+    bodyRange(model, m, basis, scale, pos, idx, 0, 0, t, t1);
+    if (pace((t1 - t) / 3)) await turn();
   }
   return { m, pos, idx };
 }
@@ -74,8 +77,11 @@ export function utf8Within(s, n) {
   while (e > 0 && (b[e] & 0xc0) === 0x80) e--;
   return b.subarray(0, e);
 }
-export function toSTL(model, ids0, basis, name = 'model') {
+// (async, a turn between pieces, as 3MF's: 2 M triangles held the page 422 ms here and 1,179 ms in
+// GLB, against 399 ms at most for 3MF -- r72 A7)
+export async function toSTL(model, ids0, basis, name = 'model') {
   const [ids] = withTriangles(model, ids0, []);
+  const pace = pacer();
   let n = 0;
   for (const id of ids) n += model.header.meshes[id - 1].idxCount / 3;
   const buf = new ArrayBuffer(84 + 50 * n);
@@ -87,8 +93,9 @@ export function toSTL(model, ids0, basis, name = 'model') {
   dv.setUint32(80, n, true);
   let o = 84;
   for (const id of ids) {
-    const { pos, idx } = bodyOf(model, id, basis, 1);
+    const { pos, idx } = await bodyOfInTurns(model, id, basis, 1, pace);
     for (let t = 0; t < idx.length; t += 3) {
+      if (pace()) await turn();
       const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
       const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
       const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
@@ -190,12 +197,19 @@ function withTriangles(model, ids, names) {
   const ok = new Set(exportable(model, ids));
   const kept = keep.filter(([id]) => ok.has(id));
   if (!kept.length) throw new Error(NOTHING_TO_EXPORT);
+  // (no more triangles than the viewer's own readers place: 10,000,001 were written as STL and GLB,
+  // and the viewer then refused to open either -- r72 A6. Every writer, by the one cap)
+  let n = 0;
+  for (const [id] of kept) n += model.header.meshes[id - 1].idxCount / 3;
+  if (n > MAX_PLACED_TRIANGLES) throw new Error(tooManyToExport(n));
   return [kept.map((x) => x[0]), kept.map((x) => x[1])];
 }
+export const tooManyToExport = (n) => `not written: ${n.toLocaleString('en-US')} triangles, more than the ${MAX_PLACED_TRIANGLES.toLocaleString('en-US')} this viewer reads`;
 
-// (maxText: the reader's limit, a test's smaller one)
-export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_BYTES) {
+// (maxText, maxColours: the reader's limits, a test's smaller ones)
+export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_BYTES, maxColours = MAX_PLACED_PARTS) {
   const [ids, names] = withTriangles(model, ids0, names0);
+  const pace = pacer();
   // one base material per distinct colour (each triangle takes its first
   // vertex's), so a body's per-face colours survive
   const colours = new Map();
@@ -220,7 +234,7 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
   };
   const put = async (s) => { batch.push(s); if (batch.length >= BATCH) { flush(); await turn(); } };
   for (const [j, id] of ids.entries()) {
-    const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 1);
+    const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 1, pace);
     await put(`<object id="${j + 2}" type="model" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>`);
     for (let v = 0; v < m.vtxCount; v++) {
       batch.push(`<vertex x="${num(pos[3 * v])}" y="${num(pos[3 * v + 1])}" z="${num(pos[3 * v + 2])}"/>`);
@@ -234,6 +248,9 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
     await put('</triangles></mesh></object>');
   }
   flush();
+  // (no more colours than the reader takes base materials: a scan of 2.1 M colours wrote a 3MF the
+  // viewer refused -- r72 Q5)
+  if (colours.size > maxColours) throw new Error(`not written as 3MF: its ${colours.size.toLocaleString('en-US')} colours are more than the ${maxColours.toLocaleString('en-US')} this viewer reads (GLB writes them)`);
   // (the materials are known once every triangle has been: written before the objects in the file)
   const mats = [...colours.keys()].map((c, i) => `<base name="colour ${i + 1}" displaycolor="${c}"/>`).join('');
   const modelXml = [enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -253,7 +270,7 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
 }
 
 // ---- GLB ----
-export function toGLB(model, ids0, basis, names0 = []) {
+export async function toGLB(model, ids0, basis, names0 = []) { // (async with turns: r72 A7, as toSTL)
   const [ids, names] = withTriangles(model, ids0, names0);
   const chunks = [];
   let binLen = 0;
@@ -267,8 +284,9 @@ export function toGLB(model, ids0, basis, names0 = []) {
     binLen += bytes.length;
     return views.length - 1;
   };
-  ids.forEach((id, j) => {
-    const { m, pos, idx } = bodyOf(model, id, basis, 0.001);
+  const pace = pacer();
+  for (const [j, id] of ids.entries()) {
+    const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 0.001, pace);
     const nrm = new Float32Array(m.vtxCount * 3);
     // (linear, as glTF's COLOR_0 is, in normalized 16 bits -- in 8 the darks band: r70 Q1)
     const col = new Uint16Array(m.vtxCount * 4);
@@ -276,6 +294,7 @@ export function toGLB(model, ids0, basis, names0 = []) {
     const N = model.normal, C = model.color;
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let v = 0; v < m.vtxCount; v++) {
+      if (pace()) await turn();
       const g = m.vtxStart + v;
       const n0 = [N[4 * g] / 32767, N[4 * g + 1] / 32767, N[4 * g + 2] / 32767];
       const r = basis.map((b) => n0[0] * b[0] + n0[1] * b[1] + n0[2] * b[2]);
@@ -295,7 +314,7 @@ export function toGLB(model, ids0, basis, names0 = []) {
     const name = names[j] || m.name || `body ${id}`;
     meshes.push({ name, primitives: [{ attributes: { POSITION: a0, NORMAL: a0 + 1, COLOR_0: a0 + 2 }, indices: a0 + 3, material: 0 }] });
     nodes.push({ name, mesh: j });
-  });
+  }
   const json = {
     asset: { version: '2.0', generator: 'cad.place' },
     scene: 0, scenes: [{ nodes: nodes.map((_, i) => i) }], nodes, meshes,

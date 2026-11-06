@@ -4,7 +4,7 @@
 // through their readers, loaded on first use), orbit camera, part tree,
 // picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
 import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
@@ -250,7 +250,9 @@ function setStatus(s, msg) {
 
 // (every kind of file the page opens, as its empty card says)
 const IDLE_MSG = `open or drop ${opensShort()}`;
-const mb = (n) => (n / 1e6).toFixed(1);
+// (MB of 2^20, as the limits and their words count: "546.4 MB" while loading, then refused as "521 MB
+// of text" -- r72 Q8; a tenth kept, for a progress line that moves)
+const mb = (n) => (n / 2 ** 20).toFixed(1);
 
 // Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a failure
 // apart from the load, the GPU recovery's end and an error shown in the view (three of them
@@ -1343,7 +1345,10 @@ function closedOf(mesh, mi) {
 // under app.tour.base, not the step's (a step's highlight and its grey went into the file, and a part
 // it isolated others from was all that was written: r70 Q2. The tour keeps them as an Array --
 // startTour's base -- and .has on it threw, every export during a tour writing nothing: r71 A1)
-const exportState = () => (app.tour ? { hidden: new Set(app.tour.base.hidden), color: inScheme(app.baseMesh, ownOverrides(), ownFaces() || new Map()).color } : { hidden: app.hidden, color: app.mesh.color });
+// (the visitor's own hidden parts, the one rule for an export and Save drawing -- which drew the
+// step's isolate, its subject alone: r72 A4)
+const ownHidden = () => (app.tour ? new Set(app.tour.base.hidden) : app.hidden);
+const exportState = () => (app.tour ? { hidden: ownHidden(), color: inScheme(app.baseMesh, ownOverrides(), ownFaces() || new Map()).color } : { hidden: app.hidden, color: app.mesh.color });
 async function exportMesh(fmt) {
   if (!app.header || !EXPORTS[fmt]) return;
   const own = exportState();
@@ -1618,7 +1623,9 @@ async function printPng(png) {
 // parts is drawn, hidden ones too: a board alone gives its outline and holes.
 function saveDrawing() {
   if (!app.header || !app.baseMesh?.faces) return;
-  const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+  // (the visitor's own parts during a tour, as an export writes them: r72 A4)
+  const hidden = ownHidden();
+  const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !hidden.has(id));
   if (!ids.length) { tell('nothing shown to draw'); return; }
   const preset = nearestPreset(app.cam);
   const [yaw, pitch] = VIEWS[preset];
@@ -5888,7 +5895,7 @@ function refusedForSize(f) {
   return true;
 }
 // (the words once, for a file refused and a download cut at the size: r51 A9, Q8)
-const oversizeText = (name) => `${name} is over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`;
+const oversizeText = (name) => `${name} is ${OVERSIZE_WORDS}`; // (the list check's words too: js/cadmesh.js, r72 A8)
 
 // A file from the device (Open…, a drop). One too big is refused before
 // anything starts: in loadFile the refusal came after the running load was
@@ -7653,7 +7660,11 @@ function lackingNote(place, opened) {
 // rule (tourPlaysHere) -- but only while it is still the address's (a list pick ends it, and it still
 // played over the model picked, ending that model's own: r57 A1, Q1); with no model to play over,
 // said ready, unless its own model failed; then over. The start-up's and View in 3D's ending.
-function addressTourEnds(r, ownFailed) {
+// (after the loads an entry's tour waits for, by the same rounds: the visitor's Add model… begun
+// while ?tour= was read ended it as it joined, when the tour came first -- the third tour, which
+// round 71's one wait did not reach: r72 A1. With none under way it runs at once, as before)
+async function addressTourEnds(r, ownFailed) {
+  if (r?.tour && app.urlTourPending) for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
   if (r?.tour && app.urlTourPending) {
     if (!tourPlaysHere(r.tour)) { /* its own model's, not the visitor's file's: nothing said */ }
     else if (app.header) startTourIn(r.tour, params.get('tour'), params.get('step'));

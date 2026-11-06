@@ -47,7 +47,13 @@ export function drawingSVG(parts, right, up, { title = '', margin = 5 } = {}) {
     // (a middle by the sag the part's deflection allows, as circleOf takes its loops: r71 A4)
     const onR = (r, x, y, sag = 0) => Math.abs(Math.hypot(x - r.x, y - r.y) - r.r) <= (RADIUS_TOL + sag) * r.r + 1e-4;
     const sag = circleSagShare(part.geom.a);
-    const onCircle = (pts) => round.some((r) => pts.every(([x, y]) => onR(r, x, y))
+    // (and an edge of one straight segment only when it spans no more than the part's deflection, the
+    // most a rim's segment spans: by its middle alone, a chord -- a shaft's D-flat -- up to 34° of the
+    // circle was taken for a rim piece and left out at a = 0.5: r72 Q2)
+    const a = part.geom.a > 0 ? part.geom.a : 0;
+    const piece = (r, pts) => pts.length > 2 || !a
+      || 2 * Math.asin(Math.min(1, Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) / (2 * r.r))) <= a + 1e-9;
+    const onCircle = (pts) => round.some((r) => pts.every(([x, y]) => onR(r, x, y)) && piece(r, pts)
       && pts.every(([x, y], i) => i === 0 || onR(r, (x + pts[i - 1][0]) / 2, (y + pts[i - 1][1]) / 2, sag)));
     for (const [ei, e] of part.geom.edges.entries()) {
       if (part.geom.edgeClosed[ei] && !round.length) {

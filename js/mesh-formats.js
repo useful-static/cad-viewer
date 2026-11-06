@@ -16,7 +16,7 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, sniffFormat, tooMuchText } from './formats.js';
+import { FORMATS, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, sizeMb, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -31,9 +31,9 @@ const CREASE_DEG = 30;
 // Vertices are counted as well as triangles: each placement copies its part's vertices, so one
 // triangle indexing a 30 M-vertex list, placed 4 times, was 29.6 s and 2.9 GB from 451 bytes
 // (the vertex cap is an unindexed mesh at the triangle cap: 3 corners each).
-const MAX_PLACED_TRIANGLES = 10_000_000;
+// (the triangle cap in js/formats.js, where the exports read it too: r72 A6)
 const MAX_PLACED_VERTICES = 3 * MAX_PLACED_TRIANGLES;
-const MAX_PLACED_PARTS = 2_000_000;
+// (the parts cap, the 3MF reader's base materials' too, in js/formats.js: the 3MF writer keeps to it -- r72 Q5)
 // a glTF accessor's values, refused past this before it is allocated (3 coordinates of
 // 3 corners of the triangle cap; a 200-byte file asked for 2^30 vertices)
 const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
@@ -125,7 +125,7 @@ export async function parseMesh(format, buf, name, files = new Map()) {
 // characters: a larger one is refused in words before it is decoded (a 3MF part inflating to
 // 600 MB met the engine's "Cannot create a string longer than 0x1fffffe8 characters")
 // (the limit and its words js/formats.js's, the DXF reader's too: r70 Q5)
-const mb = (n) => `${big(Math.round(n / 2 ** 20))} MB`;
+const mb = sizeMb; // (the one formatter: js/formats.js, r72 A8)
 // (buf: an ArrayBuffer or a byte view; encoding: an ASCII PLY body is latin1)
 const text = (buf, what = 'the file', encoding = 'utf-8') => {
   if (buf.byteLength > MAX_TEXT_BYTES) throw tooMuchText(what, buf.byteLength);
@@ -342,7 +342,7 @@ function parseSTL(buf, base) {
   // count at least 0x09090909 triangles, far past the size.
   const n = buf.byteLength >= 84 ? dv.getUint32(80, true) : 0;
   const want = 84 + 50 * n;
-  if (buf.byteLength >= 84 && want <= buf.byteLength && buf.byteLength - want < 50) {
+  if (stlIsBinary(buf.byteLength, n)) { // (the list check's rule too: js/formats.js, r72 A2)
     hold('triangles', n); hold('vertices', 3 * n);
     const pos = new Array(n * 9), tri = new Array(n * 3);
     for (let i = 0; i < n; i++) {
@@ -355,6 +355,8 @@ function parseSTL(buf, base) {
   // neither: a file holding a NUL byte is binary (no ASCII STL has one), so its size is what is wrong
   const sizeWrong = () => new Error(`${base}.stl is damaged: its header counts ${big(n)} triangle${n === 1 ? '' : 's'}, so it should be ${big(want)} bytes, but it is ${big(buf.byteLength)} bytes`);
   const binary = () => buf.byteLength >= 84 && new Uint8Array(buf).indexOf(0) >= 0;
+  // (a binary one cut short, past the text limit: damaged, not "572 MB of text" -- r72 Q6)
+  if (buf.byteLength > MAX_TEXT_BYTES && binary()) throw sizeWrong();
   const s = text(buf, `${base}.stl`);
   if (!/^\s*solid/.test(s)) {
     if (binary()) throw sizeWrong();
