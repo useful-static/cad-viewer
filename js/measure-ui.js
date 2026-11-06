@@ -665,7 +665,10 @@ export function createMeasure(deps) {
     // (each body's holes once, kept with its geometry: the info panel rebuilt an open table on every
     // selection, visibility or unit change, and a 11,438-rim panel froze the page each time)
     const holesFor = (g) => g.holes || (g.holes = holesOf(g));
-    for (const id of ids) for (const h of holesFor(geomOf(id - 1, Infinity))) list.push({ ...h, mesh: id - 1 });
+    // (and the rims the stored positions cannot tell, this far from the origin: said, not left out
+    // without a word -- js/measure-geom.js untold, r66)
+    let untold = 0;
+    for (const id of ids) { const hs = holesFor(geomOf(id - 1, Infinity)); untold += hs.untold || 0; for (const h of hs) list.push({ ...h, mesh: id - 1 }); }
     list.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
     // the axes across each hole: the same for all (a board's X, Y) puts them
     // in the column's head, numbers only in the cells (the 300 px panel
@@ -692,7 +695,7 @@ export function createMeasure(deps) {
       g.n++;
       for (let j = 0; j < 3; j++) { g.lo[j] = Math.min(g.lo[j], h.centre[j]); g.hi[j] = Math.max(g.hi[j], h.centre[j]); }
     }
-    return { list, rows, groups: [...groups.values()], posHead };
+    return { list, rows, groups: [...groups.values()], posHead, untold };
   }
   function showHoles(ids, ref = null, name = '') {
     const box = $('holes');
@@ -715,6 +718,11 @@ export function createMeasure(deps) {
     const from = document.createElement('li');
     from.textContent = `positions from the corner of ${ref.name || 'the whole model'}`;
     sum.prepend(from);
+    if (t.untold) {
+      const un = document.createElement('li');
+      un.textContent = `${t.untold} ${t.untold === 1 ? 'rim' : 'rims'} too small to tell this far from the origin (the file's positions are rounded coarser than 1.5% of ${t.untold === 1 ? 'its' : 'their'} radius): not listed`;
+      sum.append(un);
+    }
     const tb = $('holesrows');
     tb.replaceChildren();
     for (const r of t.rows) {

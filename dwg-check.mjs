@@ -6,7 +6,7 @@
 import { writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
-import { drawsNothing, isShape, sheetsOf } from './js/dxf.js';
+import { drawnAtOpen, drawsNothing, isShape, sheetsOf } from './js/dxf.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
@@ -54,7 +54,13 @@ async function check(f) {
     try {
       const dr = drawDWG(d, P);
       // (and what it holds that is not drawn, by kind, as the page's info panel says it)
-      rep.drawn = { paths: dr.paths.filter(isShape).length, texts: dr.texts.length, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
+      // (drawn at open, as the info panel counts it -- on layers on, frozen ones' references left
+      // out -- with what layers off or frozen hold apart: every item was "drawn", 4206 paths where the
+      // page drew 1651 of 4855 -- r66 A4)
+      const byName = new Map(dr.layers.map((x) => [x.name, x]));
+      const shapes = dr.paths.filter(isShape), open = (it) => drawnAtOpen(it, byName);
+      const np = shapes.filter(open).length, nt = dr.texts.filter(open).length;
+      rep.drawn = { paths: np, texts: nt, hidden: shapes.length - np + dr.texts.length - nt, layouts: sheetsOf(dr).length, notDrawn: dr.notDrawn };
       if (drawsNothing(dr)) rep.drawError = 'has nothing to draw';
     } catch (e) { rep.drawError = e.message; }
     return { rep, P, bad: !!(d.failures.length || rep.drawError), why: '' };
@@ -81,7 +87,7 @@ async function main() {
       try { writeFileSync(dxfOut, pairsToDXF(P)); } catch (e) { throw new Error(`could not write ${dxfOut}: ${e.message}`); }
     }
     if (!json) {
-      console.log(`${f}: ${rep.release || '?'} ${rep.error ? `ERROR ${why}` : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
+      console.log(`${f}: ${rep.release || '?'} ${rep.error ? `ERROR ${why}` : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${rep.drawn.hidden ? ` (and ${rep.drawn.hidden} on layers off or frozen)` : ''}${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
     }
   }
   if (json) console.log(JSON.stringify(reports, null, 1));

@@ -1589,6 +1589,24 @@ export function dwgToPairs(dwg) {
       if (e.invisible) put(60, 1);
     };
     const ext = (x) => { if (x && (x[0] || x[1] || x[2] !== 1)) { put(210, x[0]); put(220, x[1]); put(230, x[2]); } };
+    // One text's fields, for a TEXT, a constant ATTDEF and an INSERT's ATTRIB (three copies, one to
+    // fix three times -- r66 A5): its point, height, value (one line), what `between` puts after the
+    // value (an attribute's tag and flags), its turn, width, slant, generation, alignment, extrusion,
+    // and its vertical alignment by vaCode (73 a TEXT's, 74 an attribute's)
+    const putText = (t, vaCode, between = null) => {
+      put(10, t.p[0]); put(20, t.p[1]); put(30, t.elev); put(40, t.h);
+      // (a DXF value is one line: a line break in single-line text becomes a space)
+      put(1, styleText(t.text, t.style).replace(/\r\n|\r|\n/g, ' '));
+      if (between) between();
+      if (t.rot) put(50, deg(t.rot));
+      if (t.wf !== 1) put(41, t.wf);
+      if (t.oblique) put(51, deg(t.oblique)); // (its slant: the drawing reads it)
+      if (t.gen) put(71, t.gen); // (backward / upside down: the drawing reads it)
+      if (t.ha) put(72, t.ha);
+      if (t.ha || t.va) { put(11, t.a[0]); put(21, t.a[1]); put(31, t.elev); }
+      ext(t.ext);
+      if (t.va) put(vaCode, t.va);
+    };
     // a kind read only to its common part (DWG.read: isEntityType, o.headOnly): named, with its layer, and
     // nothing else -- what the DXF reader needs to count it as not drawn
     if (o.headOnly) { common(o.name); return; }
@@ -1620,30 +1638,16 @@ export function dwgToPairs(dwg) {
       case 'ATTDEF': {
         // a constant attribute (flags 2, not invisible 1) is drawn from its definition, in every
         // insert of its block (r64 Q4); any other is the definition only (js/dxf.js STRUCTURE)
-        if (d.multi || !(d.flags & 2) || (d.flags & 1)) break;
-        common('ATTDEF'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h);
-        put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' ')); put(2, d.tag); put(70, d.flags);
-        if (d.rot) put(50, deg(d.rot));
-        if (d.wf !== 1) put(41, d.wf);
-        if (d.oblique) put(51, deg(d.oblique));
-        if (d.gen) put(71, d.gen);
-        if (d.ha) put(72, d.ha);
-        if (d.ha || d.va) { put(11, d.a[0]); put(21, d.a[1]); put(31, d.elev); }
-        ext(d.ext);
-        if (d.va) put(74, d.va);
+        // (a multi-line one -- R2018, an embedded MTEXT -- is read to its type only, its flags unread: it
+        // may be constant, so it is counted as not read, as a multi-line ATTRIB is, where it went
+        // without a word -- r66 A6)
+        if (d.multi) { stats.notPassed.push({ kind: 'ATTDEF (multi-line, not read)', block: curBlock }); break; }
+        if (!(d.flags & 2) || (d.flags & 1)) break;
+        common('ATTDEF'); putText(d, 74, () => { put(2, d.tag); put(70, d.flags); });
         break;
       }
       case 'TEXT': {
-        // a DXF value is one line: a line break in single-line text becomes a space
-        common('TEXT'); put(10, d.p[0]); put(20, d.p[1]); put(30, d.elev); put(40, d.h); put(1, styleText(d.text, d.style).replace(/\r\n|\r|\n/g, ' '));
-        if (d.rot) put(50, deg(d.rot));
-        if (d.wf !== 1) put(41, d.wf);
-        if (d.oblique) put(51, deg(d.oblique)); // (its slant: the drawing reads it)
-        if (d.gen) put(71, d.gen); // (backward / upside down: the drawing reads it)
-        if (d.ha) put(72, d.ha);
-        if (d.ha || d.va) { put(11, d.a[0]); put(21, d.a[1]); put(31, d.elev); }
-        ext(d.ext);
-        if (d.va) put(73, d.va);
+        common('TEXT'); putText(d, 73);
         break;
       }
       case 'MTEXT': {
@@ -1729,16 +1733,7 @@ export function dwgToPairs(dwg) {
           if (a.e.colour.aci !== 256) put(62, a.e.colour.aci);
           if (a.e.colour.rgb !== undefined) put(420, a.e.colour.rgb);
           if (a.e.invisible) put(60, 1);
-          put(10, ad.p[0]); put(20, ad.p[1]); put(30, ad.elev); put(40, ad.h);
-          put(1, styleText(ad.text, ad.style).replace(/\r\n|\r|\n/g, ' ')); put(2, ad.tag); put(70, ad.flags);
-          if (ad.rot) put(50, deg(ad.rot));
-          if (ad.wf !== 1) put(41, ad.wf);
-          if (ad.oblique) put(51, deg(ad.oblique));
-          if (ad.gen) put(71, ad.gen);
-          if (ad.ha) put(72, ad.ha);
-          if (ad.ha || ad.va) { put(11, ad.a[0]); put(21, ad.a[1]); put(31, ad.elev); }
-          ext(ad.ext);
-          if (ad.va) put(74, ad.va);
+          putText(ad, 74, () => { put(2, ad.tag); put(70, ad.flags); });
         }
         put(0, 'SEQEND'); if (inPaper) put(67, 1);
         break;

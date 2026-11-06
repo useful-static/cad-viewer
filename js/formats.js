@@ -27,11 +27,16 @@ export const DWG_RELEASES = {
 const DWG_TAGS = Object.keys(DWG_RELEASES);
 // a version tag's refusal, or null for one the reader reads: an older tag is said as older, a later
 // one as later (every unread tag was "older than R13", a 2024 drawing too -- r64 A8)
+// What a DWG's first six bytes are: "AC10" and two digits (R2.5 on), or a release before R10's tag
+// with a point (AC1.50, AC2.10). The one rule for the sniff (isDWGBytes) and the refusal's words --
+// round 65 widened the words alone, and check.html called a .dxf holding an AC2.10 DWG "ok · DXF",
+// which the page refused as no DXF (r66 A3)
+export const DWG_TAG = /^AC(10\d\d|\d\.\d\d)$/;
 export function dwgRefusal(tag) {
   if (DWG_RELEASES[tag]) return null;
   // (a release before R10 writes its tag with a point -- AC1.50, AC2.10 --: a DWG, older; it was
   // "not a DWG file" -- r65 Q8)
-  if (!/^AC(\d{4}|\d\.\d\d)$/.test(tag)) return 'not a DWG file';
+  if (!DWG_TAG.test(tag)) return 'not a DWG file';
   const first = DWG_TAGS[0], last = DWG_TAGS[DWG_TAGS.length - 1];
   const where = tag.includes('.') || tag < first ? `older than ${DWG_RELEASES[first][0]}` : tag > last ? `later than ${DWG_RELEASES[last][0]}` : `no release of ${dwgRange()}`;
   return `an ${tag} DWG (${where}) is not read`; // ("an AC1009", as it is said: r65 A8)
@@ -94,9 +99,9 @@ export function fileNameOfUrl(url) {
   return tail;
 }
 
-// A DWG by its bytes: "AC10" and two digits (the releases in DWG_RELEASES are read; any other
-// reaches the reader, which refuses it in dwgRefusal's words)
-export const isDWGBytes = (b) => b.length >= 6 && b[0] === 0x41 && b[1] === 0x43 && b[2] === 0x31 && b[3] === 0x30 && b[4] >= 0x30 && b[4] <= 0x39 && b[5] >= 0x30 && b[5] <= 0x39;
+// A DWG by its bytes: its tag (DWG_TAG; the releases in DWG_RELEASES are read, any other reaches
+// the reader, which refuses it in dwgRefusal's words)
+export const isDWGBytes = (b) => b.length >= 6 && DWG_TAG.test(String.fromCharCode(b[0], b[1], b[2], b[3], b[4], b[5]));
 
 // The format a file's first bytes say (after gunzip), or null. A binary STL has no magic (its
 // header is free text): only its name says it. 3MF and a zip of models are both zips: a zip is

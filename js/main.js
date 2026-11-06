@@ -5092,7 +5092,11 @@ const unitName = (u) => (u === 'in' ? 'inches' : u);
 // the units row's "file is in": the same bytes read again in that unit
 function setMeshUnit(u) {
   const src = app.meshSource;
-  if (!src || u === src.unit || !MM_PER[u]) return Promise.resolve();
+  // (against the unit it is in -- or, a re-read of it under way, the unit that is being read: a
+  // choice back to mm during the inches re-read compared with mm, the unit it was still in, and was
+  // nothing; the model ended in inches, the visitor's last choice mm -- r66 A2, Q1)
+  const rereading = PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq;
+  if (!src || u === (rereading ? app.rereadUnit : src.unit) || !MM_PER[u]) return Promise.resolve();
   // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
   // the add under way, the address naming a model the scene lacked -- r63 A3)
   // (and with them joined, a scene has no unit to choose: that is said -- the choice was dropped
@@ -5117,6 +5121,7 @@ function setMeshUnit(u) {
   return startLoad(() => {
     const seq = beginLoad();
     app.rereadSeq = seq;
+    app.rereadUnit = u;
     if (url) app.urlOfLoad = { seq, url };
     setStatus('loading', `reading ${src.name} in ${unitName(u)}`);
     // (the same bodies, at another size: the visitor's hidden parts stay hidden)
@@ -5401,7 +5406,10 @@ function fillInfo2D(el) {
   // (what the drawing draws as it opens; what a layer off or frozen holds said apart -- a frozen
   // reference's line counted as drawn: r65 A3)
   const shapes = d.paths.filter(dxfLib.isShape);
-  const ns = shapes.filter((p) => dxfLib.drawnAtOpen(p, full.layers)).length, nt = d.texts.filter((t) => dxfLib.drawnAtOpen(t, full.layers)).length;
+  // (the layers by name, once: an array searched per item per layer took 6 s a select on a drawing of
+  // 1000 layers and a million items -- r66 A10)
+  const byName = new Map(full.layers.map((x) => [x.name, x]));
+  const ns = shapes.filter((p) => dxfLib.drawnAtOpen(p, byName)).length, nt = d.texts.filter((t) => dxfLib.drawnAtOpen(t, byName)).length;
   const hidden = shapes.length - ns + d.texts.length - nt;
   row('contents', `${fmtInt(ns)} lines and shapes, ${fmtInt(nt)} texts${hidden ? ` (and ${fmtInt(hidden)} on layers off or frozen)` : ''}`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
@@ -5416,8 +5424,11 @@ function fillInfo2D(el) {
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
-    // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines")
-    const np = d.paths.filter((p) => p.layer === l && dxfLib.isShape(p)).length, nt = d.texts.filter((t) => t.layer === l).length;
+    // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines";
+    // and, as the row does, what a frozen reference on it holds -- dxf.js layersOf: the row said 461,
+    // the selection "0 lines and shapes" -- r66 A1, Q2)
+    const of = (it) => dxfLib.layersOf(it).includes(l);
+    const np = d.paths.filter((p) => of(p) && dxfLib.isShape(p)).length, nt = d.texts.filter(of).length;
     row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
   }
 }
@@ -7801,7 +7812,14 @@ async function startFromAddress(early) {
       await openStart(app.listEntries[0].url);
     }
     if (!poster) lackingNote(place, firstOpened ? app.listEntries[0].url : tourOwn ? r.tour.model : null);
-    if (r.error) failApart(`the tour ${r.error}`, true);
+    // (the address's tour failing after the visitor left that address -- a list pick during its read:
+    // told, not written into the picked model's ready line. Which way it went was the order of two
+    // answers: the tour's 404 before the pick's model showed, told; after, the new model's line said
+    // "the tour not found" -- r66, the differential's residual since r60)
+    if (r.error) {
+      if (params.get('tour') && !new URLSearchParams(location.search).has('tour')) tell(`the tour ${r.error}`, 6000);
+      else failApart(`the tour ${r.error}`, true);
+    }
     // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
     // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2. Else the
     // one ending, View in 3D's too: addressTourEnds -- played by tourPlaysHere while the address's,

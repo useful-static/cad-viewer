@@ -194,8 +194,9 @@ export async function runStart(c) {
   const act = (d) => {
     o.acted.push(d); // (an act set for a moment that never comes -- no model loads -- is not one)
     // (a pick needs an entry to pick: before the list has answered there is none)
-    o.events.push(d.pick ? (app.listEntries?.[d.pick - 1] ? 'pick' : 'pick (no entry)') : d.add ? `add${app.scene ? '' : ' (no scene)'}`
-      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? (app.header && app.meshSource && app.meshSource.unit !== d.unit && app.addsPending && app.addsChain ? 'unit while adds wait' : app.header && app.meshSource && app.meshSource.unit !== d.unit && !(app.addsPending && app.addsChain) && ['loading', 'tessellating'].includes(app.status) && app.rereadSeq !== app.loadSeq ? 'unit while another opens' : 'unit') : `file ${d.file}`);
+    // (a pick's event once it is made, or not: it waits for its entry -- below)
+    if (!d.pick) o.events.push(d.add ? `add${app.scene ? '' : ' (no scene)'}`
+      : d.click ? 'click' : d.back ? 'back' : d.forward ? 'forward' : d.reload ? 'reload' : d.hash ? 'hash' : d.unhash ? 'unhash' : d.cancel ? 'cancel' : d.unit ? (app.header && app.meshSource && app.meshSource.unit !== d.unit && app.addsPending && app.addsChain ? 'unit while adds wait' : app.header && app.meshSource && app.meshSource.unit !== d.unit && !(app.addsPending && app.addsChain) && o.opening != null && o.opening === app.loadSeq ? 'unit while another opens' : 'unit') : `file ${d.file}`);
     if (d.click) return dom.posterload.onclick && dom.posterload.onclick();
     // (Add model… with one name, or the files a case picks)
     if (d.add) return run.addPicked([].concat(d.add).map((a) => (typeof a === 'string' ? { name: a, size: d.size || 10 } : a)));
@@ -203,7 +204,18 @@ export async function runStart(c) {
     // opened it all the same, and pushed an entry the page never does: r60, the differential)
     // (the history as it was before the first pick, for the take-back's check: I20)
     if (d.pick && !o.pickSnap) o.pickSnap = { stack: stack.map((s) => s.href), at };
-    if (d.pick) { const e = app.listEntries?.[d.pick - 1]; return e && e.url !== run.listedNow() && run.openListed(e.url); }
+    // (from the drop-down, which fills when the list answers: the visitor waits for the entry, a
+    // while -- ui-diff's page waits at most 1.5 s; picked at once, the page's pick before a
+    // redirected list's answer was nothing: r66)
+    if (d.pick) {
+      return (async () => {
+        for (let k = 0; k < 40 && !app.listEntries?.[d.pick - 1]; k++) await tick();
+        const e = app.listEntries?.[d.pick - 1];
+        o.events.push(e ? 'pick' : 'pick (no entry)');
+        if (!e) return null;
+        return e.url !== run.listedNow() && run.openListed(e.url);
+      })();
+    }
     // (Back: the entry before, as the history keeps it -- with its #view=, r58 Q4)
     if (d.back) { o.acting = true; try { return history.back(); } finally { o.acting = false; } }
     if (d.forward) return history.forward();
@@ -217,7 +229,12 @@ export async function runStart(c) {
     // (as setMeshUnit: after the address's ?add=s, the tour ended, the model read in the unit -- the
     // re-read itself, a load of the same bodies, stood in for by syncUnitParam: r63 A3, Q6)
     // (main.js's own setMeshUnit, the units row's handler: shown only while a model is -- r64 A4)
-    if (d.unit) return app.header ? run.setMeshUnit(d.unit) : null;
+    // (andThen: a second choice in the same task, the first's re-read just begun -- r66 A2)
+    if (d.unit) {
+      if (!app.header) return null;
+      const first = run.setMeshUnit(d.unit);
+      return d.andThen ? Promise.all([first, run.setMeshUnit(d.andThen)]) : first;
+    }
     // (Cancel on the load's card, as wired)
     if (d.cancel) return dom.pcancel.onclick && dom.pcancel.onclick();
     return run.openFile({ name: d.file, size: d.size || 10 });
@@ -251,7 +268,11 @@ export async function runStart(c) {
   const fetchFake = async (u) => {
     const path = String(u).startsWith(SITE) ? String(u).slice(SITE.length) : String(u);
     const acting = visit(path);
-    await settle((c.slow || []).includes(path) ? 30 : 3);
+    // (a read that times out gives up after its limit: later than a slow answer, as in the page --
+    // 900 ms against 600 --, so a model shown meanwhile is shown when it does. It gave up in 3
+    // ticks, before a model loaded, and its note went to the status line alone where the page also
+    // told it: r66, the differential)
+    await settle(serve[path] === 'TIMEOUT' ? 35 : (c.slow || []).includes(path) ? 30 : 3);
     if (acting) { await acting; await settle(1); }
     if (serve[path] === 'TIMEOUT') { const e = new Error('signal timed out'); e.name = 'TimeoutError'; throw e; }
     if (serve[path] === 'BODY-TIMEOUT') {
@@ -262,11 +283,18 @@ export async function runStart(c) {
     if (c.redirect && c.redirect[path]) Object.defineProperty(res, 'url', { value: SITE + c.redirect[path] });
     return res;
   };
+  // (the harness's own knowledge of a model opening: the newest load it began, until that load ends --
+  // the "this file is in" act's event read main.js's guard restated, PROGRESS_STATES and rereadSeq,
+  // which judged the page by its own rule: r66 A8)
   const fakeLoad = async (url, k, extras, fromFile) => {
     const adding = !!app.startingAdd;
     o.loadedUrls.push(String(url));
     o.events.push(`load ${String(url).split('/').pop()}`);
     const seq = k.beginLoad();
+    o.opening = seq;
+    try { return await loadBody(url, k, extras, fromFile, adding, seq); } finally { if (o.opening === seq) o.opening = null; }
+  };
+  const loadBody = async (url, k, extras, fromFile, adding, seq) => {
     if (dom.pcancel.hidden) o.cancelHidden.push(String(url));
     const file = String(url).split('/').pop();
     o.opened.push(fromFile && extras.length ? [file, ...extras.map((x) => x.name)].join('+') : file);
@@ -313,10 +341,16 @@ export async function runStart(c) {
   // file shown again, the load's rules run, then the unit it was read in (r64 A4)
   const fakeReread = async (s, unit, seq, k) => {
     o.events.push(`reread ${s.name}`);
+    // (its own moment, "reread <file>": a second choice made during it -- r66 A2)
+    visit(`reread ${s.name}`);
     k.setStatus('loading', `reading ${s.name} in ${unit}`);
     await settle((c.slow || []).includes(s.name) ? 30 : 2);
     if (k.stale(seq)) return;
-    app.tour = null;
+    // (the tour is main.js's to end, setMeshUnit's endTour -- ended here too, a mutant taking that
+    // out of main.js passed: r66 Q5)
+    // (the model shown again: loadBuffer sets the view to its preset, as at any load -- the link's
+    // view the start landed is gone; the harness kept it, and 22 runs differed: r66, the differential)
+    o.events.push(`reshown ${s.name}`);
     k.loadShown();
     k.setUnitRead(unit);
     app.meshSource = { ...s, unit };

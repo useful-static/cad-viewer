@@ -394,6 +394,25 @@ t('the head-only decision: a custom entity class and an R2010+ table are read to
   const bad = read('AEC_WALL', 500, 32, () => { throw new Error('read past the end'); });
   assert.ok(bad.o.error && !bad.o.headOnly && bad.f.some((x) => x.startsWith('decode AEC_WALL')), JSON.stringify(bad));
 });
+t('a constant ATTDEF in a block is drawn once an insert; a plain one, an invisible one and a multi-line one are not -- the multi-line one counted as not read (r66 Q6, A6)', () => {
+  const E = (owner, extra = {}) => ({ entmode: 0, owner, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0, ...extra });
+  const T = (text, flags) => ({ p: [1, 1, 0], elev: 0, h: 2, text, rot: 0, wf: 1, oblique: 0, gen: 0, ha: 0, va: 0, a: [0, 0, 0], ext: [0, 0, 1], tag: 'TAG', flags });
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [10, 11] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, flags: 0 } }],
+    [3, { handle: 3, name: 'BLOCK_RECORD', decoded: true, d: { name: 'TB', base: [0, 0, 0], entities: [13, 14, 15, 16] } }],
+    [6, { handle: 6, name: 'BLOCK_CONTROL', decoded: true, d: { n: 1, model: 1, paper: 0 } }],
+    [10, { handle: 10, name: 'INSERT', decoded: true, e: E(1), d: { block: 3, p: [0, 0, 0], s: [1, 1, 1], rot: 0 } }],
+    [11, { handle: 11, name: 'INSERT', decoded: true, e: E(1), d: { block: 3, p: [50, 0, 0], s: [1, 1, 1], rot: 0 } }],
+    [13, { handle: 13, name: 'ATTDEF', decoded: true, e: E(3), d: T('CONST-VALUE', 2) }],
+    [14, { handle: 14, name: 'ATTDEF', decoded: true, e: E(3), d: T('a default', 0) }],
+    [15, { handle: 15, name: 'ATTDEF', decoded: true, e: E(3), d: T('HIDDEN', 3) }],
+    [16, { handle: 16, name: 'ATTDEF', decoded: true, e: E(3), d: { multi: true, ver: 0, type: 2 } }],
+  ]);
+  const dr = drawDWG({ objects, header: {}, v: 32, version: 'AC1032', encoding: 'utf-8', codepage: 30 });
+  assert.deepEqual(dr.texts.map((x) => [x.text, x.x]).sort(), [['CONST-VALUE', 1], ['CONST-VALUE', 51]]);
+  assert.deepEqual(dr.notDrawn, { 'ATTDEF (multi-line, not read)': 1 });
+});
 t('round 17: a missing block, a multi-line ATTRIB, a viewport and the active layout reach the page', () => {
   const E = (owner, extra = {}) => ({ entmode: 0, owner, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0, ...extra });
   const objects = new Map([
@@ -520,7 +539,8 @@ t('round 18: drops counted only where the drawing reaches them; a missing block\
     const c = defs.find((o) => o.d && !o.d.multi && (o.d.flags & 3) === 2 && o.d.text.trim() && insertsOf(o) > 0);
     assert.ok(c, 'the file holds a constant ATTDEF with a value, in a block that is inserted');
     const inserts = insertsOf(c);
-    assert.ok(parseDXF(dwgToPairs(d)).texts.filter((x) => x.text === c.d.text).length >= inserts);
+    // (once an insert, exactly: ">=" passed one drawn twice -- r66 Q6)
+    assert.equal(parseDXF(dwgToPairs(d)).texts.filter((x) => x.text === c.d.text).length, inserts);
   });
 }
 

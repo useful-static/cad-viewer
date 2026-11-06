@@ -969,8 +969,10 @@ function emit(recs, M, byBlock, depth, ctx) {
         // were counted "not drawn", while the same drawing's DWG drew them)
         const q = blockRef(r);
         const b = ctx.blocks.get(get(q, 2, ''));
-        // (a reference to a block not in the file draws nothing: counted, as a table's was alone)
-        if (!b) { ctx.count(r, r.type); break; }
+        // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
+        // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
+        // and they drew at open -- r66 A7)
+        if (!b) { attHold = L.frozen ? (ctx.hold && ctx.hold.includes(layer) ? ctx.hold : [...(ctx.hold || []), layer]) : null; ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -1349,7 +1351,8 @@ function extentsOf(out, layers) {
   const kept = layers ? { paths: out.paths.filter((p) => thawed(p, layers)), texts: out.texts.filter((t) => thawed(t, layers)) } : out;
   return (layers && itemsBox(kept)) || itemsBox(out);
 }
-function itemsBox(out) {
+// (exported for the view's Fit, which frames the frozen layers the visitor turned on: r66 Q3)
+export function itemsBox(out) {
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
   for (const p of out.paths) {
     // (a wide polyline reaches half its width past its points: Fit cut it at the edge)

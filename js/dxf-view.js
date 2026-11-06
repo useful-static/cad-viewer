@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
+import { itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unitWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
@@ -259,11 +259,28 @@ export function createDxfView(canvas, drawing, cb = {}) {
     return w;
   };
 
+  // What Fit frames: the drawing's extents (frozen layers left out, as Zoom Extents leaves them) while
+  // every frozen layer is still off; with one the visitor turned on, what its layers then show too --
+  // Fit framed the opening extents always, and 158 of 022-FORKLIFT's 159 ASHADE items fell outside
+  // its frame once that layer was on (r66 Q3)
+  const frozen = drawing.layers.filter((l) => l.frozen).map((l) => l.name);
+  const framed = new Map(); // (by the frozen layers on: one box each)
+  const frame = () => {
+    const on = frozen.filter((n) => !st.off.has(n));
+    if (!on.length) return ext;
+    const key = on.join('\u0000');
+    if (!framed.has(key)) {
+      const keep = (it) => layersOf(it).every((n) => !frozen.includes(n) || !st.off.has(n));
+      framed.set(key, itemsBox({ paths: drawing.paths.filter(keep), texts: drawing.texts.filter(keep) }) || ext);
+    }
+    return framed.get(key);
+  };
   function fit() {
     const [w, h] = css();
-    const dx = ext.max[0] - ext.min[0] || 1, dy = ext.max[1] - ext.min[1] || 1;
+    const e = frame();
+    const dx = e.max[0] - e.min[0] || 1, dy = e.max[1] - e.min[1] || 1;
     st.s = Math.min(w / dx, h / dy) * 0.92;
-    st.c = [0, 0];
+    st.c = [(e.min[0] + e.max[0]) / 2 - o[0], (e.min[1] + e.max[1]) / 2 - o[1]];
     draw();
   }
 
@@ -284,11 +301,15 @@ export function createDxfView(canvas, drawing, cb = {}) {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const sel = st.selected;
-    const order = [...groups.values()].sort((a, b) => (a.layer === sel) - (b.layer === sel)); // the selected layer last, on top
+    // (an item is a layer's when it answers to it: its own, or a frozen reference's it is drawn under
+    // -- the layer list's rule, js/dxf.js layersOf; the selection lit only an item's own, and a frozen
+    // layer's 461 items were drawn faded when it was selected: r66 A1, Q2)
+    const isOf = (it, n) => n != null && layersOf(it).includes(n);
+    const order = [...groups.values()].sort((a, b) => isOf(a, sel) - isOf(b, sel)); // the selected layer last, on top
     for (const g of order) {
       if (hid(g)) continue;
-      const hot = g.layer === sel || g.layer === st.hover;
-      const col = g.layer === sel ? SELECTED : sel && g.layer !== st.hover ? FADED : g.colour;
+      const hot = isOf(g, sel) || isOf(g, st.hover);
+      const col = isOf(g, sel) ? SELECTED : sel && !isOf(g, st.hover) ? FADED : g.colour;
       if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col;
       ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
@@ -321,7 +342,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       // (in the font's own px from here, scaled to the text's height: FONT_PX)
       const k0 = t.h / FONT_PX;
       ctx.scale(k0, -k0);
-      ctx.fillStyle = t.layer === sel ? SELECTED : sel && t.layer !== st.hover ? FADED : onPaper(t.colour);
+      ctx.fillStyle = isOf(t, sel) ? SELECTED : sel && !isOf(t, st.hover) ? FADED : onPaper(t.colour);
       ctx.font = FONT;
       ctx.textAlign = t.align;
       // (an MTEXT with a reference width wraps at it, measured in the font -- js/dxf.js wrapLines;

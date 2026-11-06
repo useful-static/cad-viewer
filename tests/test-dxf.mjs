@@ -1136,6 +1136,14 @@ test('a frozen reference holds its ATTRIBs and every frozen layer above it; the 
   const text = (s) => d2.texts.find((t) => t.text === s);
   assert.deepEqual(layersOf(text('SHEET-7')), ['T', 'F1']);
   assert.deepEqual(layersOf(text('FREE')), ['T']);
+  // (an INSERT of a block not in the file, on F1: its ATTRIB held all the same -- r66 A7)
+  const miss = parseDXF(dxf([
+    [0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'], [0, 'LAYER'], [2, 'F1'], [70, 1], [62, 2], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'INSERT'], [8, 'F1'], [2, 'XB'], [10, 0], [20, 0], [66, 1],
+    [0, 'ATTRIB'], [8, 'T'], [10, 0], [20, 0], [40, 2], [1, 'SHEET-8'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual(layersOf(miss.texts.find((t) => t.text === 'SHEET-8')), ['T', 'F1']);
   const nested = d2.paths.find((p) => p.pts[0] === 1000);
   assert.deepEqual(layersOf(nested), ['T', 'F1', 'F2']);
   assert.deepEqual([d2.extents.min, d2.extents.max], [[-50, 0], [10, 10]], 'neither frozen reference, the off line kept');

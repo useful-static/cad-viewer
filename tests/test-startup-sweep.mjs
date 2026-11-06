@@ -38,7 +38,11 @@
 //   I23 "this file is in" writes ?unit= beside the model it is for;
 //   I24 after a reload, the model shown is the one the address shown opens fresh (Back onto an entry
 //       from before it read that page's marks as its own: r64 Q3);
-//   I25 "this file is in" while another model opens is refused in words (r64 S1; untested: r65 A6).
+//   I25 "this file is in" while another model opens is refused in words (r64 S1; untested: r65 A6);
+//   I26 the address's tour failing after the visitor left that address is told, never written into
+//       the shown model's ready line (which way it went was the order of two answers: r66);
+//   I27 "this file is in", chosen more than once, reads the model in the last unit chosen, and a
+//       re-read ends the tour (r66 A2, Q1, Q4, Q5).
 // (r59: the harness keeps a real history -- Back and a #view= edit fire popstate and hashchange as a
 // browser does --, the real setModelParam and Cancel, a device file with no URL, a view by its text,
 // a new header for each added model, and the list's late answer running the entry's rules.)
@@ -262,6 +266,12 @@ function acts(a, embed) {
     out.push(['this file is in inches, during a list pick', { slow: ['b.stl'], during: [{ at: 'b.stl', unit: 'in' }], after: [{ pick: 2 }] }]);
   }
   out.push(['this file is in inches, during a dropped file', { slow: ['v.stl'], during: [{ at: 'v.stl', unit: 'in' }], after: [{ file: 'v.stl' }] }]);
+  // (r66 A2, Q1, Q4: a second choice of "this file is in" -- back to mm during the inches re-read;
+  // two while the ?add=s wait -- the last one chosen is what the model is read in)
+  // (the second choice in the same task as the first, its re-read just begun: a moment the page can be
+  // acted at too -- a re-read asks for nothing, and ui-diff never saw a "reread" moment: r66)
+  out.push(['this file is in inches, then mm during its re-read', { after: [{ unit: 'in', andThen: 'mm' }] }]);
+  if (addOf(a.q) && a.lateList) out.push(['this file is in inches then mm, once the model shows', { during: [{ at: `loaded ${firstOfAddress({ addr: a })}`, unit: 'in' }, { at: `loaded ${firstOfAddress({ addr: a })}`, unit: 'mm' }] }]);
   // (r65 Q6: once the model shows, its ?add= still waiting -- for a late list. Only there: with the
   // list in, the add starts at once, and in the page the act came after it joined -- the
   // differential, r65)
@@ -520,6 +530,22 @@ function check(c0, r) {
       v('I22', `a failed pick opened again a scene that was whole (${r.events.join(' > ')})`);
     }
   }
+  // I27: the last unit chosen is the reading, when every act was a unit choice and one model, read
+  // from its bytes, is shown (a choice back to mm during the inches re-read was nothing: r66 A2)
+  if (acts.length && acts.every((d) => d.unit) && r.status === 'ready' && r.app.meshSource && (r.app.scene || []).length === 1) {
+    const last = acts[acts.length - 1].andThen || acts[acts.length - 1].unit;
+    if (r.unitRead !== last) v('I27', `the last unit chosen ${last}, the model read in ${r.unitRead}`);
+  }
+  // (and the re-read ends the tour, as setMeshUnit ends it: a tour started before it, none after)
+  {
+    const ev = r.events, rr = ev.findIndex((e) => e.startsWith('reread '));
+    if (rr >= 0 && ev.slice(0, rr).some((e) => e.startsWith('tour ')) && !ev.slice(rr).some((e) => e === 'tour-end' || e.startsWith('tour ') || e.startsWith('shown '))
+      && !ev.slice(0, rr).some((e) => e === 'tour-end')) v('I27', `a tour left playing over the re-read (${ev.join(' > ')})`);
+  }
+  // I26: the start's tour, failing after a pick left its address, is not the picked model's line
+  if (qp.get('tour') && !new URL(r.href).searchParams.get('tour') && r.status === 'ready' && /the tour (not found|gave no answer)/.test(r.msg || '')) {
+    v('I26', `the start's tour's failure in the ready line of an address naming no tour: ${r.msg}`);
+  }
   // I25: "this file is in" chosen while another model opens is refused, and said so
   if (r.events.includes('unit while another opens') && !r.shown.some((t) => /^not read in inches: another model is opening$/.test(t))) {
     v('I25', `"this file is in" while another model opened, no refusal told: ${JSON.stringify(r.shown)}`);
@@ -684,7 +710,8 @@ export function endState(r) {
   const base = (u) => String(u || '').split('/').pop();
   const ev = r.events;
   // (the scene's last change: a model shown, or one joining it -- each ends the tour and sets the view)
-  const lastShown = ev.map((e) => e.startsWith('shown ') || e === 'added').lastIndexOf(true);
+  // (a re-read in another unit too: the model shown again, at its preset view -- r66)
+  const lastShown = ev.map((e) => e.startsWith('shown ') || e.startsWith('reshown ') || e === 'added').lastIndexOf(true);
   const after = ev.slice(lastShown + 1);
   const view = after.filter((e) => e.startsWith('view ')).pop();
   // (a tour ended since -- a re-read ends it: r63 Q6 -- is no tour)

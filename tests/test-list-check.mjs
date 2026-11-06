@@ -44,6 +44,7 @@ const FILES = {
   [`${B}r12.dwg`]: Buffer.from('AC1009\0\0\0\0'),
   [`${B}r12-named-dxf.dxf`]: Buffer.from('AC1009\0\0\0\0'),
   [`${B}r2000.dwg`]: Buffer.from('AC1015\0\0\0\0'),
+  [`${B}r2-named-dxf.dxf`]: Buffer.from('AC2.10\0\0\0\0'),
   // sent with Content-Encoding: gzip: the browser has unpacked it by the time it is read
   [`${B}unpacked.stp.gz`]: 'ISO-10303-21;\nHEADER;\n',
   [`${B}text.stp.gz`]: 'hello',
@@ -144,6 +145,11 @@ await test('a DWG of a release the page does not read is bad, in the reader\'s w
   const named = await checkFile(`${B}r12-named-dxf.dxf`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(named.level, 'bad', named.detail);
   assert.match(named.detail, /AC1009 DWG \(older than R13\) is not read \(named DXF\)/);
+  // (and a release before R10, its tag with a point, is a DWG to the sniff as to the words: called
+  // "ok · DXF" by its name, which the page refused as no DXF -- r66 A3)
+  const r2 = await checkFile(`${B}r2-named-dxf.dxf`, { fetchFn: fakeFetch, sniff: true });
+  assert.equal(r2.level, 'bad', r2.detail);
+  assert.match(r2.detail, /an AC2\.10 DWG \(older than R13\) is not read \(named DXF\)/);
   // must accept: a release it reads stays ok
   const r2000 = await checkFile(`${B}r2000.dwg`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(r2000.level, 'ok', r2000.detail);

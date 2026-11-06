@@ -126,6 +126,15 @@ test('far out, a loop 2.8% off a circle is not one, a true rim still is (as floa
   assert.ok(circleOf(loop(0.1, 0, 5000), 0.5), 'Ø0.2 at 5 m');
   assert.ok(circleOf(loop(1.5, 0, 20000), 0.5), 'Ø3 at 20 m');
 });
+test('a rim the stored positions cannot tell is no row but counted (untold), and the same rim at the origin is a hole (r66)', () => {
+  // a Ø0.08 through-hole (rounding at 20 m: 2.43% of its radius, as the boards' vias), and a Ø3 one
+  const at = (x) => holesOf(bodyGeometry(model([{ name: 'w', faces: [...washer(0.04, 0.3, 0.1, 48, x, x, 0), ...washer(1.5, 3, 0.1, 48, x + 10, x, 0)] }]), 0));
+  const h0 = at(0), h20 = at(20000);
+  assert.deepEqual(h0.map((h) => [Math.round(h.diameter * 100) / 100, h.rims]), [[0.08, 2], [3, 2]]);
+  assert.equal(h0.untold, 0);
+  assert.deepEqual(h20.map((h) => [Math.round(h.diameter * 100) / 100, h.rims]), [[3, 2]], 'the Ø3 hole still told 20 m out');
+  assert.equal(h20.untold, 2, 'the Ø0.08 hole\'s two rims said untold, not left out without a word');
+});
 test('a bore anywhere pairs: tilted in one plane (a component 0 by design) off the origin, and small 5 m out', () => {
   // a washer about any axis d at o, as float32
   const unit = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l); };

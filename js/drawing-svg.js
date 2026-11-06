@@ -47,7 +47,8 @@ export function drawingSVG(parts, right, up, { title = '', margin = 5 } = {}) {
         // a closed edge that is a circle seen face on (geometry without its
         // faces' circles): a true circle
         const c = circleOf(e.slice(0, -1), part.geom.a); // (the part's own: a scene's models differ)
-        if (c && Math.abs(Math.abs(dot(c.normal, toward)) - 1) < 1e-3) {
+        // (one the stored positions cannot tell is drawn as its edge: js/measure-geom.js untold)
+        if (c && !c.untold && Math.abs(Math.abs(dot(c.normal, toward)) - 1) < 1e-3) {
           const [cx, cy] = P(c.centre);
           grow(cx - c.radius, cy - c.radius);
           grow(cx + c.radius, cy + c.radius);

@@ -29,9 +29,15 @@ const storedFloor = (far) => 8 * 2 ** -23 * far;
 // floor of circleOf and wallJoins. Eight let a loop 2.8% off a circle pass as a hole a few metres
 // out (the RK3399 board 5 m out gained two; six of eight boards more at 20 m: r65 Q3)
 const storedUlp = (far) => 2 ** -23 * far;
-// a rim whose radius the stored positions cannot tell to this share is no circle that can be told:
-// not one (r65 Q3)
-const TELLABLE = 0.05;
+// A loop the stored positions cannot tell: a stored coordinate's rounding, half a unit in its last
+// place, more than this many times the radius test. Such a loop is "untold": no circle, and
+// counted, so the hole table says what it cannot tell. The line is measured, not derived: the eight
+// boards 20 m out, every rim rounded to at most 1.06% of its radius (a Ø0.184's) reads as at the
+// origin, and none rounded to 2.43% (the Ø0.08s) does -- left out without a word (r65 Q3, r66).
+// 1.5 lies between; half the test dropped 38 of the RK3328's 49 rows that read right, the test
+// itself 12 of the RK3399's.
+const TELL_SHARE = 1.5;
+export const untoldAt = (far, r) => storedUlp(far) / 2 > TELL_SHARE * RADIUS_TOL * r;
 
 export const circleMinPoints = (a) => (a > 0 && a < (2 * Math.PI) / 9 ? Math.ceil((2 * Math.PI) / a) - 1 : Infinity);
 
@@ -89,13 +95,13 @@ export function circleOf(pts, angularDeflection) {
   let far = 0;
   for (const p of pts) far = Math.max(far, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]));
   const stored = storedUlp(far);
-  if (stored > TELLABLE * r) return null;
   for (const [x, y, z] of xy) {
     if (Math.abs(z) > Math.max(EPS_PLANAR * r, stored)) return null;
     if (Math.abs(Math.hypot(x - cx, y - cy) - r) > Math.max(RADIUS_TOL * r, stored)) return null;
   }
   const centre = [0, 1, 2].map((k) => c[k] + ux[k] * cx + uy[k] * cy);
-  return { centre, normal: nz, radius: r };
+  // (inside the test, but as stored it cannot be told from a shape that is not a circle: untold)
+  return untoldAt(far, r) ? { centre, normal: nz, radius: r, untold: true } : { centre, normal: nz, radius: r };
 }
 
 // A face's plane, or null when its triangles do not all lie in one:
@@ -242,7 +248,8 @@ export function bodyGeometry(model, meshIndex) {
       if (!f.whole) {
         const c = circleOf(pts, a);
         // (its face by index: faces.indexOf for each circle was 1.3 s of 11,444 faces)
-        if (c) { c.face = fi; c.inner = li !== outer; f.circles.push(c); circles.push(c); }
+        // (an untold one is no circle, and its face's count of what cannot be told: r66)
+        if (c && c.untold) { if (li !== outer) f.untold = (f.untold || 0) + 1; } else if (c) { c.face = fi; c.inner = li !== outer; f.circles.push(c); circles.push(c); }
       }
       for (let i = 0; i < loop.length; i++) {
         const ka = idOf(loop[i]), kb = idOf(loop[(i + 1) % loop.length]);
@@ -546,5 +553,9 @@ export function holesOf(geom) {
     if (best >= 0) markUsed(best);
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
   }
-  return out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
+  out.sort((a, b) => a.diameter - b.diameter || a.centre[0] - b.centre[0] || a.centre[1] - b.centre[1]);
+  // (and how many rims of flat faces the stored positions cannot tell, so far from the origin: the
+  // table says so -- r66)
+  out.untold = geom.faces.reduce((n, f) => n + (f.plane && f.untold ? f.untold : 0), 0);
+  return out;
 }
