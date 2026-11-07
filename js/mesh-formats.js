@@ -16,7 +16,7 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -586,10 +586,7 @@ function parsePLY(buf, base) {
   // (its header and format by the one rule, the list check's too: js/formats.js plyHeader -- r73 A2)
   const ph = plyHeader(u8);
   if (!ph) throw new Error(`${base}.ply is damaged: it has no end_header line`);
-  const { hdrEnd, lines: hdr, format: fmt } = ph;
-  let bodyStart = hdrEnd + 'end_header'.length;
-  while (u8[bodyStart] === 13) bodyStart++;
-  if (u8[bodyStart] === 10) bodyStart++;
+  const { lines: hdr, format: fmt, bodyStart } = ph;
   const els = [];
   for (const l of hdr) {
     const sp = l.trim().split(/\s+/);
@@ -842,9 +839,11 @@ export async function unzip(buf) {
     async get(p, max = MAX_FILE_BYTES, too = null) {
       const f = out.get(p.replace(/^\//, '').toLowerCase());
       if (!f) return null;
-      if (too && f.usize > max) throw too(mb(f.usize));
+      // (a size past the limit rounded up, as the text readers say it: "500 MB, more than the 500 MB"
+      // for one a byte over -- r74 A8, Q8)
+      if (too && f.usize > max) throw too(sizeOver(f.usize));
       if (f.method === 0) {
-        if (too && f.data.length > max) throw too(mb(f.data.length));
+        if (too && f.data.length > max) throw too(sizeOver(f.data.length));
         return f.data.slice().buffer;
       }
       if (f.method !== 8) throw new Error(`zip entry ${p} uses compression method ${f.method}`);

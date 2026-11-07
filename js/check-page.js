@@ -75,3 +75,5 @@ $('form').onsubmit = (ev) => {
   run(urls);
 };
 if (given.length) run(given);
+// (the module's last statement: js/boot-check.js's sign the check started -- r74 A4)
+window.__checkStarted = true;

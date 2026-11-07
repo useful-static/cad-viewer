@@ -674,6 +674,10 @@ await test('r3-7 text past the engine\'s string limit: a 3MF model part inflatin
   dv.setUint16(cd + 10, 8, true);
   dv.setUint32(cd + 24, raw.length, true);
   await refusedFast(() => parseMesh('3mf', z.buffer, 'a.3mf'), /a\.3mf: its model part 3D\/3dmodel\.model unpacks to 600 MB, more than the 500 MB of text this viewer reads/, 1000);
+  // (claiming 300 KB past the limit: said past it, rounded up -- "500 MB, more than the 500 MB" by
+  // whole MB: r74 A8, Q8)
+  dv.setUint32(cd + 24, 500 * 2 ** 20 + 307200, true);
+  await refusedFast(() => parseMesh('3mf', z.buffer, 'a.3mf'), /a\.3mf: its model part 3D\/3dmodel\.model unpacks to 500\.3 MB, more than the 500 MB of text this viewer reads/, 1000);
   // (the same entry claiming 1 MB unpacked: the inflate stops at the text limit)
   dv.setUint32(cd + 24, 2 ** 20, true);
   await refusedFast(() => parseMesh('3mf', z.buffer, 'a.3mf'), /a\.3mf: its model part 3D\/3dmodel\.model unpacks to over 500 MB, more than the 500 MB of text this viewer reads/, 10000);

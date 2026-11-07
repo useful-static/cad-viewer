@@ -2007,11 +2007,11 @@ await test('loadUrl takes the model\'s early download and readLists the early re
   const app = { loadSeq: 0 }, got = [], loc = { href: 'https://s.example/', search: '' };
   const el = () => ({ hidden: false, textContent: '' });
   const f = new Function('app', '$', 'setStatus', 'announce', 'fileName', 'showProgress', 'directFor', 'earlyFetch', 'fetchFailedText', 'isRelative',
-    'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad',
+    'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad', 'mbSoFar',
     `${cut('function beginLoad() {')}${cut('function stale(seq) {')}${cut('async function loadUrl(url) {')}${cut('async function readLists(lists, openFirst) {')}; return { loadUrl, readLists };`)(
     app, () => el(), () => {}, () => {}, (u) => u.split('/').pop(), () => {}, (u) => ({ url: u }), ef.earlyFetch, async () => 'x', isRelative,
     2 ** 31, (n) => n, () => '', () => '0', async (buf, name) => { got.push([name, buf.byteLength]); }, loc,
-    ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {});
+    ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {}, () => '0'); // (mbSoFar: r74 A10)
   // (the early ones, as js/early.js starts them)
   ef.startEarly('https://s.example/a.stl');
   ef.setEarlyLists(['l.json'], fetchModelLists(['l.json'], 'https://s.example/', (u) => fetch(u)));

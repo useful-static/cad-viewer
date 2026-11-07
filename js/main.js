@@ -253,6 +253,8 @@ const IDLE_MSG = `open or drop ${opensShort()}`;
 // (MB of 2^20, as the limits and their words count: "546.4 MB" while loading, then refused as "521 MB
 // of text" -- r72 Q8; a tenth kept, for a progress line that moves)
 const mb = mbTenth; // (rounded up to a tenth, as the limits' words say a size: r73 Q4)
+// (and what has come of a download rounded down: rounded up, it read "12.1 of 12.1 MB" still downloading -- r74 A10)
+const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
 
 // Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a failure
 // apart from the load, the GPU recovery's end and an error shown in the view (three of them
@@ -5842,12 +5844,14 @@ async function loadUrl(url) {
       // progress (app.status 'loading') and does not paint "ready" over it
       setStatus('loading', pct
         // (in the page's one MB, mb: "fetching 546.4 MB", then refused as 521 MB of text -- r73 A6)
+        // (what has come rounded down: up, as a size past a limit is, it read "12.1 of 12.1 MB" still
+        // downloading -- r74 A10)
         ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${mb(total)} MB`
-        : `fetching ${mb(got)} MB`);
+        : `fetching ${mbSoFar(got)} MB`);
       const secs = (performance.now() - tf) / 1000;
       const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
       showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
-        pct ? `${mb(got)} of ${mb(total)} MB${rate}` : `${mb(got)} MB${rate}`);
+        pct ? `${mbSoFar(got)} of ${mb(total)} MB${rate}` : `${mbSoFar(got)} MB${rate}`);
     }
     const all = new Uint8Array(got);
     let o = 0;
@@ -8047,3 +8051,6 @@ async function selftest() {
 }
 
 guard(main()).then(() => { if (params.get('selftest')) return selftest(); });
+// (the module's last statement: every one above it ran -- js/boot-check.js's sign the page started;
+// window.__cadv, set early, missed a throw in any later top-level statement: r74 Q7)
+window.__cadvStarted = true;

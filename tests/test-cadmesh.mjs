@@ -437,6 +437,12 @@ test('occt mapping: refuses a failed import', () => {
   assert.throws(() => occtResultToModel({ success: false }), /import failed/);
 });
 
+test('stp2mesh unpacks a .stp.gz as the page does: its limit and words, every member (r74 A7: node\'s gunzipSync, no limit -- 2.3 GB in 10 MB took 4.76 GB)', () => {
+  const src = readFileSync(join(HERE, '..', 'stp2mesh.mjs'), 'utf8');
+  assert.doesNotMatch(src, /gunzipSync\(read\)/, 'must fire: the unlimited unpack');
+  assert.match(src, /await gunzip\(read\)/);
+  assert.match(src, /import \{[^}]*\bgunzip\b[^}]*\} from '\.\/js\/cadmesh\.js'/);
+});
 test('stp2mesh refuses --absolute together with --deflection (review r1)', () => {
   let rc = 0;
   let err = '';
@@ -592,9 +598,11 @@ await test('a gzip of several members is read whole, member after member, where 
           for (let L = 18; L <= all.length; L++) {
             let out;
             try { out = gunzipSync(all.subarray(0, L)); } catch { continue; }
-            // (the first prefix that unpacks is the first member: node reads one member there)
+            // (the first prefix that unpacks is the first member: node reads one member there. With
+            // junk after it, Chromium drops output it had queued: 131,072 of a 200,000-byte member
+            // came -- given here as half -- r74 Q3)
+            if (L < all.length) { ctl.enqueue(new Uint8Array(out.subarray(0, out.length >> 1))); throw new TypeError('Junk found after end of compressed data.'); }
             ctl.enqueue(new Uint8Array(out));
-            if (L < all.length) throw new TypeError('Junk found after end of compressed data.');
             return;
           }
           throw new TypeError('incorrect header check');
@@ -609,6 +617,13 @@ await test('a gzip of several members is read whole, member after member, where 
     const members = Buffer.concat([gzipSync(a), gzipSync(b), gzipSync(c)]);
     const got = Buffer.from(await gunzip(members));
     assert.ok(got.equals(Buffer.concat([a, b, c])), `${got.length} bytes of ${a.length + b.length + c.length} (must fire: "corrupt or truncated (Junk found…)")`);
+    // (r74 A2: an empty member, and a one-byte one, in the middle -- their trailers 12 and 13 bytes in;
+    // looked for from 18, passed over, the file refused)
+    for (const mid of [Buffer.alloc(0), Buffer.from('x')]) {
+      const m3 = Buffer.concat([gzipSync(a), gzipSync(mid), gzipSync(c)]);
+      const g3 = Buffer.from(await gunzip(m3));
+      assert.ok(g3.equals(Buffer.concat([a, mid, c])), `a ${mid.length}-byte member between (must fire: "corrupt or truncated")`);
+    }
     // must reject still: junk that is no member after the first
     await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
   } finally {

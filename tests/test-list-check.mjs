@@ -264,6 +264,13 @@ await test('a PLY is text by its reader\'s own header rule: a late format line, 
     const r = await checkFile(`${B}scan.ply`, { fetchFn: sized(start, 700 * 2 ** 20), sniff: true });
     assert.equal(r.level, 'bad', `${what}: ${r.detail} (must fire: ok)`);
   }
+  // (r74 Q1) its body alone is held to the limit: 500 MB of body under a 2 KB header opens (must fire:
+  // bad, "500.1 MB of text"); a body past it is bad
+  const head = `ply\nformat ascii 1.0\n${'comment scanner header\n'.repeat(90)}element vertex 3\nproperty float x\nend_header\n`;
+  const atLimit = await checkFile(`${B}scan.ply`, { fetchFn: sized(head, head.length + 500 * 2 ** 20), sniff: true });
+  assert.notEqual(atLimit.level, 'bad', atLimit.detail);
+  const past = await checkFile(`${B}scan.ply`, { fetchFn: sized(head, head.length + 500 * 2 ** 20 + 1), sniff: true });
+  assert.equal(past.level, 'bad', past.detail);
   // must accept: a binary one that size
   const bin = await checkFile(`${B}scan.ply`, { fetchFn: sized('ply\nformat binary_little_endian 1.0\nelement vertex 3\nproperty float x\nend_header\n', 700 * 2 ** 20), sniff: true });
   assert.notEqual(bin.level, 'bad', bin.detail);
@@ -330,6 +337,52 @@ await test('a gzip is held to the limits by what it unpacks to, its trailer read
   const noRange = await checkFile(`${B}part.stl.gz`, { fetchFn: whole, sniff: true });
   assert.equal(noRange.level, 'warn', noRange.detail);
   assert.match(noRange.detail, /its unpacked size could not be asked/);
+});
+await test('a gzip\'s start is read as the page reads it: a short first member, and a PLY header past 4 KB (r74 A1, A3)', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const sized = (start, total) => async () => new Response(Buffer.from(start), { status: 206, headers: { 'content-length': String(start.length), 'content-range': `bytes 0-${start.length - 1}/${total}` } });
+  // a PLY whose header is over 4 KB, its format line late, in 5 MB of gzip saying 540 MB (must fire: "ok")
+  const hdr = `ply\n${'comment a long header line of the kind scanners write\n'.repeat(90)}format ascii 1.0\nelement vertex 3\nproperty float x\nend_header\n`;
+  const ply = gzipSync(Buffer.from(hdr));
+  const served = (start, total, isize) => async (u, o = {}) => {
+    const r = (o.headers && o.headers.Range) || '';
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32LE(isize >>> 0, 0);
+    const body = r.startsWith(`bytes=${total - 4}-`) ? tail : start;
+    const from = body === tail ? total - 4 : 0;
+    return new Response(body, { status: 206, headers: { 'content-length': String(body.length), 'content-range': `bytes ${from}-${from + body.length - 1}/${total}` } });
+  };
+  const r = await checkFile(`${B}scan.ply.gz`, { fetchFn: served(ply, 5e6, 540 * 2 ** 20), sniff: true });
+  assert.equal(r.level, 'bad', `${hdr.length}-byte header: ${r.detail} (must fire: ok)`);
+  // a gzip whose first member is short: read through to the next (must accept here: node's stream
+  // reads every member, so the arm that fires is Chromium's, ui-checks.py gzip-members)
+  const two = Buffer.concat([gzipSync(Buffer.from('solid x\n')), gzipSync(Buffer.from(' facet normal 0 0 1\n'.repeat(50)))]);
+  const s = await checkFile(`${B}two.stl.gz`, { fetchFn: sized(two, two.length), sniff: true });
+  assert.doesNotMatch(s.detail, /could not be read here/);
+  assert.match(s.detail, /STL/);
+});
+await test('a 3MF is held to the text limit by its model part, read from its directory with a range (r74 A5: a 1.3 MB 3MF of a 520 MB part said "ok · zip")', async () => {
+  // (a zip of one stored-size entry, its central directory saying what it unpacks to)
+  const zipOf = (name, usize) => {
+    const nm = Buffer.from(name);
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(8, 8); local.writeUInt32LE(usize, 22); local.writeUInt16LE(nm.length, 26);
+    const data = Buffer.from([3, 0]);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10); cd.writeUInt32LE(2, 20); cd.writeUInt32LE(usize, 24); cd.writeUInt16LE(nm.length, 28);
+    const body = Buffer.concat([local, nm, data]);
+    const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + nm.length, 12); end.writeUInt32LE(body.length, 16);
+    return Buffer.concat([body, cd, nm, end]);
+  };
+  const ranged = (z) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || 'bytes=0-65535');
+    const a = +m[1], b = Math.min(+m[2], z.length - 1);
+    return new Response(z.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${z.length}` } });
+  };
+  const big = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 520 * 2 ** 20)), sniff: true });
+  assert.equal(big.level, 'bad', `${big.detail} (must fire: ok · zip)`);
+  assert.match(big.detail, /its model part 3D\/3dmodel\.model unpacks to 520 MB of text, more than the 500 MB of text this viewer reads/);
+  // must accept: under it
+  const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 40 * 2 ** 20)), sniff: true });
+  assert.notEqual(ok.level, 'bad', ok.detail);
 });
 await test('a ranged read that fails where a plain one opens the file is asked again plainly, not called a CORS failure (r73 Q2: a host sending its stored Content-Encoding)', async () => {
   // (the browser's ranged request asks for identity; such a host sends gzip anyway, and the fetch

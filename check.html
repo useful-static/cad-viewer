@@ -22,6 +22,9 @@
 "publisher":{"@type":"Organization","name":"Useful Static","url":"https://known.name/"}}
 </script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- Before the modules, listening as they are fetched: a page whose check-page.js never ran says so,
+     with a Reload button, where its owner saw the form and nothing else (r74 A4; js/boot-check.js) -->
+<script src="js/boot-check.js" data-name="The list check" data-flag="__checkStarted"></script>
 <style>
   :root { color-scheme: dark; --bg:#1d2127; --panel:#252a31; --line:#353b44; --text:#e6e8eb; --dim:#9aa3ad; --accent:#ff8c1a; }
   * { box-sizing:border-box; }
@@ -67,7 +70,8 @@
   </table>
   <p class="note">A file the viewer cannot read across sites needs your server to send
     <code>Access-Control-Allow-Origin</code> for it (cad.place's origin, or <code>*</code>), on errors too, or a
-    missing file reads as a refusal. The model is read only up to its first 64 KB, enough to see its format.
+    missing file reads as a refusal. The model is read only up to its first 64 KB, enough to see its format;
+    a gzip of up to about 4 MB is read whole, to know what it unpacks to (and a larger one's last four bytes).
     The list format: <a href="https://github.com/useful-static/cad-viewer#model-lists">model lists</a>.</p>
 </main>
 <script type="module" src="js/check-page.js"></script>

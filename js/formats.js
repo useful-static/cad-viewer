@@ -147,7 +147,8 @@ export const TEXT_LIMIT_WORDS = `more than the ${sizeMb(MAX_TEXT_BYTES)} of text
 export const mbTenth = (n) => (Math.ceil((n / 2 ** 20) * 10) / 10).toFixed(1);
 // (in the limits' words: whole when it is, else up to a tenth -- "600 MB", "500.1 MB")
 const overMb = (n) => { const t = Math.ceil((n / 2 ** 20) * 10) / 10; return Number.isInteger(t) ? t.toLocaleString('en-US') : t.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); };
-export const textOverWords = (bytes) => `${overMb(bytes)} MB of text, ${TEXT_LIMIT_WORDS}`;
+export const sizeOver = (bytes) => `${overMb(bytes)} MB`; // (a size past a limit, as said: a zip entry's too -- r74 A8, Q8)
+export const textOverWords = (bytes) => `${sizeOver(bytes)} of text, ${TEXT_LIMIT_WORDS}`;
 export const tooMuchText = (what, bytes) => new Error(`${what} is ${textOverWords(bytes)}`);
 // An STL is binary when its size is 84 + 50 n for the n its header counts (bytes 80-83), even if it
 // starts "solid", or that plus a surplus under one record (padding, an appended byte or two); else
@@ -165,7 +166,18 @@ export function plyHeader(u8) {
   const lines = head.slice(0, hdrEnd).split(/\r?\n/);
   let format = 'ascii';
   for (const l of lines) { const sp = l.trim().split(/\s+/); if (sp[0] === 'format') format = sp[1]; }
-  return { hdrEnd, lines, format };
+  // (where its body starts: past end_header and its line's end)
+  let bodyStart = hdrEnd + 'end_header'.length;
+  while (u8[bodyStart] === 13) bodyStart++;
+  if (u8[bodyStart] === 10) bodyStart++;
+  return { hdrEnd, lines, format, bodyStart };
+}
+// How much of a file its reader holds to the text limit: a PLY's body alone, its header read apart
+// (the list check held the whole file, and called a 500 MB ASCII PLY bad that the page opened: r74
+// Q1); every other text format, the whole
+export function textBytes(label, start, size) {
+  if (label === 'PLY' && start) { const ph = plyHeader(start); if (ph) return size - ph.bodyStart; }
+  return size;
 }
 // Whether the viewer reads a file of this format as one string -- held to MAX_TEXT_BYTES -- from its
 // first bytes (at least 84) and its size: by the format's own rule beside the table, so a text format
