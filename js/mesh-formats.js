@@ -16,7 +16,7 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
-import { entryDataAt, methodRefusal, within, zipDirectory } from './zip-dir.js';
+import { entryDataAt, methodRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
 import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
@@ -806,29 +806,31 @@ function parseOFF(s, base) {
 export async function unzip(buf) {
   const len = buf.byteLength;
   const u8 = new Uint8Array(buf);
-  const need = within(len); // (js/zip-dir.js's: written out here too -- r76 A10)
-  // (its directory by the one reader, the list check's too: js/zip-dir.js -- r75 A4)
+  const need = within(len); // (js/zip-dir.js's bounds check -- r76 A10)
+  // (its directory by the one reader, the list check's too: js/zip-dir.js -- r75 A4; each entry by
+  // its key, zipKey, the one matching rule -- r77 A5)
   const out = new Map();
-  for (const { name, method, flags, csize, usize, lho } of await zipDirectory(u8, 0, len)) {
+  for (const { name, key, method, flags, csize, usize, lho } of await zipDirectory(u8, 0, len)) {
     const at = entryDataAt(lho, u8.subarray(lho, lho + 30));
     need(at, csize, `${name}'s data`);
     const data = new Uint8Array(buf, at, csize);
-    out.set(name.replace(/^\//, '').toLowerCase(), { method, flags, data, name, usize });
+    out.set(key, { method, flags, data, name, usize });
   }
   return {
     names: [...out.values()].map((f) => f.name),
-    has: (p) => out.has(p.replace(/^\//, '').toLowerCase()),
+    has: (p) => out.has(zipKey(p)),
     // (max, too: a smaller limit for this entry, and too(size words) -> the Error past it, met
     // before inflating when the directory says so, else when the inflate passes it)
     async get(p, max = MAX_FILE_BYTES, too = null) {
-      const f = out.get(p.replace(/^\//, '').toLowerCase());
+      const f = out.get(zipKey(p));
       if (!f) return null;
+      // (what it reads of an entry, the one rule: js/zip-dir.js -- r76 A3, Q2; before a stored entry
+      // too, which an encrypted one may be; and before its size, named as stored, as the list check
+      // says it -- an encrypted root over 500 MB was refused in other words by each: r77 Q5)
+      if (methodRefusal(f.name, f.method, f.flags)) throw new Error(methodRefusal(f.name, f.method, f.flags));
       // (a size past the limit rounded up, as the text readers say it: "500 MB, more than the 500 MB"
       // for one a byte over -- r74 A8, Q8)
       if (too && f.usize > max) throw too(sizeOver(f.usize));
-      // (what it reads of an entry, the one rule: js/zip-dir.js -- r76 A3, Q2; before a stored entry
-      // too, which an encrypted one may be)
-      if (methodRefusal(p, f.method, f.flags)) throw new Error(methodRefusal(p, f.method, f.flags));
       if (f.method === 0) {
         if (too && f.data.length > max) throw too(sizeOver(f.data.length));
         return f.data.slice().buffer;
@@ -865,7 +867,7 @@ async function parse3MF(buf, base) {
   const rels = await xmlPart('_rels/.rels', 'relationships part');
   const path = threeMfRoot(rels ? text(rels, `${base}.3mf's relationships part`) : '');
   // a part's key: its path without case or a leading / (as the zip matches it)
-  const partKey = (p) => p.replace(/^\//, '').toLowerCase();
+  const partKey = zipKey;
   const rootKey = partKey(path);
   // what the model parts hold is counted as it is read, and refused past the viewer's caps
   // before it is kept (each vertex, triangle, placement, material and object costs memory)

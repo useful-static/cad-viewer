@@ -4,8 +4,8 @@
 // through their readers, loaded on first use), orbit camera, part tree,
 // picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
-import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel } from './formats.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead } from './cadmesh.js';
+import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions } from './formats.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
@@ -4912,7 +4912,13 @@ async function unpackGz(buf, name, seq) {
   showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
   await nextPaint();
   if (stale(seq)) return null;
-  const out = await gunzip(buf);
+  // (the thread given turns as it unpacks, and the unpack stopped once the load is: a Cancel or a new
+  // file meanwhile waited for the whole of it -- r77 Q1, Q3)
+  let out;
+  try { out = await gunzip(buf, undefined, () => stale(seq)); } catch (e) {
+    if (e instanceof StopRead) return null;
+    throw e;
+  }
   return stale(seq) ? null : out;
 }
 
@@ -5211,47 +5217,7 @@ function startTourIn(tour, url, only = null) {
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
-// A zip's companions for its model, each named by its path from the model's folder ("chair.mtl",
-// "buffers/chair.bin", "../textures/wood.png"), which the reader resolves a reference by first
-// (js/mesh-formats.js companion): a same-named file in another folder never takes the model's place
-// -- by bare name, the red chair opened blue (r53 Q1), and its buffer under red/buffers/ was blue's
-// (r54 Q1). A folder holding another model is that model's: its files are not this one's, and are
-// not unpacked for it (a 523 KB zip unpacked 537 MB of another model's textures: r54 Q8). A shared
-// folder -- textures/ beside the model's -- still serves. \ in a zip's names is read as / (r54 A3).
-function zipCompanions(files, model, opens) {
-  const norm = (n) => n.replace(/\\/g, '/');
-  // (folders compared without case, as the zip's reader and the companion lookup compare names:
-  // Red/chair.obj beside red/chair.mtl opened blue -- r55 Q4)
-  const dir = (n) => { const s = norm(n).toLowerCase(); return s.slice(0, s.lastIndexOf('/') + 1); };
-  const own = dir(model);
-  // another model's folder: its folder just below where its path and this model's part -- for
-  // red/source/chair.obj beside blue/source/x.obj that is blue/, so blue/textures/ is not this one's
-  // (it was taken: 600 MB of another model's textures, r55 Q6); for a/x.obj beside a/b/y.obj, a/b/
-  const others = files.filter((f) => f !== model && opens(f)).map(dir);
-  const theirs = [];
-  for (const d of others) {
-    const a = own.split('/'), b = d.split('/');
-    let i = 0;
-    while (i < a.length - 1 && i < b.length - 1 && a[i] === b[i]) i++;
-    if (i < b.length - 1) theirs.push(`${b.slice(0, i + 1).join('/')}/`);
-  }
-  const out = [];
-  for (const n of files) {
-    if (n === model || !isCompanion(n)) continue;
-    const d = dir(n);
-    // (under another model's folder; or in a folder above this one that holds another model, whose
-    // own files those are)
-    if (theirs.some((t) => d.startsWith(t)) || (d !== own && others.includes(d))) continue;
-    if (d.startsWith(own)) { out.push({ path: n, name: norm(n).slice(own.length) }); continue; }
-    // a folder beside the model's: named by the way up to their common folder
-    const up = own.slice(0, own.length - 1).split('/');
-    const there = norm(n).split('/');
-    let i = 0;
-    while (i < up.length && i < there.length - 1 && up[i] === there[i].toLowerCase()) i++;
-    out.push({ path: n, name: `${'../'.repeat(up.length - i)}${there.slice(i).join('/')}` });
-  }
-  return out;
-}
+// (its companions: js/formats.js zipCompanions, the list check's choice too -- r77 A3)
 async function loadZip(buf, name, seq) {
   // (a gzipped zip unpacked first, as every other kind is: "not a zip file" said a model.zip.gz the
   // list check called ok -- r76 A1)

@@ -2,14 +2,19 @@
 // the list check (js/list-check.js), which kept a reader of its own and was silent on a zip64
 // archive the page refuses (r75 A4).
 //
-// zipDirectory(tail, tailAt, len, readAt?) -> [{ name, method, csize, usize, lho }]
+// zipDirectory(tail, tailAt, len, readAt?) -> [{ name, key, method, flags, csize, usize, lho }]
 //   tail: bytes ending at the archive's end (the whole file, or its last 64 KB and more), from
 //   offset tailAt of an archive of len bytes; the directory read from it, or -- when it starts
 //   before the tail -- from readAt(offset, n) (async, the list check's range request). Every
 //   offset is checked against the archive's size: a broken zip is refused as "damaged". Refusals
-//   are the page's own words.
+//   are the page's own words. A name given twice, or in two cases, is one entry: the last one, in
+//   the first one's place (key: zipKey of its name).
 
 export const ZIP_TAIL = 65557; // (the end record and its longest comment)
+
+// An entry's key: its path without a leading / or case -- how the page's unzip, its 3MF reader and
+// the list check match a path to an entry (the rule was written six times: r77 A5)
+export const zipKey = (p) => String(p).replace(/^\//, '').toLowerCase();
 
 // (every offset an archive of len bytes gives, checked against its size: a broken zip refused as
 // "damaged", not met as the engine's "Offset is outside the bounds of the DataView")
@@ -44,10 +49,15 @@ export async function zipDirectory(tail, tailAt, len, readAt = null) {
     if (!(o + 46 + nlen <= cd.length)) throw new Error('a damaged zip (an entry name lies outside the file)');
     const name = new TextDecoder().decode(cd.subarray(o + 46, o + 46 + nlen));
     need(lho, 30, `${name}'s header`);
+    // (and its data, at least as far as the directory can tell -- it starts past the 30-byte header --
+    // here, for every reader: the page's unzip alone held it to the file, and the list check said "ok"
+    // of a 200-byte zip whose entry claimed 10 MB, r77 Q2. Where exactly it starts is the local
+    // header's: unzip and the check's sources hold that to the file too)
+    need(lho + 30, csize, `${name}'s data`);
     // (a name twice, or in two cases: the last one kept, in the first one's place, as one name -- the
     // page's map of them; the list check read the first, a small A.stl over the 3 GB a.stl the page
     // refused: r76 A4)
-    const key = name.replace(/^\//, '').toLowerCase();
+    const key = zipKey(name);
     const e = { name, key, method, flags, csize, usize, lho };
     if (at.has(key)) out[at.get(key)] = e; else { at.set(key, out.length); out.push(e); }
     o += 46 + nlen + xlen + clen;

@@ -480,6 +480,81 @@ await test('a zip\'s entry is judged as the page opens it: a gzip in it, a 3MF i
   }
   assert.deepEqual(got, rows.map(([what, , , want]) => [what, want]));
 });
+await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s companions, an empty file, an entry whose size is understated (r77 A1-A4, A9, A10)', async () => {
+  const { gzipSync, deflateRawSync } = await import('node:zlib');
+  const host = (bytes) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+    const a = +m[1], b = Math.min(+m[2], bytes.length - 1);
+    return new Response(bytes.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(Math.max(0, b - a + 1)), 'content-range': `bytes ${a}-${b}/${bytes.length}` } });
+  };
+  const check = async (name, bytes, plain) => checkFile(`${B}${name}`, { fetchFn: plain ? async () => new Response(Buffer.from(bytes), { status: 200, headers: { 'content-length': String(bytes.length) } }) : host(Buffer.from(bytes)), sniff: true });
+  const stl = (head = '') => { const b = Buffer.alloc(84 + 50); b.write(head, 0, 'latin1'); b.writeUInt32LE(1, 80); return b; };
+  const relsTo = (target, pad = 0) => `<?xml version="1.0"?><Relationships><!--${' '.repeat(pad)}--><Relationship Target="${target}" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
+  // (an entry that starts as a gzip and inflates past the check's 64 MB, its directory claiming 1 KB)
+  const under = Buffer.concat([gzipSync(stl()), Buffer.alloc(70 * 2 ** 20)]);
+  const bigPk = stl('PK'); bigPk.writeUInt32LE(2_000_000, 80); // (its first record only: the directory gives its size)
+  const pastEnd = miniZip([['part.obj', 'v 0 0 0\n']]); pastEnd.writeUInt32LE(10 * 2 ** 20, pastEnd.indexOf(Buffer.from([0x50, 0x4b, 1, 2])) + 20); // (its csize: 10 MB)
+  const localPast = miniZip([['part.obj', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n']]); localPast.writeUInt16LE(60000, 28); // (its local extra length)
+  const rows = [
+    // A1: a binary STL whose free-text header starts "PK", or "PK\x03\x04" (must fire: "not a zip file", "starts as zip")
+    ['A1 "PK" header', 'pk.stl', stl('PK'), 'ok'],
+    ['A1 "PK\\3\\4" header', 'pk.stl', stl('PK\x03\x04'), 'ok'],
+    ['A1 gzipped', 'pk.stl.gz', gzipSync(stl('PK')), 'ok'],
+    // ... and a zip's part.stl holding a zip: the page reads it as an STL, damaged (must fire: "ok")
+    // ... in a zip, a 95 MB one, judged by its size, not read whole as a zip (must fire: "not read here")
+    ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', bigPk, 84 + 50 * 2_000_000]]), 'ok'],
+    ['A1 a zip as part.stl', 'outer.zip', miniZip([['part.stl', miniZip([['in.stl', stl()]])]]), 'bad'],
+    // A2: the rels part past 64 KB naming the root (must fire: "no model part"); a bzip2 rels (must fire: "ok")
+    ['A2 rels past 64 KB', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/plate.model', 70000)], ['3D/plate.model', '<model/>']]), 'ok'],
+    ['A2 rels bzip2', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model'), undefined, 12], ['3D/3dmodel.model', '<model/>']]), 'bad:_rels/.rels uses compression method 12'],
+    // A3: a companion the page reads before the model and cannot (must fire: "ok"); companions over 2 GB
+    ['A3 companion bzip2', 'part.zip', miniZip([['part.stl', stl()], ['part.png', 'x', undefined, 12]]), 'bad:part.png uses compression method 12'],
+    ['A3 companions over 2 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', 'x', 1.5 * 2 ** 30], ['b.png', 'x', 1.5 * 2 ** 30]]), 'bad:companion files'],
+    // A4: an empty file, a 3-byte STL, a zip of an empty part (must fire: "ok")
+    // (its size said: 0 is one, not "size not given")
+    ['A4 empty', 'a.stl', Buffer.alloc(0), 'bad:0.00 MB · it is empty'],
+    ['A4 empty, no range', 'a.stl', Buffer.alloc(0), 'bad:0.00 MB · it is empty', 'plain'],
+    ['A4 empty OBJ', 'c.obj', Buffer.alloc(0), 'bad:empty'],
+    ['A4 3 bytes', 'b.stl', Buffer.from('abc'), 'bad:neither a binary STL'],
+    ['A4 zipped empty', 'part.zip', miniZip([['part.stl', '']]), 'bad:empty'],
+    // A9: an entry inflating past the check's limit, its size understated (must fire: a throw, "over 0 GB")
+    ['A9 understated', 'part.zip', miniZip([['part.stl.gz', deflateRawSync(under), 1024, 8]]), 'warn:not read here'],
+    // A10: a 3MF said as one (must fire: "· zip")
+    // Q2: an entry whose data the directory puts past the file's end, plain and gzipped (must fire: a
+    // warning blaming the server, and "ok")
+    ['Q2 data past the end', 'part.zip', pastEnd, 'bad:a damaged zip (part.obj\'s data lies outside the file)'],
+    ['Q2 gzipped', 'part.zip.gz', gzipSync(pastEnd), 'bad:a damaged zip (part.obj\'s data lies outside the file)'],
+    // ... past it by the local header's own lengths, which the directory cannot see (must fire: the
+    // short bytes in hand read as the entry, "ok")
+    ['Q2 by the local header', 'part.zip.gz', gzipSync(localPast), 'bad:a damaged zip'],
+    ['A10 named 3MF', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>']]), 'ok:· 3MF'],
+  ];
+  const got = [];
+  for (const [what, name, bytes, want, plain] of rows) {
+    let r;
+    try { r = await check(name, bytes, plain); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  assert.deepEqual(got, rows.map(([what, , , want]) => [what, want]));
+});
+await test('an encrypted 3MF root over the text limit: the page and the check refuse it in one order, by one name (r77 Q5)', async () => {
+  const { parseMesh } = await import('../js/mesh-formats.js');
+  const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const z = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>', 600 * 2 ** 20, 0, 1]]);
+  let page = '';
+  try { await parseMesh('3mf', new Uint8Array(z).buffer, 'x'); } catch (e) { page = e.message; }
+  const r = await checkFile(`${B}x.3mf`, { fetchFn: async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(z, { status: 200, headers: { 'content-length': String(z.length) } });
+    const a = +m[1], b = Math.min(+m[2], z.length - 1);
+    return new Response(z.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${z.length}` } });
+  }, sniff: true });
+  const words = 'zip entry 3D/3dmodel.model is encrypted';
+  assert.ok(page.includes(words), `page: ${page} (must fire: its size first, "/3D/3dmodel.model unpacks to 600 MB")`);
+  assert.ok(r.level === 'bad' && r.detail.includes(words), `check: ${r.detail}`);
+});
 await test('zipDirectory: a name twice is one entry, the last, in the first one\'s place; 20,000 entries read in under 2 s (r76 A4)', async () => {
   const { zipDirectory } = await import('../js/zip-dir.js');
   const z = new Uint8Array(miniZip([['A.stl', 'a'], ['b.obj', 'b'], ['/a.stl', 'cc']]));

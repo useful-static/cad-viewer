@@ -724,11 +724,56 @@ await test('a gzip of several members is read whole, member after member, where 
       try { g3 = await gunzip(all); } finally { globalThis.DecompressionStream = FirstMemberOnly; }
       assert.equal(g3.byteLength, body.length + tail.length, 'a 100 MB member with a chance header 90 MB in (must fire: "corrupt or truncated")');
     }
+    // (r77 Q1: Chromium stops after every member, and each stream was handed the whole rest of the file
+    // at once -- a bgzip's cost the square of its members, 12,852 of them 126 s on the page thread. A
+    // stand-in that stops as soon as a piece runs past its member's end, counting the writes it is handed:
+    // a piece is written once the one before is taken, and none after the stream stopped)
+    {
+      const ms = Array.from({ length: 120 }, (_, i) => gzipSync(Buffer.alloc(70000, i), { level: 0 }));
+      const all = Buffer.concat(ms), starts = [], ends = [];
+      for (let o = 0, i = 0; i < ms.length; o += ms[i].length, i++) { starts.push(o); ends.push(o + ms[i].length); }
+      let writes = 0;
+      class Stops {
+        constructor(format) {
+          if (format !== 'gzip') return new real(format);
+          let got = Buffer.alloc(0), k = -1;
+          const t = new TransformStream({
+            transform(c, ctl) {
+              got = Buffer.concat([got, Buffer.from(c)]);
+              if (k < 0) k = starts.findIndex((o) => all.subarray(o, o + 64).equals(got.subarray(0, 64)));
+              if (k < 0) throw new TypeError('incorrect header check');
+              if (got.length > ends[k] - starts[k]) { ctl.enqueue(new Uint8Array(gunzipSync(ms[k]))); throw new TypeError('Junk found after end of compressed data.'); }
+            },
+            flush(ctl) {
+              if (got.length !== ends[k] - starts[k]) throw new TypeError('unexpected end of file');
+              ctl.enqueue(new Uint8Array(gunzipSync(ms[k])));
+            },
+          });
+          this.readable = t.readable;
+          this.writable = { getWriter: () => { const w = t.writable.getWriter(); return { write: (c) => { writes++; return w.write(c); }, close: () => w.close(), get ready() { return w.ready; } }; } };
+        }
+      }
+      globalThis.DecompressionStream = Stops;
+      let g;
+      try { g = await gunzip(all); } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+      assert.equal(g.byteLength, 120 * 70000, 'every member');
+      assert.ok(writes <= 4 * ms.length, `${writes} pieces written for ${ms.length} members (must fire: about 7,700, the rest of the file each)`);
+    }
     // must reject still: junk that is no member after the first
     await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
   } finally {
     globalThis.DecompressionStream = real;
   }
+});
+
+await test('an unpack gives the thread a turn every 32 MB out, and its caller\'s stop ends it there (r77 Q3: an 800 MB gzip held the page 3.9 s, Cancel waiting)', async () => {
+  const { StopRead } = await import('../js/cadmesh.js');
+  const gz = gzipSync(Buffer.alloc(100 * 2 ** 20));
+  let asked = 0;
+  const out = await gunzip(gz, undefined, () => { asked++; return false; });
+  assert.equal(out.byteLength, 100 * 2 ** 20);
+  assert.equal(asked, 3, `asked ${asked} times in 100 MB (must fire: 0, no turn)`);
+  await assert.rejects(gunzip(gz, undefined, () => true), (e) => e instanceof StopRead);
 });
 
 done();

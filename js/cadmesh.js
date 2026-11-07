@@ -369,13 +369,14 @@ export function bodyLabels(header) {
 
 // gzip bytes -> the bytes inside (any file: a .cadmesh, a part.stp.gz),
 // counted as they come, at most `max`
-export function gunzip(buf, max = MAX_FILE_BYTES) {
-  return inflate(buf, 'gzip', max);
+// (stop: read at each turn of the thread -- a load superseded or cancelled -- true ends it in a StopRead)
+export function gunzip(buf, max = MAX_FILE_BYTES, stop = null) {
+  return inflate(buf, 'gzip', max, stop);
 }
 
 // compressed bytes ('gzip', or a zip entry's 'deflate-raw') -> the bytes inside, counted as they
 // come and refused past `max` (a zip bomb stops there, not when the tab runs out of memory)
-export async function inflate(buf, format, max = MAX_FILE_BYTES) {
+export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   if (typeof DecompressionStream === 'undefined') {
     throw new Error(`this file is ${what}-compressed, and this browser cannot decompress (no DecompressionStream)`);
@@ -392,7 +393,7 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES) {
       out = grown;
     }
     out.set(value, at);
-  });
+  }, 0, stop);
   if (n === out.length) return out.buffer;
   // (a buffer too long for its data: transfer() shrinks it without a second copy where it can)
   return typeof out.buffer.transfer === 'function' ? out.buffer.transfer(n) : out.buffer.slice(0, n);
@@ -413,6 +414,17 @@ export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES) {
 const FEED = 65536;
 const DROPPED_MOST = FEED * 1032 + 2 ** 20;
 const REREAD_MOST = 64 * 2 ** 20;
+// (a turn of the thread, every TURN_BYTES of output: a task of its own, so a paint, a timer and a
+// click run -- a MessageChannel's, as setTimeout's is held to 1 s in a hidden tab)
+const TURN_BYTES = 32 * 2 ** 20;
+const turn = () => new Promise((res) => {
+  if (typeof MessageChannel === 'undefined') { setTimeout(res, 0); return; }
+  const c = new MessageChannel();
+  c.port1.onmessage = () => { c.port1.close(); res(); };
+  c.port2.postMessage(0);
+});
+// A read stopped by its caller's stop() (a load superseded or cancelled): not a fault of the file
+export class StopRead extends Error { constructor() { super('the read was stopped'); this.stopped = true; } }
 // The one reading of compressed bytes, for inflate, inflateCount and inflateHead: each chunk handed to
 // take(value, at) as it comes, refused past `max`; the count returned.
 // (a gzip of several members -- cat a.gz b.gz, bgzip -- is one file's bytes in turn, RFC 1952. This
@@ -426,10 +438,11 @@ const REREAD_MOST = 64 * 2 ** 20;
 // queued, and the CRC over a cut-short file's whole output held the page 4 s -- r74 Q3, Q4)
 // (head: stop once that many bytes are out, and a stream cut short -- a file's first 64 KB -- is what
 // it gave, not an error: inflateHead)
-async function readMembers(buf, format, max, take, head = 0) {
+// (stop: a function, read at each turn of the thread; true stops the read with a StopRead)
+async function readMembers(buf, format, max, take, head = 0, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let n = 0, off = 0, reread = 0;
+  let n = 0, off = 0, reread = 0, seen = 0, turned = 0;
   // (one stream over bytes, its output handed on from `n`: written straight in -- read through a Blob
   // stream of its own each, a bgzip of 250 members was refused, "network error": r74 A6)
   // (in pieces of FEED bytes: a stream processes each as its output is read, so when it stops, what
@@ -438,24 +451,50 @@ async function readMembers(buf, format, max, take, head = 0) {
   const stream = async (bytes) => {
     const ds = new DecompressionStream(format);
     const w = ds.writable.getWriter();
-    for (let i = 0; i < bytes.length; i += FEED) w.write(bytes.subarray(i, Math.min(bytes.length, i + FEED))).catch(() => {});
-    w.close().catch(() => {});
+    // (each piece written once the stream has taken the one before, and none once it has stopped:
+    // queued all at once, Chromium -- which stops after every member -- was handed the whole rest of
+    // the file for each one, and a bgzip of 12,852 members held the page 126 s: r77 Q1)
+    let over = false;
+    (async () => {
+      try {
+        for (let i = 0; i < bytes.length && !over; i += FEED) {
+          await w.ready;
+          if (over) break;
+          await w.write(bytes.subarray(i, Math.min(bytes.length, i + FEED)));
+        }
+        if (!over) await w.close();
+      } catch { /* the stream stopped: the rest is not written */ }
+    })();
     const rd = ds.readable.getReader();
     try {
       for (;;) {
         const { done, value } = await rd.read();
         if (done) return null;
+        // (the page's thread given a turn every TURN_BYTES out: a paint, a timer, Cancel's click --
+        // an 800 MB gzip held it 3.9 s with none, r77 Q3; and a load stopped meanwhile stops here)
+        seen += value.byteLength; // (all output, a member read again too)
+        if (seen - turned >= TURN_BYTES) {
+          turned = seen;
+          await turn();
+          if (stop && stop()) { await rd.cancel().catch(() => {}); throw new StopRead(); }
+        }
         if (n + value.byteLength > max) {
           await rd.cancel();
-          throw new RangeError(`it unpacks to over ${(max / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+          // (in the limit's own size, and "opens" only of the file limit: under it, the list check's
+          // 64 MB read "over 0 GB, more than this viewer opens" -- r77 A9)
+          const size = max >= 2 ** 30 ? `${(max / 2 ** 30).toFixed(0)} GB` : `${Math.round(max / 2 ** 20)} MB`;
+          throw new RangeError(`it unpacks to over ${size}, ${max >= MAX_FILE_BYTES ? 'more than this viewer opens' : 'more than is read here'}`);
         }
         take(value, n);
         n += value.byteLength;
         if (head && n >= head) { await rd.cancel().catch(() => {}); return 'head'; }
       }
     } catch (e) {
+      if (e instanceof StopRead) throw e;
       if (e instanceof RangeError) throw new Error(`the ${format === 'gzip' ? 'gzip file' : 'zip entry'} is too big: ${e.message}`);
       return e;
+    } finally {
+      over = true;
     }
   };
   for (;;) {

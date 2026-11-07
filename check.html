@@ -74,8 +74,10 @@
   </table>
   <p class="note">A file the viewer cannot read across sites needs your server to send
     <code>Access-Control-Allow-Origin</code> for it (cad.place's origin, or <code>*</code>), on errors too, or a
-    missing file reads as a refusal. The model is read only up to its first 64 KB, enough to see its format;
-    a gzip of up to about 4 MB is read whole, to know what it unpacks to (and a larger one's last four bytes).
+    missing file reads as a refusal. The model is read up to its first 64 KB, enough to see its format;
+    a gzip of up to about 4 MB is read whole, to know what it unpacks to (and a larger one's last four bytes);
+    a zip or a 3MF by ranges, its directory and the parts the viewer opens, and a gzip or zip inside it whole,
+    up to 64 MB unpacked.
     The list format: <a href="https://github.com/useful-static/cad-viewer#model-lists">model lists</a>.</p>
 </main>
 <script type="module" src="js/check-page.js"></script>

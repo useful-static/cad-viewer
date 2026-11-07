@@ -5,10 +5,10 @@
 // stayed on its shell, "loading", with nothing to say why and nothing to press (r72: seen in the
 // differential; r73: five ways, each tried on the real page).
 //
-// The sign of a start is a flag the app's module sets as its LAST top-level statement (main.js
-// window.__cadvStarted; check.html's js/check-page.js window.__checkStarted): a throw in any
-// statement before it is a page that did not start (window.__cadv, set early, missed a throw after
-// it: r74 Q7). Two moments are read:
+// The sign of a start is a flag the app's module sets once its work is done -- followed only by the
+// removal of the page's no-script card, #bootslow (main.js window.__cadvStarted; check.html's
+// js/check-page.js window.__checkStarted): a throw in any statement before it is a page that did
+// not start (window.__cadv, set early, missed a throw after it: r74 Q7). Two moments are read:
 // - the page's load (its module scripts run or failed by then): no start is a page that did not
 //   start, said with the files that failed or the error it stopped with, and a Reload button;
 // - 20 s on, while the load has not come (a module never answered keeps it from coming, and the
@@ -56,6 +56,10 @@
     (document.getElementById('stage') || document.body).appendChild(d); // (#stage: where the viewer's cards are drawn)
     card = d;
   }
+  // (the wait before "has not started", in seconds: the no-script #bootslow card in index.html and
+  // check.html shows at the same moment, in the same words -- tests/test-early.mjs holds them to this
+  // one figure and title, kept in three places with nothing tying them: r77 A7)
+  var SLOW_S = 20;
   var loaded = false, slow = false;
   // (the 20 s card taken away once the page starts, however late: it stayed over a page that had
   // started at 40 s, for good -- r75 Q2)
@@ -70,11 +74,11 @@
       : 'It stopped as it started: ' + thrown + '. Reloading may fix it.');
     slow = false;
   });
-  // (the load not come: said at 20 s, and looked at again every 2 s -- gone once it starts)
+  // (the load not come: said at SLOW_S, and looked at again every 2 s -- gone once it starts)
   setTimeout(function tick() {
     if (started()) { gone(); return; }
     if (loaded) return;
-    if (!card) { say(name + ' has not started', 'A part of it has not arrived after 20 s' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + ' failed)' : '') + ': the connection may be slow or have stopped. Reload to try again.'); slow = true; }
+    if (!card) { say(name + ' has not started', 'A part of it has not arrived after ' + SLOW_S + ' s' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + ' failed)' : '') + ': the connection may be slow or have stopped. Reload to try again.'); slow = true; }
     setTimeout(tick, 2000);
-  }, 20000);
+  }, SLOW_S * 1000);
 }());

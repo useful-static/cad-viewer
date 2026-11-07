@@ -21,7 +21,7 @@ import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, list
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
-import { formatOfName, isCompanion, zipModel } from '../js/formats.js';
+import { formatOfName, isCompanion, zipModel, zipCompanions as zipCompanionsOf } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
 import { runStart } from './startup-harness.mjs';
@@ -1954,9 +1954,8 @@ await test('the start-up contract: each address, embed, poster and early pick, m
 });
 
 test('a zip\'s companions for its model: its own folder\'s first, a same-named file elsewhere never in their place (r53 Q1)', () => {
-  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const at = src.indexOf('function zipCompanions(files, model');
-  const zip = new Function('isCompanion', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return zipCompanions;`)(isCompanion);
+  // (js/formats.js's, main.js loadZip's and the list check's one choice since r77 A3)
+  const zip = zipCompanionsOf;
   const opens = (n) => /\.(obj|gltf|stl)$/i.test(n);
   const zipCompanions = (files, model) => zip(files, model, opens).map((c) => `${c.path} as ${c.name}`);
   // (the red chair: red's .mtl, whichever order the zip lists them; blue's not unpacked for it)

@@ -168,6 +168,59 @@ export function zipModel(names) {
   const threeMf = !model && files.some((n) => /^\/?3d\/[^/]+\.model$/i.test(n)) && files.some((n) => /^\/?_rels\/\.rels$/i.test(n));
   return { files, opens, model, threeMf, others: model ? files.filter((n) => n !== model && opens(n)).length : 0 };
 }
+// A zip's companions for its model, each named by its path from the model's folder ("chair.mtl",
+// "buffers/chair.bin", "../textures/wood.png"), which the reader resolves a reference by first
+// (js/mesh-formats.js companion): a same-named file in another folder never takes the model's place
+// -- by bare name, the red chair opened blue (r53 Q1), and its buffer under red/buffers/ was blue's
+// (r54 Q1). A folder holding another model is that model's: its files are not this one's, and are
+// not unpacked for it (a 523 KB zip unpacked 537 MB of another model's textures: r54 Q8). A shared
+// folder -- textures/ beside the model's -- still serves. \ in a zip's names is read as / (r54 A3).
+// -> [{ path (as stored), name }]. The one choice, main.js loadZip's (which reads every one before
+// the model) and the list check's (which looked at the model alone and said "ok" of a zip whose
+// bzip2 .png the page refused -- r77 A3)
+export function zipCompanions(files, model, opens) {
+  const norm = (n) => n.replace(/\\/g, '/');
+  // (folders compared without case, as the zip's reader and the companion lookup compare names:
+  // Red/chair.obj beside red/chair.mtl opened blue -- r55 Q4)
+  const dir = (n) => { const s = norm(n).toLowerCase(); return s.slice(0, s.lastIndexOf('/') + 1); };
+  const own = dir(model);
+  // another model's folder: its folder just below where its path and this model's part -- for
+  // red/source/chair.obj beside blue/source/x.obj that is blue/, so blue/textures/ is not this one's
+  // (it was taken: 600 MB of another model's textures, r55 Q6); for a/x.obj beside a/b/y.obj, a/b/
+  const others = files.filter((f) => f !== model && opens(f)).map(dir);
+  const theirs = [];
+  for (const d of others) {
+    const a = own.split('/'), b = d.split('/');
+    let i = 0;
+    while (i < a.length - 1 && i < b.length - 1 && a[i] === b[i]) i++;
+    if (i < b.length - 1) theirs.push(`${b.slice(0, i + 1).join('/')}/`);
+  }
+  const out = [];
+  for (const n of files) {
+    if (n === model || !isCompanion(n)) continue;
+    const d = dir(n);
+    // (under another model's folder; or in a folder above this one that holds another model, whose
+    // own files those are)
+    if (theirs.some((t) => d.startsWith(t)) || (d !== own && others.includes(d))) continue;
+    if (d.startsWith(own)) { out.push({ path: n, name: norm(n).slice(own.length) }); continue; }
+    // a folder beside the model's: named by the way up to their common folder
+    const up = own.slice(0, own.length - 1).split('/');
+    const there = norm(n).split('/');
+    let i = 0;
+    while (i < up.length && i < there.length - 1 && up[i] === there[i].toLowerCase()) i++;
+    out.push({ path: n, name: `${'../'.repeat(up.length - i)}${there.slice(i).join('/')}` });
+  }
+  return out;
+}
+// Whether the page opens a file of this name and these first bytes (unpacked) as a zip or a 3MF: by
+// its name where the name says a format (main.js loadAny; a mesh by a mesh format's magic, which a
+// zip's is not: js/mesh-formats.js meshFormatOf), else by its bytes (sniffFormat). The one rule for
+// the page and the list check, which took any "PK" start for a zip: a valid binary STL whose header
+// starts "PK" was "not a zip file" there, and a zip's part.stl holding a zip "ok" (r77 A1)
+export function opensAsZip(name, bytes) {
+  const f = formatOfName(name) || (bytes ? sniffFormat(bytes.subarray(0, SNIFF_BYTES)) : null);
+  return !!f && (f.kind === 'zip' || f.label === '3MF');
+}
 // A PLY's header, as its reader takes it: the text to end_header in its first 64 KB, its lines, and
 // its format -- ascii unless a format line says otherwise. null with no end_header (damaged). The
 // one rule for the reader (js/mesh-formats.js parsePLY) and the list check, which looked for "format
