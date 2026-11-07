@@ -16,9 +16,9 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
-import { entryDataAt, methodRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
+import { entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -78,12 +78,14 @@ function placements(roots, kids, own, maxDepth, refuse, who) {
 // The mesh format a file is (the reader parseMesh runs), or null: by js/formats.js's sniff
 // where the first bytes are conclusive (a PLY header, a GLB's "glTF": these win over the name,
 // as check.html judges them), else by the name
+// (a mesh-named file by js/formats.js meshReaderOf, the companions' and the list check's rule too --
+// r79 A8; a file whose name says no mesh by a mesh format's magic alone)
 export function meshFormatOf(name, buf) {
   const u8 = new Uint8Array(buf, 0, Math.min(buf.byteLength, SNIFF_BYTES));
+  const named = meshReaderOf(name, u8);
+  if (named) return named.ext[0]; // (each mesh format has one extension)
   const s = sniffFormat(u8);
-  if (s && s.magic && s.kind === 'mesh') return s.ext[0];
-  const ext = extOf(name);
-  return MESH_EXTS.includes(ext) ? ext : null;
+  return s && s.magic && s.kind === 'mesh' ? s.ext[0] : null;
 }
 
 // A companion file's key: its name without a directory (cut at / or \) and without case. Every
@@ -833,17 +835,19 @@ export async function unzip(buf, stop = null) {
       // (a size past the limit rounded up, as the text readers say it: "500 MB, more than the 500 MB"
       // for one a byte over -- r74 A8, Q8)
       if (too && f.usize > max) throw too(sizeOver(f.usize));
-      if (f.method === 0) {
-        if (too && f.data.length > max) throw too(sizeOver(f.data.length));
-        return f.data.slice().buffer;
-      }
+      // (a stored entry's usize is the bytes it holds, js/zip-dir.js: the check above is its too -- r79 A9)
+      if (f.method === 0) return f.data.slice().buffer;
       // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
       if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
-      if (!too) return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES, stop);
-      try { return await inflate(f.data, 'deflate-raw', max, stop); } catch (e) {
+      // (and the size it inflates to held to its directory's: js/zip-dir.js sizeRefusal -- r79 Q2)
+      const sized = (bytes) => { const r = sizeRefusal(f.name, bytes.byteLength, f.usize); if (r) throw new Error(r); return bytes; };
+      if (!too) return sized(await inflate(f.data, 'deflate-raw', MAX_FILE_BYTES, stop));
+      let inflated;
+      try { inflated = await inflate(f.data, 'deflate-raw', max, stop); } catch (e) {
         if (/too big/.test(e.message)) throw too(`over ${mb(max)}`);
         throw e;
       }
+      return sized(inflated);
     },
   };
 }

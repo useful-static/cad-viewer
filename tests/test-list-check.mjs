@@ -399,8 +399,9 @@ await test('a 3MF is held to the text limit by its model part, read from its dir
   const big = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 520 * 2 ** 20)), sniff: true });
   assert.equal(big.level, 'bad', `${big.detail} (must fire: ok · zip)`);
   assert.match(big.detail, /its model part 3D\/3dmodel\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/); // (the reader's words: r76 Q5)
-  // must accept: under it
-  const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 40 * 2 ** 20)), sniff: true });
+  // must accept: under it (its directory true to its data, which is empty: one claiming 40 MB of an
+  // empty stream is a damaged zip to the page since r79 Q2)
+  const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 0)), sniff: true });
   assert.notEqual(ok.level, 'bad', ok.detail);
 });
 await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root from its rels, the zip\'s entry loadZip opens, a gzipped one, a zip64 one (r75 A1-A4)', async () => {
@@ -499,6 +500,7 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
   const under = Buffer.concat([gzipSync(stl()), Buffer.alloc(70 * 2 ** 20)]);
   const bigPk = stl('PK'); bigPk.writeUInt32LE(2_000_000, 80); // (its first record only: the directory gives its size)
   const bigDeflate = randomBytes(1.1 * 2 ** 20); // (deflate data past 1 MB: its size the directory's)
+  const realSrc = randomBytes(1.1 * 2 ** 20), realDeflate = deflateRawSync(realSrc), realDeflateSize = realSrc.length; // (valid, past 1 MB)
   const stl2 = Buffer.alloc(84 + 100); stl2.writeUInt32LE(2, 80);
   const pastEnd = miniZip([['part.obj', 'v 0 0 0\n']]); pastEnd.writeUInt32LE(10 * 2 ** 20, pastEnd.indexOf(Buffer.from([0x50, 0x4b, 1, 2])) + 20); // (its csize: 10 MB)
   const localPast = miniZip([['part.obj', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n']]); localPast.writeUInt16LE(60000, 28); // (its local extra length)
@@ -509,7 +511,7 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['A1 gzipped', 'pk.stl.gz', gzipSync(stl('PK')), 'ok'],
     // ... and a zip's part.stl holding a zip: the page reads it as an STL, damaged (must fire: "ok")
     // ... in a zip, a 95 MB one, judged by its size, not read whole as a zip (must fire: "not read here")
-    ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', deflateRawSync(Buffer.concat([bigPk, randomBytes(1.2 * 2 ** 20)])), 84 + 50 * 2_000_000, 8]]), 'ok'],
+    ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', deflateRawSync(Buffer.concat([bigPk.subarray(0, 84), Buffer.alloc(50 * 2_000_000)])), 84 + 50 * 2_000_000, 8]]), 'ok'], // (true to its data: r79 Q2)
     ['A1 a zip as part.stl', 'outer.zip', miniZip([['part.stl', miniZip([['in.stl', stl()]])]]), 'bad'],
     // A2: the rels part past 64 KB naming the root (must fire: "no model part"); a bzip2 rels (must fire: "ok")
     ['A2 rels past 64 KB', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/plate.model', 70000)], ['3D/plate.model', '<model/>']]), 'ok'],
@@ -518,18 +520,28 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['A3 companion bzip2', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['part.png', 'x', undefined, 12]]), 'bad:part.png uses compression method 12'],
     // (r78 A1: only for a reader that reads them -- an STL's, a STEP's, a DXF's are never read; must
     // fire: "bad", "companion files")
+    // (r79 A8: by the reader the page meets -- a .obj that is a PLY by its magic reads none; must fire,
+    // "bad · … method 12")
+    ['r79 A8 a PLY named .obj', 'part.zip', miniZip([['part.obj', 'ply\nformat ascii 1.0\nelement vertex 0\nend_header\n'], ['part.png', 'x', undefined, 12]]), 'warn:opens as one'],
     ['r78 A1 an STL\'s', 'part.zip', miniZip([['part.stl', stl()], ['part.png', 'x', undefined, 12]]), 'ok'],
     ['r78 A1 a STEP\'s', 'part.zip', miniZip([['part.step', 'ISO-10303-21;\nHEADER;\n'], ['preview.png', 'x', undefined, 12]]), 'ok'],
     ['r78 A1 a DXF\'s', 'plan.zip', miniZip([['plan.dxf', '0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n'], ['a.png', bigDeflate, 1.5 * 2 ** 30, 8], ['b.png', bigDeflate, 1.5 * 2 ** 30, 8]]), 'ok'],
     // (deflated, past 1 MB each: sized by the directory, as the page holds a deflated entry -- stored ones
     // claiming 1.5 GB were 1 byte each to the page, which opened the OBJ: r78 Q2)
-    ['A3 companions over 2 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', bigDeflate, 1.5 * 2 ** 30, 8], ['b.png', bigDeflate, 1.5 * 2 ** 30, 8]]), 'bad:companion files'],
+    // (r79 A2: each held to what the ones before leave, as the page reads it -- a.png's 1.1 MB, then
+    // b.png's claim past the rest: must fire, "ok")
+    ['A3 companions over 2 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', realDeflate, realDeflateSize, 8], ['b.png', deflateRawSync(Buffer.from('x')), 2 ** 31 - 2 ** 20, 8]]), 'bad:companion files'],
+    // (r79 A3: a companion past 1 MB whose data is corrupt, read at its start -- must fire, "ok")
+    ['r79 A3 a corrupt 2 MB .mtl', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['part.mtl', bigDeflate, 4 * 2 ** 20, 8]]), 'bad:corrupt or truncated'],
+    // (r79 A2: a small companion's claim past the file limit, as the page refuses it -- must fire, "ok")
+    ['r79 A2 a .mtl claiming 3 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['part.mtl', deflateRawSync(Buffer.from('newmtl a\n')), 3 * 2 ** 30, 8]]), 'bad:companion files'],
     // r78 Q2: a stored entry by the bytes it holds, whatever the directory claims (must fire: "ok" of
     // the cut one, "damaged" of the whole one)
     ['r78 Q2 stored, cut', 'part.zip', miniZip([['part.stl', stl2.subarray(0, 134), 184]]), 'bad:damaged'],
     ['r78 Q2 stored, whole, claimed short', 'part.zip', miniZip([['part.stl', stl2, 134]]), 'ok'],
     // (and a small deflated one by what it inflates to, as the page has it: must fire, "companion files")
-    ['r78 Q2 deflated companions, claimed 1.5 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', deflateRawSync(Buffer.from('x')), 1.5 * 2 ** 30, 8], ['b.png', deflateRawSync(Buffer.from('x')), 1.5 * 2 ** 30, 8]]), 'ok'],
+    // (its claim not what it inflates to: a damaged zip to the page since r79 Q2, and here)
+    ['r78 Q2 deflated companions, claimed 1.5 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', deflateRawSync(Buffer.from('x')), 1.5 * 2 ** 30, 8], ['b.png', deflateRawSync(Buffer.from('x')), 1.5 * 2 ** 30, 8]]), 'bad:a damaged zip (a.png unpacks to 1 bytes'],
     ['r78 Q2 stored companions, claimed 1.5 GB', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['a.png', 'x', 1.5 * 2 ** 30], ['b.png', 'x', 1.5 * 2 ** 30]]), 'ok'],
     // A4: an empty file, a 3-byte STL, a zip of an empty part (must fire: "ok")
     // (its size said: 0 is one, not "size not given")
@@ -539,7 +551,8 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['A4 3 bytes', 'b.stl', Buffer.from('abc'), 'bad:neither a binary STL'],
     ['A4 zipped empty', 'part.zip', miniZip([['part.stl', '']]), 'bad:empty'],
     // A9: an entry inflating past the check's limit, its size understated (must fire: a throw, "over 0 GB")
-    ['A9 understated', 'part.zip', miniZip([['part.stl.gz', deflateRawSync(under), 1024, 8]]), 'warn:not read here'],
+    // (since r79 Q2 its understated size is itself the page's refusal, a damaged zip)
+    ['A9 understated', 'part.zip', miniZip([['part.stl.gz', deflateRawSync(under), 1024, 8]]), 'bad:where its directory says 1,024'],
     // A10: a 3MF said as one (must fire: "· zip")
     // Q2: an entry whose data the directory puts past the file's end, plain and gzipped (must fire: a
     // warning blaming the server, and "ok")
@@ -557,7 +570,8 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     const [lv, word] = want.split(/:(.*)/);
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
-  assert.deepEqual(got, rows.map(([what, , , want]) => [what, want]));
+  const wanted = rows.map(([what, , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1]))); // (the rows that differ, in the one line the harness prints)
 });
 await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gzip: as the page meets each (r78 A3-A5)', async () => {
   const { gzipSync } = await import('node:zlib');
@@ -572,11 +586,17 @@ await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gz
     return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
   };
   const bz = miniZip([['part.stl', 'solid x\n', undefined, 12]]);
+  // (more than one answer's 64 KB, so not in hand whole: r79 A4 takes a short one as the file)
+  const bzBig = miniZip([['pad.txt', Buffer.alloc(70000, 0x20)], ['part.stl', 'solid x\n', undefined, 12]]);
   const garbage = Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
   const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
   const rows = [
     // A3: its size hidden -- said, or judged from the whole body in hand (must fire: "ok · size not given · zip")
-    ['A3 size hidden', 'part.zip', bz, hidden, 'warn:its size was not given'],
+    ['A3 size hidden', 'part.zip', bzBig, hidden, 'warn:its size was not given'],
+    // (r79 A4: a short part, the whole file, gives its size and is judged: must fire, "size not given")
+    ['r79 A4 a short part, size hidden', 'part.zip', bz, hidden, 'bad:0.00 MB · zip · zip entry part.stl uses compression method 12'],
+    ['r79 A4 a 3-byte STL, size hidden', 'b.stl', Buffer.from('abc'), hidden, 'bad:neither a binary STL'],
+    ['r79 A4 a cut STL, no length', 'c.stl', (() => { const b = Buffer.alloc(134); b.writeUInt32LE(2, 80); return b; })(), whole, 'bad:damaged'],
     ['A3 size hidden, whole in hand', 'part.zip', bz, whole, 'bad:compression method 12'],
     // A4: a corrupt deflate entry, a corrupt 3MF root (must fire: "ok · zip", "ok · 3MF")
     ['A4 corrupt entry', 'part.zip', miniZip([['part.stl', garbage, 4000, 8]]), ranged, 'bad:the deflated data is corrupt or truncated'],
@@ -591,7 +611,8 @@ await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gz
     const [lv, word] = want.split(/:(.*)/);
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
-  assert.deepEqual(got, rows.map(([what, , , , want]) => [what, want]));
+  const wanted = rows.map(([what, , , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1]))); // (the rows that differ, in the one line the harness prints)
 });
 await test('an encrypted 3MF root over the text limit: the page and the check refuse it in one order, by one name (r77 Q5)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

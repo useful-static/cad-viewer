@@ -5,7 +5,7 @@
 // picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead } from './cadmesh.js';
-import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions } from './formats.js';
+import { SNIFF_BYTES, extOf, formatOfName, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions, openedName } from './formats.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
@@ -4943,8 +4943,7 @@ async function loadAny(buf, name, seq, extras = []) {
   if (!formatOfName(name)) {
     let body = buf;
     if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
-    const said = sniffFormat(new Uint8Array(body, 0, Math.min(SNIFF_BYTES, body.byteLength)));
-    if (said) name = `${name.replace(/\.gz$/i, '')}.${said.ext[0]}`;
+    name = openedName(name, new Uint8Array(body, 0, Math.min(SNIFF_BYTES, body.byteLength))); // (js/formats.js, check-tour's too: r79 A5)
     buf = body;
   }
   // every format by the one table (js/formats.js): a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB;
@@ -5061,7 +5060,8 @@ async function loadMeshFile(buf, name, seq, drop = []) {
   for (const f of takesCompanions(formatOfName(`m.${format}`)?.label) ? drop : []) {
     let b;
     // (a zip's, inflated: stopped with the load -- r78 A6)
-    try { b = await f.arrayBuffer(); } catch (e) {
+    // (a zip's read to what is left of the budget: r79 A7; a File's arrayBuffer takes no argument)
+    try { b = await f.arrayBuffer(MAX_FILE_BYTES - total); } catch (e) {
       if (e instanceof StopRead) return;
       throw e;
     }
@@ -5249,7 +5249,10 @@ async function loadZip(buf, name, seq) {
   // (a 3MF by its directory, whatever its name: opened as one -- r76 A6)
   if (threeMf) return loadAny(buf, `${name.replace(/\.[^./]*$/, '')}.3mf`, seq);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
-  const extras = zipCompanions(files, model, opens).map((c) => ({ name: c.name, arrayBuffer: () => z.get(c.path) }));
+  // (each read to the budget the ones before it leave, loadMeshFile's `max`, refused in its words past
+  // it: each was inflated whole before the total was held, and a 2.9 MB zip held 3000 MB first -- r79 A7)
+  const over = () => new Error(`${model.split('/').pop().replace(/\.gz$/i, '')}: its companion files come to ${OVERSIZE_WORDS}`);
+  const extras = zipCompanions(files, model, opens).map((c) => ({ name: c.name, arrayBuffer: (max = MAX_FILE_BYTES) => z.get(c.path, max, over) }));
   let inner;
   try { inner = await z.get(model); } catch (e) {
     if (e instanceof StopRead) return;

@@ -419,8 +419,9 @@ const REREAD_MOST = 64 * 2 ** 20;
 const TURN_BYTES = 32 * 2 ** 20;
 // (and at a member's start once TURN_MS have passed, whatever came out: a gzip of 64-byte members
 // gives little output for much work, and 65,539 of them held the page 87 s with no turn and stop()
-// never asked -- r78 Q1. Within a member the output is at least its input over 1032, so TURN_BYTES
-// bounds the time there)
+// never asked -- r78 Q1 -- and before each try at a member's end, r79 Q1. Within one stream the turn
+// is by output alone, TURN_BYTES: empty stored blocks give none, and 200 MB of them read in 0.3 s
+// (r79 Q4, measured))
 const TURN_MS = 50;
 const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const turn = () => new Promise((res) => {
@@ -532,9 +533,15 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
         // (the budget from what this member's first stream gave too: from what came before alone, a
         // 100 MB first member with one chance header before its end was refused -- r76 Q1)
         if (reread > REREAD_MOST + 2 * from + 4 * made) break;
+        // (a turn and the caller's stop here too, by the time: a member corrupt at its first byte and
+        // copies of a header after it held Chromium 250 s, never asked -- r79 Q1)
+        if (clock() - turnedAt >= TURN_MS && await turnNow()) throw new StopRead();
         n = from;
         const r = await stream(u8.subarray(off, p));
-        reread += n - from;
+        // (a try that fails charged at least a piece: one that inflated nothing cost nothing, and the
+        // tries were never bounded -- r79 Q1; one that finds the end, what it read, as before: charged
+        // a piece each, a valid gzip of 16,387 small members ran out of budget)
+        reread += r ? Math.max(n - from, FEED) : n - from;
         if (r === 'head') return n;
         if (!r) { next = p; break; }
       }

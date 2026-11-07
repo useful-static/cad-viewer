@@ -129,6 +129,28 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + nm.length, 12); end.writeUInt32LE(30 + nm.length + d.length, 16);
     writeFileSync(join(dir, 'm.zip'), Buffer.concat([lh, nm, d, cd, nm, end]));
     assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'm.zip')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
+    // (r79 A5: by the page's own rules -- a zipped glTF read with the .bin beside it, an ASCII STL under
+    // a name that says no format opened by its bytes; must fire, "needs chair.bin", "bad magic")
+    const zipOf = (files) => {
+      const parts = [], cds = [];
+      let off = 0;
+      for (const [n, data] of files) {
+        const nb = Buffer.from(n), db = Buffer.from(data);
+        const l = Buffer.alloc(30); l.writeUInt32LE(0x04034b50, 0); l.writeUInt32LE(db.length, 18); l.writeUInt32LE(db.length, 22); l.writeUInt16LE(nb.length, 26);
+        const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt32LE(db.length, 20); c.writeUInt32LE(db.length, 24); c.writeUInt16LE(nb.length, 28); c.writeUInt32LE(off, 42);
+        parts.push(l, nb, db); cds.push(c, nb); off += 30 + nb.length + db.length;
+      }
+      const cdb = Buffer.concat(cds), e = Buffer.alloc(22); e.writeUInt32LE(0x06054b50, 0); e.writeUInt16LE(files.length, 8); e.writeUInt16LE(files.length, 10); e.writeUInt32LE(cdb.length, 12); e.writeUInt32LE(off, 16);
+      return Buffer.concat([...parts, cdb, e]);
+    };
+    const bin = Buffer.from(Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0).buffer);
+    const gltf = JSON.stringify({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0, name: 'plate' }], meshes: [{ name: 'plate', primitives: [{ attributes: { POSITION: 0 } }] }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }], bufferViews: [{ buffer: 0, byteLength: 36 }], buffers: [{ uri: 'chair.bin', byteLength: 36 }] });
+    writeFileSync(join(dir, 'g.zip'), zipOf([['chair.gltf', gltf], ['chair.bin', bin]]));
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'g.zip')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
+    writeFileSync(join(dir, 'download'), 'solid plate\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid plate\n');
+    writeFileSync(join(dir, 'p.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'download', steps: [{}] }));
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'p.cadtour.json')], { encoding: 'utf8' }), /^OK {2}/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -12,7 +12,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
-import { fileNameOfUrl, formatOfName, opensAsZip, sniffFormat, zipModel } from '../js/formats.js';
+import { fileNameOfUrl, formatOfName, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
 import { meshFormatOf, unzip } from '../js/mesh-formats.js';
 import { readMeshFile } from '../js/read-file.js';
 import { resolve } from 'node:path';
@@ -67,9 +67,13 @@ try {
   // (its name as the page names a URL's file -- a query value naming a model, the query dropped:
   // js/formats.js fileNameOfUrl; by its last segment, "download?file=part.stl&token=abc" was "bad magic"
   // -- r78 A7)
-  let name = fileNameOfUrl(model.replace(/\\/g, '/')).replace(/\.gz$/i, '');
+  // (and, a name that says no format, the one its bytes say: js/formats.js openedName, main.js
+  // loadAny's rule -- an ASCII STL at an unnamed URL was "cadmesh: bad magic", r79 A5)
+  let name = openedName(fileNameOfUrl(model.replace(/\\/g, '/')).replace(/\.gz$/i, ''), new Uint8Array(raw));
   // (a zip opened as the page opens one: the entry js/formats.js zipModel chooses, a 3MF by its
-  // directory -- r78 A7)
+  // directory -- r78 A7; and its companions handed to the reader that reads them, main.js loadZip and
+  // loadMeshFile -- a zipped glTF "needs chair.bin": r79 A5)
+  const extras = new Map();
   if (opensAsZip(name, new Uint8Array(raw)) && formatOfName(name)?.label !== '3MF') {
     const z = await unzip(raw);
     const zm = zipModel(z.names);
@@ -77,14 +81,14 @@ try {
     else if (!zm.model) throw new Error(`${name} holds no model this viewer opens`);
     else {
       const inner = await z.get(zm.model);
-      name = zm.model.split('/').pop();
       raw = isGzip(inner) ? await gunzip(inner) : inner;
-      name = name.replace(/\.gz$/i, '');
+      name = zm.model.split('/').pop().replace(/\.gz$/i, '');
+      if (meshReaderOf(name, new Uint8Array(raw))?.companions) for (const c of zipCompanions(zm.files, zm.model, zm.opens)) extras.set(c.name.toLowerCase(), await z.get(c.path));
     }
   }
   const mesh = meshFormatOf(name, raw);
   // (no edges or facts: the tour's check reads the bodies only -- r42 Q10)
-  if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras: new Map(), unit: tour.unit || 'mm', edges: false })).raw;
+  if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras, unit: tour.unit || 'mm', edges: false })).raw;
   else if (sniffFormat(raw)?.kind === 'cad' || formatOfName(name)?.kind === 'cad') throw new Error('a STEP / IGES / BREP: convert it first (stp2mesh.mjs) and check against the .cadmesh');
   ({ header } = decodeCadmesh(raw));
 } catch (e) {

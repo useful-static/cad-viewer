@@ -767,9 +767,13 @@ await test('a gzip of several members is read whole, member after member, where 
       const ms = Array.from({ length: 10000 }, (_, i) => { const b = Buffer.alloc(40, 0x20); b.writeUInt32LE(i, 0); return gzipSync(b, { level: 0 }); });
       const all = Buffer.concat(ms), at = new Map();
       for (let o = 0, i = 0; i < ms.length; o += ms[i].length, i++) at.set(all.subarray(o, o + 24).toString('hex'), i);
+      // (each stream costing a tenth of a millisecond, as one does in Chromium, so the read takes time
+      // enough for the turns to be told apart from one turn: r79 Q3)
+      const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms); };
       class Tiny {
         constructor(format) {
           if (format !== 'gzip') return new real(format);
+          spin(0.1);
           let got = Buffer.alloc(0), k;
           const t = new TransformStream({
             transform(c, ctl) {
@@ -785,12 +789,47 @@ await test('a gzip of several members is read whole, member after member, where 
       }
       globalThis.DecompressionStream = Tiny;
       let asked = 0, g;
+      // (and asked all along, not once: the longest stretch with no ask under 500 ms -- r79 Q3, a turn
+      // once and never again passed "at least once")
+      const times = [Date.now()];
       try {
-        g = await gunzip(all, undefined, () => { asked++; return false; });
+        g = await gunzip(all, undefined, () => { asked++; times.push(Date.now()); return false; });
+        times.push(Date.now());
         assert.equal(g.byteLength, 10000 * 40, 'every member');
         assert.ok(asked >= 1, `stop asked ${asked} times over 10,000 tiny members`);
+        const gap = Math.max(...times.slice(1).map((t, i) => t - times[i]));
+        assert.ok(gap < 500, `${gap} ms with no ask, of ${times[times.length - 1] - times[0]} ms`);
         await assert.rejects(gunzip(all, undefined, () => true), (e) => e instanceof StopRead);
       } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+    }
+    // (r79 Q1: a member corrupt at its first byte, then copies of a header with a trailer of size 0
+    // before each: every one a try at the member's end, each inflating nothing and charged nothing --
+    // 700 KB held Chromium 250 s. A try that fails is charged a piece: must fire, 20,000 streams)
+    {
+      const head = [0x1f, 0x8b, 0x08, 0, 0, 0, 0, 0, 0, 0xff, 0x07, 0x00], rec = [0, 0, 0, 0, 0x1f, 0x8b, 0x08];
+      const crafted = new Uint8Array(head.length + 20000 * rec.length);
+      crafted.set(head, 0);
+      for (let i = 0; i < 20000; i++) crafted.set(rec, head.length + i * rec.length);
+      let opened = 0;
+      const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms); };
+      class Broken {
+        constructor(format) {
+          if (format !== 'gzip') return new real(format);
+          opened++;
+          spin(1); // (a stream's cost, as in Chromium: the tries take time enough to need turns)
+          const t = new TransformStream({ transform() { throw new TypeError('invalid block type'); } });
+          this.readable = t.readable; this.writable = t.writable;
+        }
+      }
+      globalThis.DecompressionStream = Broken;
+      // (and the thread turned, the stop asked, among the tries: under 500 ms with no ask -- must fire,
+      // no turn in the try loop, Cancel waiting)
+      const times = [Date.now()];
+      try { await assert.rejects(gunzip(crafted, undefined, () => { times.push(Date.now()); return false; }), /corrupt or truncated/); } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+      times.push(Date.now());
+      assert.ok(opened <= 1100, `${opened} streams opened (the budget, 64 MB, at a piece a failed try)`);
+      const gap = Math.max(...times.slice(1).map((t, i) => t - times[i]));
+      assert.ok(gap < 500, `${gap} ms with no ask among the tries, of ${times[times.length - 1] - times[0]} ms`);
     }
     // must reject still: junk that is no member after the first
     await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
@@ -821,6 +860,17 @@ await test('an unpack gives the thread a turn every 32 MB out, and its caller\'s
   await assert.rejects(z.get('m.stl'), (e) => e instanceof StopRead);
   // (and with a limit of its own, a 3MF part's read)
   await assert.rejects(z.get('m.stl', 200 * 2 ** 20, (s) => new Error(s)), (e) => e instanceof StopRead);
+  // (r79 A7: a read to a budget -- main.js loadZip's companions, each to what the ones before leave --
+  // refused in the caller's words past it, before inflating where the directory says so, else as it
+  // inflates: must fire, the 100 MB inflated whole)
+  const z2 = await unzip(new Uint8Array(zip).buffer);
+  await assert.rejects(z2.get('m.stl', 50 * 2 ** 20, () => new Error('companions over')), /^Error: companions over$/);
+  cd.writeUInt32LE(1024, 24); // (its claim understated: met as it inflates)
+  const z3 = await unzip(new Uint8Array(Buffer.concat([lh, nm, d, cd, nm, end])).buffer);
+  await assert.rejects(z3.get('m.stl', 50 * 2 ** 20, () => new Error('companions over')), /^Error: companions over$/);
+  // (r79 Q2: an entry that inflates to other than its directory's size is a damaged zip, the list
+  // check's words too -- must fire, the 100 MB handed on as if 1 KB)
+  await assert.rejects(z3.get('m.stl'), /^Error: a damaged zip \(m\.stl unpacks to 104,857,600 bytes, where its directory says 1,024\)$/);
 });
 
 await test('inflateHead: nothing out is an empty view, a read it cannot make null (r78 A5)', async () => {

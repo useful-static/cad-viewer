@@ -74,6 +74,11 @@ export async function zipDirectory(tail, tailAt, len, readAt = null) {
 export const methodRefusal = (name, method, flags = 0) => (flags & 1 ? `zip entry ${name} is encrypted (a password-protected zip), which this viewer does not read`
   : method === 0 || method === 8 ? null : `zip entry ${name} uses compression method ${method}`);
 
+// An entry that inflates to other than the size its directory gives is damaged, in these words, or null
+// -- the one rule for the page's unzip and the list check: the check sized an entry past 1 MB of data
+// by its claim and the page by what it inflated to, and they disagreed both ways (r79 Q2)
+export const sizeRefusal = (name, got, said) => (got === said ? null : `a damaged zip (${name} unpacks to ${got.toLocaleString('en-US')} bytes, where its directory says ${said.toLocaleString('en-US')})`);
+
 // An entry's data: where it starts, from its local header's 30 bytes (head) -- its name and extra
 // lengths there, which may differ from the directory's
 export const entryDataAt = (lho, head) => {

@@ -2005,6 +2005,13 @@ await test('a mesh\'s companion files together are capped at the size a file may
   const unreadable = { name: 't.png', arrayBuffer: async () => { throw new Error('zip entry t.png uses compression method 12'); } };
   await loadMeshFile(new ArrayBuffer(4), 'c.stl', 1, [unreadable]);
   assert.deepEqual(read[1], []);
+  // (a GLB's are, its buffers and pictures by uri -- r79 A1; must fire, [] and "needs d.bin"); and each
+  // read to what the ones before it leave of the limit (100 here) -- r79 A7: each read whole first
+  const asked = [];
+  const budgeted = (name, n) => ({ name, arrayBuffer: async (max) => { asked.push(max); return new ArrayBuffer(n); } });
+  await loadMeshFile(new ArrayBuffer(4), 'd.glb', 1, [budgeted('d.bin', 30), budgeted('t.png', 20)]);
+  assert.deepEqual(read[2], ['d.bin', 't.png']);
+  assert.deepEqual(asked, [100, 70], 'the budget left, each read');
 });
 
 // (r56's pick-and-Back arm -- a pick ends the address's tour, Back reopens the tour's own model -- is

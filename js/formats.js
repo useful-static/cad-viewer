@@ -58,7 +58,8 @@ export const FORMATS = [
   { label: 'PLY', ext: ['ply'], kind: 'mesh', magic: true },
   { label: 'OFF', ext: ['off'], kind: 'mesh' },
   { label: '3MF', ext: ['3mf'], kind: 'mesh', magic: true, as: 'zip' },
-  { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true },
+  // (a GLB reads a buffer or picture its JSON names by uri, beside it: r79 A1)
+  { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true, companions: true },
   { label: 'glTF', ext: ['gltf'], kind: 'mesh', companions: true },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
   // (range: the releases js/dwg.js reads, said in "opens": DWG_RELEASES' first to last)
@@ -76,6 +77,17 @@ export const isCompanion = (name) => COMPANION_EXT.includes(extOf(name));
 // page read every mesh's, and refused a zipped STL for a bzip2 picture beside it; the check judged a
 // STEP's and a DXF's, which the page never reads (r78 A1, A2)
 export const takesCompanions = (label) => !!FORMATS.find((f) => f.label === label)?.companions;
+// The mesh format the page reads a mesh-named file as, from its name and first bytes: a mesh format's
+// magic in its start wins over the name (a PLY header, a GLB's "glTF"), else the name's; null when the
+// name is no mesh's. The one rule for the page's reader (js/mesh-formats.js meshFormatOf), the
+// companions it reads (main.js loadMeshFile) and the list check, which worked it out in three places
+// (r79 A8). A FORMATS row.
+export function meshReaderOf(name, start) {
+  const f = formatOfName(name);
+  if (!f || f.kind !== 'mesh') return null;
+  const s = start && start.length ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null;
+  return s && s.magic && s.kind === 'mesh' ? s : f;
+}
 
 // a name's extension, lower case, after any query and a .gz ("part.STP.gz?v=2" -> "stp")
 export function extOf(name) {
@@ -227,6 +239,14 @@ export function zipCompanions(files, model, opens) {
 // zip's is not: js/mesh-formats.js meshFormatOf), else by its bytes (sniffFormat). The one rule for
 // the page and the list check, which took any "PK" start for a zip: a valid binary STL whose header
 // starts "PK" was "not a zip file" there, and a zip's part.stl holding a zip "ok" (r77 A1)
+// The name the page opens a file under, from its name and its (unpacked) first bytes: its own where
+// it says a format, else one its bytes say (".stl" for an ASCII STL at /download?id=7), else its own.
+// The one rule for main.js loadAny and tests/check-tour.mjs, which kept a copy that had drifted (r79 A5)
+export function openedName(name, bytes) {
+  if (formatOfName(name)) return name;
+  const said = bytes && bytes.length ? sniffFormat(bytes.subarray(0, SNIFF_BYTES)) : null;
+  return said ? `${name.replace(/\.gz$/i, '')}.${said.ext[0]}` : name;
+}
 export function opensAsZip(name, bytes) {
   const f = formatOfName(name) || (bytes ? sniffFormat(bytes.subarray(0, SNIFF_BYTES)) : null);
   return !!f && (f.kind === 'zip' || f.label === '3MF');
