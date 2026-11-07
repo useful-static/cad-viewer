@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { encodeCadmesh, decodeCadmesh, bytesToId, writtenSizeLimit } from '../js/cadmesh.js';
+import { encodeCadmesh, decodeCadmesh, bytesToId, writtenSizeLimit, StopRead } from '../js/cadmesh.js';
 import * as CADMESH from '../js/cadmesh.js';
 const OVERSIZE_WORDS = CADMESH.OVERSIZE_WORDS || ''; // (main.js imports it since r72 A8; none in an older tree)
 import { mergeModels, modelRanges, staleModels, sceneEdgesFacts } from '../js/scene.js';
@@ -21,7 +21,7 @@ import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, list
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
-import { formatOfName, isCompanion, zipModel, zipCompanions as zipCompanionsOf } from '../js/formats.js';
+import { formatOfName, isCompanion, takesCompanions, zipModel, zipCompanions as zipCompanionsOf } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
 import { runStart } from './startup-harness.mjs';
@@ -1639,7 +1639,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     let release = null;
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
-      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions',
+      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions', 'StopRead',
       `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
@@ -1648,7 +1648,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
       // (the reader: what it is handed, after the awaits a real one makes)
       async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
       async () => { if (unzipWait) await held; return { unzip: async (b) => { read.push(['unzip', b.byteLength]); return { names, get: async () => new ArrayBuffer(4) }; } }; },
-      async () => {}, formatOfName, 'OPENS', zipModel, (b) => gz && b.byteLength === 7, async (b) => new ArrayBuffer(9), () => []); // (loadZip's choice, js/formats.js since r75 A2; its gunzip, r76 A1)
+      async () => {}, formatOfName, 'OPENS', zipModel, (b) => gz && b.byteLength === 7, async (b) => new ArrayBuffer(9), () => [], StopRead); // (loadZip's choice, js/formats.js since r75 A2; its gunzip, r76 A1)
     return { f, read, release, app };
   };
   const file = (name, size = 10) => ({ name, size, arrayBuffer: async () => { await tick(); return new ArrayBuffer(4); } });
@@ -1990,9 +1990,9 @@ await test('a mesh\'s companion files together are capped at the size a file may
   const at = src.indexOf('async function loadMeshFile(buf, name, seq');
   const read = [];
   const loadMeshFile = new Function('isGzip', 'unpackGz', 'meshReaders', 'stale', 'OPENS', 'setStatus', 'showProgress', 'mb', 'nextPaint', 'MAX_FILE_BYTES',
-    'app', 'readUnit', 'addressUnit', 'meshFromSource', 'OVERSIZE_WORDS', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
-    () => false, null, async () => ({ meshFormatOf: () => 'obj' }), () => false, '', () => {}, () => {}, () => '0', async () => {}, 100,
-    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); }, 'over 0 GB, more than this viewer opens'); // (the page's one wording, js/cadmesh.js: r73 A6)
+    'app', 'readUnit', 'addressUnit', 'meshFromSource', 'OVERSIZE_WORDS', 'takesCompanions', 'formatOfName', 'StopRead', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
+    () => false, null, async () => ({ meshFormatOf: (n) => n.split('.').pop() }), () => false, '', () => {}, () => {}, () => '0', async () => {}, 100,
+    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); }, 'over 0 GB, more than this viewer opens', takesCompanions, formatOfName, StopRead); // (the page's one wording, js/cadmesh.js: r73 A6)
   const extra = (name, n) => ({ name, arrayBuffer: async () => new ArrayBuffer(n) });
   // (under the cap: read, each by its name)
   await loadMeshFile(new ArrayBuffer(4), 'a.obj', 1, [extra('a.mtl', 40), extra('t.png', 40)]);
@@ -2000,6 +2000,11 @@ await test('a mesh\'s companion files together are capped at the size a file may
   // (over it together, though each is under: refused, the mesh never read)
   await assert.rejects(loadMeshFile(new ArrayBuffer(4), 'b.obj', 1, [extra('b.mtl', 60), extra('t.png', 60)]), /^Error: b\.obj: its companion files come to over 0 GB, more than this viewer opens$/);
   assert.equal(read.length, 1);
+  // (an STL's are not read at all: no reader of it looks at one, and a zipped STL was refused for a
+  // picture beside it the page could not unpack -- r78 A2; must fire: the throw, or ['t.png'])
+  const unreadable = { name: 't.png', arrayBuffer: async () => { throw new Error('zip entry t.png uses compression method 12'); } };
+  await loadMeshFile(new ArrayBuffer(4), 'c.stl', 1, [unreadable]);
+  assert.deepEqual(read[1], []);
 });
 
 // (r56's pick-and-Back arm -- a pick ends the address's tour, Back reopens the tour's own model -- is

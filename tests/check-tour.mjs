@@ -12,8 +12,8 @@
 
 import { readFile } from 'node:fs/promises';
 import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
-import { formatOfName, sniffFormat } from '../js/formats.js';
-import { meshFormatOf } from '../js/mesh-formats.js';
+import { fileNameOfUrl, formatOfName, opensAsZip, sniffFormat, zipModel } from '../js/formats.js';
+import { meshFormatOf, unzip } from '../js/mesh-formats.js';
 import { readMeshFile } from '../js/read-file.js';
 import { resolve } from 'node:path';
 import { parseModelList, readCapped } from '../js/model-list.js';
@@ -64,7 +64,24 @@ try {
   if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`over ${MAX_FILE_BYTES / 2 ** 30} GB`);
   if (isGzip(buf.buffer)) buf = new Uint8Array(await gunzip(buf.buffer));
   let raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  const name = model.split(/[/\\]/).pop().replace(/\.gz$/i, '');
+  // (its name as the page names a URL's file -- a query value naming a model, the query dropped:
+  // js/formats.js fileNameOfUrl; by its last segment, "download?file=part.stl&token=abc" was "bad magic"
+  // -- r78 A7)
+  let name = fileNameOfUrl(model.replace(/\\/g, '/')).replace(/\.gz$/i, '');
+  // (a zip opened as the page opens one: the entry js/formats.js zipModel chooses, a 3MF by its
+  // directory -- r78 A7)
+  if (opensAsZip(name, new Uint8Array(raw)) && formatOfName(name)?.label !== '3MF') {
+    const z = await unzip(raw);
+    const zm = zipModel(z.names);
+    if (zm.threeMf) name = `${name.replace(/\.[^./]*$/, '')}.3mf`;
+    else if (!zm.model) throw new Error(`${name} holds no model this viewer opens`);
+    else {
+      const inner = await z.get(zm.model);
+      name = zm.model.split('/').pop();
+      raw = isGzip(inner) ? await gunzip(inner) : inner;
+      name = name.replace(/\.gz$/i, '');
+    }
+  }
   const mesh = meshFormatOf(name, raw);
   // (no edges or facts: the tour's check reads the bodies only -- r42 Q10)
   if (mesh) raw = (await readMeshFile({ buf: raw, format: mesh, name, extras: new Map(), unit: tour.unit || 'mm', edges: false })).raw;

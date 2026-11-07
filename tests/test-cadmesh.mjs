@@ -759,6 +759,39 @@ await test('a gzip of several members is read whole, member after member, where 
       assert.equal(g.byteLength, 120 * 70000, 'every member');
       assert.ok(writes <= 4 * ms.length, `${writes} pieces written for ${ms.length} members (must fire: about 7,700, the rest of the file each)`);
     }
+    // (r78 Q1: many tiny members -- much work, little output -- turn the thread by the time too, and ask
+    // the caller's stop there: 65,539 of 64 bytes held the page 87 s, stop() never asked. A stand-in
+    // that stops at each member's end, as Chromium does; must fire: asked 0 times, read to the end)
+    {
+      const { StopRead } = await import('../js/cadmesh.js');
+      const ms = Array.from({ length: 10000 }, (_, i) => { const b = Buffer.alloc(40, 0x20); b.writeUInt32LE(i, 0); return gzipSync(b, { level: 0 }); });
+      const all = Buffer.concat(ms), at = new Map();
+      for (let o = 0, i = 0; i < ms.length; o += ms[i].length, i++) at.set(all.subarray(o, o + 24).toString('hex'), i);
+      class Tiny {
+        constructor(format) {
+          if (format !== 'gzip') return new real(format);
+          let got = Buffer.alloc(0), k;
+          const t = new TransformStream({
+            transform(c, ctl) {
+              got = Buffer.concat([got, Buffer.from(c)]);
+              if (k === undefined) k = at.get(got.subarray(0, 24).toString('hex'));
+              if (k === undefined) throw new TypeError('incorrect header check');
+              if (got.length > ms[k].length) { ctl.enqueue(new Uint8Array(gunzipSync(ms[k]))); throw new TypeError('Junk found after end of compressed data.'); }
+            },
+            flush(ctl) { if (got.length !== ms[k].length) throw new TypeError('unexpected end of file'); ctl.enqueue(new Uint8Array(gunzipSync(ms[k]))); },
+          });
+          this.readable = t.readable; this.writable = t.writable;
+        }
+      }
+      globalThis.DecompressionStream = Tiny;
+      let asked = 0, g;
+      try {
+        g = await gunzip(all, undefined, () => { asked++; return false; });
+        assert.equal(g.byteLength, 10000 * 40, 'every member');
+        assert.ok(asked >= 1, `stop asked ${asked} times over 10,000 tiny members`);
+        await assert.rejects(gunzip(all, undefined, () => true), (e) => e instanceof StopRead);
+      } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+    }
     // must reject still: junk that is no member after the first
     await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
   } finally {
@@ -772,8 +805,29 @@ await test('an unpack gives the thread a turn every 32 MB out, and its caller\'s
   let asked = 0;
   const out = await gunzip(gz, undefined, () => { asked++; return false; });
   assert.equal(out.byteLength, 100 * 2 ** 20);
-  assert.equal(asked, 3, `asked ${asked} times in 100 MB (must fire: 0, no turn)`);
+  // (at least one a 32 MB; the turns by the time, r78 Q1, may add more)
+  assert.ok(asked >= 3, `asked ${asked} times in 100 MB (must fire: 0, no turn)`);
   await assert.rejects(gunzip(gz, undefined, () => true), (e) => e instanceof StopRead);
+  // (r78 A6: and the page's other unpacks, a .cadmesh.gz's and a zip entry's, take the same stop --
+  // must fire: each read whole, Cancel waiting)
+  await assert.rejects(inflateCadmesh(gz, () => true), (e) => e instanceof StopRead);
+  const { unzip } = await import('../js/mesh-formats.js');
+  const d = deflateRawSync(Buffer.alloc(100 * 2 ** 20)), nm = Buffer.from('m.stl');
+  const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(8, 8); lh.writeUInt32LE(d.length, 18); lh.writeUInt32LE(100 * 2 ** 20, 22); lh.writeUInt16LE(nm.length, 26);
+  const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(100 * 2 ** 20, 24); cd.writeUInt16LE(nm.length, 28);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + nm.length, 12); end.writeUInt32LE(30 + nm.length + d.length, 16);
+  const zip = Buffer.concat([lh, nm, d, cd, nm, end]);
+  const z = await unzip(new Uint8Array(zip).buffer, () => true);
+  await assert.rejects(z.get('m.stl'), (e) => e instanceof StopRead);
+  // (and with a limit of its own, a 3MF part's read)
+  await assert.rejects(z.get('m.stl', 200 * 2 ** 20, (s) => new Error(s)), (e) => e instanceof StopRead);
+});
+
+await test('inflateHead: nothing out is an empty view, a read it cannot make null (r78 A5)', async () => {
+  const { inflateHead } = await import('../js/cadmesh.js');
+  const empty = await inflateHead(gzipSync(Buffer.alloc(0)), 64);
+  assert.ok(empty instanceof Uint8Array && empty.length === 0, `${empty} (must fire: null, "could not be read")`);
+  assert.deepEqual([...(await inflateHead(gzipSync(Buffer.from('abc')), 64))], [97, 98, 99]);
 });
 
 done();

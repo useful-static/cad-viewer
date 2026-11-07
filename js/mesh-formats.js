@@ -92,7 +92,7 @@ export function meshFormatOf(name, buf) {
 // drop: js/main.js keys by File.name) and one keyed by path both match.
 export const companionKey = (ref) => String(ref).split(/[/\\]/).pop().toLowerCase();
 // ...but by its path first, where the map has paths (a zip's companions, named by their path from the
-// model's folder: js/main.js zipCompanions): a glTF's "textures/wood.png" is that file, not a
+// model's folder: js/formats.js zipCompanions): a glTF's "textures/wood.png" is that file, not a
 // wood.png beside the model, and "buffers/chair.bin" the one under the model's own folder (by name
 // alone, another folder's took its place -- r54 A3, Q1). \ is read as /, a leading ./ dropped.
 const pathKey = (ref) => String(ref).replace(/\\/g, '/').replace(/^(\.\/)+/, '').toLowerCase();
@@ -803,7 +803,9 @@ function parseOFF(s, base) {
 // ---------- 3MF ----------
 // A zip's entries: { names (as stored), has(path), get(path) -> ArrayBuffer }
 // (stored or deflated; paths matched without case or a leading /)
-export async function unzip(buf) {
+// (stop: read at each turn of an entry's inflate -- the page's load superseded or cancelled -- true
+// ends it in a StopRead, js/cadmesh.js: Cancel waited for a whole entry -- r78 A6)
+export async function unzip(buf, stop = null) {
   const len = buf.byteLength;
   const u8 = new Uint8Array(buf);
   const need = within(len); // (js/zip-dir.js's bounds check -- r76 A10)
@@ -837,8 +839,8 @@ export async function unzip(buf) {
       }
       // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
       if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
-      if (!too) return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES);
-      try { return await inflate(f.data, 'deflate-raw', max); } catch (e) {
+      if (!too) return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES, stop);
+      try { return await inflate(f.data, 'deflate-raw', max, stop); } catch (e) {
         if (/too big/.test(e.message)) throw too(`over ${mb(max)}`);
         throw e;
       }

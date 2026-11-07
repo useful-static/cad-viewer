@@ -417,6 +417,12 @@ const REREAD_MOST = 64 * 2 ** 20;
 // (a turn of the thread, every TURN_BYTES of output: a task of its own, so a paint, a timer and a
 // click run -- a MessageChannel's, as setTimeout's is held to 1 s in a hidden tab)
 const TURN_BYTES = 32 * 2 ** 20;
+// (and at a member's start once TURN_MS have passed, whatever came out: a gzip of 64-byte members
+// gives little output for much work, and 65,539 of them held the page 87 s with no turn and stop()
+// never asked -- r78 Q1. Within a member the output is at least its input over 1032, so TURN_BYTES
+// bounds the time there)
+const TURN_MS = 50;
+const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const turn = () => new Promise((res) => {
   if (typeof MessageChannel === 'undefined') { setTimeout(res, 0); return; }
   const c = new MessageChannel();
@@ -442,7 +448,12 @@ export class StopRead extends Error { constructor() { super('the read was stoppe
 async function readMembers(buf, format, max, take, head = 0, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let n = 0, off = 0, reread = 0, seen = 0, turned = 0;
+  let n = 0, off = 0, reread = 0, seen = 0, turned = 0, turnedAt = clock();
+  // (a turn of the thread, then the caller's stop asked: true when the read is to stop)
+  const turnNow = async () => {
+    turned = seen; await turn(); turnedAt = clock();
+    return !!(stop && stop());
+  };
   // (one stream over bytes, its output handed on from `n`: written straight in -- read through a Blob
   // stream of its own each, a bgzip of 250 members was refused, "network error": r74 A6)
   // (in pieces of FEED bytes: a stream processes each as its output is read, so when it stops, what
@@ -474,9 +485,7 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
         // an 800 MB gzip held it 3.9 s with none, r77 Q3; and a load stopped meanwhile stops here)
         seen += value.byteLength; // (all output, a member read again too)
         if (seen - turned >= TURN_BYTES) {
-          turned = seen;
-          await turn();
-          if (stop && stop()) { await rd.cancel().catch(() => {}); throw new StopRead(); }
+          if (await turnNow()) { await rd.cancel().catch(() => {}); throw new StopRead(); }
         }
         if (n + value.byteLength > max) {
           await rd.cancel();
@@ -499,6 +508,8 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
   };
   for (;;) {
     const from = n;
+    // (each member's start, by the time: many small members give too little output to turn by it)
+    if (off && clock() - turnedAt >= TURN_MS && await turnNow()) throw new StopRead();
     const stopped = await stream(off ? u8.subarray(off) : u8);
     if (!stopped || stopped === 'head') return n;
     let next = -1;
@@ -537,7 +548,8 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
 }
 
 // The first n bytes a gzip unpacks to, read as the page reads it -- every member -- from as much of
-// it as is at hand (a file's start: a stream cut short gives what it has); null when nothing came.
+// it as is at hand (a file's start: a stream cut short gives what it has); null when it cannot be
+// read (no DecompressionStream, past the limit), an empty view when it unpacks to nothing.
 // The list check's sniff: its own single-member reader of 4 KB disagreed with the page twice, a gzip
 // whose first member is short, and a PLY header past 4 KB (r74 A1, A3)
 export async function inflateHead(buf, n, format = 'gzip') {
@@ -549,7 +561,9 @@ export async function inflateHead(buf, n, format = 'gzip') {
       if (at < n) out.set(value.subarray(0, n - at), at);
     }, n);
   } catch { return null; }
-  return got ? out.subarray(0, Math.min(got, n)) : null;
+  // (nothing out is an empty view, not null: null said both "will not inflate" and "inflates to
+  // nothing", and an empty a.stl.gz was "its gzip could not be read here" -- r78 A5)
+  return out.subarray(0, Math.min(got, n));
 }
 
 // The output buffer's first size: the gzip trailer's length, else 4x the input -- never past what
@@ -566,11 +580,13 @@ export function firstSize(buf, format, max) {
 }
 
 // buf -> the raw .cadmesh bytes (buf itself when it is not gzipped)
-export async function inflateCadmesh(buf) {
+// (stop: as gunzip's -- a StopRead passed on as it is, not a "cadmesh:" fault)
+export async function inflateCadmesh(buf, stop = null) {
   if (!isGzip(buf)) return buf;
   try {
-    return await gunzip(buf);
+    return await gunzip(buf, MAX_FILE_BYTES, stop);
   } catch (e) {
+    if (e instanceof StopRead) throw e;
     throw new Error(`cadmesh: ${e.message}`);
   }
 }

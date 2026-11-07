@@ -118,6 +118,17 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     let rc = 0;
     try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--labels'], { encoding: 'utf8' }); } catch (e) { rc = e.status; }
     assert.equal(rc, 2);
+    // (r78 A7: the model named as the page names a URL's file -- a query value naming a model, the
+    // query dropped -- and a zip opened for the model in it; by its last segment both were "bad magic")
+    const obj = 'o plate\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
+    writeFileSync(join(dir, 'dl?file=m.obj&token=abc'), obj);
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'dl?file=m.obj&token=abc')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
+    const nm = Buffer.from('in/m.obj'), d = Buffer.from(obj);
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt32LE(d.length, 18); lh.writeUInt32LE(d.length, 22); lh.writeUInt16LE(nm.length, 26);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(d.length, 24); cd.writeUInt16LE(nm.length, 28);
+    const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + nm.length, 12); end.writeUInt32LE(30 + nm.length + d.length, 16);
+    writeFileSync(join(dir, 'm.zip'), Buffer.concat([lh, nm, d, cd, nm, end]));
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'm.zip')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

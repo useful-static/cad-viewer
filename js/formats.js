@@ -5,7 +5,10 @@
 // (stp2mesh.mjs). manifest.webmanifest's file_handlers is checked against it
 // (tests/test-formats.mjs). A new format is a row here, its sniff below if it has one, and its
 // reader by kind: a mesh format a case in js/mesh-formats.js parseMesh, a 2D one in
-// js/read-file.js readDrawing, a CAD one OpenCascade's reader named by `cad`.
+// js/read-file.js readDrawing, a CAD one OpenCascade's reader named by `cad`. A text format is
+// also a case in readsAsText (and textBytes, if its reader holds less than the whole to the text
+// limit), so the page's limit and the list check hold it; one whose reader reads the files beside
+// it is `companions: true` (r78 A9).
 //
 // Pure ES module, no DOM.
 
@@ -49,12 +52,14 @@ export const FORMATS = [
   { label: 'BREP', ext: ['brep', 'brp'], kind: 'cad', cad: 'brep', magic: true },
   { label: 'cadmesh', ext: ['cadmesh'], kind: 'cadmesh', magic: true },
   { label: 'STL', ext: ['stl'], kind: 'mesh' },
-  { label: 'OBJ', ext: ['obj'], kind: 'mesh' },
+  // (companions: its reader reads the files that come with it -- an OBJ's .mtl, a .gltf's buffers and
+  // pictures; no other reader looks at one)
+  { label: 'OBJ', ext: ['obj'], kind: 'mesh', companions: true },
   { label: 'PLY', ext: ['ply'], kind: 'mesh', magic: true },
   { label: 'OFF', ext: ['off'], kind: 'mesh' },
   { label: '3MF', ext: ['3mf'], kind: 'mesh', magic: true, as: 'zip' },
   { label: 'GLB', ext: ['glb'], kind: 'mesh', magic: true },
-  { label: 'glTF', ext: ['gltf'], kind: 'mesh' },
+  { label: 'glTF', ext: ['gltf'], kind: 'mesh', companions: true },
   { label: 'DXF', ext: ['dxf'], kind: '2d' },
   // (range: the releases js/dwg.js reads, said in "opens": DWG_RELEASES' first to last)
   { label: 'DWG', ext: ['dwg'], kind: '2d', magic: true, range: dwgRange() },
@@ -66,6 +71,11 @@ const BY_EXT = new Map(FORMATS.flatMap((f) => f.ext.map((e) => [e, f])));
 // files that come with a model and are not one: an OBJ's .mtl, a .gltf's buffers and pictures
 export const COMPANION_EXT = ['mtl', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'ktx2'];
 export const isCompanion = (name) => COMPANION_EXT.includes(extOf(name));
+// Whether a model of this format (its label) is read with its companions: the one rule for the page
+// (main.js loadMeshFile reads them only then) and the list check (which judges them only then) -- the
+// page read every mesh's, and refused a zipped STL for a bzip2 picture beside it; the check judged a
+// STEP's and a DXF's, which the page never reads (r78 A1, A2)
+export const takesCompanions = (label) => !!FORMATS.find((f) => f.label === label)?.companions;
 
 // a name's extension, lower case, after any query and a .gz ("part.STP.gz?v=2" -> "stp")
 export function extOf(name) {

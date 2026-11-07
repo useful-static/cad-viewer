@@ -9,7 +9,7 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, stlIsBinary, takesCompanions, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
 import { MAX_FILE_BYTES, OVERSIZE_WORDS, gunzip, inflate, inflateCount, inflateHead, isGzip } from './cadmesh.js';
 import { ZIP_TAIL, entryDataAt, methodRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
@@ -172,6 +172,20 @@ async function zipEntriesVerdict(src, label, depth) {
     const raw = await src.read(entryDataAt(x.lho, head), x.csize);
     return x.method === 0 ? raw : new Uint8Array(await inflate(raw, 'deflate-raw', max));
   };
+  // (an entry's deflate data as the page inflates it -- whole, its refusal in its words -- counted, not
+  // kept, where the data is at most 1 MB; past that, data that inflates to nothing at its start. A
+  // corrupt entry was "ok · zip", a corrupt 3MF root "ok · 3MF": r78 A4)
+  // (-> { bad } the page's refusal, or { size } what it unpacks to: counted where the data is at most
+  // 1 MB, as the page has it whatever the directory claims -- r78 Q2 -- else the directory's)
+  const inflated = async (x, start = null) => {
+    if (x.method !== 8) return { size: x.usize };
+    const said = (e) => ({ bad: { level: 'bad', words: `its ${x.name}: ${e.message || e}` } });
+    if (x.csize > 1 << 20) return x.usize && start && !start.length ? said('the deflated data is corrupt or truncated (it inflates to nothing)') : { size: x.usize };
+    const head = await src.read(x.lho, 30);
+    const raw = await src.read(entryDataAt(x.lho, head), x.csize);
+    try { return { size: await inflateCount(raw, 'deflate-raw', MAX_FILE_BYTES) }; } catch (e) { return said(e); }
+  };
+  const corrupt = async (x, start = null) => (await inflated(x, start)).bad || null;
   const zm = zipModel(entries.map((x) => x.name));
   if (label === '3MF' || zm.threeMf) {
     // (its relationships part as the reader reads it -- its method, then whole up to the text limit:
@@ -182,7 +196,10 @@ async function zipEntriesVerdict(src, label, depth) {
     if (rels) {
       if (unread(rels)) return unread(rels);
       if (rels.usize > MAX_TEXT_BYTES) return { level: 'bad', words: `its relationships part _rels/.rels unpacks to ${sizeOver(rels.usize)}, ${TEXT_LIMIT_WORDS}` };
-      relsText = new TextDecoder().decode(await whole(rels, MAX_TEXT_BYTES));
+      try { relsText = new TextDecoder().decode(await whole(rels, MAX_TEXT_BYTES)); } catch (e) {
+        if (/^a damaged zip/.test(e.message || '')) throw e;
+        return { level: 'bad', words: `its _rels/.rels: ${e.message || e}` };
+      }
     }
     const path = threeMfRoot(relsText);
     const root = byName(path);
@@ -191,6 +208,8 @@ async function zipEntriesVerdict(src, label, depth) {
     if (unread(root)) return unread(root);
     // (in the reader's words, its path as the rels name it: "of text" twice and "3D/" for "/3D/" here -- r76 Q5)
     if (root.usize > MAX_TEXT_BYTES) return { level: 'bad', words: `its model part ${path} unpacks to ${sizeOver(root.usize)}, ${TEXT_LIMIT_WORDS}` };
+    const broken = await corrupt(root, root.csize > 1 << 20 ? await startOf(root) : null);
+    if (broken) return broken;
     const parts = entries.filter((x) => /\.model$/i.test(x.name));
     // (another model part the page cannot read: refused if the root names it, which is not read here)
     const other = parts.find((x) => x !== root && unread(x));
@@ -207,10 +226,23 @@ async function zipEntriesVerdict(src, label, depth) {
   // (its companions, which the page reads before the model, each by the reader's rule and together
   // under the file limit: one it cannot read refuses the model -- "ok" of a zip whose .png was bzip2:
   // r77 A3; the choice and the words the page's, js/formats.js zipCompanions, main.js loadMeshFile)
-  const companions = zipCompanions(zm.files, model, zm.opens).map((c) => byName(c.path)).filter(Boolean);
-  for (const c of companions) if (unread(c)) return unread(c);
-  if (companions.reduce((s, c) => s + c.usize, 0) > MAX_FILE_BYTES) return { level: 'bad', words: `${model.split('/').pop()}: its companion files come to ${OVERSIZE_WORDS}` };
   const start = await startOf(x);
+  const xi = await inflated(x, start);
+  if (xi.bad) return xi.bad;
+  // (only for a model whose reader reads them, as the page reads it -- a mesh by a mesh format's magic,
+  // else its name: js/formats.js takesCompanions; a STEP's or a DXF's were judged, which the page
+  // never reads -- r78 A1)
+  const sniffed = start ? sniffBytes(start.subarray(0, SNIFF_BYTES)) : null;
+  const readAs = sniffed && sniffed.magic && sniffed.kind === 'mesh' && formatOfName(model)?.kind === 'mesh' ? sniffed.label : formatOfName(model)?.label;
+  const companions = takesCompanions(readAs) ? zipCompanions(zm.files, model, zm.opens).map((c) => byName(c.path)).filter(Boolean) : [];
+  let held = 0;
+  for (const c of companions) {
+    if (unread(c)) return unread(c);
+    const ci = await inflated(c);
+    if (ci.bad) return ci.bad;
+    held += ci.size;
+  }
+  if (held > MAX_FILE_BYTES) return { level: 'bad', words: `${model.split('/').pop()}: its companion files come to ${OVERSIZE_WORDS}` };
   // (the entry as the page opens it -- loadAny, by its own name: a gzip unpacked, a zip or a 3MF read
   // as one. The check ran its own short list on it, and called a zipped part.stl.gz damaged and a
   // zipped 3MF of a 600 MB part "ok": r76 A2; a zip by the page's rule, js/formats.js opensAsZip, not
@@ -227,7 +259,7 @@ async function zipEntriesVerdict(src, label, depth) {
     const v = await bytesVerdict(bytes, model.split('/').pop(), depth + 1);
     return v && { level: v.level, words: `its ${model}: ${v.words}` };
   }
-  return startVerdict(model, start, x.usize);
+  return startVerdict(model, start, xi.size); // (its size as the page has it: r78 Q2)
 }
 // What the page does with a file of these bytes and this name -- a gzip unpacked, a zip or a 3MF by
 // its directory, else the size and text rules -- as a fault { level, words }, or null
@@ -332,28 +364,29 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const bits = [total !== null ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
   let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null, counted = false, unpackError = null;
-  let zipBytes = null, zipNotRead = false;
+  let zipBytes = null, zipNotRead = false, wholeStart = null;
   if (sniff) {
     // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
     // threw through the whole list check, which stopped with no verdict)
     let start;
     try { start = await head(res, 65536); } catch (e) { return { level: 'bad', detail: `its start could not be read: ${e && e.message ? e.message : e}`, url }; }
     if (!start.length) return { level: 'bad', detail: [...bits, EMPTY_WORDS].join(' · '), url };
+    // (a whole answer that ended inside the bytes read: the file itself, in hand)
+    if (res.status === 200 && start.length < 65536) wholeStart = start;
     const gz = isGzip(start);
     const inner = gz ? await gunzipStart(start) : start;
     const got = inner ? sniffFormat(inner) : null;
     const want = namedFormat(url);
     if (gz) bits.push('gzip');
-    if (!inner) {
-      bits.push('its gzip could not be read here');
-      level = 'warn';
-    } else {
+    // (a gzip whose start gave nothing: unread, or empty -- told once it is counted, below)
+    const nothing = !inner || (gz && !inner.length);
+    if (!nothing) {
       const fv = formatVerdict(want, got, inner, gz ? null : total);
       bits.push(fv.words);
       level = fv.level;
     }
     sizeFormat = got || want;
-    sizeStart = inner;
+    sizeStart = nothing ? null : inner; // (a start that gave nothing says nothing to the size rules)
     sizeGz = gz;
     // (a gzip's unpacked size, its last four bytes (ISIZE, mod 4 GiB), asked with a range: the page
     // holds what it unpacks to the same limits, and "ok · gzip · STL" said a 1.8 MB file unpacking to
@@ -390,6 +423,10 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
         if (b && b.length === 4) unpacked = new DataView(b.buffer, b.byteOffset, 4).getUint32(0, true);
       } catch { /* not asked: the unpacked size stays unknown */ }
     }
+    // (counted whole and nothing inside: empty, as a plain or zipped one is said -- an empty a.stl.gz
+    // was "its gzip could not be read here": r78 A5; else its start unread, as before)
+    if (nothing && counted && unpacked === 0) return { level: 'bad', detail: [...bits, EMPTY_WORDS].join(' · '), url };
+    if (nothing) { bits.push('its gzip could not be read here'); level = 'warn'; }
     // named .gz but not gzip: a server that sends it with Content-Encoding: gzip has the browser
     // unpack it on the way, and the viewer opens what arrives (main.js loadAny) -- so it is a
     // fault only when what arrived is not the file its name says
@@ -437,6 +474,9 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   if (sniff && pk && zipBytes) zipSaid = await zipVerdict(bytesSource(zipBytes), zipLabel);
   else if (sniff && pk && sizeGz) zipSaid = { level: 'warn', words: zipNotRead ? `its entries were not read here (it unpacks to more than ${sizeMb(ZIP_KEPT)})` : 'its entries were not read here' };
   else if (sniff && pk && total && total <= MAX_FILE_BYTES) zipSaid = await zipVerdict(rangedSource(fetchFn, fetchUrl, total), zipLabel);
+  // (its size not given -- Content-Range hidden, HEAD refused: read from the body in hand when that is
+  // the whole file, else said, not "ok · size not given · zip" with no entry read -- r78 A3)
+  else if (sniff && pk && total === null) zipSaid = wholeStart ? await zipVerdict(bytesSource(wholeStart), zipLabel) : { level: 'warn', words: 'its entries were not read here (its size was not given)' };
   const rule = sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);

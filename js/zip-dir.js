@@ -43,7 +43,10 @@ export async function zipDirectory(tail, tailAt, len, readAt = null) {
     if (!(o + 46 <= cd.length)) throw new Error('a damaged zip (a directory entry lies outside the file)');
     if (c.getUint32(o, true) !== 0x02014b50) throw new Error('a damaged zip central directory');
     const method = c.getUint16(o + 10, true), flags = c.getUint16(o + 8, true);
-    const csize = c.getUint32(o + 20, true), usize = c.getUint32(o + 24, true);
+    // (a stored entry's size is the bytes it holds -- what the page's unzip hands on -- whatever the
+    // directory claims: the list check took the claim, and called a cut STL "ok" and a whole one
+    // "damaged" -- r78 Q2)
+    const csize = c.getUint32(o + 20, true), usize = method === 0 ? csize : c.getUint32(o + 24, true);
     const nlen = c.getUint16(o + 28, true), xlen = c.getUint16(o + 30, true), clen = c.getUint16(o + 32, true);
     const lho = c.getUint32(o + 42, true);
     if (!(o + 46 + nlen <= cd.length)) throw new Error('a damaged zip (an entry name lies outside the file)');
