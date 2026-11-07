@@ -21,8 +21,8 @@
 
 import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { gunzipSync, gzipSync, constants as zc } from 'node:zlib';
-import { decodeCadmesh, encodeCadmesh, modelFactsOf, refuseWithoutEdges } from './js/cadmesh.js';
+import { gzipSync, constants as zc } from 'node:zlib';
+import { decodeCadmesh, encodeCadmesh, gunzip, modelFactsOf, refuseWithoutEdges } from './js/cadmesh.js';
 import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report] [--sliver MM]
@@ -236,7 +236,8 @@ async function main() {
   // (the input read and the output checked in the five tools' one wording, before the split)
   let raw = await readInput(a.in);
   await checkOutput(a.out);
-  if (raw[0] === 0x1f && raw[1] === 0x8b) raw = gunzipSync(raw);
+  // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
+  if (raw[0] === 0x1f && raw[1] === 0x8b) raw = Buffer.from(await gunzip(raw));
   const d = decodeCadmesh(toAB(raw));
   const s = splitBoard(d, { sliver: a.sliver });
   const h = d.header;

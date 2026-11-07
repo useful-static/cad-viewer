@@ -17,6 +17,21 @@ const B = 'https://example.com/boards/';
 const cadmesh = gzipSync(Buffer.concat([Buffer.from('CADM'), Buffer.alloc(200)]));
 const stepInside = gzipSync(Buffer.from('ISO-10303-21;\nHEADER;\n'));
 const tour = JSON.stringify({ cadtour: 1, title: 'A tour', steps: [{ title: 'one' }, { title: 'two' }] });
+// a zip of stored entries [name, bytes], its directory saying usize where given (a size claimed)
+const miniZip = (entries) => {
+  const parts = [], cds = [];
+  let off = 0;
+  for (const [name, data, claimed] of entries) {
+    const nm = Buffer.from(name), d = Buffer.from(data);
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt32LE(d.length, 18); local.writeUInt32LE(d.length, 22); local.writeUInt16LE(nm.length, 26);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
+    parts.push(local, nm, d); cds.push(cd, nm);
+    off += 30 + nm.length + d.length;
+  }
+  const cdb = Buffer.concat(cds);
+  const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(cdb.length, 12); end.writeUInt32LE(off, 16);
+  return Buffer.concat([...parts, cdb, end]);
+};
 const FILES = {
   [`${B}models.json`]: JSON.stringify({
     'good.cadmesh.gz': { name: 'Good', id: 'good', image: 'good.webp', step: 'good.stp.gz', tours: [{ name: 'Good tour', url: 'good.cadtour.json' }] },
@@ -38,7 +53,7 @@ const FILES = {
   [`${B}sorted.gltf`]: '{"accessors":[],"asset":{"version":"2.0"}}',
   [`${B}get?file=board.stl`]: 'solid b\n facet normal 0 0 1\n',
   [`${B}ply-named-obj.obj`]: 'ply\nformat ascii 1.0\n',
-  [`${B}case.3mf`]: Buffer.from('PK\x03\x04rest'),
+  [`${B}case.3mf`]: miniZip([['3D/3dmodel.model', '<?xml version="1.0"?><model unit="millimeter"/>']]),
   [`${B}ply-named-stl.stl`]: 'ply\nformat ascii 1.0\n',
   [`${B}dwg-named-dxf.dxf`]: Buffer.from('AC1015\0\0\0\0'),
   [`${B}r12.dwg`]: Buffer.from('AC1009\0\0\0\0'),
@@ -59,10 +74,14 @@ async function fakeFetch(url, opts = {}) {
   // a part is a 206 whose Content-Length is the part's; with hideRange the
   // Content-Range is hidden, as a browser hides it from another site's page
   // when the server does not expose it (libre.computer, 2026-10-31)
-  const partLen = Math.min(len, 65536);
+  // (the range asked, from where it starts: a zip's directory is read from its end -- r75)
+  const m = ranged ? /bytes=(\d+)-(\d*)/.exec(ranged) : null;
+  const from = m ? Math.min(+m[1], len) : 0;
+  const to = m ? Math.min(m[2] === '' ? len - 1 : +m[2], len - 1, from + 65535) : len - 1;
+  const partLen = Math.max(0, to - from + 1);
   const headers = { 'content-length': String(ranged ? partLen : len) };
-  if (ranged && !fakeFetch.hideRange) headers['content-range'] = `bytes 0-${partLen - 1}/${len}`;
-  return new Response(opts.method === 'HEAD' ? null : Buffer.from(body).subarray(0, ranged ? partLen : len), { status: ranged ? 206 : 200, headers });
+  if (ranged && !fakeFetch.hideRange) headers['content-range'] = `bytes ${from}-${to}/${len}`;
+  return new Response(opts.method === 'HEAD' ? null : Buffer.from(body).subarray(ranged ? from : 0, ranged ? to + 1 : len), { status: ranged ? 206 : 200, headers });
 }
 
 await test('formats', () => {
@@ -383,6 +402,45 @@ await test('a 3MF is held to the text limit by its model part, read from its dir
   // must accept: under it
   const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 40 * 2 ** 20)), sniff: true });
   assert.notEqual(ok.level, 'bad', ok.detail);
+});
+await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root from its rels, the zip\'s entry loadZip opens, a gzipped one, a zip64 one (r75 A1-A4)', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const host = (bytes) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+    const a = +m[1], b = Math.min(+m[2], bytes.length - 1);
+    return new Response(bytes.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${bytes.length}` } });
+  };
+  const big = 520 * 2 ** 20;
+  const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/plate.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  // A1: rooted at /3D/plate.model by its rels (must fire: "ok · zip", by 3D/3dmodel.model)
+  const rooted = miniZip([['_rels/.rels', rels], ['3D/plate.model', '<model/>', big]]);
+  const a1 = await checkFile(`${B}plate.3mf`, { fetchFn: host(rooted), sniff: true });
+  assert.equal(a1.level, 'bad', a1.detail);
+  assert.match(a1.detail, /its model part 3D\/plate\.model unpacks to 520 MB of text/);
+  // (r75 Q3: its rels read by the reader's own walker -- a Relationship inside a comment passed over,
+  // an entity in its Target decoded; a regex of the check's own took the commented-out one)
+  const rels2 = '<?xml version="1.0"?><Relationships><!-- <Relationship Target="/3D/decoy.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/> --><Relationship Target="/3D/pl&#97;te.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const q3 = await checkFile(`${B}plate.3mf`, { fetchFn: host(miniZip([['_rels/.rels', rels2], ['3D/plate.model', '<model/>', big]])), sniff: true });
+  assert.equal(q3.level, 'bad', `${q3.detail} (must fire: ok, by the decoy)`);
+  // A2: a zip whose entry loadZip opens is a 520 MB OBJ (must fire: "ok")
+  const obj = miniZip([['readme.txt', 'hello'], ['part.obj', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n', big]]);
+  const a2 = await checkFile(`${B}part.zip`, { fetchFn: host(obj), sniff: true });
+  assert.equal(a2.level, 'bad', a2.detail);
+  assert.match(a2.detail, /its part\.obj unpacks to 520 MB of text/);
+  // A3: the same 3MF gzipped (must fire: "ok · gzip · zip")
+  const a3 = await checkFile(`${B}plate.3mf.gz`, { fetchFn: host(gzipSync(rooted)), sniff: true });
+  assert.equal(a3.level, 'bad', a3.detail);
+  assert.match(a3.detail, /its model part 3D\/plate\.model unpacks to 520 MB of text/);
+  // A4: a zip64 archive, refused by the page in its words (must fire: "ok")
+  const z64 = Buffer.from(miniZip([['3D/3dmodel.model', '<model/>']]));
+  z64.writeUInt16LE(0xffff, z64.length - 22 + 10);
+  const a4 = await checkFile(`${B}z64.3mf`, { fetchFn: host(z64), sniff: true });
+  assert.equal(a4.level, 'bad', a4.detail);
+  assert.match(a4.detail, /the viewer cannot open it: a zip64 archive, which this viewer does not read/);
+  // must accept: a small 3MF and zip
+  const okZip = await checkFile(`${B}part.zip`, { fetchFn: host(miniZip([['part.obj', 'v 0 0 0\n']])), sniff: true });
+  assert.notEqual(okZip.level, 'bad', okZip.detail);
 });
 await test('a ranged read that fails where a plain one opens the file is asked again plainly, not called a CORS failure (r73 Q2: a host sending its stored Content-Encoding)', async () => {
   // (the browser's ranged request asks for identity; such a host sends gzip anyway, and the fetch

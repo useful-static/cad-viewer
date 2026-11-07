@@ -16,6 +16,8 @@
 // DecompressionStream for its deflated entries.
 
 import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
+import { entryDataAt, zipDirectory } from './zip-dir.js';
+import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
 import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
@@ -802,33 +804,17 @@ function parseOFF(s, base) {
 // A zip's entries: { names (as stored), has(path), get(path) -> ArrayBuffer }
 // (stored or deflated; paths matched without case or a leading /)
 export async function unzip(buf) {
-  const dv = new DataView(buf);
   const len = buf.byteLength;
+  const u8 = new Uint8Array(buf);
   // every offset the archive gives is checked against its size: a broken zip is refused as
   // "damaged", not met as the engine's "Offset is outside the bounds of the DataView"
   const need = (at, n, what) => { if (!(at >= 0 && at + n <= len)) throw new Error(`a damaged zip (${what} lies outside the file)`); };
-  // the end of central directory record, searched back from the end
-  let e = -1;
-  for (let i = len - 22; i >= Math.max(0, len - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
-  if (e < 0) throw new Error('not a zip file (no central directory)');
-  const n = dv.getUint16(e + 10, true);
-  let o = dv.getUint32(e + 16, true);
-  if (o === 0xffffffff || n === 0xffff) throw new Error('a zip64 archive, which this viewer does not read');
+  // (its directory by the one reader, the list check's too: js/zip-dir.js -- r75 A4)
   const out = new Map();
-  for (let i = 0; i < n; i++) {
-    need(o, 46, 'a directory entry');
-    if (dv.getUint32(o, true) !== 0x02014b50) throw new Error('a damaged zip central directory');
-    const method = dv.getUint16(o + 10, true);
-    const csize = dv.getUint32(o + 20, true), usize = dv.getUint32(o + 24, true);
-    const nlen = dv.getUint16(o + 28, true), xlen = dv.getUint16(o + 30, true), clen = dv.getUint16(o + 32, true);
-    const lho = dv.getUint32(o + 42, true);
-    need(o + 46, nlen, 'an entry name');
-    const name = new TextDecoder().decode(new Uint8Array(buf, o + 46, nlen));
-    o += 46 + nlen + xlen + clen;
-    need(lho, 30, `${name}'s header`);
-    const lnl = dv.getUint16(lho + 26, true), lxl = dv.getUint16(lho + 28, true);
-    need(lho + 30 + lnl + lxl, csize, `${name}'s data`);
-    const data = new Uint8Array(buf, lho + 30 + lnl + lxl, csize);
+  for (const { name, method, csize, usize, lho } of await zipDirectory(u8, 0, len)) {
+    const at = entryDataAt(lho, u8.subarray(lho, lho + 30));
+    need(at, csize, `${name}'s data`);
+    const data = new Uint8Array(buf, at, csize);
     out.set(name.replace(/^\//, '').toLowerCase(), { method, data, name, usize });
   }
   return {
@@ -858,63 +844,7 @@ export async function unzip(buf) {
   };
 }
 
-// A small XML tag walker (a worker has no DOMParser): onTag({ tag, attrs, close, self }) for each
-// tag whose local name (its prefix dropped) is in `want`, in document order; every other tag is
-// passed over without being parsed or kept. onTag returning true stops the walk. (A list of
-// every tag, built before anything was counted, ran out of heap on a 204 KB 3MF holding 200 MB
-// of "<a/>".)
-const TAG_RE = /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/y;
-function xmlWalk(s, want, onTag) {
-  // the wanted tags' starts found by one regex (the engine passes over every other tag
-  // natively: 200 MB of "<a/>" in 0.5 s, against 1.2 s for a loop over each '<'), then each read
-  // whole by TAG_RE where it starts. A name is matched to its end, one prefix run at most per '<'.
-  const find = new RegExp(`<\\/?(?:[A-Za-z_][\\w:.-]*:)?(?:${want.join('|')})(?![\\w:.-])`, 'g');
-  // a comment, CDATA section or processing instruction holds no tags: a match inside one is
-  // passed over to its end (a commented-out build item was read, and refused as missing). Each
-  // span is found once, ahead of the walk, so the walk stays linear; one never closed runs to the
-  // end of the text.
-  const SPECIAL = /<!--|<!\[CDATA\[|<\?/g;
-  const CLOSE = { '<!--': '-->', '<![CDATA[': ']]>', '<?': '?>' };
-  const spanFrom = (from) => {
-    SPECIAL.lastIndex = from;
-    const m = SPECIAL.exec(s);
-    if (!m) return { start: Infinity, end: Infinity };
-    const e = s.indexOf(CLOSE[m[0]], m.index + m[0].length);
-    return { start: m.index, end: e < 0 ? Infinity : e + CLOSE[m[0]].length };
-  };
-  let span = spanFrom(0);
-  let f;
-  while ((f = find.exec(s))) {
-    while (span.end <= f.index) span = spanFrom(span.end);
-    if (span.start < f.index) {
-      if (span.end === Infinity) return;
-      find.lastIndex = span.end;
-      continue;
-    }
-    TAG_RE.lastIndex = f.index;
-    const m = TAG_RE.exec(s);
-    if (!m) continue;
-    const attrs = {};
-    const ar = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-    let a;
-    while ((a = ar.exec(m[3]))) attrs[a[1].replace(/^.*:/, '')] = xmlText(a[2] ?? a[3]);
-    if (onTag({ tag: m[2].replace(/^.*:/, ''), attrs, close: !!m[1], self: !!m[4] })) return;
-    find.lastIndex = TAG_RE.lastIndex;
-  }
-}
-
-// An attribute value as text: XML's five named entities and its character references (&#N;,
-// &#xH;) decoded ("Bolt &amp; nut" is the name "Bolt & nut"). A reference to no character is
-// left as written. (Only a value holding "&" is scanned: a model's millions of coordinates are not.)
-const XML_NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-function xmlText(v) {
-  if (v.indexOf('&') < 0) return v;
-  return v.replace(/&(?:#[xX]([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|quot|apos));/g, (all, hex, dec, nm) => {
-    if (nm) return XML_NAMED[nm];
-    const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec, 10);
-    return cp > 0 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : all;
-  });
-}
+// (the XML walker and its text: js/xml-walk.js, the list check's too -- r75 Q3)
 
 // 3MF's unit attribute -> the viewer's unit name (js/units.js holds mm per unit)
 const UNIT_NAME = { micron: 'um', millimeter: 'mm', centimeter: 'cm', inch: 'in', foot: 'ft', meter: 'm' };
@@ -931,15 +861,9 @@ async function parse3MF(buf, base) {
     const also = max < MAX_TEXT_BYTES ? ' with the model parts before it' : '';
     try { return await zip.get(p, max, (size) => new Error(`${who}: its ${what} ${p} unpacks to ${size}${also}, ${TEXT_LIMIT_WORDS}`)); } catch (e) { throw named(e); }
   };
-  let path = '3D/3dmodel.model';
+  // (its root by the one rule, the list check's too: js/formats.js threeMfRoot -- r75 A1)
   const rels = await xmlPart('_rels/.rels', 'relationships part');
-  if (rels) {
-    xmlWalk(text(rels, `${base}.3mf's relationships part`), ['Relationship'], (t) => {
-      if (!/3dmodel$/.test(t.attrs.Type || '')) return false;
-      if (t.attrs.Target) path = t.attrs.Target;
-      return true;
-    });
-  }
+  const path = threeMfRoot(rels ? text(rels, `${base}.3mf's relationships part`) : '');
   // a part's key: its path without case or a leading / (as the zip matches it)
   const partKey = (p) => p.replace(/^\//, '').toLowerCase();
   const rootKey = partKey(path);

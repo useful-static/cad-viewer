@@ -8,8 +8,8 @@ import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { constants as zlibConstants, gunzipSync, gzipSync } from 'node:zlib';
-import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hashName, noSurfaces, DEFAULT_TESSELLATION, refuseWithoutEdges } from './js/cadmesh.js';
+import { gzipSync } from 'node:zlib';
+import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hashName, inflateHead, noSurfaces, DEFAULT_TESSELLATION, refuseWithoutEdges } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
@@ -64,7 +64,7 @@ const FORMATS = Object.fromEntries(CAD_FORMATS.filter((f) => f.kind === 'cad').f
 
 // The CAD format a file's first bytes say (gzipped or not), or undefined: the viewer's own
 // sniff (js/formats.js sniffFormat)
-function sniffFile(path) {
+async function sniffFile(path) {
   // the first 64 KiB only (a gzip's head unpacks from them): the whole file
   // was read and unpacked to look at 200 bytes (review r23)
   let b;
@@ -75,8 +75,11 @@ function sniffFile(path) {
       b = b.subarray(0, readSync(fd, b, 0, b.length, 0));
     } finally { closeSync(fd); }
   } catch { return undefined; }
+  // (its head unpacked by the page's own reading, every member: js/cadmesh.js inflateHead -- r75 A6)
   if (b[0] === 0x1f && b[1] === 0x8b) {
-    try { b = gunzipSync(b, { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
+    const h = await inflateHead(new Uint8Array(b.buffer, b.byteOffset, b.length), SNIFF_BYTES);
+    if (!h) return undefined;
+    b = Buffer.from(h.buffer, h.byteOffset, h.byteLength);
   }
   const f = sniffFormat(new Uint8Array(b.buffer, b.byteOffset, Math.min(b.length, SNIFF_BYTES)));
   return f && f.kind === 'cad' ? f.cad : undefined;
@@ -99,7 +102,7 @@ async function main() {
   // said by runCli: "stp2mesh: ..."; 2 is for the options)
   const read = await readInput(args.input);
   // a name that says nothing: told by the bytes, as the viewer does (r22)
-  const format = FORMATS[ext] || sniffFile(args.input);
+  const format = FORMATS[ext] || await sniffFile(args.input);
   if (!format) {
     // (the input refused, as a missing one is: 2 is for the options)
     throw new Error(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`

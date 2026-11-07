@@ -9,8 +9,12 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, readsAsText, sizeMb, sniffFormat as sniffBytes, stlIsBinary, textBytes, textOverWords } from './formats.js';
-import { MAX_FILE_BYTES, OVERSIZE_WORDS, inflateCount, inflateHead } from './cadmesh.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, readsAsText, sizeMb, sniffFormat as sniffBytes, stlIsBinary, textBytes, textOverWords, zipModel } from './formats.js';
+import { threeMfRoot } from './xml-walk.js';
+import { MAX_FILE_BYTES, OVERSIZE_WORDS, gunzip, inflateCount, inflateHead } from './cadmesh.js';
+import { ZIP_TAIL, entryDataAt, zipDirectory } from './zip-dir.js';
+// (the most of a gzipped zip kept unpacked, to read its directory)
+const ZIP_KEPT = 64 * 2 ** 20;
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -88,34 +92,72 @@ function stlCut(label, start, size) {
   return `damaged: its header counts ${big(n)} triangle${n === 1 ? '' : 's'}, so it should be ${big(want)} bytes, but it is ${big(size)} bytes`;
 }
 
-// A zip's entries by its central directory, read from its end with ranges: [{ name, usize }], or
-// null when it cannot be read so (no range, not a zip's end). A zip64 size reads as Infinity.
-async function zipEntries(fetchFn, url, total) {
-  const ranged = async (a, b) => {
-    const r = await fetchFn(url, { headers: { Range: `bytes=${a}-${b}` }, cache: 'no-store' });
-    if (r.status !== 206) { try { await r.body?.cancel(); } catch { /* gone */ } return null; }
-    return new Uint8Array(await r.arrayBuffer());
-  };
-  try {
-    const from = Math.max(0, total - 65557);
-    const tail = await ranged(from, total - 1);
-    if (!tail) return null;
-    const dv = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-    let e = tail.length - 22;
-    while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
-    if (e < 0) return null;
-    const cdSize = dv.getUint32(e + 12, true), cdOff = dv.getUint32(e + 16, true);
-    const cd = cdOff >= from ? tail.subarray(cdOff - from, cdOff - from + cdSize) : await ranged(cdOff, cdOff + cdSize - 1);
-    if (!cd || cd.length < cdSize) return null;
-    const c = new DataView(cd.buffer, cd.byteOffset, cd.byteLength), out = [];
-    for (let p = 0; p + 46 <= cd.length && c.getUint32(p, true) === 0x02014b50;) {
-      const usize = c.getUint32(p + 24, true), nl = c.getUint16(p + 28, true), xl = c.getUint16(p + 30, true), cl = c.getUint16(p + 32, true);
-      out.push({ name: new TextDecoder().decode(cd.subarray(p + 46, p + 46 + nl)), usize: usize === 0xffffffff ? Infinity : usize });
-      p += 46 + nl + xl + cl;
-    }
-    return out;
-  } catch { return null; }
+// What the page does with a zip or a 3MF, from its directory and the parts it reads -- by the page's
+// own rules: js/zip-dir.js zipDirectory (and its zip64 refusal), js/formats.js zipModel (the entry
+// loadZip opens) and threeMfRoot (the root model part, from _rels/.rels). src: { len, read(at, n) }
+// -> its bytes (a ranged fetch, or bytes in hand: a gzipped one unpacked). -> { level, words } of a
+// fault, or null. (The check's own reader said "ok" of a zip64 3MF, of a 3MF rooted elsewhere than
+// 3D/3dmodel.model, of a zip of a 520 MB OBJ, and of a gzipped 3MF -- r75 A1-A4)
+async function zipVerdict(src, label) {
+  try { return await zipVerdictOf(src, label); } catch (e) {
+    // (the check's own limit -- no range from the server -- a warning, not the page's refusal)
+    if (e instanceof NoRange) return { level: 'warn', words: `its entries could not be read here (${e.message})` };
+    throw e;
+  }
 }
+class NoRange extends Error {}
+async function zipVerdictOf(src, label) {
+  const tailAt = Math.max(0, src.len - ZIP_TAIL);
+  let entries;
+  try {
+    entries = await zipDirectory(await src.read(tailAt, src.len - tailAt), tailAt, src.len, src.read);
+  } catch (e) {
+    if (e instanceof NoRange) throw e;
+    return { level: 'bad', words: `the viewer cannot open it: ${e.message || e}` };
+  }
+  // an entry's first bytes, unpacked (64 KB: as much as the rules read)
+  const startOf = async (x) => {
+    const head = await src.read(x.lho, 30);
+    const raw = await src.read(entryDataAt(x.lho, head), Math.min(x.csize, x.method === 0 ? 65536 : 1 << 20));
+    return x.method === 0 ? raw : inflateHead(raw, 65536, 'deflate-raw');
+  };
+  const byName = (p) => entries.find((x) => x.name.replace(/^\//, '').toLowerCase() === p.replace(/^\//, '').toLowerCase());
+  if (label === '3MF') {
+    const rels = byName('_rels/.rels');
+    const relsText = rels && rels.usize < 1 << 20 ? new TextDecoder().decode((await startOf(rels)) || new Uint8Array(0)) : '';
+    const path = threeMfRoot(relsText);
+    const root = byName(path);
+    if (root && root.usize > MAX_TEXT_BYTES) return { level: 'bad', words: `its model part ${root.name} unpacks to ${textOverWords(root.usize)}` };
+    const parts = entries.filter((x) => /\.model$/i.test(x.name));
+    const all = parts.reduce((s, x) => s + x.usize, 0);
+    if (parts.length > 1 && all > MAX_TEXT_BYTES) return { level: 'warn', words: `its model parts come to ${textOverWords(all)}, if every one is read` };
+    return null;
+  }
+  const { model } = zipModel(entries.map((x) => x.name));
+  if (!model) return { level: 'bad', words: 'it holds no model this viewer opens' };
+  const x = byName(model), f = formatOfName(model);
+  if (x.usize > MAX_FILE_BYTES) return { level: 'bad', words: `its ${model} unpacks to ${OVERSIZE_WORDS}` };
+  const start = await startOf(x);
+  const got = start ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null;
+  const fl = got || f?.label;
+  if (start && textBytes(fl, start, x.usize) > MAX_TEXT_BYTES && readsAsText(fl, start, x.usize)) return { level: 'bad', words: `its ${model} unpacks to ${textOverWords(textBytes(fl, start, x.usize))}` };
+  const cut = stlCut(fl, start, x.usize);
+  if (cut) return { level: 'bad', words: `its ${model} is ${cut}` };
+  return null;
+}
+// a source of a file's bytes by range requests (206 and every byte asked, else an error)
+const rangedSource = (fetchFn, url, len) => ({
+  len,
+  async read(at, n) {
+    if (n <= 0) return new Uint8Array(0);
+    const r = await fetchFn(url, { headers: { Range: `bytes=${at}-${at + n - 1}` }, cache: 'no-store' });
+    if (r.status !== 206) { try { await r.body?.cancel(); } catch { /* gone */ } throw new NoRange('the server sent no range'); }
+    const b = new Uint8Array(await r.arrayBuffer());
+    if (b.length < n) throw new NoRange('the server sent less than it was asked');
+    return b.subarray(0, n);
+  },
+});
+const bytesSource = (u8) => ({ len: u8.length, read: async (at, n) => u8.subarray(at, at + n) });
 
 // One file: answered, CORS, found, size; with sniff, its format too.
 // -> { ok, level: 'ok' | 'warn' | 'bad', detail, url }
@@ -161,6 +203,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const bits = [total ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
   let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null, counted = false, unpackError = null;
+  let zipBytes = null, zipNotRead = false;
   if (sniff) {
     // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
     // threw through the whole list check, which stopped with no verdict)
@@ -209,7 +252,19 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
         const w = await fetchFn(fetchUrl, { cache: 'no-store' });
         if (w.ok) {
           const all = new Uint8Array(await w.arrayBuffer());
-          try { unpacked = await inflateCount(all); counted = true; } catch (e) { unpackError = e.message || String(e); }
+          // (a zip or a 3MF inside: its bytes kept, up to 64 MB, for its directory -- a gzipped 3MF
+          // of a 520 MB part said "ok · gzip · zip": r75 A3; else counted and let go)
+          const isZip = inner && inner[0] === 0x50 && inner[1] === 0x4b;
+          try {
+            if (isZip) {
+              try { zipBytes = new Uint8Array(await gunzip(all, ZIP_KEPT)); unpacked = zipBytes.length; } catch (e) {
+                if (!/too big/.test(e.message)) throw e;
+                unpacked = await inflateCount(all);
+                zipNotRead = true;
+              }
+            } else unpacked = await inflateCount(all);
+            counted = true;
+          } catch (e) { unpackError = e.message || String(e); }
         }
       } catch { /* not fetched whole: its size stays unknown */ }
     } else if (gz && inner && total > 4) {
@@ -259,20 +314,14 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const exact = sizeGz && (counted || stlSize !== null);
   if (stlSize !== null) unpacked = stlSize;
   const size = sizeGz ? (unsettled ? null : unpacked) : total;
-  // (a zip or a 3MF: its entries' sizes from its directory, held to the readers' limits)
+  // (a zip or a 3MF: what the page does with it, by its own rules -- from the server by ranges, or a
+  // gzipped one from its bytes unpacked; one too large to keep unpacked, said, not "ok")
   let zipSaid = null;
-  if (sniff && !sizeGz && total && sizeStart && sizeStart[0] === 0x50 && sizeStart[1] === 0x4b && total <= MAX_FILE_BYTES) {
-    const entries = await zipEntries(fetchFn, fetchUrl, total);
-    if (entries) {
-      const parts = entries.filter((x) => /\.model$/i.test(x.name));
-      const root = parts.find((x) => x.name.replace(/^\//, '').toLowerCase() === '3d/3dmodel.model');
-      const all = parts.reduce((s, x) => s + x.usize, 0);
-      const big = entries.find((x) => x.usize > MAX_FILE_BYTES);
-      if (root && root.usize > MAX_TEXT_BYTES) zipSaid = { level: 'bad', words: `its model part ${root.name} unpacks to ${textOverWords(root.usize)}` };
-      else if (parts.length > 1 && all > MAX_TEXT_BYTES) zipSaid = { level: 'warn', words: `its model parts come to ${textOverWords(all)}, if every one is read` };
-      else if (big) zipSaid = { level: 'warn', words: `its entry ${big.name} unpacks to ${OVERSIZE_WORDS}` };
-    }
-  }
+  const pk = sizeStart && sizeStart[0] === 0x50 && sizeStart[1] === 0x4b;
+  const zipLabel = sizeFormat === '3MF' || namedFormat(url) === '3MF' ? '3MF' : 'zip';
+  if (sniff && pk && zipBytes) zipSaid = await zipVerdict(bytesSource(zipBytes), zipLabel);
+  else if (sniff && pk && sizeGz) zipSaid = { level: 'warn', words: zipNotRead ? `its entries were not read here (it unpacks to more than ${sizeMb(ZIP_KEPT)})` : 'its entries were not read here' };
+  else if (sniff && pk && total && total <= MAX_FILE_BYTES) zipSaid = await zipVerdict(rangedSource(fetchFn, fetchUrl, total), zipLabel);
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);
     level = 'bad';

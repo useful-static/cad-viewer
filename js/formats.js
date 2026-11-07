@@ -155,6 +155,16 @@ export const tooMuchText = (what, bytes) => new Error(`${what} is ${textOverWord
 // it is read as text. The one rule for the reader (js/mesh-formats.js parseSTL) and the list check,
 // which kept its own and disagreed both ways (r72 A2)
 export const stlIsBinary = (size, n) => size >= 84 && 84 + 50 * n <= size && size - (84 + 50 * n) < 50;
+// The entry of a zip the page opens: the first, in the zip's order, whose name is a format the viewer
+// opens (not another zip), folders and __MACOSX passed over; { files, model, others } (model null
+// when none). The one choice, main.js loadZip's and the list check's (which looked only at a 3MF's
+// model parts, and said "ok" of a zip of a 520 MB OBJ the page refused: r75 A2)
+export function zipModel(names) {
+  const files = names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
+  const opens = (n) => { const f = formatOfName(n); return !!f && f.kind !== 'zip'; };
+  const model = files.find(opens) || null;
+  return { files, opens, model, others: model ? files.filter((n) => n !== model && opens(n)).length : 0 };
+}
 // A PLY's header, as its reader takes it: the text to end_header in its first 64 KB, its lines, and
 // its format -- ascii unless a format line says otherwise. null with no end_header (damaged). The
 // one rule for the reader (js/mesh-formats.js parsePLY) and the list check, which looked for "format

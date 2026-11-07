@@ -29,8 +29,10 @@
   window.addEventListener('error', function (e) {
     var t = e.target;
     if ((!t || t === window) && !thrown) thrown = e.message || String(e.error || 'an error');
-    // (each file once: a module's preload and its script fail alike)
-    var f = t && t !== window && (t.tagName === 'SCRIPT' || t.tagName === 'LINK') ? (t.src || t.href || '').split('/').pop() : '';
+    // (each file once: a module's preload and its script fail alike; a script or a module preload
+    // only -- an icon or the manifest failing was named in place of the error the page stopped
+    // with: r75 Q8)
+    var f = t && t !== window && (t.tagName === 'SCRIPT' || (t.tagName === 'LINK' && /modulepreload/i.test(t.rel || ''))) ? (t.src || t.href || '').split('/').pop() : '';
     if (f && failed.indexOf(f) < 0) failed.push(f);
   }, true);
   function say(title, text) {
@@ -51,21 +53,25 @@
     (document.getElementById('stage') || document.body).appendChild(d); // (#stage: where the viewer's cards are drawn)
     card = d;
   }
-  var loaded = false;
+  var loaded = false, slow = false;
+  // (the 20 s card taken away once the page starts, however late: it stayed over a page that had
+  // started at 40 s, for good -- r75 Q2)
+  var gone = function () { if (card && slow) { card.remove(); card = null; slow = false; } };
   window.addEventListener('load', function () {
     loaded = true;
-    if (started()) return;
+    if (started()) { gone(); return; }
     // (a file not loaded -- not downloaded, or not served as a script -- or else the error it stopped
     // with, in its own words)
     say(name + ' did not start', failed.length || !thrown
       ? 'A part of it could not be loaded' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + (failed.length > 3 ? ', …' : '') + ')' : '') + ': the connection may have changed or dropped while the page loaded. Reloading usually fixes it.'
       : 'It stopped as it started: ' + thrown + '. Reloading may fix it.');
+    slow = false;
   });
   // (the load not come: said at 20 s, and looked at again every 2 s -- gone once it starts)
   setTimeout(function tick() {
-    if (started()) { if (card && !loaded) { card.remove(); card = null; } return; }
+    if (started()) { gone(); return; }
     if (loaded) return;
-    if (!card) say(name + ' has not started', 'A part of it has not arrived after 20 s' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + ' failed)' : '') + ': the connection may be slow or have stopped. Reload to try again.');
+    if (!card) { say(name + ' has not started', 'A part of it has not arrived after 20 s' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + ' failed)' : '') + ': the connection may be slow or have stopped. Reload to try again.'); slow = true; }
     setTimeout(tick, 2000);
   }, 20000);
 }());

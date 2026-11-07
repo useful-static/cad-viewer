@@ -21,7 +21,7 @@ import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, list
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
-import { formatOfName, isCompanion } from '../js/formats.js';
+import { formatOfName, isCompanion, zipModel } from '../js/formats.js';
 
 import { test, done } from './harness.mjs';
 import { runStart } from './startup-harness.mjs';
@@ -1639,7 +1639,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     let release = null;
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
-      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS',
+      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel',
       `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
@@ -1648,7 +1648,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
       // (the reader: what it is handed, after the awaits a real one makes)
       async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
       async () => { if (unzipWait) await held; return { unzip: async () => ({ names: ['m.stl', 'other.mtl'], get: async () => new ArrayBuffer(4) }) }; },
-      async () => {}, formatOfName, 'OPENS');
+      async () => {}, formatOfName, 'OPENS', zipModel); // (loadZip's choice, js/formats.js since r75 A2)
     return { f, read, release, app };
   };
   const file = (name, size = 10) => ({ name, size, arrayBuffer: async () => { await tick(); return new ArrayBuffer(4); } });

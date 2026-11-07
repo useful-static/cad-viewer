@@ -404,8 +404,8 @@ export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES) {
   return readMembers(buf, format, max, () => {});
 }
 
-// (the most of a member's output a stopped stream may have dropped, queued and not handed on)
-const DROPPED_MOST = 4 * 2 ** 20;
+// (the most gzip headers past a member tried as its end: each a re-read of it)
+const MEMBER_TRIES = 16;
 // The one reading of compressed bytes, for inflate, inflateCount and inflateHead: each chunk handed to
 // take(value, at) as it comes, refused past `max`; the count returned.
 // (a gzip of several members -- cat a.gz b.gz, bgzip -- is one file's bytes in turn, RFC 1952. This
@@ -454,17 +454,24 @@ async function readMembers(buf, format, max, take, head = 0) {
     if (!stopped || stopped === 'head') return n;
     let next = -1;
     if (format === 'gzip') {
-      // (only a header whose member's trailer, just before it, counts at least what the stopped
-      // stream gave, and not much more -- Chromium drops what it had queued, a few hundred KB at most
-      // -- is read to: a false 1f 8b 08 in a cut-short file's data, each read again from the
-      // member's start, made the refusal quadratic)
+      // (only a header whose member's trailer, just before it, could be this member's is read to: a
+      // false 1f 8b 08 in a cut-short file's data, each read again from the member's start, made the
+      // refusal quadratic)
       const made = n - from;
+      // (and at most a few such headers tried a member: each one read again from the member's start,
+      // a crafted file of 4,001 fake headers carrying its size inflated 4 GB to be refused, and one
+      // of 8 MB would have been a petabyte -- r75 A5. A real member's end is the first that reads clean)
+      let tries = 0;
       // (from 12 bytes in: a header is 10, the shortest deflate 2 -- from 18, an empty member's end
       // was passed over: r74 A2, Q5)
       for (let p = u8.indexOf(0x1f, off + 12); p >= 0 && p + 3 <= u8.length; p = u8.indexOf(0x1f, p + 1)) {
         if (u8[p + 1] !== 0x8b || u8[p + 2] !== 8) continue;
         const isize = (u8[p - 4] | (u8[p - 3] << 8) | (u8[p - 2] << 16) | (u8[p - 1] << 24)) >>> 0;
-        if ((((isize - made) % 2 ** 32) + 2 ** 32) % 2 ** 32 > DROPPED_MOST) continue;
+        // (at least what came -- Chromium hands on 131,072 bytes of a member before "Junk found",
+        // whatever its size: a bound of what came and 4 MB passed over a 6 MB first member's real
+        // end, r75 Q1 -- and no more than deflate gives of those bytes, 1032 to 1)
+        if (isize < made || isize > (p - off) * 1032) continue;
+        if (++tries > MEMBER_TRIES) break;
         n = from;
         const r = await stream(u8.subarray(off, p));
         if (r === 'head') return n;

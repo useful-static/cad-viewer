@@ -5,7 +5,7 @@
 // picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
-import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth } from './formats.js';
+import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel } from './formats.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
@@ -5261,11 +5261,9 @@ async function loadZip(buf, name, seq) {
   // (superseded while the reader was fetched: stopped -- it went on, r52 Q2)
   if (stale(seq)) return;
   const z = await unzip(buf);
-  const files = z.names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
-  const opens = (n) => { const f = formatOfName(n); return !!f && f.kind !== 'zip'; };
-  const model = files.find(opens);
+  // (the entry it opens by the one choice, the list check's too: js/formats.js zipModel -- r75 A2)
+  const { files, opens, model, others } = zipModel(z.names);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
-  const others = files.filter((n) => n !== model && opens(n)).length;
   const extras = zipCompanions(files, model, opens).map((c) => ({ name: c.name, arrayBuffer: () => z.get(c.path) }));
   const inner = await z.get(model);
   if (stale(seq)) return;
@@ -5846,7 +5844,8 @@ async function loadUrl(url) {
         // (in the page's one MB, mb: "fetching 546.4 MB", then refused as 521 MB of text -- r73 A6)
         // (what has come rounded down: up, as a size past a limit is, it read "12.1 of 12.1 MB" still
         // downloading -- r74 A10)
-        ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${mb(total)} MB`
+        // (and the percent down: rounded, "100%" from 99.5 % on, still downloading -- r75 Q7)
+        ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${mb(total)} MB`
         : `fetching ${mbSoFar(got)} MB`);
       const secs = (performance.now() - tf) / 1000;
       const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
