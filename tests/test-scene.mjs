@@ -1633,13 +1633,13 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const tick = () => new Promise((res) => setTimeout(res, 1));
-  const run = (unzipWait) => {
+  const run = (unzipWait, names = ['m.stl', 'other.mtl'], gz = false) => {
     const app = { loadSeq: 0, status: 'ready', mesh: {}, dxf: null, embed: false };
     const read = [];
     let release = null;
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
-      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel',
+      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions',
       `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
@@ -1647,8 +1647,8 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
       (seq) => seq !== app.loadSeq,
       // (the reader: what it is handed, after the awaits a real one makes)
       async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
-      async () => { if (unzipWait) await held; return { unzip: async () => ({ names: ['m.stl', 'other.mtl'], get: async () => new ArrayBuffer(4) }) }; },
-      async () => {}, formatOfName, 'OPENS', zipModel); // (loadZip's choice, js/formats.js since r75 A2)
+      async () => { if (unzipWait) await held; return { unzip: async (b) => { read.push(['unzip', b.byteLength]); return { names, get: async () => new ArrayBuffer(4) }; } }; },
+      async () => {}, formatOfName, 'OPENS', zipModel, (b) => gz && b.byteLength === 7, async (b) => new ArrayBuffer(9), () => []); // (loadZip's choice, js/formats.js since r75 A2; its gunzip, r76 A1)
     return { f, read, release, app };
   };
   const file = (name, size = 10) => ({ name, size, arrayBuffer: async () => { await tick(); return new ArrayBuffer(4); } });
@@ -1672,6 +1672,18 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     for (let i = 0; i < 10; i++) await tick();
     assert.deepEqual(read, [['x.obj', ['x.mtl']]], 'a superseded zip meanwhile');
     assert.ok(app.loadSeq >= 2);
+  }
+  // (d) a 3MF named download.zip: opened as a 3MF, whole (r76 A6); (e) a model.zip.gz: unpacked,
+  // then unzipped by its name less .gz (r76 A1)
+  {
+    const { f, read } = run(false, ['[Content_Types].xml', '_rels/.rels', '3D/3dmodel.model']);
+    await f.loadZip(new ArrayBuffer(4), 'download.zip', f.beginLoad());
+    assert.deepEqual(read, [['unzip', 4], ['download.3mf', []]], 'a 3MF by its directory');
+  }
+  {
+    const { f, read } = run(false, ['m.stl'], true);
+    await f.loadZip(new ArrayBuffer(7), 'model.zip.gz', f.beginLoad());
+    assert.deepEqual(read, [['unzip', 9], ['m.stl', []]], 'a gzipped zip');
   }
   delete globalThis.$;
 });

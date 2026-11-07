@@ -9,7 +9,7 @@ import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hashName, inflateHead, noSurfaces, DEFAULT_TESSELLATION, refuseWithoutEdges } from './js/cadmesh.js';
+import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hashName, inflateHead, isGzip, noSurfaces, DEFAULT_TESSELLATION, refuseWithoutEdges } from './js/cadmesh.js';
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
@@ -76,7 +76,7 @@ async function sniffFile(path) {
     } finally { closeSync(fd); }
   } catch { return undefined; }
   // (its head unpacked by the page's own reading, every member: js/cadmesh.js inflateHead -- r75 A6)
-  if (b[0] === 0x1f && b[1] === 0x8b) {
+  if (isGzip(b)) {
     const h = await inflateHead(new Uint8Array(b.buffer, b.byteOffset, b.length), SNIFF_BYTES);
     if (!h) return undefined;
     b = Buffer.from(h.buffer, h.byteOffset, h.byteLength);
@@ -147,7 +147,7 @@ async function main() {
   // (unpacked as the page unpacks it: its limit, its words, every member -- node's gunzipSync had no
   // limit, and a 10 MB .stp.gz of 2.3 GB took 10 s and 4.76 GB before failing in the converter: r74 A7)
   let unpacked = read;
-  if (read[0] === 0x1f && read[1] === 0x8b) {
+  if (isGzip(read)) {
     try { unpacked = new Uint8Array(await gunzip(read)); } catch (e) { throw new Error(`${args.input}: ${e.message}`); }
   }
   // a UTF-8 byte-order mark first (some exporters write one): OpenCascade

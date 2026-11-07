@@ -9,10 +9,10 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, readsAsText, sizeMb, sniffFormat as sniffBytes, stlIsBinary, textBytes, textOverWords, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, stlIsBinary, textBytes, textOverWords, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
-import { MAX_FILE_BYTES, OVERSIZE_WORDS, gunzip, inflateCount, inflateHead } from './cadmesh.js';
-import { ZIP_TAIL, entryDataAt, zipDirectory } from './zip-dir.js';
+import { MAX_FILE_BYTES, OVERSIZE_WORDS, gunzip, inflate, inflateCount, inflateHead, isGzip } from './cadmesh.js';
+import { ZIP_TAIL, entryDataAt, methodRefusal, zipDirectory } from './zip-dir.js';
 // (the most of a gzipped zip kept unpacked, to read its directory)
 const ZIP_KEPT = 64 * 2 ** 20;
 import { fileUrl } from './open-url.js';
@@ -69,7 +69,6 @@ async function head(res, n) {
 // (512 bytes called a gzipped DXF behind a 1000-byte comment "format unknown" where the page opens it)
 const gunzipStart = (bytes, n = 65536) => inflateHead(bytes, n);
 
-const isGzip = (b) => b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b;
 // (MB of 2^20 bytes, as the page's own limits and words count them: in millions, a file at the
 // 2 GiB limit read 2147.5 MB here and 2,048 MB on the page -- r71 A11)
 // (a tenth from 1 MB, the page's own figure: js/formats.js mbTenth -- r73 Q4; a hundredth under it)
@@ -80,6 +79,26 @@ function refused(e) {
   // (given up after cad.place's own time: said as it says it -- r54 A2)
   if (isTimeout(e)) return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
   return `not fetched: the site sent no CORS header for it, or did not answer (${e && e.message ? e.message : e})`;
+}
+
+// A file's format against its name, from its unpacked start: { level, words } -- the one reading, a
+// file's and a zip entry's (an entry had fewer rules, and a zipped R12 DWG or a GLB that was an HTML
+// page read "ok": r76 Q3). want: the format its name says; got: the one its start says.
+function formatVerdict(want, got, inner) {
+  // a DWG of a release the reader does not read, whatever its name, is refused by the page:
+  // "ok · DWG" said an R12 drawing would open (r64 A2)
+  const unread = got === 'DWG' ? dwgRefusal(String.fromCharCode(...inner.subarray(0, 6))) : null;
+  if (unread) return { level: 'bad', words: want && want !== got ? `${unread} (named ${want})` : unread };
+  if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
+    // the viewer opens a mesh or a 2D drawing by its bytes where they are conclusive
+    // (js/mesh-formats.js meshFormatOf; a DWG by its tag, js/formats.js DWG_TAG, whatever its name), so a .stl
+    // holding a PLY opens as a PLY, a .dxf holding a DWG as a DWG
+    const kind = (label) => BY_LABEL.get(label)?.kind;
+    const opens = sure(got) && kind(got) === kind(want) && ['mesh', '2d'].includes(kind(got));
+    return { level: opens ? 'warn' : sure(want) || sure(got) ? 'bad' : 'warn', words: opens ? `named ${want}, but it is a ${got} (opens as one)` : `named ${want}, but it starts as ${got}` };
+  }
+  if (!got && want && sure(want)) return { level: 'bad', words: `named ${want}, but its start is no ${want} file` };
+  return { level: !got && !want ? 'warn' : 'ok', words: got || want || 'format unknown' };
 }
 
 // A binary STL (a NUL in its start: no ASCII one has one) whose size is not the one its header counts:
@@ -106,7 +125,7 @@ async function zipVerdict(src, label) {
   }
 }
 class NoRange extends Error {}
-async function zipVerdictOf(src, label) {
+async function zipVerdictOf(src, label, depth = 0) {
   const tailAt = Math.max(0, src.len - ZIP_TAIL);
   let entries;
   try {
@@ -121,28 +140,73 @@ async function zipVerdictOf(src, label) {
     const raw = await src.read(entryDataAt(x.lho, head), Math.min(x.csize, x.method === 0 ? 65536 : 1 << 20));
     return x.method === 0 ? raw : inflateHead(raw, 65536, 'deflate-raw');
   };
-  const byName = (p) => entries.find((x) => x.name.replace(/^\//, '').toLowerCase() === p.replace(/^\//, '').toLowerCase());
-  if (label === '3MF') {
+  const byName = (p) => entries.find((x) => x.key === p.replace(/^\//, '').toLowerCase());
+  // (an entry's method the page reads: js/zip-dir.js methodRefusal -- a bzip2 entry "ok": r76 A3)
+  const unread = (x) => { const m = methodRefusal(x.name, x.method, x.flags); return m ? { level: 'bad', words: m } : null; };
+  const zm = zipModel(entries.map((x) => x.name));
+  if (label === '3MF' || zm.threeMf) {
     const rels = byName('_rels/.rels');
-    const relsText = rels && rels.usize < 1 << 20 ? new TextDecoder().decode((await startOf(rels)) || new Uint8Array(0)) : '';
+    const relsText = rels && !unread(rels) && rels.usize < 1 << 20 ? new TextDecoder().decode((await startOf(rels)) || new Uint8Array(0)) : '';
     const path = threeMfRoot(relsText);
     const root = byName(path);
-    if (root && root.usize > MAX_TEXT_BYTES) return { level: 'bad', words: `its model part ${root.name} unpacks to ${textOverWords(root.usize)}` };
+    // (its root part missing: refused by the reader in these words -- "ok" here: r76 A5)
+    if (!root) return { level: 'bad', words: `it has no model part (${path})` };
+    if (unread(root)) return unread(root);
+    // (in the reader's words, its path as the rels name it: "of text" twice and "3D/" for "/3D/" here -- r76 Q5)
+    if (root.usize > MAX_TEXT_BYTES) return { level: 'bad', words: `its model part ${path} unpacks to ${sizeOver(root.usize)}, ${TEXT_LIMIT_WORDS}` };
     const parts = entries.filter((x) => /\.model$/i.test(x.name));
     const all = parts.reduce((s, x) => s + x.usize, 0);
     if (parts.length > 1 && all > MAX_TEXT_BYTES) return { level: 'warn', words: `its model parts come to ${textOverWords(all)}, if every one is read` };
     return null;
   }
-  const { model } = zipModel(entries.map((x) => x.name));
+  const model = zm.model;
   if (!model) return { level: 'bad', words: 'it holds no model this viewer opens' };
-  const x = byName(model), f = formatOfName(model);
+  const x = byName(model);
+  if (unread(x)) return unread(x);
   if (x.usize > MAX_FILE_BYTES) return { level: 'bad', words: `its ${model} unpacks to ${OVERSIZE_WORDS}` };
   const start = await startOf(x);
+  // (the entry as the page opens it -- loadAny, by its own name: a gzip unpacked, a zip or a 3MF read
+  // as one. The check ran its own short list on it, and called a zipped part.stl.gz damaged and a
+  // zipped 3MF of a 600 MB part "ok": r76 A2)
+  if (start && (isGzip(start) || (start[0] === 0x50 && start[1] === 0x4b)) && depth < 2) {
+    if (x.usize > ZIP_KEPT) return { level: 'warn', words: `its ${model} was not read here (it unpacks to more than ${sizeMb(ZIP_KEPT)})` };
+    const head = await src.read(x.lho, 30);
+    const raw = await src.read(entryDataAt(x.lho, head), x.csize);
+    const bytes = x.method === 0 ? raw : new Uint8Array(await inflate(raw, 'deflate-raw', ZIP_KEPT));
+    const v = await bytesVerdict(bytes, model.split('/').pop(), depth + 1);
+    return v && { level: v.level, words: `its ${model}: ${v.words}` };
+  }
+  return startVerdict(model, start, x.usize);
+}
+// What the page does with a file of these bytes and this name -- a gzip unpacked, a zip or a 3MF by
+// its directory, else the size and text rules -- as a fault { level, words }, or null
+async function bytesVerdict(bytes, name, depth) {
+  if (isGzip(bytes)) {
+    let inner;
+    try { inner = new Uint8Array(await gunzip(bytes, ZIP_KEPT)); } catch (e) {
+      if (/too big/.test(e.message)) return { level: 'warn', words: `it was not read here (it unpacks to more than ${sizeMb(ZIP_KEPT)})` };
+      return { level: 'bad', words: `the viewer cannot unpack it: ${e.message || e}` };
+    }
+    return bytesVerdict(inner, name.replace(/\.gz$/i, ''), depth);
+  }
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return zipVerdictOf(bytesSource(bytes), formatOfName(name)?.label === '3MF' ? '3MF' : 'zip', depth);
+  return startVerdict(name, bytes.subarray(0, 65536), bytes.length);
+}
+// A file of this name, start and size by the size and text rules: past the file limit, a text format
+// past the text limit, a binary STL cut short
+function startVerdict(name, start, size) {
+  if (size > MAX_FILE_BYTES) return { level: 'bad', words: `its ${name} unpacks to ${OVERSIZE_WORDS}` };
   const got = start ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null;
-  const fl = got || f?.label;
-  if (start && textBytes(fl, start, x.usize) > MAX_TEXT_BYTES && readsAsText(fl, start, x.usize)) return { level: 'bad', words: `its ${model} unpacks to ${textOverWords(textBytes(fl, start, x.usize))}` };
-  const cut = stlCut(fl, start, x.usize);
-  if (cut) return { level: 'bad', words: `its ${model} is ${cut}` };
+  const want = formatOfName(name)?.label || null;
+  // (its format against its name, by the file's own rules: formatVerdict -- r76 Q3)
+  if (start) {
+    const fv = formatVerdict(want, got, start);
+    if (fv.level !== 'ok') return { level: fv.level, words: `its ${name}: ${fv.words}` };
+  }
+  const fl = got || want;
+  if (start && textBytes(fl, start, size) > MAX_TEXT_BYTES && readsAsText(fl, start, size)) return { level: 'bad', words: `its ${name} unpacks to ${textOverWords(textBytes(fl, start, size))}` };
+  const cut = stlCut(fl, start, size);
+  if (cut) return { level: 'bad', words: `its ${name} is ${cut}` };
   return null;
 }
 // a source of a file's bytes by range requests (206 and every byte asked, else an error)
@@ -214,29 +278,13 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     const got = inner ? sniffFormat(inner) : null;
     const want = namedFormat(url);
     if (gz) bits.push('gzip');
-    // a DWG of a release the reader does not read, whatever its name, is refused by the page:
-    // "ok · DWG" said an R12 drawing would open (r64 A2)
-    const unread = got === 'DWG' ? dwgRefusal(String.fromCharCode(...inner.subarray(0, 6))) : null;
     if (!inner) {
       bits.push('its gzip could not be read here');
       level = 'warn';
-    } else if (unread) {
-      bits.push(want && want !== got ? `${unread} (named ${want})` : unread);
-      level = 'bad';
-    } else if (got && want && got !== want && BY_LABEL.get(want)?.as !== got.toLowerCase()) {
-      // the viewer opens a mesh or a 2D drawing by its bytes where they are conclusive
-      // (js/mesh-formats.js meshFormatOf; a DWG by its tag, js/formats.js DWG_TAG, whatever its name), so a .stl
-      // holding a PLY opens as a PLY, a .dxf holding a DWG as a DWG
-      const kind = (label) => BY_LABEL.get(label)?.kind;
-      const opens = sure(got) && kind(got) === kind(want) && ['mesh', '2d'].includes(kind(got));
-      bits.push(opens ? `named ${want}, but it is a ${got} (opens as one)` : `named ${want}, but it starts as ${got}`);
-      level = opens ? 'warn' : sure(want) || sure(got) ? 'bad' : 'warn';
-    } else if (!got && want && sure(want)) {
-      bits.push(`named ${want}, but its start is no ${want} file`);
-      level = 'bad';
     } else {
-      bits.push(got || want || 'format unknown');
-      if (!got && !want) level = 'warn';
+      const fv = formatVerdict(want, got, inner);
+      bits.push(fv.words);
+      level = fv.level;
     }
     sizeFormat = got || want;
     sizeStart = inner;

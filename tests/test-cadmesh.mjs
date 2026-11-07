@@ -17,7 +17,7 @@ import {
 } from '../js/cadmesh.js';
 import { FACTS_RULE } from '../js/edges.js';
 import { readMeshFile } from '../js/read-file.js';
-import { deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
+import { constants as zlibConstants, deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
 import { test, skip, done } from './harness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -631,23 +631,25 @@ await test('a gzip of several members is read whole, member after member, where 
     // (r75 A5: fake gzip headers after a member, each with a trailer of its size: refused after a few
     // tries, not one re-read of the member each -- here counted by the streams opened)
     {
-      const m = gzipSync(Buffer.alloc(1 << 16, 0x41));
-      const fake = Buffer.alloc(12); fake.writeUInt32LE(1 << 16, 0); fake.set([0x1f, 0x8b, 8], 4);
+      // (a 1 MB member, as the review's: each try inflates it again -- bounded by the output inflated
+      // again, 64 MB and twice what came before: r76 A7)
+      const m = gzipSync(Buffer.alloc(1 << 20, 0x41));
+      const fake = Buffer.alloc(12); fake.writeUInt32LE(1 << 20, 0); fake.set([0x1f, 0x8b, 8], 4);
       const crafted = Buffer.concat([m, ...Array.from({ length: 400 }, () => fake)]);
       let opened = 0;
       const Counted = class { constructor(f) { opened++; return new FirstMemberOnly(f); } };
       globalThis.DecompressionStream = Counted;
       await assert.rejects(gunzip(crafted), /corrupt or truncated/);
       globalThis.DecompressionStream = FirstMemberOnly;
-      assert.ok(opened <= 20, `${opened} streams opened (must fire: 401; the cap is 16 tries)`);
+      assert.ok(opened <= 200, `${opened} streams opened (must fire: 401; the output read again is bounded, 64 MB here)`);
     }
     // (r75 Q1, Q5: Chromium hands on 131,072 bytes of a member before "Junk found", whatever its size
     // -- the stand-in above kept half, which hid it. A stand-in that knows the members' ends: a 6 MB
     // first member, 131,072 of it given when junk follows (must fire: refused, the 4 MB bound))
     {
       const big = Buffer.alloc(6 * 2 ** 20, 0x41), tail = Buffer.from('endsolid x\n');
-      const m1 = gzipSync(big), m2 = gzipSync(tail), all = Buffer.concat([m1, m2]);
-      const ends = [m1.length, all.length];
+      const m1 = gzipSync(big), m2 = gzipSync(tail);
+      let all = Buffer.concat([m1, m2]), ends = [m1.length, all.length];
       class Chromium {
         constructor(format) {
           if (format !== 'gzip') return new real(format);
@@ -671,6 +673,56 @@ await test('a gzip of several members is read whole, member after member, where 
       const g = Buffer.from(await gunzip(all));
       globalThis.DecompressionStream = FirstMemberOnly;
       assert.equal(g.length, big.length + tail.length, 'a 6 MB first member');
+      // (r76 A7: a valid first member holding 20 runs that look like a trailer of about its size and a
+      // gzip header -- stored, level 0, so they are in the compressed bytes. Refused by a count of 16
+      // tries (must fire); opened by the bytes read again bounded)
+      const run = Buffer.alloc(7); run.writeUInt32LE(200000, 0); run.set([0x1f, 0x8b, 8], 4);
+      const body = Buffer.concat(Array.from({ length: 20 }, () => Buffer.concat([Buffer.alloc(10000, 0x42), run])));
+      const s1 = gzipSync(body, { level: 0 });
+      all = Buffer.concat([s1, m2]); ends = [s1.length, all.length];
+      globalThis.DecompressionStream = Chromium;
+      const g2 = Buffer.from(await gunzip(all));
+      globalThis.DecompressionStream = FirstMemberOnly;
+      assert.equal(g2.length, body.length + tail.length, 'a member holding 20 chance headers');
+    }
+    // (r76 Q1: a 100 MB first member with one chance header 90 MB in, its trailer-shaped bytes near the
+    // member's size. Its try reads 90 MB again and fails; the real end comes after. A budget from what
+    // came before the member alone, 64 MB, stopped there and refused the file (must fire). The
+    // stand-in is fed in pieces, as the page writes: when junk follows, it drops one piece's output
+    // at most, as Chromium does)
+    {
+      const MB = 2 ** 20, body = Buffer.alloc(100 * MB, 0x37), tail = Buffer.from('endsolid x\n');
+      const run = Buffer.alloc(7); run.writeUInt32LE(100 * MB - 1000, 0); run.set([0x1f, 0x8b, 8], 4);
+      run.copy(body, 90 * MB + 123);
+      const s1 = gzipSync(body, { level: 0 }), s2 = gzipSync(tail);
+      const all = Buffer.concat([s1, s2]), ends = [s1.length, all.length];
+      assert.ok(s1.indexOf(run) > 0, 'the planted header is in the compressed bytes');
+      class Fed {
+        constructor(format) {
+          if (format !== 'gzip') return new real(format);
+          const parts = [];
+          const t = new TransformStream({
+            transform(c) { parts.push(Buffer.from(c)); },
+            flush(ctl) {
+              const got = Buffer.concat(parts);
+              const off = [0, ...ends].find((o) => o < all.length && all.subarray(o, o + 64).equals(got.subarray(0, 64)));
+              const end = off === undefined ? undefined : ends.find((e) => e > off);
+              if (end === undefined) throw new TypeError('incorrect header check');
+              // (cut short: what it inflated handed on, then the error -- as Chromium does, and what makes a
+              // wrong try cost the bytes read again)
+              if (got.length < end - off) { ctl.enqueue(new Uint8Array(gunzipSync(got, { finishFlush: zlibConstants.Z_SYNC_FLUSH }))); throw new TypeError('unexpected end of file'); }
+              const out = gunzipSync(all.subarray(off, end));
+              if (got.length > end - off) { ctl.enqueue(new Uint8Array(out.subarray(0, Math.max(0, out.length - 65536)))); throw new TypeError('Junk found after end of compressed data.'); }
+              ctl.enqueue(new Uint8Array(out));
+            },
+          });
+          this.readable = t.readable; this.writable = t.writable;
+        }
+      }
+      globalThis.DecompressionStream = Fed;
+      let g3;
+      try { g3 = await gunzip(all); } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+      assert.equal(g3.byteLength, body.length + tail.length, 'a 100 MB member with a chance header 90 MB in (must fire: "corrupt or truncated")');
     }
     // must reject still: junk that is no member after the first
     await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);

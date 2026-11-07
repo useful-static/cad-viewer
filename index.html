@@ -461,6 +461,9 @@
     width:min(420px, calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 22px;
     box-shadow:0 8px 30px rgba(0,0,0,.35); text-align:center; }
+  /* the no-script card: hidden, then shown at 20 s by the style alone (r76 Q4) */
+  #bootslow { visibility:hidden; animation:bootslow 0s linear 20s forwards; }
+  @keyframes bootslow { to { visibility:visible; } }
   #stage .card[hidden] { display:none; }
   #stage .card h2 { font-size:16px; margin:0 0 8px; font-weight:600; overflow-wrap:anywhere; }
   #stage .card p { margin:6px 0; }
@@ -849,6 +852,10 @@
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
     </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
   </div>
+  <!-- A page that never started, said with no script at all: shown at 20 s by the style alone and
+       taken away by main.js's last statement -- when js/boot-check.js itself did not arrive, the page
+       stayed on "loading" with nothing to press (r76 Q4) -->
+  <div id="bootslow" class="card" role="alert"><h2>cad.place has not started</h2><p>A part of it has not arrived after 20 s: the connection may be slow or have stopped.</p><a class="primary" href="">Reload</a></div>
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>
     <h2>Open a CAD file</h2>

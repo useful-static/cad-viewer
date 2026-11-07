@@ -30,7 +30,7 @@ import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
-import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames } from './tour.js';
+import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, tourSlug } from './tour.js';
 import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
@@ -2321,7 +2321,7 @@ function paintCaption(ctx, w, h, scale, title, text) {
   ctx.restore();
 }
 
-const slugOf = (s) => (s || 'tour').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tour';
+const slugOf = tourSlug; // (the one rule: js/tour.js -- r76 A8)
 const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
 
 // A tour as pictures: each step applied at once (no flight), its colours on
@@ -5253,6 +5253,10 @@ function zipCompanions(files, model, opens) {
   return out;
 }
 async function loadZip(buf, name, seq) {
+  // (a gzipped zip unpacked first, as every other kind is: "not a zip file" said a model.zip.gz the
+  // list check called ok -- r76 A1)
+  if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
+  name = name.replace(/\.gz$/i, '');
   setStatus('loading', `unpacking ${name}`);
   showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
   await nextPaint();
@@ -5262,7 +5266,9 @@ async function loadZip(buf, name, seq) {
   if (stale(seq)) return;
   const z = await unzip(buf);
   // (the entry it opens by the one choice, the list check's too: js/formats.js zipModel -- r75 A2)
-  const { files, opens, model, others } = zipModel(z.names);
+  const { files, opens, model, threeMf, others } = zipModel(z.names);
+  // (a 3MF by its directory, whatever its name: opened as one -- r76 A6)
+  if (threeMf) return loadAny(buf, `${name.replace(/\.[^./]*$/, '')}.3mf`, seq);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   const extras = zipCompanions(files, model, opens).map((c) => ({ name: c.name, arrayBuffer: () => z.get(c.path) }));
   const inner = await z.get(model);
@@ -8053,3 +8059,4 @@ guard(main()).then(() => { if (params.get('selftest')) return selftest(); });
 // (the module's last statement: every one above it ran -- js/boot-check.js's sign the page started;
 // window.__cadv, set early, missed a throw in any later top-level statement: r74 Q7)
 window.__cadvStarted = true;
+document.getElementById('bootslow')?.remove(); // (index.html's no-script card: r76 Q4)

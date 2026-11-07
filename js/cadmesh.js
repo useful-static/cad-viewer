@@ -316,9 +316,11 @@ export function withHeader(header, data) {
 // static host serves application/octet-stream uncompressed. The gzip magic
 // tells the two apart, so raw files keep loading. Both directions use the
 // platform's Compression Streams (browsers, Node 18+): no bundled inflater.
+// (an ArrayBuffer or a byte view: given a Uint8Array, new Uint8Array(it, 0, 2) copied it whole, and a
+// longer one was never a gzip -- the one test, the list check's and the CLIs' too: r76 A9)
 export function isGzip(buf) {
-  const b = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
-  return b.length === 2 && b[0] === 0x1f && b[1] === 0x8b;
+  const b = ArrayBuffer.isView(buf) ? buf : new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+  return b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b;
 }
 
 const pipeBytes = (buf, stream) => new Response(new Blob([buf]).stream().pipeThrough(stream)).arrayBuffer();
@@ -404,8 +406,13 @@ export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES) {
   return readMembers(buf, format, max, () => {});
 }
 
-// (the most gzip headers past a member tried as its end: each a re-read of it)
-const MEMBER_TRIES = 16;
+// (a stream's input, written FEED bytes at a time; the most of a member's output a stopped stream
+// drops, one piece's at deflate's largest ratio and a margin; the output inflated again in looking
+// for members' ends, past twice what the members before gave and four times what this one's first
+// stream did)
+const FEED = 65536;
+const DROPPED_MOST = FEED * 1032 + 2 ** 20;
+const REREAD_MOST = 64 * 2 ** 20;
 // The one reading of compressed bytes, for inflate, inflateCount and inflateHead: each chunk handed to
 // take(value, at) as it comes, refused past `max`; the count returned.
 // (a gzip of several members -- cat a.gz b.gz, bgzip -- is one file's bytes in turn, RFC 1952. This
@@ -422,13 +429,16 @@ const MEMBER_TRIES = 16;
 async function readMembers(buf, format, max, take, head = 0) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let n = 0, off = 0;
+  let n = 0, off = 0, reread = 0;
   // (one stream over bytes, its output handed on from `n`: written straight in -- read through a Blob
   // stream of its own each, a bgzip of 250 members was refused, "network error": r74 A6)
+  // (in pieces of FEED bytes: a stream processes each as its output is read, so when it stops, what
+  // it drops is one piece's output at most -- written whole, Chromium handed on 131,072 bytes of a
+  // member of any size, and a member's end could not be told from a chance header: r76 A7)
   const stream = async (bytes) => {
     const ds = new DecompressionStream(format);
     const w = ds.writable.getWriter();
-    w.write(bytes).catch(() => {});
+    for (let i = 0; i < bytes.length; i += FEED) w.write(bytes.subarray(i, Math.min(bytes.length, i + FEED))).catch(() => {});
     w.close().catch(() => {});
     const rd = ds.readable.getReader();
     try {
@@ -458,22 +468,23 @@ async function readMembers(buf, format, max, take, head = 0) {
       // false 1f 8b 08 in a cut-short file's data, each read again from the member's start, made the
       // refusal quadratic)
       const made = n - from;
-      // (and at most a few such headers tried a member: each one read again from the member's start,
-      // a crafted file of 4,001 fake headers carrying its size inflated 4 GB to be refused, and one
-      // of 8 MB would have been a petabyte -- r75 A5. A real member's end is the first that reads clean)
-      let tries = 0;
+      // (and the bytes read again bounded, not the headers tried: each try reads the member again
+      // from its start -- a crafted file of 4,001 fake headers inflated 4 GB to be refused (r75 A5),
+      // and a count of 16 refused a valid file whose large first member held 17 by chance (r76 A7))
       // (from 12 bytes in: a header is 10, the shortest deflate 2 -- from 18, an empty member's end
       // was passed over: r74 A2, Q5)
       for (let p = u8.indexOf(0x1f, off + 12); p >= 0 && p + 3 <= u8.length; p = u8.indexOf(0x1f, p + 1)) {
         if (u8[p + 1] !== 0x8b || u8[p + 2] !== 8) continue;
         const isize = (u8[p - 4] | (u8[p - 3] << 8) | (u8[p - 2] << 16) | (u8[p - 1] << 24)) >>> 0;
-        // (at least what came -- Chromium hands on 131,072 bytes of a member before "Junk found",
-        // whatever its size: a bound of what came and 4 MB passed over a 6 MB first member's real
-        // end, r75 Q1 -- and no more than deflate gives of those bytes, 1032 to 1)
-        if (isize < made || isize > (p - off) * 1032) continue;
-        if (++tries > MEMBER_TRIES) break;
+        // (at least what came, and no more than one piece's output past it: what a stopped stream
+        // drops -- r75 Q1, r76 A7)
+        if (isize < made || isize - made > DROPPED_MOST) continue;
+        // (the budget from what this member's first stream gave too: from what came before alone, a
+        // 100 MB first member with one chance header before its end was refused -- r76 Q1)
+        if (reread > REREAD_MOST + 2 * from + 4 * made) break;
         n = from;
         const r = await stream(u8.subarray(off, p));
+        reread += n - from;
         if (r === 'head') return n;
         if (!r) { next = p; break; }
       }

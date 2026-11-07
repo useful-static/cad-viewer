@@ -17,7 +17,7 @@
 import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { gzipSync, constants as zc } from 'node:zlib';
-import { decodeCadmesh, gunzip, splitCadmesh, withHeader } from './js/cadmesh.js';
+import { decodeCadmesh, gunzip, isGzip, splitCadmesh, withHeader } from './js/cadmesh.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
@@ -79,7 +79,7 @@ async function main() {
   let raw = await readInput(a.in);
   if (!a.show) await checkOutput(a.out);
   // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
-  if (raw[0] === 0x1f && raw[1] === 0x8b) raw = Buffer.from(await gunzip(raw));
+  if (isGzip(raw)) raw = Buffer.from(await gunzip(raw));
   if (a.show) {
     const h = decodeCadmesh(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)).header;
     console.log(JSON.stringify({ vertexCount: h.vertexCount, recolour: h.recolour || null }));

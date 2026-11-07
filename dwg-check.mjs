@@ -4,7 +4,7 @@
 // how many objects of the drawn types decoded. --dxf FILE writes the drawing as
 // DXF (one file only); --json prints the report as JSON.
 import { writeFileSync } from 'node:fs';
-import { gunzip } from './js/cadmesh.js';
+import { gunzip, isGzip } from './js/cadmesh.js';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, openCounts, sheetsOf } from './js/dxf.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
@@ -32,7 +32,7 @@ async function check(f) {
     let buf = await readInput(f);
     // (unpacked as the page unpacks it: its limit and words, every member -- node's gunzipSync had no
     // limit, a 10 MB .dwg.gz of 2.3 GB took 4.6 GB to fail another way: r75 A6)
-    if (buf[0] === 0x1f && buf[1] === 0x8b) buf = Buffer.from(await gunzip(buf));
+    if (isGzip(buf)) buf = Buffer.from(await gunzip(buf));
     const d = readDWG(buf);
     rep.ms = Date.now() - t0;
     // savedBy: the AppInfo writer (Autodesk, ODA, another product's name; '' when not stated)

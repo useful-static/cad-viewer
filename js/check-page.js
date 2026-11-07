@@ -77,3 +77,4 @@ $('form').onsubmit = (ev) => {
 if (given.length) run(given);
 // (the module's last statement: js/boot-check.js's sign the check started -- r74 A4)
 window.__checkStarted = true;
+document.getElementById('bootslow')?.remove(); // (check.html's no-script card: r76 Q4)

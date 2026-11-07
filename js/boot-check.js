@@ -37,6 +37,9 @@
   }, true);
   function say(title, text) {
     if (card) card.remove();
+    // (the page's own no-script card, for when this script did not arrive: one card, not two -- r76 Q4)
+    var bs = document.getElementById('bootslow');
+    if (bs) bs.remove();
     var d = document.createElement('div');
     d.id = 'bootfail';
     d.className = 'card';

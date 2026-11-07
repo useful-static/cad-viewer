@@ -21,10 +21,10 @@ const tour = JSON.stringify({ cadtour: 1, title: 'A tour', steps: [{ title: 'one
 const miniZip = (entries) => {
   const parts = [], cds = [];
   let off = 0;
-  for (const [name, data, claimed] of entries) {
+  for (const [name, data, claimed, method = 0, flags = 0] of entries) {
     const nm = Buffer.from(name), d = Buffer.from(data);
-    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt32LE(d.length, 18); local.writeUInt32LE(d.length, 22); local.writeUInt16LE(nm.length, 26);
-    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(flags, 6); local.writeUInt16LE(method, 8); local.writeUInt32LE(d.length, 18); local.writeUInt32LE(d.length, 22); local.writeUInt16LE(nm.length, 26);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(flags, 8); cd.writeUInt16LE(method, 10); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
     parts.push(local, nm, d); cds.push(cd, nm);
     off += 30 + nm.length + d.length;
   }
@@ -398,7 +398,7 @@ await test('a 3MF is held to the text limit by its model part, read from its dir
   };
   const big = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 520 * 2 ** 20)), sniff: true });
   assert.equal(big.level, 'bad', `${big.detail} (must fire: ok · zip)`);
-  assert.match(big.detail, /its model part 3D\/3dmodel\.model unpacks to 520 MB of text, more than the 500 MB of text this viewer reads/);
+  assert.match(big.detail, /its model part 3D\/3dmodel\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/); // (the reader's words: r76 Q5)
   // must accept: under it
   const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 40 * 2 ** 20)), sniff: true });
   assert.notEqual(ok.level, 'bad', ok.detail);
@@ -417,7 +417,7 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   const rooted = miniZip([['_rels/.rels', rels], ['3D/plate.model', '<model/>', big]]);
   const a1 = await checkFile(`${B}plate.3mf`, { fetchFn: host(rooted), sniff: true });
   assert.equal(a1.level, 'bad', a1.detail);
-  assert.match(a1.detail, /its model part 3D\/plate\.model unpacks to 520 MB of text/);
+  assert.match(a1.detail, /its model part \/3D\/plate\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/);
   // (r75 Q3: its rels read by the reader's own walker -- a Relationship inside a comment passed over,
   // an entity in its Target decoded; a regex of the check's own took the commented-out one)
   const rels2 = '<?xml version="1.0"?><Relationships><!-- <Relationship Target="/3D/decoy.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/> --><Relationship Target="/3D/pl&#97;te.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
@@ -431,7 +431,7 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   // A3: the same 3MF gzipped (must fire: "ok · gzip · zip")
   const a3 = await checkFile(`${B}plate.3mf.gz`, { fetchFn: host(gzipSync(rooted)), sniff: true });
   assert.equal(a3.level, 'bad', a3.detail);
-  assert.match(a3.detail, /its model part 3D\/plate\.model unpacks to 520 MB of text/);
+  assert.match(a3.detail, /its model part \/3D\/plate\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/);
   // A4: a zip64 archive, refused by the page in its words (must fire: "ok")
   const z64 = Buffer.from(miniZip([['3D/3dmodel.model', '<model/>']]));
   z64.writeUInt16LE(0xffff, z64.length - 22 + 10);
@@ -441,6 +441,62 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   // must accept: a small 3MF and zip
   const okZip = await checkFile(`${B}part.zip`, { fetchFn: host(miniZip([['part.obj', 'v 0 0 0\n']])), sniff: true });
   assert.notEqual(okZip.level, 'bad', okZip.detail);
+});
+await test('a zip\'s entry is judged as the page opens it: a gzip in it, a 3MF in it, its method and encryption, a name twice, a missing root, a 3MF named otherwise, a format against its name (r76 A2-A6, Q2, Q3)', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const host = (bytes) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+    const a = +m[1], b = Math.min(+m[2], bytes.length - 1);
+    return new Response(bytes.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${bytes.length}` } });
+  };
+  const check = async (name, zip) => checkFile(`${B}${name}`, { fetchFn: host(zip), sniff: true });
+  const stl = Buffer.alloc(84 + 50); stl.writeUInt32LE(1, 80);
+  const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const big3mf = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>', 600 * 2 ** 20]]);
+  const rows = [
+    // A2: a valid zipped part.stl.gz opens (must fire: "damaged"); a zipped 3MF of a 600 MB part is refused (must fire: "ok")
+    ['A2 gz entry', 'part.zip', miniZip([['part.stl.gz', gzipSync(stl)]]), 'ok'],
+    ['A2 3MF entry', 'part.zip', miniZip([['x.3mf', big3mf]]), 'bad'],
+    // A3: a bzip2 entry (method 12) is refused (must fire: "ok")
+    ['A3 method 12', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n', undefined, 12]]), 'bad'],
+    // A4: a name twice in two cases: the last one, 3 GB, is what the page opens (must fire: "ok" by the first)
+    ['A4 a name twice', 'part.zip', miniZip([['A.stl', stl], ['a.stl', stl, 3 * 2 ** 30]]), 'bad'],
+    // A5: a 3MF whose root part is missing (must fire: "ok")
+    ['A5 no root', 'd.3mf', miniZip([['_rels/.rels', rels.replace('3dmodel.model', 'plate.model')], ['3D/3dmodel.model', '<model/>']]), 'bad'],
+    // A6: a 3MF named download.zip, judged as one: its 600 MB part (must fire: "holds no model")
+    ['A6 3MF by its directory', 'download.zip', big3mf, 'bad:model part'],
+    // Q2: an encrypted entry (flag bit 0) is refused (must fire: "ok")
+    ['Q2 encrypted', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n', undefined, 0, 1]]), 'bad:encrypted'],
+    // Q3: a zipped R12 DWG, and a zipped GLB that is an HTML page, as alone (must fire: "ok")
+    ['Q3 R12 DWG', 'plan.zip', miniZip([['plan.dwg', Buffer.from('AC1009\0\0\0\0')]]), 'bad'],
+    ['Q3 GLB not one', 'part.zip', miniZip([['part.glb', '<!doctype html><title>404</title>']]), 'bad'],
+  ];
+  const got = [];
+  for (const [what, name, zip, want] of rows) {
+    const r = await check(name, zip);
+    const [lv, word] = want.split(':');
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  assert.deepEqual(got, rows.map(([what, , , want]) => [what, want]));
+});
+await test('zipDirectory: a name twice is one entry, the last, in the first one\'s place; 20,000 entries read in under 2 s (r76 A4)', async () => {
+  const { zipDirectory } = await import('../js/zip-dir.js');
+  const z = new Uint8Array(miniZip([['A.stl', 'a'], ['b.obj', 'b'], ['/a.stl', 'cc']]));
+  const got = (await zipDirectory(z, 0, z.length)).map((e) => [e.name, e.csize]);
+  assert.deepEqual(got, [['/a.stl', 2], ['b.obj', 1]]);
+  const many = new Uint8Array(miniZip(Array.from({ length: 20000 }, (_, i) => [`p${i}.stl`, 'x'])));
+  const t0 = Date.now();
+  assert.equal((await zipDirectory(many, 0, many.length)).length, 20000);
+  assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
+});
+await test('tourSlug: one rule for the recorder and the page\'s downloads (r76 A8)', async () => {
+  const { tourSlug } = await import('../js/tour.js');
+  assert.deepEqual(['My Tour: Part 2!', '', '---', 'ÉTÉ'].map(tourSlug), ['my-tour-part-2', 'tour', 'tour', 't']);
+  const fs = await import('node:fs');
+  const main = fs.readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  assert.match(main, /const slugOf = tourSlug;/);
+  assert.match(fs.readFileSync(new URL('../js/tour-recorder.js', import.meta.url), 'utf8'), /tourSlug\(draft\.title\)/);
 });
 await test('a ranged read that fails where a plain one opens the file is asked again plainly, not called a CORS failure (r73 Q2: a host sending its stored Content-Encoding)', async () => {
   // (the browser's ranged request asks for identity; such a host sends gzip anyway, and the fetch

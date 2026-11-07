@@ -32,6 +32,7 @@
   header { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); }
   header a { color:var(--text); text-decoration:none; font-weight:600; }
   main { max-width:1100px; margin:0 auto; padding:16px; }
+  @keyframes bootslow { to { visibility:visible; } }
   h1 { font-size:20px; margin:4px 0 6px; }
   p.lede { color:var(--dim); margin:0 0 14px; max-width:760px; }
   form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
@@ -54,6 +55,9 @@
 <body>
 <header><a href="./">CAD viewer</a><span style="color:var(--dim)">· Check a model list</span></header>
 <main>
+  <!-- the no-script card, shown at 20 s by the style alone, taken away by check-page.js's last
+       statement: when js/boot-check.js itself did not arrive (r76 Q4) -->
+  <div id="bootslow" role="alert" style="visibility:hidden;animation:bootslow 0s linear 20s forwards"><h2>The list check has not started</h2><p>A part of it has not arrived after 20 s: the connection may be slow or have stopped. <a href="">Reload</a></p></div>
   <h1>Check a model list</h1>
   <p class="lede">Each model in the list, its picture, its STEP file and its tours, fetched from this page the way the
     viewer fetches them: a file that fails here fails for your visitors, and the reason is given. Nothing is uploaded;

@@ -21,6 +21,10 @@ import { DISPLAY_UNITS, MM_PER } from './units.js';
 import { EXPLODE_MODES, NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 
 export const PRESETS = Object.keys(VIEW_PRESETS);
+// A tour's file name from its title: lower case, a run of anything else one hyphen, "tour" when
+// nothing is left -- the one rule, the saved tour's (js/tour-recorder.js) and its pictures' zip and
+// video's (main.js), written twice: r76 A8
+export const tourSlug = (s) => (s || 'tour').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tour';
 export const EASES = ['linear', 'inOut'];
 export const DIMS = ['none', 'ghost', 'grey', 'hide'];
 // how a tour plays: a step at a time, or by itself (the first is the default)

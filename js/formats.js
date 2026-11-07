@@ -163,7 +163,10 @@ export function zipModel(names) {
   const files = names.filter((n) => !n.endsWith('/') && !/(^|\/)__MACOSX\//i.test(n));
   const opens = (n) => { const f = formatOfName(n); return !!f && f.kind !== 'zip'; };
   const model = files.find(opens) || null;
-  return { files, opens, model, others: model ? files.filter((n) => n !== model && opens(n)).length : 0 };
+  // (and a 3MF by its directory -- a model part under 3D/ and its relationships -- whatever its own
+  // name: one fetched as /api/download?id=7 was "a zip that holds no model": r76 A6)
+  const threeMf = !model && files.some((n) => /^\/?3d\/[^/]+\.model$/i.test(n)) && files.some((n) => /^\/?_rels\/\.rels$/i.test(n));
+  return { files, opens, model, threeMf, others: model ? files.filter((n) => n !== model && opens(n)).length : 0 };
 }
 // A PLY's header, as its reader takes it: the text to end_header in its first 64 KB, its lines, and
 // its format -- ascii unless a format line says otherwise. null with no end_header (damaged). The
