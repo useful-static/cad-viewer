@@ -175,6 +175,10 @@ await test('no export writes what the viewer\'s readers refuse: more triangles t
   for (const fmt of Object.keys(EXPORTS)) {
     await assert.rejects(EXPORTS[fmt].write(over, [1], IDENT, { names: ['huge'], base: 'huge' }), (e) => e.message === tooManyToExport(MAX_PLACED_TRIANGLES + 1), `${fmt} (must fire: written)`);
   }
+  // GLB's accessors: no more values than the reader takes (r73 A3) -- a body claiming 22,500,001
+  // vertices, its colours 4 a vertex (must fire: built and written)
+  const wide = { ...model, header: { meshes: [{ name: 'scan', vtxStart: 0, vtxCount: 22_500_001, idxStart: 0, idxCount: 3 }] } };
+  await assert.rejects(toGLB(wide, [1], IDENT), /^Error: not written as GLB: scan would need an accessor of 90,000,004 values, more than the 90,000,000 this viewer reads \(STL or 3MF writes it\)$/);
   // 3MF's colours: by the reader's cap, here a smaller one
   const many = grid(40, 40, (v) => [v & 255, (v >> 8) & 255, 7]); // (1,600 colours)
   await assert.rejects(to3MF(many, [1], IDENT, [], undefined, 1000), /^Error: not written as 3MF: its 1,\d{3} colours are more than the 1,000 this viewer reads \(GLB writes them\)$/);

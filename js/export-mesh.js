@@ -15,7 +15,7 @@
 import { crc32 } from './crc32.js';
 import { SRGB_TO_LINEAR } from './srgb.js';
 import { orientBasis } from './orient.js';
-import { MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } from './formats.js';
+import { MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, TEXT_LIMIT_WORDS } from './formats.js';
 import { windsAgainstNormals } from './raycast.js';
 
 // a turn for the page: a task, not a microtask, so its input and painting run between
@@ -192,16 +192,20 @@ const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/
 export const exportable = (model, ids) => ids.filter((id) => model.header.meshes[id - 1].idxCount > 0);
 // (the one refusal, said one way, by every writer -- STL's too, which wrote an 84-byte file)
 export const NOTHING_TO_EXPORT = 'nothing to export (no body left to write has a triangle)';
+// A writer's refusal -- what the viewer would not read back, nothing to write -- told apart from a
+// writer's own fault (a TypeError), which cadmesh-export.mjs reported as a format's refusal (r73 Q5).
+// Its name stays "Error": the page and the tests read its words as they were.
+export class ExportRefused extends Error {}
 function withTriangles(model, ids, names) {
   const keep = ids.map((id, j) => [id, names[j]]);
   const ok = new Set(exportable(model, ids));
   const kept = keep.filter(([id]) => ok.has(id));
-  if (!kept.length) throw new Error(NOTHING_TO_EXPORT);
+  if (!kept.length) throw new ExportRefused(NOTHING_TO_EXPORT);
   // (no more triangles than the viewer's own readers place: 10,000,001 were written as STL and GLB,
   // and the viewer then refused to open either -- r72 A6. Every writer, by the one cap)
   let n = 0;
   for (const [id] of kept) n += model.header.meshes[id - 1].idxCount / 3;
-  if (n > MAX_PLACED_TRIANGLES) throw new Error(tooManyToExport(n));
+  if (n > MAX_PLACED_TRIANGLES) throw new ExportRefused(tooManyToExport(n));
   return [kept.map((x) => x[0]), kept.map((x) => x[1])];
 }
 export const tooManyToExport = (n) => `not written: ${n.toLocaleString('en-US')} triangles, more than the ${MAX_PLACED_TRIANGLES.toLocaleString('en-US')} this viewer reads`;
@@ -229,7 +233,7 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
     if (!batch.length) return;
     const b = enc.encode(batch.join(''));
     batch = [];
-    if ((bytes += b.length) > maxText) throw new Error(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
+    if ((bytes += b.length) > maxText) throw new ExportRefused(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
     objects.push(b);
   };
   const put = async (s) => { batch.push(s); if (batch.length >= BATCH) { flush(); await turn(); } };
@@ -250,7 +254,7 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
   flush();
   // (no more colours than the reader takes base materials: a scan of 2.1 M colours wrote a 3MF the
   // viewer refused -- r72 Q5)
-  if (colours.size > maxColours) throw new Error(`not written as 3MF: its ${colours.size.toLocaleString('en-US')} colours are more than the ${maxColours.toLocaleString('en-US')} this viewer reads (GLB writes them)`);
+  if (colours.size > maxColours) throw new ExportRefused(`not written as 3MF: its ${colours.size.toLocaleString('en-US')} colours are more than the ${maxColours.toLocaleString('en-US')} this viewer reads (GLB writes them)`);
   // (the materials are known once every triangle has been: written before the objects in the file)
   const mats = [...colours.keys()].map((c, i) => `<base name="colour ${i + 1}" displaycolor="${c}"/>`).join('');
   const modelXml = [enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -258,7 +262,7 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
     + `<resources><basematerials id="1">${mats}</basematerials>`), ...objects,
   enc.encode(`</resources><build>${ids.map((_, j) => `<item objectid="${j + 2}"/>`).join('')}</build></model>`)];
   // (the whole part, its materials and build too, as the reader counts it)
-  if (modelXml.reduce((s, p) => s + p.length, 0) > maxText) throw new Error(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
+  if (modelXml.reduce((s, p) => s + p.length, 0) > maxText) throw new ExportRefused(`not written as 3MF: its model part would be ${TEXT_LIMIT_WORDS} (STL or GLB writes it)`);
   return zip([
     ['[Content_Types].xml', enc.encode('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
       + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -284,6 +288,12 @@ export async function toGLB(model, ids0, basis, names0 = []) { // (async with tu
     binLen += bytes.length;
     return views.length - 1;
   };
+  // (no accessor of more values than the reader takes, before any is built: a body's colours are 4
+  // a vertex, and 7.6 M triangles of their own vertices wrote 91.2 M of them -- r73 A3)
+  for (const id of ids) {
+    const m = model.header.meshes[id - 1], most = Math.max(4 * m.vtxCount, m.idxCount);
+    if (most > MAX_ACCESSOR_VALUES) throw new ExportRefused(`not written as GLB: ${m.name || `body ${id}`} would need an accessor of ${most.toLocaleString('en-US')} values, more than the ${MAX_ACCESSOR_VALUES.toLocaleString('en-US')} this viewer reads (STL or 3MF writes it)`);
+  }
   const pace = pacer();
   for (const [j, id] of ids.entries()) {
     const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 0.001, pace);

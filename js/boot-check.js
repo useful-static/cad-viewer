@@ -10,11 +10,13 @@
 // main.js sets as it starts) is a page that did not start: it says so, with the files that failed,
 // and a Reload button. Nothing is retried on its own.
 (function () {
-  var failed = [];
+  var failed = [], thrown = null;
   // (a script or a preloaded module that could not be fetched: its error event, caught on the way
-  // down, as it does not bubble)
+  // down, as it does not bubble; and an error the code threw as it ran -- main.js stopping at its top
+  // level was said as a download that failed: r73)
   window.addEventListener('error', function (e) {
     var t = e.target;
+    if ((!t || t === window) && !thrown) thrown = e.message || String(e.error || 'an error');
     // (each file once: a module's preload and its script fail alike)
     var f = t && t !== window && (t.tagName === 'SCRIPT' || t.tagName === 'LINK') ? (t.src || t.href || '').split('/').pop() : '';
     if (f && failed.indexOf(f) < 0) failed.push(f);
@@ -28,7 +30,11 @@
     var h = document.createElement('h2');
     h.textContent = 'cad.place did not start';
     var p = document.createElement('p');
-    p.textContent = 'A part of the viewer could not be downloaded' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + (failed.length > 3 ? ', …' : '') + ')' : '') + ': the connection may have changed or dropped while the page loaded. Reloading usually fixes it.';
+    // (a file not loaded -- not downloaded, or not served as a script -- or else the error it stopped
+    // with, in its own words)
+    p.textContent = failed.length || !thrown
+      ? 'A part of the viewer could not be loaded' + (failed.length ? ' (' + failed.slice(0, 3).join(', ') + (failed.length > 3 ? ', …' : '') + ')' : '') + ': the connection may have changed or dropped while the page loaded. Reloading usually fixes it.'
+      : 'The viewer stopped as it started: ' + thrown + '. Reloading may fix it.';
     var b = document.createElement('button');
     b.className = 'primary';
     b.textContent = 'Reload';

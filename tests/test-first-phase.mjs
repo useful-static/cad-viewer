@@ -45,8 +45,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // (a ceiling, so a new static import of a large module is seen: 806 KB in 39 modules at r51,
   // 852 KB in 40 at r64 -- the round's own code in main.js and formats.js, no new import; 866 KB in 40
   // at r67, the hole table's countersinks and untold rims, no new import; 880 KB in 40 at r69, the
-  // hole read by its wall, fillets and drill points, no new import)
-  assert.ok(bytes < 895e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // hole read by its wall, fillets and drill points, no new import; 897 KB in 41 at r73, formats.js's
+  // size and header rules and main.js's tour waits, no new import)
+  assert.ok(bytes < 910e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

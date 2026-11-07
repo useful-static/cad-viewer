@@ -398,7 +398,8 @@ await test('File > "Tour: X" (main.js, as written): read while the visitor picks
   const lineOf = (h) => { const i = src.indexOf(h); assert.ok(i > 0, `main.js has ${h}`); return src.slice(i, src.indexOf('\n', i)); };
   // (a main.js before the shared helper has none: its click's own wait is what runs -- r71)
   const fnOf = (h) => { const i = src.indexOf(h); return i < 0 ? 'const entryTourRead = null;' : src.slice(i, src.indexOf('\n}\n', i) + 2); };
-  const rules =`${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn, entryTourRead];`;
+  const settled = src.includes('async function entryTourSettled(') ? fnOf('async function entryTourSettled(') : ''; // (r73 A5)
+  const rules =`${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${settled}\n${lineOf('const entryTourOn = ')}\nreturn [entryTourWait, entryTourOn, entryTourRead];`;
   const PROGRESS = new Set(['loading', 'tessellating']); // (main.js PROGRESS_STATES)
   // during: what happens while the tour is read -- 'pick' (another model shown, a new open), 'reopen'
   // (the same URL opened again), 'picking' (the visitor's pick downloading); adds: an ?add= on its way
@@ -476,12 +477,28 @@ await test('an export during a tour writes the visitor\'s own parts and colours,
   const plain = run({ tour: null, hidden: new Set([2]), mesh: { color: 'shown' } });
   assert.deepEqual([[1, 2, 3].filter((id) => plain.hidden.has(id)), plain.color], [[2], 'shown']);
 });
-await test('the page\'s progress counts MB of 2^20, as its limits and their words do (main.js mb, as written: r72 Q8)', () => {
+await test('the address\'s tour failing to start is said, apart from the load, and is over either way (main.js addressTourEnds, as written: r73 A8 -- its callers drop its promise)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const i = src.indexOf('const mb = (n) => ');
+  const h = src.includes('async function addressTourEnds(') ? 'async function addressTourEnds(' : 'function addressTourEnds(';
+  const fn = src.slice(src.indexOf(h), src.indexOf('\n}\n', src.indexOf(h)) + 2);
+  const log = [];
+  const app = { urlTourPending: true, header: {} };
+  const run = new Function('app', 'entryTourWait', 'entryTourSettled', 'tourPlaysHere', 'startTourIn', 'params', 'tourReadyNote', 'tourOver', 'failApart', 'console',
+    `${fn}\nreturn addressTourEnds;`)(app, () => null, async () => {}, () => true, () => { throw new Error('no step "x"'); }, new URLSearchParams('tour=t.json'),
+    () => log.push('ready'), () => { log.push('over'); app.urlTourPending = false; }, (m) => log.push(`apart: ${m}`), { error: () => {} });
+  let rejected = null;
+  await Promise.resolve(run({ tour: { steps: [] } }, false)).catch((e) => { rejected = e.message; });
+  assert.deepEqual([rejected, log], [null, ['apart: the tour could not be played: no step "x"', 'over']], 'must fire: an unhandled rejection, the tour not over');
+});
+await test('the page\'s progress counts MB of 2^20, as its limits and their words do (main.js mb, as written: r72 Q8)', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const i = src.indexOf('const mb = ');
   assert.ok(i > 0, 'main.js has mb');
-  const mb = new Function(`${src.slice(i, src.indexOf('\n', i))}; return mb;`)();
+  // (since r73 Q4 the formats' one figure, rounded up to a tenth: mbTenth)
+  const { mbTenth } = await import('../js/formats.js');
+  const mb = new Function('mbTenth', `${src.slice(i, src.indexOf('\n', i))}\nreturn mb;`)(mbTenth);
   assert.equal(mb(546.4e6), '521.1', 'must fire: "546.4", then refused as 521 MB of text');
+  assert.equal(mb(500 * 2 ** 20 + 1), '500.1', 'past a limit, never read as it (r73 Q4)');
 });
 await test('Save drawing during a tour draws the visitor\'s own parts, not the step\'s isolate (main.js saveDrawing, as written: r72 A4)', () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -544,7 +561,7 @@ await test('the entry\'s own tour, waiting for the ?add=s, steps aside for a tou
       addsChain: new Promise((res) => { joined = res; }) };
     const readTour = (u) => (added ? new Promise((res) => { answer = () => res({ tour: { u } }); }) : Promise.resolve({ tour: { u } }));
     const f = new Function('app', 'e', 'readTour', 'startTourIn', 'linkViewOver', 'autoTourKey', 'PROGRESS_STATES',
-      `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
+      `${lineOf('const rereading = ')}\n${lineOf('const entryTourWait = ')}\n${fnOf('async function entryTourRead(')}\n${fnOf('async function entryTourSettled(')}\n${lineOf('const entryTourOn = ')}\n${auto}`);
     f(app, { tours: [{ url: 'own.json' }, { url: 'second.json' }] }, readTour, (tour, u) => log.push(`plays ${u}`), () => false, () => app.sourceUrl, new Set(['loading']));
     if (added) {
       app.addLoad = new Promise((res) => { landed = () => { app.addLoad = null; log.push('e.stl joins'); res(); }; });
@@ -1962,9 +1979,9 @@ await test('a mesh\'s companion files together are capped at the size a file may
   const at = src.indexOf('async function loadMeshFile(buf, name, seq');
   const read = [];
   const loadMeshFile = new Function('isGzip', 'unpackGz', 'meshReaders', 'stale', 'OPENS', 'setStatus', 'showProgress', 'mb', 'nextPaint', 'MAX_FILE_BYTES',
-    'app', 'readUnit', 'addressUnit', 'meshFromSource', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
+    'app', 'readUnit', 'addressUnit', 'meshFromSource', 'OVERSIZE_WORDS', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
     () => false, null, async () => ({ meshFormatOf: () => 'obj' }), () => false, '', () => {}, () => {}, () => '0', async () => {}, 100,
-    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); });
+    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); }, 'over 0 GB, more than this viewer opens'); // (the page's one wording, js/cadmesh.js: r73 A6)
   const extra = (name, n) => ({ name, arrayBuffer: async () => new ArrayBuffer(n) });
   // (under the cap: read, each by its name)
   await loadMeshFile(new ArrayBuffer(4), 'a.obj', 1, [extra('a.mtl', 40), extra('t.png', 40)]);

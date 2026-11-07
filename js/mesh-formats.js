@@ -15,8 +15,8 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, inflate, toByte } from './cadmesh.js';
-import { FORMATS, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, sizeMb, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, extOf, plyHeader, sizeMb, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -36,7 +36,7 @@ const MAX_PLACED_VERTICES = 3 * MAX_PLACED_TRIANGLES;
 // (the parts cap, the 3MF reader's base materials' too, in js/formats.js: the 3MF writer keeps to it -- r72 Q5)
 // a glTF accessor's values, refused past this before it is allocated (3 coordinates of
 // 3 corners of the triangle cap; a 200-byte file asked for 2^30 vertices)
-const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
+// (MAX_ACCESSOR_VALUES: js/formats.js, the GLB writer keeps to it too -- r73 A3)
 // a glTF's materials: each one a drawn primitive uses may name a texture whose image is decoded
 // (one at a time, each image once), so the list bounds the decodes (100,000 materials naming one
 // image were 100,000 decodes in flight at once)
@@ -583,17 +583,17 @@ const PLY_T = { char: 'Int8', int8: 'Int8', uchar: 'Uint8', uint8: 'Uint8', shor
 const PLY_SIZE = { Int8: 1, Uint8: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, Float32: 4, Float64: 8 };
 function parsePLY(buf, base) {
   const u8 = new Uint8Array(buf);
-  const hdrEnd = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 65536))).indexOf('end_header');
-  if (hdrEnd < 0) throw new Error(`${base}.ply is damaged: it has no end_header line`);
+  // (its header and format by the one rule, the list check's too: js/formats.js plyHeader -- r73 A2)
+  const ph = plyHeader(u8);
+  if (!ph) throw new Error(`${base}.ply is damaged: it has no end_header line`);
+  const { hdrEnd, lines: hdr, format: fmt } = ph;
   let bodyStart = hdrEnd + 'end_header'.length;
   while (u8[bodyStart] === 13) bodyStart++;
   if (u8[bodyStart] === 10) bodyStart++;
-  const hdr = new TextDecoder('latin1').decode(u8.subarray(0, hdrEnd)).split(/\r?\n/);
-  let fmt = 'ascii';
   const els = [];
   for (const l of hdr) {
     const sp = l.trim().split(/\s+/);
-    if (sp[0] === 'format') fmt = sp[1];
+    if (sp[0] === 'format') continue;
     else if (sp[0] === 'element') els.push({ name: sp[1], n: +sp[2], props: [] });
     else if (sp[0] === 'property' && els.length) {
       const e = els[els.length - 1];
@@ -849,7 +849,7 @@ export async function unzip(buf) {
       }
       if (f.method !== 8) throw new Error(`zip entry ${p} uses compression method ${f.method}`);
       // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
-      if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+      if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
       if (!too) return inflate(f.data, 'deflate-raw', MAX_FILE_BYTES);
       try { return await inflate(f.data, 'deflate-raw', max); } catch (e) {
         if (/too big/.test(e.message)) throw too(`over ${mb(max)}`);

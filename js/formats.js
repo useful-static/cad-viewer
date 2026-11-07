@@ -134,16 +134,39 @@ export const MAX_TEXT_BYTES = 500 * 2 ** 20;
 export const MAX_PLACED_TRIANGLES = 10_000_000;
 // and the most parts and placements -- a 3MF's base materials counted by it too
 export const MAX_PLACED_PARTS = 2_000_000;
+// and a glTF accessor's values, refused past this before it is allocated (3 coordinates of 3 corners
+// of the triangle cap; a 200-byte file asked for 2^30 vertices) -- the GLB writer kept to the
+// triangles alone, and a body of 7.6 M triangles' colours, 4 a vertex, were refused on reading (r73 A3)
+export const MAX_ACCESSOR_VALUES = 9 * MAX_PLACED_TRIANGLES;
 // a size as the viewer says one: whole MB of 2^20 (the text readers', the mesh readers' and the list
 // check's -- four formatters in three units: r72 A8)
 export const sizeMb = (n) => `${Math.round(n / 2 ** 20).toLocaleString('en-US')} MB`;
 export const TEXT_LIMIT_WORDS = `more than the ${sizeMb(MAX_TEXT_BYTES)} of text this viewer reads`;
-export const tooMuchText = (what, bytes) => new Error(`${what} is ${sizeMb(bytes)} of text, ${TEXT_LIMIT_WORDS}`);
+// (a size past a limit rounded up, to a tenth: rounded to whole MB, 500 MB and a byte was "500 MB of
+// text, more than the 500 MB" -- r73 Q4; mbTenth the page's and the check's one-decimal figure)
+export const mbTenth = (n) => (Math.ceil((n / 2 ** 20) * 10) / 10).toFixed(1);
+// (in the limits' words: whole when it is, else up to a tenth -- "600 MB", "500.1 MB")
+const overMb = (n) => { const t = Math.ceil((n / 2 ** 20) * 10) / 10; return Number.isInteger(t) ? t.toLocaleString('en-US') : t.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); };
+export const textOverWords = (bytes) => `${overMb(bytes)} MB of text, ${TEXT_LIMIT_WORDS}`;
+export const tooMuchText = (what, bytes) => new Error(`${what} is ${textOverWords(bytes)}`);
 // An STL is binary when its size is 84 + 50 n for the n its header counts (bytes 80-83), even if it
 // starts "solid", or that plus a surplus under one record (padding, an appended byte or two); else
 // it is read as text. The one rule for the reader (js/mesh-formats.js parseSTL) and the list check,
 // which kept its own and disagreed both ways (r72 A2)
 export const stlIsBinary = (size, n) => size >= 84 && 84 + 50 * n <= size && size - (84 + 50 * n) < 50;
+// A PLY's header, as its reader takes it: the text to end_header in its first 64 KB, its lines, and
+// its format -- ascii unless a format line says otherwise. null with no end_header (damaged). The
+// one rule for the reader (js/mesh-formats.js parsePLY) and the list check, which looked for "format
+// ascii" in 512 bytes and called two 700 MB ASCII PLYs "ok" (a late format line, and none: r73 A2)
+export function plyHeader(u8) {
+  const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 65536)));
+  const hdrEnd = head.indexOf('end_header');
+  if (hdrEnd < 0) return null;
+  const lines = head.slice(0, hdrEnd).split(/\r?\n/);
+  let format = 'ascii';
+  for (const l of lines) { const sp = l.trim().split(/\s+/); if (sp[0] === 'format') format = sp[1]; }
+  return { hdrEnd, lines, format };
+}
 // Whether the viewer reads a file of this format as one string -- held to MAX_TEXT_BYTES -- from its
 // first bytes (at least 84) and its size: by the format's own rule beside the table, so a text format
 // added is said here once (r72 A2)
@@ -152,7 +175,7 @@ export function readsAsText(label, start, size) {
   switch (label) {
     case 'OBJ': case 'OFF': case 'glTF': return true;
     case 'STL': return start && start.length >= 84 ? !stlIsBinary(size, new DataView(start.buffer, start.byteOffset, start.byteLength).getUint32(80, true)) : false;
-    case 'PLY': return start ? /format\s+ascii/.test(head) : false;
+    case 'PLY': return start ? plyHeader(start)?.format === 'ascii' : false;
     case 'DXF': return start ? !head.startsWith(BINARY_DXF_SENTINEL) : true;
     default: return false;
   }

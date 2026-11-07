@@ -9,8 +9,8 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, readsAsText, sizeMb, sniffFormat as sniffBytes } from './formats.js';
-import { MAX_FILE_BYTES, OVERSIZE_WORDS } from './cadmesh.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, readsAsText, sizeMb, sniffFormat as sniffBytes, stlIsBinary, textOverWords } from './formats.js';
+import { MAX_FILE_BYTES, OVERSIZE_WORDS, inflateCount } from './cadmesh.js';
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -74,13 +74,24 @@ async function gunzipStart(bytes, n = SNIFF_BYTES) {
 const isGzip = (b) => b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b;
 // (MB of 2^20 bytes, as the page's own limits and words count them: in millions, a file at the
 // 2 GiB limit read 2147.5 MB here and 2,048 MB on the page -- r71 A11)
-const mb = (n) => (n / 2 ** 20).toFixed(n < 2 ** 20 ? 2 : 1);
+// (a tenth from 1 MB, the page's own figure: js/formats.js mbTenth -- r73 Q4; a hundredth under it)
+const mb = (n) => (n < 2 ** 20 ? (n / 2 ** 20).toFixed(2) : mbTenth(n));
 
 // What a failed fetch means, as cad.place would meet it
 function refused(e) {
   // (given up after cad.place's own time: said as it says it -- r54 A2)
   if (isTimeout(e)) return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
   return `not fetched: the site sent no CORS header for it, or did not answer (${e && e.message ? e.message : e})`;
+}
+
+// A binary STL (a NUL in its start: no ASCII one has one) whose size is not the one its header counts:
+// the reader's damaged words (js/mesh-formats.js parseSTL), else null
+function stlCut(label, start, size) {
+  if (label !== 'STL' || !start || start.length < 84 || !size || start.indexOf(0) < 0) return null;
+  const n = new DataView(start.buffer, start.byteOffset, start.byteLength).getUint32(80, true);
+  if (stlIsBinary(size, n)) return null;
+  const want = 84 + 50 * n, big = (v) => v.toLocaleString('en-US');
+  return `damaged: its header counts ${big(n)} triangle${n === 1 ? '' : 's'}, so it should be ${big(want)} bytes, but it is ${big(size)} bytes`;
 }
 
 // One file: answered, CORS, found, size; with sniff, its format too.
@@ -92,7 +103,16 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const fetchUrl = fileUrl(url);
   let res;
   try {
-    res = await fetchFn(fetchUrl, sniff ? { headers: { Range: 'bytes=0-65535' }, cache: 'no-store' } : { method, cache: 'no-store' });
+    try {
+      res = await fetchFn(fetchUrl, sniff ? { headers: { Range: 'bytes=0-65535' }, cache: 'no-store' } : { method, cache: 'no-store' });
+    } catch (e) {
+      // (a ranged read fails where a plain one does not: a host sending its stored Content-Encoding
+      // to the identity a ranged request asks -- net::ERR_CONTENT_DECODING_FAILED, said here as a
+      // CORS failure while the page, a plain GET, opened the file: r73 Q2. Asked again plainly, the
+      // start read and the rest let go)
+      if (!sniff) throw e;
+      res = await fetchFn(fetchUrl, { cache: 'no-store' });
+    }
   } catch (e) {
     // a file the viewer only links to (Download STEP: a plain download, which needs no CORS)
     // is not at fault for refusing this page; that it is there cannot be read from here
@@ -117,7 +137,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   }
   const bits = [total ? `${mb(total)} MB` : 'size not given'];
   let level = 'ok';
-  let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null;
+  let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null, counted = false, unpackError = null;
   if (sniff) {
     // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
     // threw through the whole list check, which stopped with no verdict)
@@ -158,9 +178,22 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // (a gzip's unpacked size, its last four bytes (ISIZE, mod 4 GiB), asked with a range: the page
     // holds what it unpacks to the same limits, and "ok · gzip · STL" said a 1.8 MB file unpacking to
     // 546 MB of ASCII STL would open -- r72 Q1)
-    if (gz && inner && total > 4) {
+    // (a small one -- under 4 GiB at deflate's largest ratio -- fetched whole and unpacked as the page
+    // unpacks it, counted and let go: its trailer is the LAST member's size, and a gzip of several
+    // members said "ok" by it while the page refused it -- r73 Q1)
+    if (gz && total && total * 1032 < 2 ** 32) { // (its start unread too: the page's refusal is then what it says)
+      try {
+        const w = await fetchFn(fetchUrl, { cache: 'no-store' });
+        if (w.ok) {
+          const all = new Uint8Array(await w.arrayBuffer());
+          try { unpacked = await inflateCount(all); counted = true; } catch (e) { unpackError = e.message || String(e); }
+        }
+      } catch { /* not fetched whole: its size stays unknown */ }
+    } else if (gz && inner && total > 4) {
       try {
         const t = await fetchFn(fetchUrl, { headers: { Range: `bytes=${total - 4}-${total - 1}` }, cache: 'no-store' });
+        // (a server that ignores the range sends the whole file: its body let go, not read -- r73 A1)
+        if (t.status !== 206) { try { await t.body?.cancel(); } catch { /* gone already */ } }
         const b = t.status === 206 ? new Uint8Array(await t.arrayBuffer()) : null;
         if (b && b.length === 4) unpacked = new DataView(b.buffer, b.byteOffset, 4).getUint32(0, true);
       } catch { /* not asked: the unpacked size stays unknown */ }
@@ -184,17 +217,54 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   // (in the page's own words, one string each: js/cadmesh.js OVERSIZE_WORDS, js/formats.js
   // tooMuchText's -- "2048.0 MB" here beside "over 2 GB" there: r72 A8; and by the readers' own rule
   // for what is text, js/formats.js readsAsText -- this check's own disagreed both ways: r72 A2)
-  // (a gzip by what it unpacks to, when its trailer was read; else by its own size, as before)
-  const size = sizeGz ? unpacked : total;
+  // (a gzip by what it unpacks to: counted whole when small; else by its trailer, the last member's
+  // size mod 4 GiB (ISIZE), which settles only a size over the limits; unread, nothing is known.
+  // Read as exact, a 4.6 GB STL in 400 MB of gzip said "ok · 381.5 MB" -- r73 A1)
+  const gzLeast = total ? total - 18 - 5 * Math.ceil(total / 65535) : 0; // (stored blocks: the least a gzip unpacks to)
+  // (a binary STL inside settles it: its header's count gives its size, 84 + 50 n, when that agrees
+  // with the trailer mod 4 GiB -- a 5 GB one read "672 MB of text" by the residue)
+  let stlSize = null;
+  if (sizeGz && unpacked !== null && sizeFormat === 'STL' && sizeStart && sizeStart.length >= 84) {
+    const s = 84 + 50 * new DataView(sizeStart.buffer, sizeStart.byteOffset, sizeStart.byteLength).getUint32(80, true);
+    const over = (((unpacked - s) % 2 ** 32) + 2 ** 32) % 2 ** 32;
+    if (over < 50) stlSize = s + over;
+  }
+  // (counted whole, the size is the page's own; from the trailer alone it is the last member's, mod
+  // 4 GiB: still the least it unpacks to below 4 GiB, so past a limit by it is past it, but below
+  // what the gzip itself takes it says nothing -- past 4 GiB, or a gzip of several members: r73 Q1)
+  const unsettled = sizeGz && !counted && unpacked !== null && stlSize === null && unpacked < gzLeast;
+  const exact = sizeGz && (counted || stlSize !== null);
+  if (stlSize !== null) unpacked = stlSize;
+  const size = sizeGz ? (unsettled ? null : unpacked) : total;
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);
+    level = 'bad';
+  } else if (unpackError) {
+    // (the page's own refusal of what it unpacks)
+    bits.push(`the viewer cannot unpack it: ${unpackError}`);
     level = 'bad';
   } else if (sizeGz && unpacked > MAX_FILE_BYTES) {
     bits.push(`unpacks to ${OVERSIZE_WORDS}`);
     level = 'bad';
   } else if (size && size > MAX_TEXT_BYTES && readsAsText(sizeFormat, sizeStart, size)) {
-    bits.push(`${sizeGz ? 'unpacks to ' : ''}${sizeMb(size)} of text, ${TEXT_LIMIT_WORDS}`);
+    // (a residue is the least it unpacks to, so a text format past the limit by it is past it; an STL
+    // whose header did not settle its size is no binary one at any multiple, so text, as the reader
+    // takes it)
+    bits.push(`${sizeGz ? 'unpacks to ' : ''}${textOverWords(size)}`); // (the readers' words: r73 Q4)
     level = 'bad';
+  } else if (stlCut(sizeFormat, sizeStart, size)) {
+    // (a binary STL cut short or padded past one record: the page refuses it as damaged, its words
+    // the reader's -- "ok · STL" here: r73 A4)
+    bits.push(stlCut(sizeFormat, sizeStart, size));
+    level = 'bad';
+  } else if (sizeGz && sniff && sizeStart && !exact
+    // (and only where the limits can be met: at the deflate's largest ratio its size could pass one)
+    && total * 1032 > (readsAsText(sizeFormat, sizeStart, Infinity) ? MAX_TEXT_BYTES : MAX_FILE_BYTES)) {
+    // (what it unpacks to not settled: said, not "ok")
+    bits.push(unpacked === null ? 'its unpacked size could not be asked (the server sent no range)'
+      : unsettled ? 'its unpacked size cannot be told from its last four bytes (past 4 GB, or a gzip of several members)'
+        : `unpacks to ${sizeMb(unpacked)}, or that and a multiple of 4 GB (a gzip keeps the size mod 4 GB)`);
+    if (level === 'ok') level = 'warn';
   }
   return { level, detail: bits.join(' · '), url };
 }

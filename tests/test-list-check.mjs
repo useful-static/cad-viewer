@@ -89,7 +89,7 @@ await test('file-good', async () => {
 // never the part's own Content-Length (live bug: every board read 0.07 MB)
 await test('file-size-beyond-the-part', async () => {
   const total = Buffer.byteLength(FILES[`${B}big.cadmesh.gz`]);
-  const want = `${(total / 2 ** 20).toFixed(1)} MB`; // (MB of 2^20, as the page counts: r71 A11)
+  const want = `${(Math.ceil((total / 2 ** 20) * 10) / 10).toFixed(1)} MB`; // (MB of 2^20, as the page counts: r71 A11; up to a tenth: r73 Q4)
   for (const hide of [false, true]) {
     fakeFetch.hideRange = hide;
     const r = await checkFile(`${B}big.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
@@ -236,7 +236,8 @@ await test('a file the page refuses for its size is said so: past the file limit
   assert.match(big.detail, /over 2 GB, more than this viewer opens/);
   const text = await checkFile(`${B}ascii.stl`, { fetchFn: sized(asciiStart, 700 * 2 ** 20 + 1), sniff: true });
   assert.equal(text.level, 'bad', `a 700 MB ASCII STL: ${text.detail}`);
-  assert.match(text.detail, /700 MB of text, more than the 500 MB of text this viewer reads/);
+  // (700 MB and a byte: said past 700, as the size bit says it -- r73 Q4)
+  assert.match(text.detail, /700\.1 MB · STL · 700\.1 MB of text, more than the 500 MB of text this viewer reads/);
   const dxf = await checkFile(`${B}plan.dxf`, { fetchFn: sized('  0\nSECTION\n  2\nHEADER\n', 700 * 2 ** 20), sniff: true });
   assert.equal(dxf.level, 'bad', `a 700 MB ASCII DXF: ${dxf.detail}`);
   // must accept: a binary STL of that size (84 + 50 n bytes, n in its header), read as bytes, not text
@@ -246,10 +247,26 @@ await test('a file the page refuses for its size is said so: past the file limit
   // to be 84 + 50 k is text to the page, refused (must fire: "ok"); a binary one whose header starts
   // "solid", 2 bytes over, opens (must fire: bad)
   const k = 12e6;
+  // (r73 A4) a binary STL cut short: the page refuses it as damaged (must fire: "ok · STL")
+  const cut = await checkFile(`${B}cut.stl`, { fetchFn: sized(stlStart('', 1000), 84 + 50 * 999), sniff: true });
+  assert.equal(cut.level, 'bad', cut.detail);
+  assert.match(cut.detail, /damaged: its header counts 1,000 triangles, so it should be 50,084 bytes, but it is 50,034 bytes/);
   const ascii50 = await checkFile(`${B}ascii50.stl`, { fetchFn: sized(asciiStart, 84 + 50 * k), sniff: true });
   assert.equal(ascii50.level, 'bad', `a ${84 + 50 * k}-byte ASCII STL: ${ascii50.detail}`);
   const solidBin = await checkFile(`${B}solid-bin.stl`, { fetchFn: sized(stlStart('solid exported by a CAD program', k), 84 + 50 * k + 2), sniff: true });
   assert.notEqual(solidBin.level, 'bad', `a binary STL whose header says "solid", 2 bytes over: ${solidBin.detail}`);
+});
+await test('a PLY is text by its reader\'s own header rule: a late format line, or none, is ascii (r73 A2: two 700 MB ASCII PLYs said "ok")', async () => {
+  const sized = (start, total) => async () => new Response(Buffer.from(start), { status: 206, headers: { 'content-length': String(start.length), 'content-range': `bytes 0-${start.length - 1}/${total}` } });
+  const late = `ply\n${'comment a long header\n'.repeat(40)}format ascii 1.0\nelement vertex 3\nproperty float x\nend_header\n`;
+  const none = 'ply\nelement vertex 3\nproperty float x\nend_header\n';
+  for (const [what, start] of [['a late format line', late], ['no format line', none]]) {
+    const r = await checkFile(`${B}scan.ply`, { fetchFn: sized(start, 700 * 2 ** 20), sniff: true });
+    assert.equal(r.level, 'bad', `${what}: ${r.detail} (must fire: ok)`);
+  }
+  // must accept: a binary one that size
+  const bin = await checkFile(`${B}scan.ply`, { fetchFn: sized('ply\nformat binary_little_endian 1.0\nelement vertex 3\nproperty float x\nend_header\n', 700 * 2 ** 20), sniff: true });
+  assert.notEqual(bin.level, 'bad', bin.detail);
 });
 await test('a gzip is held to the limits by what it unpacks to, its trailer read with a range (r72 Q1: a 1.8 MB .stl.gz of 546 MB ASCII STL said "ok")', async () => {
   const { gzipSync } = await import('node:zlib');
@@ -263,18 +280,71 @@ await test('a gzip is held to the limits by what it unpacks to, its trailer read
     return new Response(body, { status: 206, headers: { 'content-length': String(body.length), 'content-range': `bytes ${from}-${from + body.length - 1}/${total}` } });
   };
   const ascii = gzipSync(Buffer.from('solid x\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\n'));
-  const big = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 546 * 2 ** 20), sniff: true });
-  assert.equal(big.level, 'bad', `546 MB of ASCII STL in 1.8 MB of gzip: ${big.detail} (must fire: ok)`);
+  // (gzips of 5 MB and more: by their trailer -- the small ones are counted whole, below)
+  const big = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 5e6, 546 * 2 ** 20), sniff: true });
+  assert.equal(big.level, 'bad', `546 MB of ASCII STL in 5 MB of gzip: ${big.detail} (must fire: ok)`);
   assert.match(big.detail, /unpacks to 546 MB of text, more than the 500 MB of text this viewer reads/);
-  const huge = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 3 * 2 ** 30), sniff: true });
+  const huge = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 5e6, 3 * 2 ** 30), sniff: true });
   assert.match(huge.detail, /unpacks to over 2 GB, more than this viewer opens/);
   // must accept: under the limit; and a binary STL unpacking past the text limit (read as bytes)
-  const small = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 1.8e6, 40 * 2 ** 20), sniff: true });
+  const small = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 5e6, 40 * 2 ** 20), sniff: true });
   assert.notEqual(small.level, 'bad', small.detail);
   const n = 14680064, hd = Buffer.alloc(84);
   hd.writeUInt32LE(n, 80);
-  const bin = await checkFile(`${B}part.stl.gz`, { fetchFn: served(gzipSync(hd), 1.8e6, 84 + 50 * n), sniff: true });
+  const bin = await checkFile(`${B}part.stl.gz`, { fetchFn: served(gzipSync(hd), 5e6, 84 + 50 * n), sniff: true });
   assert.notEqual(bin.level, 'bad', `a 700 MB binary STL in gzip: ${bin.detail}`);
+  // (r73 A1, Q1: the trailer is the LAST member's size, mod 4 GiB) below what the gzip itself takes:
+  // a 4.6 GB ASCII STL in 400 MB of gzip, or a gzip of several members -- not told apart, so said,
+  // a warning (must fire: "ok · 381.5 MB")
+  const wrapped = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 400e6, 4.6e9 % 2 ** 32), sniff: true });
+  assert.equal(wrapped.level, 'warn', wrapped.detail);
+  assert.match(wrapped.detail, /cannot be told from its last four bytes \(past 4 GB, or a gzip of several members\)/);
+  // a small gzip, counted whole as the page unpacks it: every member (must fire: its trailer's, the
+  // last member's), and one the page cannot unpack, refused in its words (must fire: "ok")
+  const members = Buffer.concat([gzipSync(Buffer.from('solid x\n'.repeat(400))), gzipSync(Buffer.from('endsolid x\n'))]);
+  const whole2 = async () => new Response(members, { status: 200, headers: { 'content-length': String(members.length) } });
+  const two = await checkFile(`${B}two.stl.gz`, { fetchFn: whole2, sniff: true });
+  assert.notEqual(two.level, 'bad', two.detail);
+  const sized2 = (bytes) => async () => new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+  const counted = await checkFile(`${B}big.stl.gz`, { fetchFn: sized2(Buffer.concat([gzipSync(Buffer.alloc(600 * 2 ** 20, 0x20).fill('solid x\n', 0, 8)), gzipSync(Buffer.from('endsolid x\n'))])), sniff: true });
+  assert.equal(counted.level, 'bad', counted.detail);
+  assert.match(counted.detail, /unpacks to 600\.1 MB of text/); // (600 MB and the second member's 11 bytes)
+  const junk = Buffer.concat([gzipSync(Buffer.from('solid x\n'.repeat(400))), Buffer.from('trailing junk, no member')]);
+  const broken = await checkFile(`${B}junk.stl.gz`, { fetchFn: sized2(junk), sniff: true });
+  assert.equal(broken.level, 'bad', broken.detail);
+  assert.match(broken.detail, /the viewer cannot unpack it: /);
+  // a 5 GB binary STL: its header's count settles the size (must fire: "672 MB of text")
+  const hd5 = Buffer.alloc(84);
+  hd5.writeUInt32LE(1e8, 80);
+  const bin5 = await checkFile(`${B}part.stl.gz`, { fetchFn: served(gzipSync(hd5), 400e6, (84 + 50 * 1e8) % 2 ** 32), sniff: true });
+  assert.match(bin5.detail, /unpacks to over 2 GB/);
+  assert.doesNotMatch(bin5.detail, /of text/);
+  // not settled: 100 MB of gzip saying 300 MB could be 4.3 GB -- said, a warning, not "ok"
+  const unsure = await checkFile(`${B}part.stl.gz`, { fetchFn: served(ascii, 100e6, 300 * 2 ** 20), sniff: true });
+  assert.equal(unsure.level, 'warn', unsure.detail);
+  assert.match(unsure.detail, /unpacks to 300 MB, or that and a multiple of 4 GB/);
+  // a server that ignores the range (a 200 for the trailer): not asked, a warning (must fire: "ok")
+  const whole = async (u, o = {}) => ((o.headers && o.headers.Range || '').startsWith('bytes=0-')
+    ? new Response(ascii, { status: 206, headers: { 'content-length': String(ascii.length), 'content-range': `bytes 0-${ascii.length - 1}/${100e6}` } })
+    : new Response(ascii, { status: 200, headers: { 'content-length': String(100e6) } }));
+  const noRange = await checkFile(`${B}part.stl.gz`, { fetchFn: whole, sniff: true });
+  assert.equal(noRange.level, 'warn', noRange.detail);
+  assert.match(noRange.detail, /its unpacked size could not be asked/);
+});
+await test('a ranged read that fails where a plain one opens the file is asked again plainly, not called a CORS failure (r73 Q2: a host sending its stored Content-Encoding)', async () => {
+  // (the browser's ranged request asks for identity; such a host sends gzip anyway, and the fetch
+  // fails, net::ERR_CONTENT_DECODING_FAILED -- the plain GET the page makes arrives unpacked)
+  const obj = Buffer.from('o cube\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+  const host = async (u, o = {}) => {
+    if (o.headers && o.headers.Range) throw new TypeError('Failed to fetch');
+    return new Response(obj, { status: 200, headers: { 'content-length': String(obj.length) } });
+  };
+  const r = await checkFile(`${B}cube.obj`, { fetchFn: host, sniff: true });
+  assert.notEqual(r.level, 'bad', `${r.detail} (must fire: "not fetched: the site sent no CORS header")`);
+  assert.match(r.detail, /OBJ/);
+  // must reject still: one that fails both ways
+  const gone = await checkFile(`${B}cube.obj`, { fetchFn: async () => { throw new TypeError('Failed to fetch'); }, sniff: true });
+  assert.match(gone.detail, /not fetched: the site sent no CORS header/);
 });
 await test('list-not-read', async () => {
   const r = await checkLists([`${B}missing.json`], 'https://cad.place/', { fetchFn: fakeFetch });

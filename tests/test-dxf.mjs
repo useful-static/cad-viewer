@@ -1261,7 +1261,8 @@ await test('an ASCII DXF past the text limit is refused in the text readers\' wo
   assert.equal(MAX_TEXT_BYTES, 500 * 2 ** 20);
   const b = new TextEncoder().encode('0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n');
   // (the limit's own refusal, at a limit this size: the default is MAX_TEXT_BYTES)
-  assert.throws(() => dxfText(b, 'big.dxf', 16), (e) => e.message === `big.dxf is 0 MB of text, ${TEXT_LIMIT_WORDS}`);
+  // (its size past the limit rounded up, to a tenth: never read as within it -- r73 Q4)
+  assert.throws(() => dxfText(b, 'big.dxf', 16), (e) => e.message === `big.dxf is 0.1 MB of text, ${TEXT_LIMIT_WORDS}`);
   assert.equal(typeof dxfText(b), 'string', 'under it, decoded');
   assert.match(dxfText.toString(), /max = MAX_TEXT_BYTES/, 'the default is the one limit (must fire: none)');
 });

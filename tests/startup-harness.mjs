@@ -117,7 +117,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   + line('const tourPlaysHere = ') + line('const addressModel = ') + line('const viewIsFor = ', true) + line('const MODEL_PARAMS = ') + line('const ADDRESS_MODEL_PARAMS = ')
   + line('const pendingViewIsFor = ') + line('const linkViewOver = ')
   + line('const listNote = ') + line('const posterUp = ') + line('function somethingShown() {')
-  + line('const autoTourKey = ') + line('const entryTourWait = ', true) + cutIf('async function entryTourRead(url) {', true) + line('const entryTourOn = ', true) + line('const rereading = ', true) + cutIf('function syncMeshUnitRow() {', true) + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
+  + line('const autoTourKey = ') + line('const entryTourWait = ', true) + cutIf('async function entryTourRead(url) {', true) + cutIf('async function entryTourSettled() {', true) + line('const entryTourOn = ', true) + line('const rereading = ', true) + cutIf('function syncMeshUnitRow() {', true) + line('const unitName = ') + line('const newPageId = ') + line('const ownEntry = ') + line('const otherPages = ') + line('const nextEntry = ', true) + line('const earlyPick = ') + line('const untouched = ') + line('const idleText = ')
   + `const OVERSIZE_WORDS = ${JSON.stringify(CADMESH.OVERSIZE_WORDS || '')};\n`
   + line('const POSTER_MSG = ') + line('const oversizeText = ') + line('const companionsOf = ')
   + (src.includes('modelNameFrom(search') ? line('const modelNameIn = ') : arrow('const modelNameIn = '))

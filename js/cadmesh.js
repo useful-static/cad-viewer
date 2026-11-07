@@ -60,6 +60,7 @@
 // the Node converter.
 
 import { buildEdges, FACTS_RULE, factsRuleHolds, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
+import { crc32 } from './crc32.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -378,36 +379,90 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES) {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error(`this file is ${what}-compressed, and this browser cannot decompress (no DecompressionStream)`);
   }
-  const rd = new Blob([buf]).stream().pipeThrough(new DecompressionStream(format)).getReader();
   // ONE output buffer, filled as the chunks arrive: holding the chunks and then copying them into
   // their total kept two copies of the whole file at the peak (a 1.9 GB model needed 3.8 GB). Its
   // first size is the gzip trailer's (ISIZE: the length mod 4 GB -- right for any file this opens,
   // and only a hint: a lie costs a regrow, never a wrong answer), grown x2 when the data runs past.
   let out = new Uint8Array(firstSize(buf, format, max));
-  let n = 0;
-  try {
-    for (;;) {
-      const { done, value } = await rd.read();
-      if (done) break;
-      if (n + value.byteLength > max) {
-        await rd.cancel();
-        throw new RangeError(`it unpacks to over ${(max / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
-      }
-      if (n + value.byteLength > out.length) {
-        const grown = new Uint8Array(Math.min(max, Math.max(2 * out.length, n + value.byteLength)));
-        grown.set(out.subarray(0, n));
-        out = grown;
-      }
-      out.set(value, n);
-      n += value.byteLength;
+  const n = await readMembers(buf, format, max, (value, at) => {
+    if (at + value.byteLength > out.length) {
+      const grown = new Uint8Array(Math.min(max, Math.max(2 * out.length, at + value.byteLength)));
+      grown.set(out.subarray(0, at));
+      out = grown;
     }
-  } catch (e) {
-    if (e instanceof RangeError) throw new Error(`the ${format === 'gzip' ? 'gzip file' : 'zip entry'} is too big: ${e.message}`);
-    throw new Error(`the ${what} data is corrupt or truncated (${e.message || e})`);
-  }
+    out.set(value, at);
+  }, (from, to) => crc32(out, from, to));
   if (n === out.length) return out.buffer;
   // (a buffer too long for its data: transfer() shrinks it without a second copy where it can)
   return typeof out.buffer.transfer === 'function' ? out.buffer.transfer(n) : out.buffer.slice(0, n);
+}
+
+// How many bytes a gzip (or deflate-raw) unpacks to, read as the page reads it -- every member, the
+// same limit and refusals -- none of them kept: the list check's measure of a gzip it can fetch
+// whole (its trailer is the LAST member's size, mod 4 GiB: r73 Q1)
+export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (no DecompressionStream)');
+  let crc = 0, member = -1;
+  return readMembers(buf, format, max, (value, at, from) => {
+    if (from !== member) { member = from; crc = 0; }
+    crc = crc32(value, 0, value.byteLength, crc);
+  }, () => crc);
+}
+
+// The one reading of compressed bytes, for inflate and inflateCount: each chunk handed to take(value,
+// at, memberStart) as it comes, refused past `max`; the count returned.
+// (a gzip of several members -- cat a.gz b.gz, bgzip -- is one file's bytes in turn, RFC 1952. This
+// browser's DecompressionStream stops after the first: "Junk found after end of compressed data",
+// a valid file called damaged, where node's reads every member -- so the tests passed on what the
+// page refused (r73 Q1, Q3). Each member is read in turn: when a stream stops early, the next
+// member starts right after this one's trailer -- its CRC-32 (crcOf(memberStart, n)) and length,
+// then a gzip header)
+async function readMembers(buf, format, max, take, crcOf) {
+  const what = format === 'gzip' ? 'gzip' : 'deflated';
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let n = 0, off = 0;
+  for (;;) {
+    const from = n;
+    const rd = new Blob([off ? u8.subarray(off) : u8]).stream().pipeThrough(new DecompressionStream(format)).getReader();
+    let stopped = null;
+    try {
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        if (n + value.byteLength > max) {
+          await rd.cancel();
+          throw new RangeError(`it unpacks to over ${(max / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+        }
+        take(value, n, from);
+        n += value.byteLength;
+      }
+    } catch (e) {
+      if (e instanceof RangeError) throw new Error(`the ${format === 'gzip' ? 'gzip file' : 'zip entry'} is too big: ${e.message}`);
+      stopped = e;
+    }
+    if (!stopped) return n;
+    const next = format === 'gzip' ? nextMember(u8, off, crcOf(from, n), n - from) : -1;
+    if (next < 0) throw new Error(`the ${what} data is corrupt or truncated (${stopped.message || stopped})`);
+    off = next;
+  }
+}
+
+// Where the gzip member after the one read from `off` starts: the first place past `off` holding its
+// trailer -- the CRC-32 of the bytes it gave and their count mod 4 GiB -- followed by a gzip header
+// (1f 8b 08); -1 when there is none (the data is damaged, not a member boundary)
+function nextMember(u8, off, crc, len) {
+  const t = new Uint8Array(8);
+  const dv = new DataView(t.buffer);
+  dv.setUint32(0, crc, true);
+  dv.setUint32(4, len % 2 ** 32, true);
+  for (let p = off + 18; p + 11 <= u8.length; p++) {
+    p = u8.indexOf(t[0], p);
+    if (p < 0) return -1;
+    let k = 1;
+    while (k < 8 && u8[p + k] === t[k]) k++;
+    if (k === 8 && u8[p + 8] === 0x1f && u8[p + 9] === 0x8b && u8[p + 10] === 8) return p + 8;
+  }
+  return -1;
 }
 
 // The output buffer's first size: the gzip trailer's length, else 4x the input -- never past what

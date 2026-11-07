@@ -577,5 +577,43 @@ await test('a .cadmesh with a coordinate past 10^15 is refused as the mesh reade
   const { header, data } = splitCadmesh(encodeCadmesh({ units: 'millimeter', meshes: [quad('box', 0)] }));
   assert.throws(() => withHeader({ ...header, bbox: { min: [-1e38, 0, 0], max: [1e38, 1, 0] } }, data), /too large to show \(a coordinate past 10\^15 mm\)/);
 });
+await test('a gzip of several members is read whole, member after member, where the browser\'s stream stops after the first (r73 Q1, Q3)', async () => {
+  // (Chromium's DecompressionStream('gzip') refuses what follows the first member, "Junk found after
+  // end of compressed data"; node's reads every member. A stand-in that stops as Chromium does: its
+  // first member's bytes, then that error)
+  const real = globalThis.DecompressionStream;
+  class FirstMemberOnly {
+    constructor(format) {
+      if (format !== 'gzip') return new real(format);
+      let all = Buffer.alloc(0);
+      const t = new TransformStream({
+        transform(c) { all = Buffer.concat([all, Buffer.from(c)]); },
+        flush(ctl) {
+          for (let L = 18; L <= all.length; L++) {
+            let out;
+            try { out = gunzipSync(all.subarray(0, L)); } catch { continue; }
+            // (the first prefix that unpacks is the first member: node reads one member there)
+            ctl.enqueue(new Uint8Array(out));
+            if (L < all.length) throw new TypeError('Junk found after end of compressed data.');
+            return;
+          }
+          throw new TypeError('incorrect header check');
+        },
+      });
+      this.readable = t.readable; this.writable = t.writable;
+    }
+  }
+  globalThis.DecompressionStream = FirstMemberOnly;
+  try {
+    const a = Buffer.from('solid x\n'.repeat(50)), b = Buffer.from('facet normal 0 0 1\n'.repeat(80)), c = Buffer.from('endsolid x\n');
+    const members = Buffer.concat([gzipSync(a), gzipSync(b), gzipSync(c)]);
+    const got = Buffer.from(await gunzip(members));
+    assert.ok(got.equals(Buffer.concat([a, b, c])), `${got.length} bytes of ${a.length + b.length + c.length} (must fire: "corrupt or truncated (Junk found…)")`);
+    // must reject still: junk that is no member after the first
+    await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
+  } finally {
+    globalThis.DecompressionStream = real;
+  }
+});
 
 done();

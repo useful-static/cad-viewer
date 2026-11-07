@@ -19,12 +19,13 @@
 //               matches (e.g. annotation geometry such as airflow arrows)
 //
 // Prints one line per file written: name, bodies, bytes. Exit 0 = all written (or -h); 1 = the
-// input refused (damaged, or nothing to export); 2 = usage.
+// input refused (damaged, or nothing to export), or a format refused (a 3MF past the text the
+// viewer reads: the other formats written first, the refusal said after them); 2 = usage.
 // Test: tests/test-cadmesh-export.mjs.
 import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
-import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
+import { EXPORTS, ExportRefused, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
 
@@ -58,7 +59,8 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
     // (a format that refuses -- a 3MF past the reader's text, "STL or GLB writes it" -- is that
     // format's result: the others still written, as its words say; one refusal wrote none -- r72 A10)
     let data;
-    try { data = await ex.write(model, ids, exportBasis(orient, ex.up), { base, names }); } catch (e) { out.push({ kind, error: e.message }); continue; }
+    // (a writer's refusal only, ExportRefused: any other error is a fault, thrown as one -- r73 Q5)
+    try { data = await ex.write(model, ids, exportBasis(orient, ex.up), { base, names }); } catch (e) { if (!(e instanceof ExportRefused)) throw e; out.push({ kind, error: e.message }); continue; }
     const buf = data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
     out.push({ kind, bytes: buf, bodies: ids.length, of: model.header.meshes.length });
   }

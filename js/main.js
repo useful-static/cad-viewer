@@ -5,7 +5,7 @@
 // picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave } from './cadmesh.js';
-import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText } from './formats.js';
+import { SNIFF_BYTES, extOf, formatOfName, sniffFormat, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth } from './formats.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
@@ -252,7 +252,7 @@ function setStatus(s, msg) {
 const IDLE_MSG = `open or drop ${opensShort()}`;
 // (MB of 2^20, as the limits and their words count: "546.4 MB" while loading, then refused as "521 MB
 // of text" -- r72 Q8; a tenth kept, for a progress line that moves)
-const mb = (n) => (n / 2 ** 20).toFixed(1);
+const mb = mbTenth; // (rounded up to a tenth, as the limits' words say a size: r73 Q4)
 
 // Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a failure
 // apart from the load, the GPU recovery's end and an error shown in the view (three of them
@@ -1877,7 +1877,8 @@ function outsideQuat(box, ids = null, step = null) {
     const mine = new Set(ids || []);
     // (what the step shows: the visitor's hidden parts, plus the step's own
     // hide -- a heatsink taken off its chip -- less its show)
-    const hidden = step && step.show === 'all' ? new Set() : new Set(app.tour ? app.tour.base.hidden : app.hidden);
+    // (a copy of the one rule's set, as this adds to it: ownHidden -- written out here a second time, r73 A5)
+    const hidden = step && step.show === 'all' ? new Set() : new Set(ownHidden());
     if (step && step.hide) for (const id of tourParts(step.hide).ids) hidden.add(id);
     if (step && Array.isArray(step.show)) for (const id of tourParts(step.show).ids) hidden.delete(id);
     const within = (b) => [0, 1, 2].every((k) => {
@@ -5046,7 +5047,7 @@ async function loadMeshFile(buf, name, seq, drop = []) {
     const b = await f.arrayBuffer();
     if (stale(seq)) return;
     total += b.byteLength;
-    if (total > MAX_FILE_BYTES) throw new Error(`${name}: its companion files come to over ${(MAX_FILE_BYTES / 2 ** 30).toFixed(0)} GB, more than this viewer opens`);
+    if (total > MAX_FILE_BYTES) throw new Error(`${name}: its companion files come to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
     extras.set(f.name.toLowerCase(), b);
   }
   if (stale(seq)) return;
@@ -5122,8 +5123,12 @@ const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rerea
 // hold the tour for good; past them it starts, and the next model joining ends it as any join does (A9)
 async function entryTourRead(url) {
   const [r] = await Promise.all([readTour(url), entryTourWait()]);
-  for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
+  await entryTourSettled();
   return r;
+}
+// (the rounds themselves, the address's tour's too -- addressTourEnds: the loop was written twice, r73 A5)
+async function entryTourSettled() {
+  for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
 }
 const entryTourOn = (key, open) => !!app.header && autoTourKey() === key && app.openCount === open && !app.pickPending && !rereading();
 // the unit the address asks a URL load to be read in: only for the model the address names
@@ -5836,8 +5841,9 @@ async function loadUrl(url) {
       // through setStatus, so a recovery that ends mid-fetch sees a load in
       // progress (app.status 'loading') and does not paint "ready" over it
       setStatus('loading', pct
-        ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${(total / 1e6).toFixed(1)} MB`
-        : `fetching ${(got / 1e6).toFixed(1)} MB`);
+        // (in the page's one MB, mb: "fetching 546.4 MB", then refused as 521 MB of text -- r73 A6)
+        ? `fetching ${Math.min(100, Math.round((100 * got) / total))}% of ${mb(total)} MB`
+        : `fetching ${mb(got)} MB`);
       const secs = (performance.now() - tf) / 1000;
       const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
       showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
@@ -7663,14 +7669,23 @@ function lackingNote(place, opened) {
 // (after the loads an entry's tour waits for, by the same rounds: the visitor's Add model… begun
 // while ?tour= was read ended it as it joined, when the tour came first -- the third tour, which
 // round 71's one wait did not reach: r72 A1. With none under way it runs at once, as before)
+// (its callers do not wait for it -- the start's own end is not held by the tour's wait --, so a
+// failure here is said here, apart from the load, as a tour's is: dropped, it was an unhandled
+// rejection, the tour neither played nor said -- r73 A8)
 async function addressTourEnds(r, ownFailed) {
-  if (r?.tour && app.urlTourPending) for (let k = 0, w = entryTourWait(); w && k < 4; k++, w = entryTourWait()) await w;
-  if (r?.tour && app.urlTourPending) {
-    if (!tourPlaysHere(r.tour)) { /* its own model's, not the visitor's file's: nothing said */ }
-    else if (app.header) startTourIn(r.tour, params.get('tour'), params.get('step'));
-    else if (!ownFailed) tourReadyNote();
+  try {
+    if (r?.tour && app.urlTourPending && entryTourWait()) await entryTourSettled();
+    if (r?.tour && app.urlTourPending) {
+      if (!tourPlaysHere(r.tour)) { /* its own model's, not the visitor's file's: nothing said */ }
+      else if (app.header) startTourIn(r.tour, params.get('tour'), params.get('step'));
+      else if (!ownFailed) tourReadyNote();
+    }
+  } catch (e) {
+    console.error(e);
+    failApart(`the tour could not be played: ${e && e.message ? e.message : e}`);
+  } finally {
+    tourOver();
   }
-  tourOver();
 }
 // "The tour is ready", said where it has no model to play over: never the open-a-file words in an
 // embed, whose visitor chose nothing to open (r48 A1, A2; r49 Q5). The start-up and View in 3D's.
