@@ -16,7 +16,7 @@ import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js'
 import { fileNameOfUrl, formatOfName, isCompanion, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
 import { meshFormatOf, unzip } from '../js/mesh-formats.js';
 import { companionsOverText, readCompanions } from '../js/companions.js';
-import { CliError, parseCli } from '../js/cli-args.js';
+import { CliError, parseCli, readInput } from '../js/cli-args.js';
 import { readMeshFile } from '../js/read-file.js';
 import { dirname, join, resolve } from 'node:path';
 import { parseModelList, readCapped } from '../js/model-list.js';
@@ -44,7 +44,9 @@ const fetchOk = async (p) => {
   if (!res.ok) throw new Error(`${res.status === 404 ? 'not found' : 'refused'} (${res.status}): ${p}`);
   return res;
 };
-const read = async (p) => (/^https?:/.test(p) ? new Uint8Array(await (await fetchOk(p)).arrayBuffer()) : new Uint8Array(await readFile(p)));
+// (a local file by the tools' one reading, js/cli-args.js readInput: "<path>: no such file", not node's
+// "ENOENT: …" -- r83 A7)
+const read = async (p) => (/^https?:/.test(p) ? new Uint8Array(await (await fetchOk(p)).arrayBuffer()) : new Uint8Array(await readInput(p)));
 // A local path stands in as https://local.invalid/<its absolute path> (as for --labels below), so
 // a tour's relative "model" resolves beside the tour file, and back to a path
 const LOCAL = 'https://local.invalid';

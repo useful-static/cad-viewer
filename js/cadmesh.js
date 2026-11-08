@@ -76,6 +76,19 @@ export const toByte = (x) => Math.round(Math.min(1, Math.max(0, x)) * 255);
 const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
 // name -> element type; written only when the model carries them
 const OPTIONAL = { faces: Uint32Array, edges: Uint32Array, silhouettes: Uint32Array, silhouetteNormals: Int16Array };
+const REQUIRED = { position: Float32Array, normal: Int16Array, color: Uint8Array, id: Uint8Array, index: Uint32Array };
+// The sections the decoder views, in its order -- every required one, and an optional one the header
+// names -- and its refusal of the first missing or past `size` bytes, or null. The one walk for
+// decodeCadmesh and cadmeshCut (the list check's), which kept a copy that disagreed both ways: a
+// section the decoder never reads, past the end, "bad"; a missing index "ok" (r83 A4)
+const sectionsViewed = (header) => [...Object.keys(REQUIRED), ...Object.keys(OPTIONAL).filter((s) => header.sections[s])];
+function sectionRefusal(header, dataStart, size) {
+  for (const name of sectionsViewed(header)) {
+    const s = header.sections[name];
+    if (!s || dataStart + s.offset + s.byteLength > size) return `cadmesh: section ${name} out of range (truncated file?)`;
+  }
+  return null;
+}
 // the b-rep statuses the converter reports: BodyKind in
 // occt-progress/progress.patch is the source; this list follows it
 export const BODY_KINDS = ['closed', 'capped', 'sheet', 'open'];
@@ -635,14 +648,8 @@ export function cadmeshCut(head, size) {
   let header;
   try { header = JSON.parse(new TextDecoder().decode(head.subarray(12, 12 + jlen))); } catch { return null; }
   if (!header || typeof header.sections !== 'object' || !header.sections) return null;
-  const dataStart = align8(12 + jlen);
-  // (in the decoder's order: the sections it views first)
-  const names = ['position', 'normal', 'color', 'id', 'index', ...Object.keys(header.sections).filter((n) => !['position', 'normal', 'color', 'id', 'index'].includes(n))];
-  for (const name of names) {
-    const s = header.sections[name];
-    if (s && dataStart + s.offset + s.byteLength > size) return `cadmesh: section ${name} out of range (truncated file?)`;
-  }
-  return null;
+  // (the decoder's own walk: sectionRefusal -- r83 A4)
+  return sectionRefusal(header, align8(12 + jlen), size);
 }
 
 // Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,
@@ -670,20 +677,14 @@ export function decodeCadmesh(buf) {
   const dataStart = align8(12 + jlen);
   const view = (name, Ctor) => {
     const s = header.sections[name];
-    if (!s || dataStart + s.offset + s.byteLength > buf.byteLength) {
-      throw new Error(`cadmesh: section ${name} out of range (truncated file?)`);
-    }
     return new Ctor(buf, dataStart + s.offset, s.byteLength / Ctor.BYTES_PER_ELEMENT);
   };
   validateHeader(header);
-  const out = {
-    header,
-    position: view('position', Float32Array),
-    normal: view('normal', Int16Array),
-    color: view('color', Uint8Array),
-    id: view('id', Uint8Array),
-    index: view('index', Uint32Array),
-  };
+  // (every section it views within the file, by the one walk: sectionRefusal -- r83 A4)
+  const wrong = sectionRefusal(header, dataStart, buf.byteLength);
+  if (wrong) throw new Error(wrong);
+  const out = { header };
+  for (const [s, Ctor] of Object.entries(REQUIRED)) out[s] = view(s, Ctor);
   for (const [s, Ctor] of Object.entries(OPTIONAL)) out[s] = header.sections[s] ? view(s, Ctor) : null;
   // An index past the vertex data draws nothing on WebGL2 (INVALID_OPERATION,
   // no error shown) and garbage on WebGPU: refuse it here, loudly.

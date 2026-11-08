@@ -505,7 +505,9 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
   // (an entry that starts as a gzip and inflates past the check's 64 MB, its directory claiming 1 KB)
   const under = Buffer.concat([gzipSync(stl()), Buffer.alloc(70 * 2 ** 20)]);
   const bigPk = stl('PK'); bigPk.writeUInt32LE(2_000_000, 80); // (its first record only: the directory gives its size)
-  const bigDeflate = randomBytes(1.1 * 2 ** 20); // (deflate data past 1 MB: its size the directory's)
+  // (deflate data past 1 MB that never inflates: 0xff starts a block of the reserved type -- random bytes
+  // were a valid stream about one run in 200, and the arm failed: r83 Q4)
+  const bigDeflate = Buffer.alloc(1.1 * 2 ** 20, 0xff);
   const realSrc = randomBytes(1.1 * 2 ** 20), realDeflate = deflateRawSync(realSrc), realDeflateSize = realSrc.length; // (valid, past 1 MB)
   const stl2 = Buffer.alloc(84 + 100); stl2.writeUInt32LE(2, 80);
   const pastEnd = miniZip([['part.obj', 'v 0 0 0\n']]); pastEnd.writeUInt32LE(10 * 2 ** 20, pastEnd.indexOf(Buffer.from([0x50, 0x4b, 1, 2])) + 20); // (its csize: 10 MB)
@@ -762,6 +764,80 @@ await test('a glTF and GLB by their whole JSON and chunks wherever they are, a .
   const capped = await checkFile(`${B}many.zip`, { fetchFn: ranged(z, 32768), sniff: true });
   got.push(['Q3 parts capped at 32 KB', capped.level === 'warn' && /sent less than it was asked/.test(capped.detail) ? 'ok' : `${capped.level}: ${capped.detail}`]);
   const wanted = [...rows.map(([what, , , want]) => [what, want]), ['Q3 parts capped at 32 KB', 'ok']];
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
+await test('a long .cadmesh header read from every host, a size sent encoded, a GLB\'s chunks all and its buffer 0, a JSON past the text limit (r83 A1-A5, Q1, Q3)', async () => {
+  // hosts: ranges honoured; capped at 32 KB a part; ignored (the whole every time); one sending a file
+  // stored gzipped, Content-Encoding: gzip, its length the gzip's, the browser handing on the file
+  const ranged = (b, cap = Infinity) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1, a + cap - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const ignoring = (b) => async () => new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+  const encoded = (b) => async () => new Response(b, { status: 200, headers: { 'content-length': String(gzipSync(b).length), 'content-encoding': 'gzip' } });
+  // (a model of 3,000 named bodies: its header past 64 KB, as every model at hand has -- the shipped
+  // all-h3-cc.cadmesh's is 358 KB -- built here, as the public tree has no models/)
+  const { encodeCadmesh } = await import('../js/cadmesh.js');
+  const quad = { name: 'plate', color: null, positions: Float32Array.of(0, 0, 0, 1, 0, 0, 1, 1, 0), normals: null, colors: null, indices: Uint32Array.of(0, 1, 2) };
+  const bodies = Array.from({ length: 3000 }, (_, i) => ({ ...quad, name: `body_${i}_${'x'.repeat(40)}` }));
+  const model = Buffer.from(encodeCadmesh({ meshes: bodies, root: { name: 'asm', meshes: bodies.map((_, i) => i), children: [] } }));
+  assert.ok(model.readUInt32LE(8) > 65536, 'a header past 64 KB');
+  const cut = model.subarray(0, model.length - 8); // (past its header, a section cut: read only with the whole header)
+  const rack = model; // (a valid model, sent encoded below)
+  // (a .cadmesh's header rewritten: its sections as given, its data kept)
+  const cm = Buffer.from(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } }));
+  const withSections = (edit) => {
+    const jlen = cm.readUInt32LE(8), header = JSON.parse(cm.subarray(12, 12 + jlen).toString());
+    const data = cm.subarray((12 + jlen + 7) & ~7);
+    edit(header.sections);
+    let j = Buffer.from(JSON.stringify(header)); const pad = ((12 + j.length + 7) & ~7) - 12 - j.length; j = Buffer.concat([j, Buffer.alloc(pad, 0x20)]);
+    const h = Buffer.alloc(12); cm.copy(h, 0, 0, 8); h.writeUInt32LE(j.length, 8);
+    return Buffer.concat([h, j, data]);
+  };
+  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const chunk = (type, data) => { const d = Buffer.from(data); const p = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + p, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(p, type === 'JSON' ? 0x20 : 0)]); };
+  const glbOf = (...cs) => { const body = Buffer.concat(cs); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
+  const draco = gltf({ extensionsRequired: ['KHR_draco_mesh_compression'] });
+  // (a GLB whose JSON chunk claims 501 MB, served by range from what it says: only its header is read)
+  const huge = 501 * 2 ** 20, hugeLen = 20 + huge;
+  const hugeHead = Buffer.alloc(20); hugeHead.write('glTF', 0); hugeHead.writeUInt32LE(2, 4); hugeHead.writeUInt32LE(hugeLen, 8); hugeHead.writeUInt32LE(huge, 12); hugeHead.write('JSON', 16, 'latin1');
+  const virtual = async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(null, { status: 416 });
+    const a = +m[1], e = Math.min(+m[2], hugeLen - 1), out = Buffer.alloc(e - a + 1, 0x20);
+    hugeHead.subarray(a, Math.min(20, e + 1)).copy(out, 0);
+    return new Response(out, { status: 206, headers: { 'content-length': String(out.length), 'content-range': `bytes ${a}-${e}/${hugeLen}` } });
+  };
+  const rows = [
+    // A2, Q3: the shipped all-h3-cc.cadmesh cut in half, from each host and zipped (must fire: "ok")
+    ['A2 cut, ranges honoured', 'cut.cadmesh', ranged(cut), 'bad:out of range (truncated file?)'],
+    ['A2 cut, parts capped at 32 KB', 'cut.cadmesh', ranged(cut, 32768), 'bad:out of range (truncated file?)'],
+    ['A2 cut, ranges ignored', 'cut.cadmesh', ignoring(cut), 'bad:out of range (truncated file?)'],
+    ['A2 cut, zipped', 'cut.zip', ranged(miniZip([['cut.cadmesh', cut]])), 'bad:out of range (truncated file?)'],
+    ['A2 whole (control)', 'all.cadmesh', ranged(model), 'ok'],
+    // A1: a valid model sent encoded, its length the gzip's (must fire: "section position out of range")
+    // (its own size unknown here, so said so, a warning -- never "bad" of a file the page opens)
+    ['A1 a valid model sent encoded', 'rack.cadmesh', encoded(rack), 'warn:size not given'],
+    // A3: a GLB's JSON past the text limit, refused in the reader's words (must fire: "ok")
+    ['A3 a 501 MB JSON chunk', 'huge.glb', virtual, 'bad:of text, more than the 500 MB of text this viewer reads'],
+    // A4: the decoder's own section walk -- a section it never reads past the end opens; no index is refused
+    ['A4 an unread section past the end', 'x.cadmesh', ranged(withSections((s) => { s.unread = { offset: 1e6, byteLength: 8 }; })), 'ok'],
+    ['A4 no index section', 'x.cadmesh', ranged(withSections((s) => { delete s.index; })), 'bad:section index out of range'],
+    // A5: a Draco JSON as the 65th chunk, the file in hand (must fire: "ok")
+    ['A5 the 65th chunk', 'many.glb', ranged(glbOf(...Array.from({ length: 64 }, () => chunk('BIN\0', Buffer.alloc(4))), chunk('JSON', draco))), 'bad:which this viewer does not decode'],
+    // Q1: a GLB cut after its JSON chunk, buffer 0 with no uri and no BIN chunk (must fire: "ok")
+    ['Q1 cut after the JSON', 'b.glb', ranged(glbOf(chunk('JSON', gltf({ buffers: [{ byteLength: 36 }] })))), 'bad:buffer 0 has no data'],
+  ];
+  const got = [];
+  for (const [what, name, host, want] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: host, sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  const wanted = rows.map(([what, , , want]) => [what, want]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
 await test('a host that caps a ranged answer: the short bytes said, never read as the directory (r80 Q6)', async () => {

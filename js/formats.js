@@ -106,14 +106,13 @@ export function gltfRefusal(json, file) {
   const unread = required.filter((x) => !GLTF_EXTENSIONS_READ.includes(x)).map((x) => String(x).slice(0, 80));
   return unread.length ? `${file} needs the glTF extension${unread.length > 1 ? 's' : ''} ${unread.join(', ')}, which this viewer does not read` : null;
 }
-// The files a glTF's JSON names that its reader must find beside it: each buffer's uri that is no
-// data: URI, as written (js/mesh-formats.js parseGLTF reads those from its companions; a GLB's own
-// buffer has no uri; images are optional). The list check's, which never read them: a .gltf by URL,
-// its .bin beside it on the server, was "ok" where the page says "needs tri.bin" (r80 Q3)
-export function gltfNeeds(json) {
-  const buffers = json && Array.isArray(json.buffers) ? json.buffers : [];
-  return buffers.filter((b) => b && typeof b.uri === 'string' && !b.uri.startsWith('data:')).map((b) => b.uri);
-}
+// The glTF reader's refusals in their one wording, js/mesh-formats.js parseGLTF's and the list check's,
+// which wrote each out again (r83 A6): its JSON that does not parse, no JSON, a buffer not beside it
+export const GLTF_WORDS = {
+  unparsed: (what, e) => `${what} is damaged: its JSON does not parse (${e && e.message ? e.message : e})`,
+  noJson: (file) => `${file} is damaged: it holds no glTF JSON`,
+  needs: (file, uri) => `${file} needs ${uri}: drop it together with the .${extOf(file)}`,
+};
 // A GLB's chunks as its reader walks them, from read(at, n) (async: bytes of a file of `size`): its
 // header, then each chunk's length and type -> { chunks: [{ type, at, len }] } or { damaged } in the
 // reader's words; most: the chunks walked at most (the list check's, by range), past it { more }.

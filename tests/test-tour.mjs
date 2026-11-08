@@ -160,6 +160,10 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     let misspelt = 0, said = null;
     try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--lables', join(dir, 'l.json')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { misspelt = e.status; said = [e.stdout, e.stderr]; }
     assert.equal(misspelt, 2, 'a misspelt option');
+    // (a missing model in the tools' one wording, not node's "ENOENT: …": r83 A7)
+    let missing = '';
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), join(dir, 'nope.cadmesh')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { missing = e.stdout; }
+    assert.match(missing, /^FAIL .*nope\.cadmesh: .*nope\.cadmesh: no such file/);
     // (on stderr, as the other tools say a usage error: r82 Q5; must fire, on stdout)
     assert.deepEqual([said[0], /check-tour: unknown option --lables/.test(said[1])], ['', true]);
     // (r82 A6: a local model read with the files beside it in its folder, as a drop carries them;

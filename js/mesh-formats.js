@@ -19,7 +19,7 @@ import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_
 import { crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32Turning } from './crc32.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, GLB_BIN, GLB_JSON, companionKey, companionOf, glbChunks, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, GLB_BIN, GLB_JSON, GLTF_WORDS, companionKey, companionOf, glbChunks, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -1057,7 +1057,7 @@ const INSTANCE_USES = ['TRANSLATION', 'ROTATION', 'SCALE'];
 
 // a glTF's JSON, or a plain "damaged" in place of the engine's parse error
 function parseJSON(s, what) {
-  try { return JSON.parse(s); } catch (e) { throw new Error(`${what} is damaged: its JSON does not parse (${e.message})`); }
+  try { return JSON.parse(s); } catch (e) { throw new Error(GLTF_WORDS.unparsed(what, e)); } // (the one wording: r83 A6)
 }
 
 async function parseGLTF(buf, format, base, files) {
@@ -1075,7 +1075,7 @@ async function parseGLTF(buf, format, base, files) {
   // its refusals name the file as the other readers do: name and extension
   const file = `${base}.${format}`;
   const damaged = (what) => new Error(`${file} is damaged: ${what}`);
-  if (!json) throw damaged('it holds no glTF JSON');
+  if (!json) throw new Error(GLTF_WORDS.noJson(file));
   // the JSON's shapes are checked where they are used: a list that is not one, or an index to
   // an entry that is not an object, is a damaged file, not the engine's "is not a function"
   const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -1118,7 +1118,7 @@ async function parseGLTF(buf, format, base, files) {
     let nm;
     try { nm = decodeURIComponent(b.uri); } catch { throw unread(); }
     const f = companion(files, nm);
-    if (!f) throw new Error(`${file} needs ${b.uri}: drop it together with the .${format}`);
+    if (!f) throw new Error(GLTF_WORDS.needs(file, b.uri));
     return f;
   }));
   // each accessor read once, however many placements (instances, nodes) use it: a mesh placed
