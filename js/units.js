@@ -1,7 +1,9 @@
 // Every quantity the viewer shows goes through here. The geometry is in its
 // header's units: mm for every reader of ours (OpenCascade converts on import);
-// a .cadmesh from another writer in another unit is shown in that unit "(not
-// converted)" -- its lengths, volume and area (fmtUnconverted) -- and refused by
+// a .cadmesh from another writer in another unit is not converted: its volume and
+// area are shown in that unit "(not converted)" (fmtUnconverted), its lengths in
+// the display unit Auto gives that unit (unconvertedNum, unconvertedUnit: one in
+// metres under a metre across in mm, as converted -- r89 Q1), and it is refused by
 // the exports, Save drawing and the mass (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
 // the user's choice, or Auto, the unit the file declares (header.sourceUnits).
 //
@@ -100,11 +102,11 @@ const sig4 = (x) => x.toLocaleString('en-US', { maximumSignificantDigits: 4 });
 // kind: 'measure', or 'size' / 'section' (one decimal fewer)
 export function fmtNum(mm, kind, unit) {
   const d = DECIMALS[unit] - (kind === 'measure' ? 0 : 1);
-  return (mm / MM_PER[unit]).toFixed(d);
+  const s = (mm / MM_PER[unit]).toFixed(d);
+  // (zero as shown is zero: float noise read "-0.0" in the position row, where a minus is an
+  // overhang -- r90 A5)
+  return /^-0(\.0*)?$/.test(s) ? s.slice(1) : s;
 }
-
-// (the unit as written, unitWord: "µm", never the id "um")
-export const fmtLength = (mm, kind, unit) => `${fmtNum(mm, kind, unit)} ${unitWord(unit)}`;
 
 export function fmtArea(mm2, unit) {
   if (imperial(unit)) {
@@ -116,9 +118,6 @@ export function fmtArea(mm2, unit) {
   return `${sig4(mm2 / 1e6)} m²`;
 }
 
-// A volume (power 3) or an area (power 2) of a model whose geometry is in a unit the viewer does not
-// convert (js/cadmesh.js geomIsMm false): in that unit, as its lengths are shown -- fmtVolume and
-// fmtArea read their number as mm³ / mm², and an inch cube read "≈ 1 mm³" (r86 A4)
 // A length of geometry in a unit not converted (word: the header's), as a plain number that may be
 // typed back: by that unit's own decimals where it is a display unit -- one length, one precision,
 // converted or not; at 4 significant digits 120.375 in read "120.4" and Enter moved the cut (r87 Q3,
@@ -151,6 +150,9 @@ export function unconvertedBack(v, word, size = Infinity) {
 // A header's unit as written for a reader: its one name's spelling where it has one ("in" for
 // "INCH"), else as the header gives it -- printed as written, "12 INCH³" (r88 A8)
 export const headerUnitWord = (word) => { const u = lengthUnitOf(word); return u ? unitWord(u) : String(word); };
+// A volume (power 3) or an area (power 2) of a model whose geometry is in a unit the viewer does not
+// convert (js/cadmesh.js geomIsMm false): in that unit -- fmtVolume and fmtArea read their number as
+// mm³ / mm², and an inch cube read "≈ 1 mm³" (r86 A4)
 export function fmtUnconverted(x, unit, power) {
   return `${sig4(x)} ${unit}${power === 3 ? '³' : '²'} (not converted)`;
 }

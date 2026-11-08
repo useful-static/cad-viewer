@@ -798,10 +798,11 @@ await test('a glTF and GLB by their whole JSON and chunks wherever they are, a .
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
   // Q3: a host capping its parts at 32 KB, its Content-Range naming the 200 KB zip: its first part is
-  // no whole file (must fire: "bad · not a zip file")
+  // no whole file (must fire: "bad · not a zip file"); the zip fetched whole instead, and its first
+  // entry -- 40 bytes of "x", no STL -- judged from it (r90 Q1)
   const z = miniZip(Array.from({ length: 2000 }, (_, i) => [`p${i}.stl`, 'x'.repeat(40)]));
   const capped = await checkFile(`${B}many.zip`, { fetchFn: ranged(z, 32768), sniff: true });
-  got.push(['Q3 parts capped at 32 KB', capped.level === 'warn' && /sent less than it was asked/.test(capped.detail) ? 'ok' : `${capped.level}: ${capped.detail}`]);
+  got.push(['Q3 parts capped at 32 KB', capped.level === 'bad' && /its p0\.stl is neither a binary STL/.test(capped.detail) ? 'ok' : `${capped.level}: ${capped.detail}`]);
   const wanted = [...rows.map(([what, , , want]) => [what, want]), ['Q3 parts capped at 32 KB', 'ok']];
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
@@ -1255,6 +1256,16 @@ await test('a 3MF inside a zip, or named .zip, is read by the page\'s 3MF reader
   }
   assert.deepEqual(got, [['no triangle, plain', 'bad'], ['no triangle, zipped', 'bad'], ['no triangle, named .zip', 'bad'], ['no triangle, no format named', 'bad'],
     ['a triangle (control), plain', 'ok'], ['a triangle (control), zipped', 'ok'], ['a triangle (control), named .zip', 'ok'], ['a triangle (control), no format named', 'ok']], JSON.stringify(got));
+  // (from a host that ignores a range, fetched whole, as every other format is -- must fire: "warn ·
+  // its entries could not be read here (the server sent no range)", r90 Q1; and named 3MF, as read by
+  // its directory -- "ok · zip", r90 Q3)
+  const noRange = (b) => async () => new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+  const nr = [];
+  for (const [part, url] of [[noTri, 'x.3mf'], [model3mf(), 'x.3mf'], [model3mf(), 'x.zip']]) {
+    const r = await checkFile(`${B}${url}`, { fetchFn: noRange(m3(part)), sniff: true });
+    nr.push(`${r.level} ${/has no triangles to show/.test(r.detail) ? 'none' : ''}${/· 3MF\b/.test(r.detail) ? '3MF' : ''}`);
+  }
+  assert.deepEqual(nr, ['bad none3MF', 'ok 3MF', 'ok 3MF'], JSON.stringify(nr));
 });
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');
@@ -1304,8 +1315,15 @@ await test('a host that caps a ranged answer: the short bytes said, never read a
     return new Response(z.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${z.length}` } });
   };
   const r = await checkFile(`${B}many.zip`, { fetchFn: capped, sniff: true });
-  assert.equal(r.level, 'warn', r.detail);
-  assert.match(r.detail, /the server sent less than it was asked/, 'must fire: the short bytes parsed as its directory');
+  // (the zip fetched whole, its 1-byte "x" STL judged from it, as the page reads it -- r90 Q1; must
+  // fire: the short bytes parsed as its directory)
+  assert.equal(r.level, 'bad', r.detail);
+  assert.match(r.detail, /its p0\.stl is neither a binary STL/);
+  // (and a host whose whole answer is short too: said, not read -- the short bytes are no zip)
+  const short = async (u, o = {}) => { const res = await capped(u, o); return o.headers && o.headers.Range ? res : new Response(z.subarray(0, 65536), { status: 200 }); };
+  const s = await checkFile(`${B}many.zip`, { fetchFn: short, sniff: true });
+  assert.equal(s.level, 'warn', s.detail);
+  assert.match(s.detail, /the server sent less than it was asked/);
 });
 await test('an encrypted 3MF root over the text limit: the page and the check refuse it in one order, by one name (r77 Q5)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

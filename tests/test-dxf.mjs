@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { UNITS, blockKey, parseDXF,layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
+import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
 import { boxTree, nearestItem } from '../js/box-tree.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
@@ -114,6 +114,14 @@ test('a layer or block named in another case is that layer or block (r87 Q4)', (
     assert.deepEqual(q.paths.map((x) => Math.abs(x.pts[2] - x.pts[0])), want, `${a} / ${b}`);
   }
   assert.equal(blockKey(' Straße '), 'STRAßE');
+});
+test('2D Measure\'s readout by the 3D panel\'s rule: its unit\'s decimals, Auto\'s unit by size, the noise floor (r89 Q3, r90 A2)', () => {
+  // (must fire: "123457 mm", r89 Q3; a 0.04 mm gap in a 0.1 m drawing in metres "0.0000 m", r90 A2)
+  assert.equal(measureText(123456.789, 123456.789, 0, 'mm', 200000), '123456.79 mm · ΔX 123456.79 · ΔY 0.00');
+  assert.equal(measureText(0.00004, 0.00004, 1e-12, 'm', 0.1), '0.04 mm · ΔX 0.04 · ΔY 0.00');
+  assert.equal(measureText(4, 4, 0, 'm', 5), '4.0000 m · ΔX 4.0000 · ΔY 0.0000');
+  assert.equal(measureText(1.5, 1.5, 1e-12, 'US ft', 10), '1.5 US ft · ΔX 1.5 · ΔY 0');
+  assert.equal(measureText(1.5, 0, 1.5, null, 10), '1.5 · ΔX 0 · ΔY 1.5');
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)

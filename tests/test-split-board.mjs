@@ -8,7 +8,7 @@
 // triangle kept. No GPU, no network:  node tests/test-split-board.mjs
 
 import assert from 'node:assert/strict';
-import { decodeCadmesh, encodeCadmesh } from '../js/cadmesh.js';
+import { decodeCadmesh, encodeCadmesh, notMmWords } from '../js/cadmesh.js';
 import { splitBoard } from '../split-board.mjs';
 
 import { test, done } from './harness.mjs';
@@ -126,7 +126,10 @@ test('refuses a file without b-rep faces', () => {
 test('refuses a board in another unit than mm, its reaches being mm (r85 A3)', () => {
   const { d } = fusedBoard();
   // (must fire: the same board in inches cut into 0 parts, exit 0)
-  assert.throws(() => splitBoard({ ...d, header: { ...d.header, units: 'inch' } }), /lengths are in inch, not converted: a board split is not made here/);
+  assert.throws(() => splitBoard({ ...d, header: { ...d.header, units: 'inch' } }), /lengths are in in, not converted: a board split is not made here/);
+  // (the unit as the page writes it, not the header's raw word -- must fire: "INCH", r90 A4)
+  assert.equal(notMmWords({ units: 'INCH' }, 'an export is'), 'this model\'s lengths are in in, not converted: an export is not made here');
+  assert.equal(notMmWords({ units: 'furlong' }, 'an export is'), 'this model\'s lengths are in furlong, not converted: an export is not made here');
   assert.equal(splitBoard({ ...d, header: { ...d.header, units: 'mm' } }).parts, 2);
 });
 

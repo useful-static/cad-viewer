@@ -468,7 +468,7 @@ function parseOBJ(s, files, base) {
     let j = a;
     while (j < e && !ws(s.charCodeAt(j))) j++;
     const k = s.slice(a, j);
-    return k === 'v' || k === 'vt' || k === 'vn' || k === 'vp' || k === 'f' || k === 'l' || k === 'p';
+    return NUMERIC_STATEMENTS.has(k);
   };
   // the "v" lines and the faces' triangles counted against the caps first, by a pass that makes
   // no strings (a 20 MB face of alternating corners was 10 M triangles built, 4.2 s and 1.6 GB);
@@ -572,13 +572,15 @@ function parseOBJ(s, files, base) {
   }
   return bodies;
 }
-// (the OBJ's comment rule, its own statement of numbers -- Kd -- ended by a "#", a name -- newmtl --
-// kept whole: "Kd 0.25 # a grey" read no colour beside an OBJ that takes "f 1 2 3 # a face" -- r89 A3)
+// The statements of numbers, an OBJ's and its .mtl's: the ones a "#" comment ends. A name statement
+// (usemtl, mtllib, o, g, newmtl) keeps its "#" (r88 A2). One table for both readers: the .mtl had a
+// Kd case of its own, which the next statement read would have had to repeat (r89 A3, r90 A3)
+const NUMERIC_STATEMENTS = new Set(['v', 'vt', 'vn', 'vp', 'f', 'l', 'p', 'Ka', 'Kd', 'Ks', 'Ke', 'Ns', 'Ni', 'd', 'Tr', 'illum']);
 function readMTL(s, out) {
   let cur = null;
   for (const raw of s.split(/\r?\n/)) {
     let sp = raw.trim().split(/\s+/);
-    if (sp[0] === 'Kd') { const h = raw.indexOf('#'); if (h >= 0) sp = raw.slice(0, h).trim().split(/\s+/); }
+    if (NUMERIC_STATEMENTS.has(sp[0])) { const h = raw.indexOf('#'); if (h >= 0) sp = raw.slice(0, h).trim().split(/\s+/); }
     if (sp[0] === 'newmtl') cur = sp.slice(1).join(' ');
     else if (sp[0] === 'Kd' && cur) {
       // "Kd r [g b]": one value is a grey (the MTL form); a colour that is not numbers is not one

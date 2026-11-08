@@ -2145,4 +2145,34 @@ await test('js/early.js fetches early the model the start-up opens first, and no
   assert.deepEqual(failed, [], `cases: ${failed.length}\n${failed.join('\n')}`);
 });
 
+await test('the units row names the unit the lengths are shown in, for geometry not converted (r90 A1)', async () => {
+  const U = await import('../js/units.js');
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const code = src.slice(src.indexOf('const geomMm = () =>'), src.indexOf('function setUnitChoice'));
+  const rows = [];
+  for (const [header, choice] of [
+    [{ units: 'm', bbox: { min: [0, 0, 0], max: [5, 1, 1] } }, 'auto'],
+    [{ units: 'm', sourceUnits: 'm', bbox: { min: [0, 0, 0], max: [0.123, 0.07, 0.01] } }, 'auto'],
+    [{ units: 'INCH', bbox: { min: [0, 0, 0], max: [10, 5, 1] } }, 'auto'],
+    [{ units: 'm', bbox: { min: [0, 0, 0], max: [0.123, 0.07, 0.01] } }, 'in'],
+    [{ units: 'furlong', bbox: { min: [0, 0, 0], max: [3, 1, 1] } }, 'auto'],
+  ]) {
+    const els = {};
+    const $ = (id) => (els[id] ||= { textContent: '', hidden: false, disabled: false, value: '', title: '', options: [{ text: '', value: 'auto' }] });
+    const app = { header, unitChoice: choice, meshSource: null };
+    const r = new Function('U', 'geomIsMm', '$', 'app', `const { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtNum, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedUnit, unitWord } = U;
+      const rereading = () => false;
+      ${code}
+      syncUnitsRow();
+      return [lenUnit(), lenNum(0.0004, 'size'), lenNum(-1e-12, 'size'), lenBack(12.3)];`)(U, CADMESH.geomIsMm, $, app);
+    rows.push(`${$('unitsrc').textContent} | ${$('unitsel').options[0].text} [${$('unitsel').value}] | ${r[0]} ${r[1]} ${r[2]} ${+r[3].toPrecision(6)}`);
+  }
+  // (must fire: "Auto (mm)" of the 5 m and the inch models, "[in]" of one shown in mm, "INCH"; and the
+  // page's own lengths -- a 0.4 mm part "0.000" with no size given, a cut typed as 12.3 mm read back
+  // as 12.3 m, float noise "-0.0" -- r90 A1, Q2)
+  assert.deepEqual(rows, ['m (not converted) | Auto (m) [auto] | m 0.000 0.000 12.3', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123',
+    'in (not converted) | Auto (in) [auto] | in 0.00 0.00 12.3', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123',
+    'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3']);
+});
+
 done();

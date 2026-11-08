@@ -33,6 +33,8 @@ export function parseCli(argv, { values = [], flags = [], max = Infinity } = {})
   const known = (w) => { const k = w.startsWith('--') && w.includes('=') ? w.slice(0, w.indexOf('=')) : w; return k === '-h' || k === '--help' || values.includes(k) || flags.includes(k); };
   for (let i = 0; i < argv.length; i++) {
     let k = argv[i];
+    // ("--" ends the options, the POSIX rule: a file "-old.dwg" was "unknown option" -- r90 Q4)
+    if (k === '--') { pos.push(...argv.slice(i + 1)); break; }
     if (!isOption(k)) { pos.push(k); continue; }
     if (k === '-h' || k === '--help') return { help: true };
     let v;

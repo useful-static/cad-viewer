@@ -8,7 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, geomIsMm, idToBytes } from './cadmesh.js';
-import { LENGTH_MM, lengthUnitOf, unitSaid } from './units.js';
+import { LENGTH_MM, headerUnitWord, lengthUnitOf, unitSaid } from './units.js';
 import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
@@ -37,7 +37,7 @@ export function sceneUnitsRefusal(models) {
 function offsetInUnit(h, offset, name) {
   if (geomIsMm(h) || offset.every((o) => o === 0)) return offset;
   const k = lengthUnitOf(h.units);
-  if (!k) throw new Error(`${name || 'this model'} cannot be moved: its lengths are in ${h.units}, which this viewer does not convert from mm`);
+  if (!k) throw new Error(`${name || 'this model'} cannot be moved: its lengths are in ${headerUnitWord(h.units)}, which this viewer does not convert from mm`);
   return offset.map((o) => o / LENGTH_MM[k]);
 }
 

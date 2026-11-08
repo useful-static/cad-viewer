@@ -60,7 +60,7 @@
 // the Node converter.
 
 import { buildEdges, FACTS_RULE, factsRuleHolds, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
-import { lengthUnitOf } from './units.js';
+import { headerUnitWord, lengthUnitOf } from './units.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -76,7 +76,8 @@ export const MM = 'millimeter';
 export const geomIsMm = (header) => !header || header.units == null || lengthUnitOf(header.units) === 'mm';
 // What a consumer that writes or weighs millimetres says of a header in another unit, or null:
 // the page's own words for a length it does not convert (main.js unitsrc "(not converted)")
-export const notMmWords = (header, what) => (geomIsMm(header) ? null : `this model's lengths are in ${header.units}, not converted: ${what} not made here`);
+// (the unit as the page writes it, js/units.js headerUnitWord: "INCH" printed raw -- r90 A4)
+export const notMmWords = (header, what) => (geomIsMm(header) ? null : `this model's lengths are in ${headerUnitWord(header.units)}, not converted: ${what} not made here`);
 // a body's colour when nothing gives it one (the readers, the One colour scheme)
 export const DEFAULT_GREY = [0.72, 0.74, 0.78];
 // 0..1 -> a byte, rounded (every writer of colour bytes: the grey's 0.74 * 255 = 188.7 is 189,

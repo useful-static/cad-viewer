@@ -5454,9 +5454,12 @@ function fillInfo2D(el) {
   if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (paper space, and model space through its viewports)`);
   const e = d.extents;
   if (e) {
-    const u = d.units ? unitWord(d.units) : 'units';
-    // in the drawing's own unit, by the one rule (js/units.js unconvertedNum: r89 A5)
-    const n = (v) => unconvertedNum(v, 'size', d.units);
+    // in Auto's unit for the drawing's, by its size, as 2D Measure and the 3D panel: by the one rule
+    // (js/units.js unconvertedNum: r89 A5, r90 A2)
+    const span = Math.max(e.max[0] - e.min[0], e.max[1] - e.min[1]) || 1;
+    const shown = unconvertedUnit(d.units, span);
+    const u = shown ? unitWord(shown) : d.units ? unitWord(d.units) : 'units';
+    const n = (v) => unconvertedNum(v, 'size', d.units, span);
     row(`size (${u})`, `${n(e.max[0] - e.min[0])} × ${n(e.max[1] - e.min[1])}`);
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
@@ -6340,7 +6343,8 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 // written, r88 A8; modelSizeMm is then in the model's own units)
 const shownUnconverted = () => unconvertedUnit(app.header.units, modelSizeMm());
 const lenUnit = () => (geomMm() ? curUnit() : shownUnconverted() || headerUnitWord(app.header.units));
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm())); // (r87 Q3, r88 A3)
+// (and the 2D view's noise floor, a billionth of the model's size: "-1e-9" read as an overhang -- r90 A5)
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm(), modelSizeMm() * 1e-9)); // (r87 Q3, r88 A3)
 // a length typed in lenUnit, back in model units (the section field)
 const lenBack = (v) => (geomMm() ? v * MM_PER[curUnit()] : unconvertedBack(v, app.header.units, modelSizeMm()));
 
@@ -6355,12 +6359,14 @@ function syncUnitsRow() {
   row.hidden = !app.header;
   if (!app.header) return;
   const declared = app.header.sourceUnits;
-  $('unitsrc').textContent = !geomMm() ? `${app.header.units} (not converted)`
+  $('unitsrc').textContent = !geomMm() ? `${headerUnitWord(app.header.units)} (not converted)`
     : declared ? (UNIT_WORDS[declared] || unitWord(declared)) : 'not recorded';
   const sel = $('unitsel');
   sel.disabled = !geomMm();
-  sel.options[0].text = `Auto (${autoUnit(declared, modelSizeMm())})`;
-  sel.value = app.unitChoice;
+  // (geometry not converted: the unit its lengths are shown in, lenUnit's, and no choice -- the row
+  // said "Auto (mm)" of an inch model shown in inches, "[in]" of one shown in mm: r90 A1)
+  sel.options[0].text = `Auto (${geomMm() ? autoUnit(declared, modelSizeMm()) : lenUnit()})`;
+  sel.value = geomMm() ? app.unitChoice : sel.options[0].value;
   // a mesh file that stores no unit: which unit it is in, chosen here
   const unit = syncMeshUnitRow();
   if (unit) {

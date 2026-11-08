@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
@@ -44,16 +44,15 @@ test('a geometry unit by its one name, and a volume or area in a unit not conver
   assert.equal(fmtUnconverted(6, 'inch', 2), '6 inch² (not converted)');
 });
 test('fixed decimals per unit: a measurement', () => {
-  assert.equal(fmtLength(25.4, 'measure', 'mm'), '25.40 mm');
-  if (DISPLAY_UNITS.includes('um')) assert.match(fmtLength(1, 'measure', 'um'), / µm$/, 'the unit as written, not its id');
-  assert.equal(fmtLength(25.4, 'measure', 'cm'), '2.540 cm');
-  assert.equal(fmtLength(25.4, 'measure', 'm'), '0.0254 m');
-  assert.equal(fmtLength(25.4, 'measure', 'in'), '1.000 in');
+  assert.deepEqual(['mm', 'cm', 'm', 'in'].map((u) => fmtNum(25.4, 'measure', u)), ['25.40', '2.540', '0.0254', '1.000']);
 });
 test('a size or section position has one decimal fewer', () => {
   assert.equal(fmtNum(5080, 'size', 'mm'), '5080.0');
   assert.equal(fmtNum(5080, 'size', 'in'), '200.00');
-  assert.equal(fmtLength(-12.345, 'section', 'cm'), '-1.23 cm');
+  assert.equal(fmtNum(-12.345, 'section', 'cm'), '-1.23');
+  // (zero as shown is zero, no minus: float noise read "-0.0" as an overhang -- must fire, r90 A5)
+  assert.deepEqual([fmtNum(-1e-6, 'size', 'mm'), fmtNum(-1e-6, 'measure', 'in'), fmtNum(-0.06, 'size', 'mm')], ['0.0', '0.000', '-0.1']);
+  assert.equal(unconvertedNum(-1e-9, 'size', 'furlong', 3, 3e-9), '0');
 });
 test('Auto: the declared unit, its nearest display unit, else mm', () => {
   assert.equal(autoUnit('in'), 'in');
@@ -108,7 +107,7 @@ test('a unit as written for a reader: µm and µin typeset, the rest as named', 
 test('every display unit has decimals and a system; the pickers carry no unit list of their own', () => {
   for (const u of DISPLAY_UNITS) {
     assert.ok(Number.isFinite(MM_PER[u]), u);
-    assert.match(fmtLength(1, 'measure', u), new RegExp(`^\\d+\\.\\d+ ${unitWord(u)}$`));
+    assert.match(fmtNum(1, 'measure', u), /^\d+\.\d+$/);
   }
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   for (const id of ['unitsel', 'meshunit']) {

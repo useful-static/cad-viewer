@@ -13,7 +13,7 @@
 
 import { itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
-import { unconvertedNum, unitWord } from './units.js';
+import { unconvertedNum, unconvertedUnit, unitWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
@@ -34,6 +34,18 @@ const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 // ({ n, xy, at(i) -> the point as an array }), the points held by the tree as they are
 // (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
 // (the points a tree holds: the finite ones -- one rule for the page's build and the worker's)
+// 2D Measure's readout of a distance d (and its dx, dy) in a drawing of this unit (its id, or null)
+// and size (span, drawing units): by js/units.js unconvertedNum, as the 3D panel's lengths -- in
+// Auto's unit for the drawing's, by its size (a drawing in metres 0.1 m across read a 0.04 mm gap
+// "0.0000 m": r90 A2), that unit's decimals where it is a display unit, else 6 significant figures
+// (r89 A5, Q3); a value a billionth of the drawing's size is float noise (a circle centre averaged
+// from its points), shown as 0
+export function measureText(d, dx, dy, unit, span) {
+  const fmt = (v) => unconvertedNum(v, 'measure', unit, span, span * 1e-9);
+  const shown = unconvertedUnit(unit, span);
+  const word = shown ? unitWord(shown) : unit ? unitWord(unit) : '';
+  return `${fmt(d)}${word ? ` ${word}` : ''} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}`;
+}
 export function finitePointIds(xy, n) {
   const ids = new Uint32Array(n);
   let m = 0;
@@ -482,19 +494,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // that finds no line
   let txtIndex = null;
   const textsIndexed = () => txtIndex || (txtIndex = textIndex(drawing.texts, (t) => textCorners(t, linesOf(t), widthOf(t)), o));
-  // by js/units.js unconvertedNum, as the 3D panel's lengths: the drawing's unit's decimals where it
-  // is a display unit, else 6 significant figures; a value a billionth of the drawing's size is float
-  // noise (a circle centre averaged from its points), shown as 0 (r89 A5, Q3)
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
-  const fmt = (v) => unconvertedNum(v, 'measure', drawing.units, Infinity, span * 1e-9);
   function measureClick(px, py) {
     const s = snapAt(px, py);
     const p = s ? [s[0], s[1]] : toUnits(px, py);
     if (!st.pending) { st.pending = p; draw(); return null; }
     const a = st.pending, dx = p[0] - a[0], dy = p[1] - a[1];
     const d = Math.hypot(dx, dy);
-    const u = units ? ` ${units}` : '';
-    const r = { a, b: p, d, dx, dy, text: `${fmt(d)}${u} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}` };
+    const r = { a, b: p, d, dx, dy, text: measureText(d, dx, dy, drawing.units, span) };
     st.results.push(r);
     st.pending = null;
     draw();

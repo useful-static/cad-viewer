@@ -111,7 +111,7 @@ await test('a model in another unit is refused, not written as mm; an inherited 
   writeFileSync(inchFile, Buffer.from(inch instanceof ArrayBuffer ? inch : inch.buffer));
   const ri = run(inchFile, '--out', join(dir, 'inch'));
   assert.equal(ri.status, 1, ri.stdout);
-  assert.match(ri.stderr, /lengths are in inch, not converted/);
+  assert.match(ri.stderr, /lengths are in in, not converted/); // (the page's spelling: r90 A4)
   for (const ext of ['stl', '3mf', 'glb']) assert.ok(!existsSync(join(dir, `inch.${ext}`)), `must fire: inch.${ext} written`);
   const { geomIsMm, notMmWords } = await import('../js/cadmesh.js');
   assert.deepEqual([geomIsMm(null), geomIsMm({}), geomIsMm({ units: 'millimeter' }), geomIsMm({ units: 'mm' }), geomIsMm({ units: 'inch' })], [true, true, true, true, false]);

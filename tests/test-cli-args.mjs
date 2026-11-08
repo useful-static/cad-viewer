@@ -29,6 +29,8 @@ test('parseCli: values, flags, --k=v, each once, a value never an option, help o
   const spec = { values: ['-o', '--to'], flags: ['--raw'], max: 1 };
   assert.deepEqual(parseCli(['a', '-o', 'b', '--raw', '--to=stl'], spec), { opts: { '-o': 'b', '--raw': true, '--to': 'stl' }, pos: ['a'] });
   assert.deepEqual(parseCli(['a', '-h'], spec), { help: true });
+  // ("--" ends the options: a file named "-old.dwg" -- must fire: "unknown option --", r90 Q4)
+  assert.deepEqual(parseCli(['--raw', '--', '-old.dwg', '--to=x'], { ...spec, max: 2 }), { opts: { '--raw': true }, pos: ['-old.dwg', '--to=x'] });
   for (const [argv, msg] of [[['a', '-o', '--raw'], /-o needs a value/], [['a', '-o', 'x', '-o', 'y'], /-o given twice/], [['a', '--bogus'], /unknown option --bogus/],
     [['a', 'b'], /one input file, not 2/], [['a', '--to', '-h'], /--to needs a value/], [['a', '--raw=1'], /takes no value/], [['a', '--to='], /--to needs a value/]]) {
     assert.throws(() => parseCli(argv, spec), (e) => e instanceof CliError && msg.test(e.message), argv.join(' '));

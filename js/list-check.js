@@ -307,8 +307,9 @@ const EMPTY_WORDS = 'it is empty (0 bytes), which no reader of the viewer opens'
 // fault, or null. (The check's own reader said "ok" of a zip64 3MF, of a 3MF rooted elsewhere than
 // 3D/3dmodel.model, of a zip of a 520 MB OBJ, and of a gzipped 3MF -- r75 A1-A4)
 // (name: the file's, for the 3MF reader's words)
-async function zipVerdict(src, label, name) {
-  try { return await zipVerdictOf(src, label, 0, name); } catch (e) {
+// (seen: told { threeMf: true } where it is read as a 3MF, so its caller can name it so -- r90 Q3)
+async function zipVerdict(src, label, name, seen = {}) {
+  try { return await zipVerdictOf(src, label, 0, name, seen); } catch (e) {
     // (the check's own limit -- no range from the server -- a warning, not the page's refusal)
     if (e instanceof NoRange) return { level: 'warn', words: `its entries could not be read here (${e.message})` };
     throw e;
@@ -317,13 +318,13 @@ async function zipVerdict(src, label, name) {
 class NoRange extends Error {}
 // (a damaged zip met past its directory -- an entry's data outside the file -- is the page's refusal
 // too, said as one: it threw through the check, "could not be checked" -- r77 Q2)
-async function zipVerdictOf(src, label, depth = 0, name = null) {
-  try { return await zipEntriesVerdict(src, label, depth, name); } catch (e) {
+async function zipVerdictOf(src, label, depth = 0, name = null, seen = {}) {
+  try { return await zipEntriesVerdict(src, label, depth, name, seen); } catch (e) {
     if (e instanceof NoRange || !/^a damaged zip/.test(e.message || '')) throw e;
     return { level: 'bad', words: `the viewer cannot open it: ${e.message}` };
   }
 }
-async function zipEntriesVerdict(src, label, depth, name) {
+async function zipEntriesVerdict(src, label, depth, name, seen = {}) {
   const tailAt = Math.max(0, src.len - ZIP_TAIL);
   let entries;
   try {
@@ -392,6 +393,7 @@ async function zipEntriesVerdict(src, label, depth, name) {
   // said 3MF, and a 3MF package served as x.zip, or at a URL naming no format, was "ok · zip" where
   // the page refuses it: r89 A1)
   if (label === '3MF' || zm.threeMf) {
+    seen.threeMf = true;
     const pv = await threeMfParts();
     if (pv && pv.level === 'bad') return pv;
     let bytes = null;
@@ -840,15 +842,31 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   const pk = sizeStart && opensAsZip(fileNameOfUrl(url), sizeStart);
   const zipLabel = sizeFormat === '3MF' || namedFormat(url) === '3MF' ? '3MF' : 'zip';
   const zipName = fileNameOfUrl(url).replace(/\.gz$/i, '');
-  if (sniff && pk && zipBytes) zipSaid = await zipVerdict(bytesSource(zipBytes), zipLabel, zipName);
+  const zipSeen = {};
+  if (sniff && pk && zipBytes) zipSaid = await zipVerdict(bytesSource(zipBytes), zipLabel, zipName, zipSeen);
   else if (sniff && pk && sizeGz) zipSaid = { level: 'warn', words: zipNotRead ? `its entries were not read here (it unpacks to more than ${sizeMb(ZIP_KEPT)})` : 'its entries were not read here' };
   // (the whole file in hand: read from it, no range asked -- r78 A3, r79 A4)
-  else if (sniff && pk && wholeStart && !sizeGz) zipSaid = await zipVerdict(bytesSource(wholeStart), zipLabel, zipName);
-  else if (sniff && pk && total && total <= MAX_FILE_BYTES) zipSaid = await zipVerdict(rangedSource(fetchFn, fetchUrl, total), zipLabel, zipName);
+  else if (sniff && pk && wholeStart && !sizeGz) zipSaid = await zipVerdict(bytesSource(wholeStart), zipLabel, zipName, zipSeen);
+  else if (sniff && pk && total && total <= MAX_FILE_BYTES) {
+    // (a host sending no range: fetched whole up to ZIP_KEPT, as a glTF, a .cadmesh and a reader's
+    // file are -- a 3MF with no triangle was "warn" from such a host, "bad" from one sending ranges:
+    // r90 Q1; past ZIP_KEPT, said not read)
+    try { zipSaid = await zipVerdictOf(rangedSource(fetchFn, fetchUrl, total), zipLabel, 0, zipName, zipSeen); } catch (e) {
+      if (!(e instanceof NoRange)) throw e;
+      let all = null;
+      if (total <= ZIP_KEPT) {
+        // (the whole file only: a host capping its answers sends a short body here too, which is no zip)
+        try { const w = await fetchFn(fetchUrl, { cache: 'no-store' }); if (w.ok) { const b = new Uint8Array(await w.arrayBuffer()); if (b.length === total) all = b; } } catch { /* not fetched: said below */ }
+      }
+      zipSaid = all ? await zipVerdict(bytesSource(all), zipLabel, zipName, zipSeen) : { level: 'warn', words: `its entries could not be read here (${e.message})` };
+    }
+  }
   // (its size not given -- Content-Range hidden, HEAD refused -- and more than is in hand: said, not
   // "ok · size not given · zip" with no entry read -- r78 A3)
   else if (sniff && pk && total === null) zipSaid = { level: 'warn', words: 'its entries were not read here (its size was not given)' };
-  let rule = sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
+  // (a 3MF by its directory named so, as the page opens it: "ok · zip" -- r90 Q3)
+  if (zipSeen.threeMf) { const i = bits.indexOf('zip'); if (i >= 0) bits[i] = '3MF'; }
+  let rule =sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
   // (a glTF's or GLB's JSON as the reader reads it: its extensions, then its buffers, none of which
   // can be beside it from a URL -- r80 Q3, r81 A5; fetched whole, up to 64 MB, where the start does
   // not hold it -- a .gltf of more than 64 KB of JSON was "ok": r81 A6)
