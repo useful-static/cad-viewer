@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
+import { UNITS, parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -87,6 +87,11 @@ test('the hatch is filled; the ellipse spans 20 x 10; the spline is a line', () 
   assert.ok(e && Math.abs(range(e, 1)[1] - range(e, 1)[0] - 10) < 0.01, 'ellipse');
   const s = d.paths.find((x) => range(x, 1)[0] === 200);
   assert.ok(s && Math.abs(range(s, 0)[1] - 10) < 1e-9, 'spline');
+});
+test('$INSUNITS 22-24, the US survey inch, yard and mile, are units (r88 Q3)', () => {
+  // (must fire: "not stored in the file" of a file that stores its unit)
+  assert.deepEqual([22, 23, 24].map((c) => UNITS[c] && UNITS[c][0]), ['US in', 'US yd', 'US mi']);
+  assert.ok(Math.abs(UNITS[22][1] / 25.4 - 1) < 3e-6 && UNITS[22][1] !== 25.4);
 });
 test('a layer or block named in another case is that layer or block (r87 Q4)', () => {
   const p = (...a) => new TextEncoder().encode(a.join('\n') + '\n').buffer;

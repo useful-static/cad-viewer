@@ -596,4 +596,21 @@ t('not a DWG, and a pre-R13 DWG, are refused by name', () => {
   // (a release before R10, its tag with a point: older, not "not a DWG file" -- r65 Q8)
   assert.throws(() => readDWG(new TextEncoder().encode('AC2.10 an R2.10 drawing')), /^Error: an AC2\.10 DWG \(older than R13\) is not read$/);
 });
+t('a drop in a block the drawing walks is counted not drawn, the block by any case: a layout\'s, an insert\'s (r88 A1, A6)', () => {
+  const pairs = (blockName, insertName) => {
+    const P = [];
+    const put = (c, v) => P.push([c, String(v)]);
+    put(0, 'SECTION'); put(2, 'BLOCKS'); put(0, 'BLOCK'); put(2, blockName); put(10, 0); put(20, 0);
+    put(0, 'LINE'); put(8, '0'); put(10, 0); put(20, 0); put(11, 1); put(21, 1); put(0, 'ENDBLK'); put(0, 'ENDSEC');
+    put(0, 'SECTION'); put(2, 'ENTITIES'); put(0, 'LINE'); put(8, '0'); put(10, 0); put(20, 0); put(11, 5); put(21, 5);
+    if (insertName) { put(0, 'INSERT'); put(8, '0'); put(2, insertName); put(10, 2); put(20, 2); }
+    put(0, 'ENDSEC'); put(0, 'EOF');
+    P.stats = { notPassed: [{ kind: 'ATTRIB (multi-line)', block: blockName }] };
+    return P;
+  };
+  // (must fire: {} for a DWG's own "*Paper_Space0" spelling, and for an insert "door" of "Door")
+  for (const [b, ins] of [['*Paper_Space0', null], ['*PAPER_SPACE0', null], ['Door', 'door'], ['Door', 'Door']]) {
+    assert.deepEqual(drawDWG({ failures: [] }, pairs(b, ins)).notDrawn, { 'ATTRIB (multi-line)': 1 }, `${b} / ${ins}`);
+  }
+});
 done();

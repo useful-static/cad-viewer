@@ -163,11 +163,19 @@ await test('every mesh format (STL, OBJ, PLY, OFF, 3MF, GLB) says its geometry i
   assert.equal(models.length, 7);
   for (const m of models) assert.equal(decodeCadmesh(encodeCadmesh(m)).header.units, MM);
 });
-await test('an OBJ comment after a statement ends its line: a face, a vertex, a material (r87 Q5)', async () => {
-  const t = 'v 0 0 0 # a corner\nv 1 0 0\nv 0 1 0\nusemtl red # paint\nf 1 2 3 # face\n';
+await test('an OBJ comment after a statement of numbers ends its line; a name keeps its "#", as its .mtl reads it (r87 Q5, r88 A2)', async () => {
+  const t = 'v 0 0 0 # a corner\nv 1 0 0\nv 0 1 0\nf 1 2 3 # face\n';
   // (must fire: "\"f 1 2 3 # face\" refers to vertex # of 3")
   const m = await parseMesh('obj', new TextEncoder().encode(t).buffer, 'a.obj');
   assert.deepEqual([m.meshes.length, m.meshes[0].indices.length], [1, 3]);
+  // (must accept: 3ds Max's "Material #25" and a file "part#2.mtl" -- cut at "#", each opened grey)
+  const enc = (x) => new TextEncoder().encode(x).buffer;
+  const mtl = (name) => enc(`newmtl ${name}\nKd 1 0 0\n`);
+  for (const [lib, mat] of [['a.mtl', 'Material #25'], ['a.mtl', 'red#1'], ['part#2.mtl', 'red']]) {
+    const obj = `mtllib ${lib}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl ${mat}\nf 1 2 3\n`;
+    const r = await parseMesh('obj', enc(obj), 'a.obj', new Map([[lib.toLowerCase(), mtl(mat)]]));
+    assert.deepEqual(r.meshes[0].color.map((c) => Math.round(c * 100) / 100), [1, 0, 0], `${lib} / ${mat}`);
+  }
 });
 await test('STL binary, header starting "solid"', async () => {
   const b = stlBinary();

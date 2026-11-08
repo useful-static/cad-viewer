@@ -20,3 +20,11 @@ export function aboveBelow(box, ref, up) {
   const bottom = (b) => (s > 0 ? b.min[k] : -b.max[k]);
   return { above: top(box) - top(ref), below: bottom(ref) - bottom(box) };
 }
+// The words for how far it stands past one face: its distance as shown (num: the panel's own
+// formatter, in the unit shown), "none" where that reads zero or less -- the cut-off was 0.005 in
+// the model's units, millimetres in mind, and a part 4 mm above its board in a file in metres read
+// "none above" (r88 A4)
+export function pastWords(v, side, num) {
+  const shown = num(v);
+  return v > 0 && Number(String(shown).replace(/,/g, '')) > 0 ? `${shown} ${side}` : `none ${side}`;
+}

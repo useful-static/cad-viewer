@@ -19,6 +19,7 @@ import { companionsOverText, readCompanions } from '../js/companions.js';
 import { CliError, parseCli, readInput } from '../js/cli-args.js';
 import { readMeshFile } from '../js/read-file.js';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseModelList, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour, partIndex, resolveParts, tourNames } from '../js/tour.js';
@@ -47,11 +48,14 @@ const fetchOk = async (p) => {
 // (a local file by the tools' one reading, js/cli-args.js readInput: "<path>: no such file", not node's
 // "ENOENT: …" -- r83 A7)
 const read = async (p) => (/^https?:/.test(p) ? new Uint8Array(await (await fetchOk(p)).arrayBuffer()) : new Uint8Array(await readInput(p)));
-// A local path stands in as https://local.invalid/<its absolute path> (as for --labels below), so
-// a tour's relative "model" resolves beside the tour file, and back to a path
+// A local path stands in as https://local.invalid/<its absolute path> (as for --labels below; the
+// tour's rule takes a model on its own scheme and host, which file: has none of), so a tour's
+// relative "model" resolves beside the tour file, and back to a path -- the path escaped and
+// unescaped by node's own file-URL mapping: as a string, a folder "a #1" was cut at its "#" and
+// "b%41" read as "bA", each tour checked against another file (r88 Q1)
 const LOCAL = 'https://local.invalid';
-const asUrl = (p) => (/^https?:/.test(p) ? new URL(p).href : new URL(`${LOCAL}${resolve(p)}`).href);
-const asPath = (u) => (u.startsWith(`${LOCAL}/`) ? decodeURIComponent(new URL(u).pathname) : u);
+const asUrl = (p) => (/^https?:/.test(p) ? new URL(p).href : new URL(`${LOCAL}${pathToFileURL(resolve(p)).pathname}`).href);
+const asPath = (u) => (u.startsWith(`${LOCAL}/`) ? fileURLToPath(`file://${new URL(u).pathname}`) : u);
 
 let tour;
 try {
@@ -120,7 +124,7 @@ let labels = null;
 if (labelsFile) {
   // read as the viewer reads a list (js/model-list.js parseModelList: every form, the files
   // resolved against the list), and the model's entry found by its resolved URL. A local path
-  // stands in as https://local.invalid/<its absolute path>, the list's and the model's alike.
+  // stands in as https://local.invalid/<its absolute path> (asUrl), the list's and the model's alike.
   // (a list it cannot read or parse: a FAIL line, not node's stack trace -- r80 A5)
   let entries;
   try { entries = parseModelList(new TextDecoder().decode(await read(labelsFile)), asUrl(labelsFile)); } catch (e) { console.log(`FAIL ${labelsFile}: ${e.message}`); process.exit(1); }

@@ -19,6 +19,8 @@ export const LENGTH_MM = {
   nm: 1e-6, um: 0.001, mm: 1, cm: 10, dm: 100, m: 1000, dam: 1e4, hm: 1e5, km: 1e6, Gm: 1e12,
   'Å': 1e-7, uin: 25.4e-6, mil: 0.0254, in: 25.4, ft: 304.8, 'US ft': 1200 / 3937 * 1000, yd: 914.4,
   mi: 1609344, AU: 1.495978707e14, ly: 9.4607304725808e18, pc: 3.0856775814913673e19,
+  // (the US survey inch, yard and mile, $INSUNITS 22-24: the table stopped at 21 -- r88 Q3)
+  'US in': 1000 / 39.37, 'US yd': 3600 / 3937 * 1000, 'US mi': 6336 / 3937 * 1e6,
 };
 
 // A geometry unit as a header may name it -- a short name above, OpenCascade's word ("inch",
@@ -29,6 +31,7 @@ const LONG_NAMES = {
   nanometer: 'nm', nanometre: 'nm', micrometer: 'um', micrometre: 'um', micron: 'um', millimeter: 'mm', millimetre: 'mm',
   centimeter: 'cm', centimetre: 'cm', decimeter: 'dm', decimetre: 'dm', meter: 'm', metre: 'm', kilometer: 'km', kilometre: 'km',
   inch: 'in', foot: 'ft', feet: 'ft', yard: 'yd', mile: 'mi',
+  'µm': 'um', 'μm': 'um', 'µin': 'uin', 'μin': 'uin', // (the micro sign and the Greek mu, as unitWord writes them: r88 A7)
 };
 // (each name's plural too: "inches" was one and "millimeters" not -- r87 A1)
 for (const [n, k] of Object.entries({ ...LONG_NAMES })) if (n !== 'feet' && n !== 'foot') LONG_NAMES[n.endsWith('ch') ? `${n}es` : `${n}s`] = k;
@@ -42,6 +45,9 @@ export function lengthUnitOf(word) {
   if (Object.hasOwn(LENGTH_MM, w)) return w;
   const l = w.toLowerCase();
   if (Object.hasOwn(LONG_NAMES, l)) return LONG_NAMES[l];
+  // (a short name folds case only written in one case, "MM" or "IN": "Mm", a megametre, was taken as
+  // millimetres and shown and exported so -- r88 A7)
+  if (w !== w.toUpperCase() && w !== l) return null;
   return Object.keys(LENGTH_MM).find((k) => k.toLowerCase() === l) || null;
 }
 
@@ -68,7 +74,7 @@ const imperial = (u) => DISPLAY.find((d) => d.id === u)?.system === 'imperial';
 // nearest display row of the same system otherwise (by the ratio of their sizes, the smaller on
 // a tie: dm is cm); mm when the file says nothing (null) or its shapes disagree ('mixed').
 // Derived from the two tables, so a new display row (ft) is Auto's answer for its own unit.
-const IMPERIAL = new Set(['uin', 'mil', 'in', 'ft', 'US ft', 'yd', 'mi']);
+const IMPERIAL = new Set(['uin', 'mil', 'in', 'ft', 'US ft', 'yd', 'mi', 'US in', 'US yd', 'US mi']);
 const AUTO = Object.fromEntries(Object.keys(LENGTH_MM).map((u) => {
   if (DISPLAY_UNITS.includes(u)) return [u, u];
   const system = IMPERIAL.has(u) ? 'imperial' : 'metric';
@@ -113,9 +119,19 @@ export function fmtArea(mm2, unit) {
 // A volume (power 3) or an area (power 2) of a model whose geometry is in a unit the viewer does not
 // convert (js/cadmesh.js geomIsMm false): in that unit, as its lengths are shown -- fmtVolume and
 // fmtArea read their number as mm³ / mm², and an inch cube read "≈ 1 mm³" (r86 A4)
-// A length in such a unit, as a plain number of 4 significant digits (it may be typed back, as the
-// section's is): to one decimal, a 0.062 in board read "0.1" and a 2.25 in one "2.3" -- r87 Q3
-export const unconvertedNum = (x) => (Number.isFinite(x) ? String(Number(x.toPrecision(4))) : String(x));
+// A length of geometry in a unit not converted (word: the header's), as a plain number that may be
+// typed back: by that unit's own decimals where it is a display unit -- one length, one precision,
+// converted or not; at 4 significant digits 120.375 in read "120.4" and Enter moved the cut (r87 Q3,
+// r88 A3) -- else to 6 significant digits, at least as many as a display unit's
+export function unconvertedNum(x, kind = 'measure', word = null) {
+  if (!Number.isFinite(x)) return String(x);
+  const u = lengthUnitOf(word);
+  if (u && Object.hasOwn(MM_PER, u)) return fmtNum(x * MM_PER[u], kind, u);
+  return String(Number(x.toPrecision(6)));
+}
+// A header's unit as written for a reader: its one name's spelling where it has one ("in" for
+// "INCH"), else as the header gives it -- printed as written, "12 INCH³" (r88 A8)
+export const headerUnitWord = (word) => { const u = lengthUnitOf(word); return u ? unitWord(u) : String(word); };
 export function fmtUnconverted(x, unit, power) {
   return `${sig4(x)} ${unit}${power === 3 ? '³' : '²'} (not converted)`;
 }

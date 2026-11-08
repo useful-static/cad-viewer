@@ -164,7 +164,7 @@ const all = (r, c) => r.g.filter((x) => x[0] === c).map((x) => Number(x[1]));
 
 // $INSUNITS: every unit the DXF reference lists (0 is "not stored") -> [name, mm per unit]
 const INSUNITS = ['', 'in', 'ft', 'mi', 'mm', 'cm', 'm', 'km', 'uin', 'mil', 'yd', 'Å', 'nm', 'um', 'dm', 'dam', 'hm',
-  'Gm', 'AU', 'ly', 'pc', 'US ft'];
+  'Gm', 'AU', 'ly', 'pc', 'US ft', 'US in', 'US yd', 'US mi']; // (22-24 too: the table stopped at 21, r88 Q3)
 export const UNITS = Object.fromEntries(INSUNITS.flatMap((n, code) => (n ? [[code, [n, LENGTH_MM[n]]]] : [])));
 
 // The text of an ASCII DXF from its bytes: from R2007 (AC1021) UTF-8; before, the drawing's code
@@ -213,8 +213,12 @@ function headerValue(u8, name, re) {
 // s: the file's text (ASCII DXF), or its bytes (an ArrayBuffer: binary DXF,
 // or ASCII read from the bytes)
 // (or the group-code pairs themselves, [[code, 'value'], ...]: js/dwg.js dwgToPairs)
-// (opts.walked: a Set given the name of each block the drawing walks -- inserted where it is
+// (opts.walked: a Set given the blockKey of each block the drawing walks -- inserted where it is
 // drawn: what drawDWG counts its own drops against, one reach for both)
+// A block's key, as parseDXF holds its name (\U+ / \M+ decoded): by upper case, the one rule for the
+// blocks, the insert chain, the layouts and the `walked` set its readers keep -- three spellings of
+// one name went into and out of that set, and a layout's drops went uncounted (r88 A1, A6)
+export const blockKey = (name) => String(name).toUpperCase();
 export function parseDXF(s, opts = {}) {
   const walked = opts.walked || null;
   // (a Uint8Array or a Node Buffer read as its bytes: it failed with the engine's "text.split is not
@@ -305,7 +309,7 @@ export function parseDXF(s, opts = {}) {
     for (const r of records(ps, ...sec.BLOCKS)) {
       // (by upper-case name, as an INSERT finds it: one naming "door" for BLOCK "DOOR" drew nothing
       // and said nothing -- r87 Q4)
-      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20)], recs: [] }; blocks.set(get(r, 2, '').toUpperCase(), cur); } else if (r.type === 'ENDBLK') cur = null;
+      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20)], recs: [] }; blocks.set(blockKey(get(r, 2, '')), cur); } else if (r.type === 'ENDBLK') cur = null;
       else if (cur) cur.recs.push(r);
     }
   }
@@ -370,8 +374,8 @@ export function parseDXF(s, opts = {}) {
   // layouts' naming)
   for (const [name, b] of blocks) {
     if (!/^\*Paper_Space\d+$/i.test(name)) continue;
-    if (walked) walked.add(name);
-    if (b.recs.length) sets.push({ recs: b.recs, sheet: sheetOf.get(name.toUpperCase()) });
+    if (walked) walked.add(name); // (the blocks' key: blockKey)
+    if (b.recs.length) sets.push({ recs: b.recs, sheet: sheetOf.get(name) });
   }
   // (in tab order where the drawing gives one: 13 sheets came in an order of their own)
   const tabOf = (s) => (s.sheet && Number.isFinite(s.sheet.tab) ? s.sheet.tab : Infinity);
@@ -625,7 +629,7 @@ function blockRef(r) {
   return r.ins;
 }
 function walkSize(ctx, name, depth = 0, open = new Set()) {
-  name = String(name).toUpperCase(); // (a block by any case is one block, its chain too: r87 Q4)
+  name = blockKey(name); // (a block by any case is one block, its chain too: r87 Q4)
   const memo = ctx.walkSizes || (ctx.walkSizes = new Map());
   if (memo.has(name)) return memo.get(name);
   const b = ctx.blocks.get(name);
@@ -991,7 +995,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // a dimension of any kind draws its block (blockRef). (A DXF's tables and arc dimensions
         // were counted "not drawn", while the same drawing's DWG drew them)
         const q = blockRef(r);
-        const b = ctx.blocks.get(get(q, 2, '').toUpperCase());
+        const b = ctx.blocks.get(blockKey(get(q, 2, '')));
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)
@@ -1011,7 +1015,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const dc = num(q, 44), dr = num(q, 45);
         const ix = isDim ? 0 : num(q, 10), iy = isDim ? 0 : num(q, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
-        if (ctx.walked) ctx.walked.add(get(q, 2, ''));
+        if (ctx.walked) ctx.walked.add(blockKey(get(q, 2, '')));
         // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
         const held = ctx.hold;
         if (L.frozen) ctx.hold = holdUnder(held, layer);

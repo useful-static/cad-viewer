@@ -462,6 +462,14 @@ function parseOBJ(s, files, base) {
   // a line's end before its comment, if it has one (searched within the line: a search of the
   // whole text from each line was a pass per line -- r87 Q5)
   const lineEnd = (a, e) => { for (let j = a; j < e; j++) if (s.charCodeAt(j) === 35) return j; return e; };
+  // whether the statement at a is one of numbers (v, vt, vn, vp, f, l, p): the ones a comment may end;
+  // a name statement (usemtl, mtllib, o, g) keeps its "#" (r88 A2)
+  const numericStatement = (a, e) => {
+    let j = a;
+    while (j < e && !ws(s.charCodeAt(j))) j++;
+    const k = s.slice(a, j);
+    return k === 'v' || k === 'vt' || k === 'vn' || k === 'vp' || k === 'f' || k === 'l' || k === 'p';
+  };
   // the "v" lines and the faces' triangles counted against the caps first, by a pass that makes
   // no strings (a 20 MB face of alternating corners was 10 M triangles built, 4.2 s and 1.6 GB);
   // the vertices the bodies copy are held as they are made
@@ -499,10 +507,11 @@ function parseOBJ(s, files, base) {
     if (a === e) continue;
     const c0 = s.charCodeAt(a);
     if (c0 === 35) continue; // '#'
-    // (a comment after a statement is the line's end: "f 1 2 3 # face" refused the file, "refers to
-    // vertex # of 3", and "usemtl red # paint" named the material with it -- r87 Q5)
-    const le = lineEnd(a, e);
-    if ((c0 === 103 || c0 === 111) && (a + 1 === le || ws(s.charCodeAt(a + 1)))) { start(a + 1, le, base); continue; } // "g", "o"
+    // (a comment after a statement of numbers is the line's end: "f 1 2 3 # face" refused the file,
+    // "refers to vertex # of 3" -- r87 Q5; a name keeps its "#", as the .mtl beside it reads its own
+    // names whole: "usemtl Material #25" lost its colour cut there -- r88 A2)
+    if ((c0 === 103 || c0 === 111) && (a + 1 === e || ws(s.charCodeAt(a + 1)))) { start(a + 1, e, base); continue; } // "g", "o"
+    const le = numericStatement(a, e) ? lineEnd(a, e) : e;
     const line = s.slice(a, le).trim();
     if (!line || line[0] === '#') continue;
     const sp = line.split(/\s+/);

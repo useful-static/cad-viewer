@@ -19,10 +19,10 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbit
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, unconvertedNum, unitSaid, unitWord } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedNum, unitSaid, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
-import { aboveBelow, rangesFrom } from './datum.js';
+import { aboveBelow, pastWords, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
@@ -6335,8 +6335,8 @@ const modelSizeMm = () => {
   return b ? Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : Infinity;
 };
 const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, modelSizeMm());
-const lenUnit = () => (geomMm() ? curUnit() : app.header.units);
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v)); // (r87 Q3)
+const lenUnit = () => (geomMm() ? curUnit() : headerUnitWord(app.header.units)); // (as written for a reader: r88 A8)
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units)); // (r87 Q3, r88 A3)
 
 // What the file declares, as a reader spells it (js/units.js unitWord)
 const UNIT_WORDS = { mixed: 'mixed (its parts disagree)' };
@@ -6562,7 +6562,7 @@ function fillInfo(el) {
     // that does not reach past one says so, rather than a negative number
     // nobody can read -- UI review: "6.2 / -0.7")
     const ab = aboveBelow(b, ref, orientUp(app.cam.orient));
-    const past = (v, side) => (v > 0.005 ? `${lenNum(v, 'size')} ${side}` : `none ${side}`);
+    const past = (v, side) => pastWords(v, side, (x) => lenNum(x, 'size')); // (r88 A4)
     add(`above / below it (${lenUnit()})`, `${past(ab.above, 'above')} · ${past(ab.below, 'below')}`);
   }
   addMore('triangles', fmtInt(tris));

@@ -17,7 +17,7 @@
 //
 // No other reader's code was consulted: the clean-room rule of the project.
 
-import { caret, valueKind, aciColour, STRUCTURE, parseDXF, unescapeDxf } from './dxf.js';
+import { blockKey, caret, valueKind, aciColour, STRUCTURE, parseDXF, unescapeDxf } from './dxf.js';
 import { crc32 } from './crc32.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from './codepages.js';
 import { DWG_RELEASES, dwgRefusal } from './formats.js';
@@ -1473,7 +1473,7 @@ export function drawDWG(dwg, P = dwgToPairs(dwg)) {
   // (the block's name as parseDXF holds it -- its \U+ / \M+ decoded: a raw name never matched, and
   // a drop in a drawn block "A\U+00B0" went uncounted; parseDXF adds the layouts' blocks itself)
   for (const { kind, block } of P.stats.notPassed) {
-    if (block === null || walked.has(unescapeDxf(block))) dr.notDrawn[kind] = (dr.notDrawn[kind] || 0) + 1;
+    if (block === null || walked.has(blockKey(unescapeDxf(block)))) dr.notDrawn[kind] = (dr.notDrawn[kind] || 0) + 1; // (by the blocks' one key: r88 A1)
   }
   // and the format checks it failed, which the page shows (dwg-check reported a file bad that the
   // page showed as healthy)

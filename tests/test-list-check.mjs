@@ -1192,6 +1192,66 @@ await test('a drawing that draws nothing, the companions a reader is handed, a r
   const wanted = rows.map(([what, , , want]) => [what, want]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
+await test('the reader in a worker: its companions posted with it, a worker that cannot start read here (r87 Q1, r88 Q2)', async () => {
+  const { parseMesh } = await import('../js/mesh-formats.js');
+  const { readDrawing } = await import('../js/read-file.js');
+  // (a stand-in for the page's Worker, as js/read-worker.js answers a "check" message; node has none,
+  // so no arm reached this path: r88 Q2)
+  let posted = null, mode = 'works';
+  class FakeWorker {
+    constructor() { if (mode === 'cannot start') throw new Error('no worker here'); }
+    postMessage(m) {
+      posted = m;
+      setTimeout(async () => {
+        if (mode === 'fails to load') { this.onerror?.({ message: 'module not found', preventDefault() {} }); return; }
+        this.onmessage?.({ data: { ready: true } });
+        try { if (m.mesh) await parseMesh(m.format, m.buf, m.name, m.files); else readDrawing(m); this.onmessage?.({ data: { ok: true } }); } catch (e) { this.onmessage?.({ data: { ok: false, message: e.message } }); }
+      }, 0);
+    }
+    terminate() {}
+  }
+  const saved = { Worker: globalThis.Worker, window: globalThis.window };
+  globalThis.Worker = FakeWorker; globalThis.window = {};
+  try {
+    const host = (b) => async () => new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const zipped = miniZip([['tri.gltf', gltfTri('tri.bin')], ['tri.bin', TRI_BIN]]);
+    const r = await checkFile(`${B}g.zip`, { fetchFn: host(zipped), sniff: true });
+    // (must fire: the companions left out of the message, "bad · … needs tri.bin")
+    assert.equal(r.level, 'ok', r.detail);
+    assert.ok(posted && posted.kind === 'check' && posted.files instanceof Map && posted.files.size === 1, 'the companions posted');
+    const bad = await checkFile(`${B}bad.obj`, { fetchFn: host(Buffer.from(OBJ_TRI.replace('f 1 2 3', 'f 1 2 9'))), sniff: true });
+    assert.equal(bad.level, 'bad', bad.detail);
+    // (a worker that cannot start, or fails to load: read here, its verdict the reader's -- must fire: "bad")
+    for (mode of ['cannot start', 'fails to load']) {
+      const ok = await checkFile(`${B}g.zip`, { fetchFn: host(zipped), sniff: true });
+      assert.equal(ok.level, 'ok', `${mode}: ${ok.detail}`);
+    }
+  } finally {
+    globalThis.Worker = saved.Worker; globalThis.window = saved.window;
+    if (saved.window === undefined) delete globalThis.window;
+  }
+});
+await test('a 3MF inside a zip is read by the page\'s 3MF reader, as one served plain or gzipped (r88 A5)', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const m3 = (part) => miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', deflateRawSync(Buffer.from(part)), Buffer.byteLength(part), 8]]);
+  const noTri = model3mf().replace(/<triangles>.*<\/triangles>/, '<triangles></triangles>');
+  const host = (b) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(e - a + 1), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const got = [];
+  for (const [what, part, want] of [['no triangle', noTri, 'bad'], ['a triangle (control)', model3mf(), 'ok']]) {
+    for (const [how, url, bytes] of [['plain', 'x.3mf', m3(part)], ['zipped', 'x.zip', miniZip([['x.3mf', m3(part)]])]]) {
+      const r = await checkFile(`${B}${url}`, { fetchFn: host(bytes), sniff: true });
+      // (must fire, zipped: "ok · zip")
+      got.push([`${what}, ${how}`, r.level === want && (want === 'ok' || /x\.3mf has no triangles to show/.test(r.detail)) ? want : `${r.level}: ${r.detail}`]);
+    }
+  }
+  assert.deepEqual(got, [['no triangle, plain', 'bad'], ['no triangle, zipped', 'bad'], ['a triangle (control), plain', 'ok'], ['a triangle (control), zipped', 'ok']], JSON.stringify(got));
+});
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');
   const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);

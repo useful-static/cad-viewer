@@ -559,7 +559,16 @@ async function bytesVerdict(bytes, name, depth) {
     }
     return bytesVerdict(inner, name.replace(/\.gz$/i, ''), depth);
   }
-  if (opensAsZip(name, bytes)) return zipVerdictOf(bytesSource(bytes), formatOfName(name)?.label === '3MF' ? '3MF' : 'zip', depth);
+  if (opensAsZip(name, bytes)) {
+    const zl = formatOfName(name)?.label === '3MF' ? '3MF' : 'zip';
+    const zv = await zipVerdictOf(bytesSource(bytes), zl, depth);
+    if (zv && zv.level === 'bad') return zv;
+    // (a 3MF by its reader too, its bytes in hand: one inside a zip was judged by the zip's rules
+    // alone, "ok · zip" of one the page refuses, "bad" served plain or gzipped -- r88 A5)
+    const rv = zl === '3MF' ? await readerVerdict('3MF', bytes, name) : null;
+    if (rv && rv.level === 'bad') return { level: 'bad', words: `its ${name}: ${rv.words}` };
+    return zv || (rv && { level: rv.level, words: `its ${name}: ${rv.words}` });
+  }
   // (a .cadmesh by its own header, the whole in hand: r82 A3)
   const label = readerOf(name, bytes)?.label;
   const cut = label === 'cadmesh' ? cadmeshCut(bytes, bytes.length) : null;

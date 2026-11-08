@@ -6,7 +6,8 @@
 //
 //   (on start)                                         -> { ready: true }
 //   { kind: 'mesh', buf, format, name, extras, unit }  -> { ok, raw (a .cadmesh), unitless }
-//   { kind: '2d', buf, format }                        -> { ok, drawing }  (format: 'DXF' | 'DWG', js/formats.js drawingReaderOf)
+//   { kind: '2d', buf, format, name }                  -> { ok, drawing }  (format: 'DXF' | 'DWG', js/formats.js drawingReaderOf)
+//   { kind: 'check', mesh, format, buf, name, files }  -> { ok }  (the list check's read: js/list-check.js readOffThread)
 //   a refusal                                          -> { ok: false, message }
 
 import { readDrawing, readMeshFile } from './read-file.js';

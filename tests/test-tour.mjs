@@ -115,6 +115,22 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     let failed = '';
     try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 's.cadtour.json')], { encoding: 'utf8' }); } catch (e) { failed = e.stdout; }
     assert.match(failed, /^FAIL .*m\.stp: a STEP \/ IGES \/ BREP: convert it first/);
+    // (a folder whose name holds "#" or "%41": the tour's model beside it, not a decoy -- cut at "#",
+    // read as "bA", each checked against another file: r88 Q1. The decoy names no "plate": must fire FAIL)
+    const decoy = { ...quad, name: 'other' };
+    writeFileSync(join(dir, 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } })));
+    for (const sub of ['a #1', 'b%41']) {
+      mkdirSync(join(dir, sub));
+      writeFileSync(join(dir, sub, 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } })));
+      writeFileSync(join(dir, sub, 't.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.cadmesh', steps: [{ frame: ['plate'] }] }));
+    }
+    mkdirSync(join(dir, 'bA'));
+    writeFileSync(join(dir, 'bA', 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [decoy], root: { name: 'asm', meshes: [0], children: [] } })));
+    writeFileSync(join(dir, 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [decoy], root: { name: 'asm', meshes: [0], children: [] } })));
+    for (const sub of ['a #1', 'b%41']) {
+      assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, sub, 't.cadtour.json')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/, sub);
+    }
+    writeFileSync(join(dir, 'm.cadmesh'), new Uint8Array(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } })));
     // --labels with nothing after it: a usage error (exit 2), not a pass without the labels
     let rc = 0;
     try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--labels'], { encoding: 'utf8' }); } catch (e) { rc = e.status; }

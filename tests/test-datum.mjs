@@ -2,7 +2,8 @@
 // Positions from a reference (js/datum.js).   node tests/test-datum.mjs  (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { aboveBelow, rangesFrom } from '../js/datum.js';
+import { aboveBelow, pastWords, rangesFrom } from '../js/datum.js';
+import { unconvertedNum } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
@@ -13,6 +14,14 @@ const hdmi = { min: [8.5, 30, 1.6], max: [23.5, 45, 9.4] };
 const under = { min: [40, 40, -2], max: [50, 50, 0] };
 const whole = { min: [8.5, 20, -2], max: [95, 76, 9.4] };
 
+test('above / below said by the distance as shown, in the unit shown (r88 A4)', () => {
+  // (a part 4 mm above its board, in a file in metres: must fire "none above")
+  const inM = (x) => unconvertedNum(x, 'size', 'm');
+  assert.equal(pastWords(0.004, 'above', inM), `${inM(0.004)} above`);
+  assert.equal(pastWords(0.00001, 'above', inM), 'none above');
+  assert.equal(pastWords(-1, 'below', inM), 'none below');
+  assert.equal(pastWords(4, 'above', (x) => x.toFixed(1)), '4.0 above');
+});
 test('ranges from the reference corner, an overhang reads negative', () => {
   assert.deepEqual(rangesFrom(hdmi, pcb).map((r) => r.map((v) => +v.toFixed(6))), [[-1.5, 13.5], [10, 25], [1.6, 9.4]]);
 });
