@@ -13,13 +13,15 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfRefusal, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, gltfShapeRefusal, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
 import { MAX_FILE_BYTES, OVERSIZE_WORDS, cadmeshCut, gunzip, inflate, inflateCount, inflateHead, isGzip } from './cadmesh.js';
 import { ZIP_TAIL, crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32 } from './crc32.js';
 // (the most of a gzipped zip kept unpacked, to read its directory)
 const ZIP_KEPT = 64 * 2 ** 20;
+// (a gzip's size by its last four bytes alone: what else those bytes mean -- r84 Q7)
+const TRAILER_OR_CUT = ' by its last four bytes (or it is cut short, and those bytes are not its size)';
 import { fileUrl } from './open-url.js';
 
 // The format a file's name says ("board.cadmesh.gz" -> "cadmesh"; "/get?file=a.stl" -> "STL"),
@@ -138,30 +140,37 @@ async function gltfJudge(label, src, file, found = () => false) {
   // (the JSON held whole and not JSON: the reader's refusal in its words -- "ok" of a .gltf cut 9 bytes
   // short: r82 Q4)
   // (the reader's words, js/formats.js GLTF_WORDS -- written out here too: r83 A6)
+  // (-> { json } or { bad }: the failure kept apart from the file's own JSON, whose keys "bad" or
+  // "more" switched the check off -- r84 A4)
   const parsed = async (bytes, what) => {
     const s = new TextDecoder().decode(await bytes);
-    try { return JSON.parse(s); } catch (e) { return { bad: { level: 'bad', words: GLTF_WORDS.unparsed(what, e) } }; }
+    try { return { json: JSON.parse(s) }; } catch (e) { return { bad: { level: 'bad', words: GLTF_WORDS.unparsed(what, e) } }; }
   };
-  let json, hasBin = false;
+  let p, hasBin = false;
   if (label === 'GLB') {
     // (every chunk walked from bytes in hand; by range, 64, and past them said -- a Draco JSON as the
     // 65th chunk was "ok": r83 A5)
     const g = await glbChunks(src.read, src.len, file, src.inHand ? Infinity : 64);
     if (g.damaged) return { level: 'bad', words: g.damaged };
     if (g.more) return { level: 'warn', words: `${file} has more than 64 chunks: its JSON was not read here` };
-    const j = g.chunks.filter((c) => c.type === GLB_JSON).pop();
+    const js = g.chunks.filter((c) => c.type === GLB_JSON);
     hasBin = g.chunks.some((c) => c.type === GLB_BIN);
-    if (!j) return { level: 'bad', words: GLTF_WORDS.noJson(file) };
-    // (past the reader's text limit, its refusal in its words: the size rules have no GLB case, and a
-    // 501 MB JSON was "ok" -- r83 A3, Q5)
-    if (j.len > MAX_TEXT_BYTES) return { level: 'bad', words: tooMuchText(`${file}'s JSON`, j.len).message };
-    json = await parsed(src.read(j.at, j.len), file);
+    if (!js.length) return { level: 'bad', words: GLTF_WORDS.noJson(file) };
+    // (every JSON chunk parsed and the last kept, as the reader does -- it refuses at the first that does
+    // not parse, and the check read the last alone: r84 Q2)
+    for (const j of js) {
+      // (past the reader's text limit, its refusal in its words: the size rules have no GLB case, and a
+      // 501 MB JSON was "ok" -- r83 A3, Q5)
+      if (j.len > MAX_TEXT_BYTES) return { level: 'bad', words: tooMuchText(`${file}'s JSON`, j.len).message };
+      p = await parsed(src.read(j.at, j.len), file);
+      if (p.bad) return p.bad;
+    }
   } else {
     if (src.len > ZIP_KEPT) return { level: 'warn', words: `${file}'s JSON is more than ${sizeMb(ZIP_KEPT)}: its extensions and buffers were not checked here` };
-    json = await parsed(src.read(0, src.len), file);
+    p = await parsed(src.read(0, src.len), file);
   }
-  if (json && json.bad) return json.bad;
-  const said = gltfVerdict(json, file, found, hasBin);
+  if (p.bad) return p.bad;
+  const said = gltfVerdict(p.json, file, found, hasBin);
   return said ? { level: 'bad', words: said } : null;
 }
 // A .cadmesh judged by its own header, as gltfJudge judges a glTF: from src ({ len, read }), its
@@ -185,20 +194,14 @@ async function cadmeshJudge(src, size, file) {
 // (hasBin: a GLB holding its BIN chunk, which a first buffer with no uri is: a GLB cut after its JSON
 // was "ok", the page refusing it, "buffer 0 has no data" -- r83 Q1)
 function gltfVerdict(json, file, found = () => false, hasBin = false) {
-  if (!json || typeof json !== 'object' || json.more) return null;
-  const refused = gltfRefusal(json, file);
-  if (refused) return refused;
-  // (each buffer in the reader's order: one with no uri is the BIN chunk's, else no data; one by uri
-  // found beside it)
-  const buffers = Array.isArray(json.buffers) ? json.buffers : [];
+  // (the reader's own rules, its shape then each buffer: js/formats.js gltfShapeRefusal and
+  // gltfBufferRefusal -- this check's own skipped seven refusals: r84 A3)
+  const shape = gltfShapeRefusal(json, file);
+  if (shape) return shape;
+  const buffers = json.buffers || [];
   for (let i = 0; i < buffers.length; i++) {
-    const b = buffers[i];
-    if (!b || typeof b !== 'object') return null; // (said by the reader in its own words; not read here)
-    if (b.uri === undefined) { if (i === 0 && hasBin) continue; return `${file} is damaged: buffer ${i} has no data`; }
-    if (typeof b.uri !== 'string' || b.uri.startsWith('data:')) continue;
-    let ref = b.uri;
-    try { ref = decodeURIComponent(b.uri); } catch { return null; /* the reader refuses it as damaged */ }
-    if (!found(ref)) return GLTF_WORDS.needs(file, b.uri);
+    const refused = gltfBufferRefusal(buffers[i], i, file, hasBin, found);
+    if (refused) return refused;
   }
   return null;
 }
@@ -415,7 +418,12 @@ async function zipEntriesVerdict(src, label, depth) {
     if (x.method === 0) { const at = entryDataAt(x.lho, await src.read(x.lho, 30)); csrc = { len: x.csize, read: (o, n) => src.read(at + o, n) }; } else if (x.usize <= ZIP_KEPT) {
       try { csrc = bytesSource(await whole(x, ZIP_KEPT)); } catch { /* said by the entry's own reading */ }
     }
-    const v = csrc ? await cadmeshJudge(csrc, xi.size, model.split('/').pop()) : { level: 'warn', words: `its ${model} holds more than ${sizeMb(ZIP_KEPT)}: its header was not checked here` };
+    // (one too large to read whole judged by the start in hand, where that holds its header -- the one
+    // place startVerdict's own copy of this check still read: r84 A8)
+    const startCut = csrc ? null : cadmeshCut(start, xi.size);
+    const v = csrc ? await cadmeshJudge(csrc, xi.size, model.split('/').pop())
+      : typeof startCut === 'string' ? { level: 'bad', words: startCut }
+      : { level: 'warn', words: `its ${model} holds more than ${sizeMb(ZIP_KEPT)}: its header was not checked here` };
     if (v && v.level === 'bad') return { level: 'bad', words: `its ${model}: ${v.words}` };
     cmWarn = v;
   }
@@ -460,9 +468,7 @@ function startVerdict(name, start, size) {
   // as an STL and refuses, was a warning -- r80 A6)
   const r = sizeRule(readerOf(name, start)?.label || got || want, start, size);
   if (r) return { level: 'bad', words: r.over ? `its ${name} unpacks to ${r.over}` : `its ${name} is ${r.cut}` };
-  // (a .cadmesh cut short, where its start holds its header: r82 A3)
-  const cut = start && readerOf(name, start)?.label === 'cadmesh' ? cadmeshCut(start, size) : null;
-  if (typeof cut === 'string') return { level: 'bad', words: `its ${name}: ${cut}` };
+  // (a .cadmesh's header is judged by its callers, each from the most it holds: r84 A8)
   if (fv && fv.level !== 'ok') return { level: fv.level, words: `its ${name}: ${fv.words}` };
   return null;
 }
@@ -672,7 +678,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   // (its size not given -- Content-Range hidden, HEAD refused -- and more than is in hand: said, not
   // "ok · size not given · zip" with no entry read -- r78 A3)
   else if (sniff && pk && total === null) zipSaid = { level: 'warn', words: 'its entries were not read here (its size was not given)' };
-  const rule = sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
+  let rule = sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
   // (a glTF's or GLB's JSON as the reader reads it: its extensions, then its buffers, none of which
   // can be beside it from a URL -- r80 Q3, r81 A5; fetched whole, up to 64 MB, where the start does
   // not hold it -- a .gltf of more than 64 KB of JSON was "ok": r81 A6)
@@ -710,13 +716,42 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
         try { const pre = await rangedSource(fetchFn, fetchUrl, total).read(0, Math.min(total, 4 * 2 ** 20)); inner = (await inflateHead(pre, ZIP_KEPT)) || sizeStart; } catch (e) { if (!(e instanceof NoRange)) throw e; }
         csrc = bytesSource(inner);
       }
-    } else csrc = wholeStart ? bytesSource(wholeStart) : rangedSource(fetchFn, fetchUrl, total);
+    } else if (wholeStart) csrc = bytesSource(wholeStart);
+    else {
+      // (the start in hand judged first, a range fetched only for a header past it: a host capping each
+      // answer at 32 KB had the whole 40 MB model downloaded for a header in its first 20 KB -- r84 Q6)
+      const c0 = cadmeshCut(sizeStart, size);
+      csrc = c0 && c0.need ? rangedSource(fetchFn, fetchUrl, total) : bytesSource(sizeStart);
+    }
     try { cutSaid = await cadmeshJudge(csrc, size, file); } catch (e) {
       if (!(e instanceof NoRange)) throw e;
       if (total <= ZIP_KEPT) {
         try { const w = await fetchFn(fetchUrl, { cache: 'no-store' }); if (w.ok) cutSaid = await cadmeshJudge(bytesSource(new Uint8Array(await w.arrayBuffer())), size, file); } catch { /* not fetched: nothing said */ }
       } else cutSaid = { level: 'warn', words: `${file}'s header was not read here (the server sent no range): whether it is whole was not checked` };
     }
+  }
+  // (a cut-short verdict that rests on a length given -- Content-Length, Content-Range -- confirmed by
+  // the file itself, fetched whole up to ZIP_KEPT: another site's page cannot read Content-Encoding,
+  // so a length may be a stored gzip's, and a valid model read "section position out of range" -- r84
+  // A1; a length that is the file's own leaves the verdict as it was)
+  const cutBy = (v) => !!v && v.level === 'bad' && /out of range|truncated|runs past the end|has no data/.test(v.words);
+  if (sniff && !sizeGz && total && total <= ZIP_KEPT && !wholeStart && (rule?.cut || cutBy(cutSaid) || cutBy(urlSaid))) {
+    try {
+      const w = await fetchFn(fetchUrl, { cache: 'no-store' });
+      if (w.ok) {
+        const all = new Uint8Array(await w.arrayBuffer());
+        // (only a file longer than its length given -- a decoded body; one shorter is the cut the
+        // verdict already says)
+        if (all.length > total) {
+          const file = fileNameOfUrl(url).replace(/\.gz$/i, '');
+          total = all.length;
+          bits[0] = `${mb(total)} MB`;
+          rule = sizeRule(sizeFormat, sizeStart, all.length);
+          if (sizeFormat === 'cadmesh') cutSaid = await cadmeshJudge(bytesSource(all), all.length, file);
+          if (sizeFormat === 'glTF' || sizeFormat === 'GLB') urlSaid = await gltfJudge(sizeFormat, bytesSource(all), file);
+        }
+      }
+    } catch { /* not fetched whole: the verdict as it was */ }
   }
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);
@@ -726,14 +761,17 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     bits.push(`the viewer cannot unpack it: ${unpackError}`);
     level = 'bad';
   } else if (sizeGz && unpacked > MAX_FILE_BYTES) {
-    bits.push(`unpacks to ${OVERSIZE_WORDS}`);
+    // (by its last four bytes alone, the other reading said too: a gzip cut short has deflate data
+    // there, and a half-downloaded one was told "unpacks to over 2 GB" where the page says it is
+    // truncated -- r84 Q7)
+    bits.push(`unpacks to ${OVERSIZE_WORDS}${exact ? '' : TRAILER_OR_CUT}`);
     level = 'bad';
   } else if (rule?.over) {
     // (a residue is the least it unpacks to, so a text format past the limit by it is past it; an STL
     // whose header did not settle its size is no binary one at any multiple, so text, as the reader
     // takes it)
     // (what the reader holds to the limit: a PLY's body, its header apart -- r74 Q1)
-    bits.push(`${sizeGz ? 'unpacks to ' : ''}${rule.over}`); // (the readers' words: r73 Q4)
+    bits.push(`${sizeGz ? 'unpacks to ' : ''}${rule.over}${sizeGz && !exact ? TRAILER_OR_CUT : ''}`); // (the readers' words: r73 Q4)
     level = 'bad';
   } else if (zipSaid) {
     // (inside a zip or a 3MF, by its directory: the 3MF's root model part past the text the reader

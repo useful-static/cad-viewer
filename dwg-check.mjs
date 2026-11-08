@@ -3,7 +3,8 @@
 // every format check the file carries (passed / failed), the object types, and
 // how many objects of the drawn types decoded. --dxf FILE writes the drawing as
 // DXF (one file only); --json prints the report as JSON.
-import { writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { gunzip, isGzip } from './js/cadmesh.js';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, openCounts, sheetsOf } from './js/dxf.js';
@@ -93,4 +94,5 @@ async function main() {
   if (json) console.log(JSON.stringify(reports, null, 1));
   process.exit(bad ? 1 : 0);
 }
-await runCli('dwg-check', main, USAGE);
+// (run only as the command, as the other CLIs: importing it ran it and exited -- r84 Q8)
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('dwg-check', main, USAGE);

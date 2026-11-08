@@ -15,7 +15,14 @@ import { fileNameOfUrl } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const B = 'https://example.com/boards/';
-const cadmesh = gzipSync(Buffer.concat([Buffer.from('CADM'), Buffer.alloc(200)]));
+// (real .cadmesh files: since r84 A2 the check reads a header as the decoder does, and "CADM" and
+// zeros is no model the page opens -- "unsupported version 0")
+const { encodeCadmesh: encodeCm } = await import('../js/cadmesh.js');
+const cmOf = (n, rnd = false) => {
+  const pos = new Float32Array(9 * n); for (let i = 0; i < pos.length; i++) pos[i] = rnd ? Math.random() : i % 7;
+  return Buffer.from(encodeCm({ meshes: [{ name: 'plate', color: null, positions: pos, normals: null, colors: null, indices: Uint32Array.from({ length: 3 * n }, (_, i) => i) }], root: { name: 'asm', meshes: [0], children: [] } }));
+};
+const cadmesh = gzipSync(cmOf(1));
 const stepInside = gzipSync(Buffer.from('ISO-10303-21;\nHEADER;\n'));
 const tour = JSON.stringify({ cadtour: 1, title: 'A tour', steps: [{ title: 'one' }, { title: 'two' }] });
 // a zip of stored entries [name, bytes], its directory saying usize where given (a size claimed); each
@@ -47,7 +54,7 @@ const FILES = {
   [`${B}good.cadmesh.gz`]: cadmesh,
   // 2 MB of noise after the magic: gzip cannot shrink it, so the file is far
   // bigger than the 64 KB part the check reads
-  [`${B}big.cadmesh.gz`]: gzipSync(Buffer.concat([Buffer.from('CADM'), randomBytes(2_000_000)])),
+  [`${B}big.cadmesh.gz`]: gzipSync(cmOf(30000, true)), // (random coordinates: its gzip past the 64 KB part)
   [`${B}good.webp`]: Buffer.from('RIFF....WEBP'),
   [`${B}good.stp.gz`]: gzipSync(Buffer.from('ISO-10303-21;')),
   [`${B}good.cadtour.json`]: tour,
@@ -824,7 +831,7 @@ await test('a long .cadmesh header read from every host, a size sent encoded, a 
     ['A3 a 501 MB JSON chunk', 'huge.glb', virtual, 'bad:of text, more than the 500 MB of text this viewer reads'],
     // A4: the decoder's own section walk -- a section it never reads past the end opens; no index is refused
     ['A4 an unread section past the end', 'x.cadmesh', ranged(withSections((s) => { s.unread = { offset: 1e6, byteLength: 8 }; })), 'ok'],
-    ['A4 no index section', 'x.cadmesh', ranged(withSections((s) => { delete s.index; })), 'bad:section index out of range'],
+    ['A4 no index section', 'x.cadmesh', ranged(withSections((s) => { delete s.index; })), 'bad:cadmesh: section index'], // (validateHeader's words first, as the decoder meets it: r84 A2)
     // A5: a Draco JSON as the 65th chunk, the file in hand (must fire: "ok")
     ['A5 the 65th chunk', 'many.glb', ranged(glbOf(...Array.from({ length: 64 }, () => chunk('BIN\0', Buffer.alloc(4))), chunk('JSON', draco))), 'bad:which this viewer does not decode'],
     // Q1: a GLB cut after its JSON chunk, buffer 0 with no uri and no BIN chunk (must fire: "ok")
@@ -838,6 +845,95 @@ await test('a long .cadmesh header read from every host, a size sent encoded, a 
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
   const wanted = rows.map(([what, , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
+await test('a size another site hides the encoding of, a .cadmesh header the decoder refuses, a glTF\'s shape and every JSON chunk, a header in the start in hand, a cut gzip\'s trailer (r84 A1-A4, A8, Q2-Q4, Q6, Q7)', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const { encodeCadmesh } = await import('../js/cadmesh.js');
+  let served = 0;
+  const ranged = (b, cap = Infinity) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) { served += b.length; return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } }); }
+    const a = +m[1], e = Math.min(+m[2], b.length - 1, a + cap - 1);
+    served += Math.max(0, e - a + 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  // A1, Q3: another site's file stored gzipped, as a browser hands it to a page on another origin --
+  // Content-Encoding unreadable, the length the gzip's, the body the file; a ranged read fails there
+  // (Chromium: the plain retry is the path taken) or answers whole
+  const hidden = (b, rangeFails = false) => async (u, o = {}) => {
+    if (rangeFails && o.headers && o.headers.Range) throw new TypeError('Failed to fetch');
+    return new Response(b, { status: 200, headers: { 'content-length': String(gzipSync(b).length) } });
+  };
+  const tri = { name: 'plate', color: null, positions: Float32Array.of(0, 0, 0, 1, 0, 0, 1, 1, 0), normals: null, colors: null, indices: Uint32Array.of(0, 1, 2) };
+  const bodies = Array.from({ length: 3000 }, (_, i) => ({ ...tri, name: `body_${i}_${'x'.repeat(40)}` }));
+  const rack = Buffer.from(encodeCadmesh({ meshes: bodies, root: { name: 'asm', meshes: bodies.map((_, i) => i), children: [] } }));
+  const rackCut = rack.subarray(0, rack.length - 8);
+  // A2, Q1: whole files whose header the decoder refuses (rewritten at its own length: the data stays)
+  const good = Buffer.from(encodeCadmesh({ meshes: [tri], root: { name: 'a', meshes: [0], children: [] } }));
+  const jlen = good.readUInt32LE(8), hdr = JSON.parse(good.subarray(12, 12 + jlen).toString());
+  const withHdr = (edit) => { const h = structuredClone(hdr); edit(h); const out = Buffer.from(good); out.write(JSON.stringify(h).padEnd(jlen, ' '), 12); return out; };
+  const ver2 = Buffer.from(good); ver2.writeUInt32LE(2, 4);
+  // A3, A4, Q2: glTF shapes the reader refuses before its buffers; a Draco GLB with the file's own
+  // keys "more" and "bad"; two JSON chunks, the first broken
+  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const chunk = (type, data) => { const d = Buffer.from(data); const p = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + p, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(p, type === 'JSON' ? 0x20 : 0)]); };
+  const glbOf = (...cs) => { const body = Buffer.concat(cs); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
+  // Q4: a large gzip -- past the size fetched whole -- of a model whose header is past 64 KB, cut short
+  // inside: its header read from its first 4 MB unpacked
+  const noise = new Float32Array(9 * 160000); for (let i = 0; i < noise.length; i++) noise[i] = Math.random();
+  const bigBody = { ...tri, name: 'noise', positions: noise, indices: Uint32Array.from({ length: 3 * 160000 }, (_, i) => i) };
+  const bigModel = Buffer.from(encodeCadmesh({ meshes: [...bodies, bigBody], root: { name: 'asm', meshes: [...bodies.keys(), 3000], children: [] } }));
+  const bigGz = gzipSync(bigModel.subarray(0, bigModel.length - 8));
+  assert.ok(bigGz.length * 1032 >= 2 ** 32 && bigModel.readUInt32LE(8) > 65536, 'past the whole fetch, a header past 64 KB');
+  // Q6: a header in the first 32 KB of a model of megabytes, from a host capping each part at 32 KB
+  const roomy = cmOf(60000);
+  // Q7: a gzip of megabytes cut short, its last four bytes deflate data read as a size past the limit
+  const gzNoise = gzipSync(randomBytes(5 * 2 ** 20));
+  let end = gzNoise.length - 4096;
+  while (gzNoise.readUInt32LE(end - 4) <= 2 ** 31) end--;
+  const gzCut = gzNoise.subarray(0, end);
+  // A8: a zipped .cadmesh deflated and saying it unpacks past 64 MB: judged by the start in hand
+  const ver2big = Buffer.concat([ver2, Buffer.alloc(65 * 2 ** 20)]);
+  const ver2zip = miniZip([['x.cadmesh', deflateRawSync(ver2big), ver2big.length, 8]]);
+  const rows = [
+    ['A1 a valid model, encoding hidden', 'rack.cadmesh', hidden(rack), 'ok'],
+    // (as headless Chromium said it, two origins, in the reviewer's probe: a warning, never "bad")
+    ['Q3 a valid model, encoding hidden, a range fails', 'rack.cadmesh', hidden(rack, true), 'warn:size not given'],
+    ['A1 a cut model, encoding hidden (control)', 'cut.cadmesh', hidden(rackCut), 'bad:out of range'],
+    ['A2 version 2', 'x.cadmesh', ranged(ver2), 'bad:unsupported version 2'],
+    ['A2 a mesh range past the vertex data', 'x.cadmesh', ranged(withHdr((h) => { h.meshes[0].vtxCount = 9; })), 'bad:range is outside'],
+    ['A2 a tree naming mesh 5', 'x.cadmesh', ranged(withHdr((h) => { h.root = { name: 'a', meshes: [5], children: [] }; })), 'bad:names mesh 5 of 1'],
+    ['A2 whole (control)', 'x.cadmesh', ranged(good), 'ok'],
+    ['A3 the JSON null', 'm.gltf', ranged(Buffer.from('null')), 'bad:holds no glTF JSON'],
+    ['A3 the JSON a list', 'm.gltf', ranged(Buffer.from('[]')), 'bad:its JSON is not an object'],
+    ['A3 buffers not a list', 'm.gltf', ranged(Buffer.from(gltf({ buffers: 5 }))), 'bad:"buffers" is not a list'],
+    ['A3 buffer 0 not an object', 'm.gltf', ranged(Buffer.from(gltf({ buffers: [5] }))), 'bad:buffer 0 is not an object'],
+    ['A3 buffer 0 uri not text', 'm.gltf', ranged(Buffer.from(gltf({ buffers: [{ uri: 7, byteLength: 4 }] }))), 'bad:uri is not text'],
+    ['A3 extensionsRequired not a list', 'm.gltf', ranged(Buffer.from(gltf({ extensionsRequired: 'x' }))), 'bad:"extensionsRequired" is not a list'],
+    ['A4 Draco, and a key "more"', 'm.gltf', ranged(Buffer.from(gltf({ more: true, extensionsRequired: ['KHR_draco_mesh_compression'] }))), 'bad:which this viewer does not decode'],
+    ['A4 Draco, and a key "bad"', 'm.gltf', ranged(Buffer.from(gltf({ bad: 1, extensionsRequired: ['KHR_draco_mesh_compression'] }))), 'bad:which this viewer does not decode'],
+    ['Q2 two JSON chunks, the first broken', 'x.glb', ranged(glbOf(chunk('JSON', '{,'), chunk('JSON', gltf({})))), 'bad:does not parse'],
+    ['Q2 two JSON chunks, both whole (control)', 'x.glb', ranged(glbOf(chunk('JSON', gltf({})), chunk('JSON', gltf({})))), 'ok'],
+    ['Q4 a zipped model deflated, cut', 'cut.zip', ranged(miniZip([['cut.cadmesh', deflateRawSync(rackCut), rackCut.length, 8]])), 'bad:out of range'],
+    ['Q4 a zipped model deflated, whole (control)', 'all.zip', ranged(miniZip([['all.cadmesh', deflateRawSync(rack), rack.length, 8]])), 'ok'],
+    ['Q4 a large gzip, its header past 64 KB, cut', 'big.cadmesh.gz', ranged(bigGz), 'bad:out of range'],
+    ['A8 a zipped model past 64 MB, its start refused', 'v.zip', ranged(ver2zip), 'bad:unsupported version 2'],
+    ['Q7 a gzip cut short', 'x.stl.gz', ranged(gzCut), 'bad:or it is cut short'],
+  ];
+  const got = [];
+  for (const [what, name, host, want] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: host, sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  // Q6: what a header in the start in hand costs, from a host capping each part at 32 KB (must fire:
+  // the whole file fetched)
+  served = 0;
+  const q6 = await checkFile(`${B}roomy.cadmesh`, { fetchFn: ranged(roomy, 32768), sniff: true });
+  got.push(['Q6 a header in the start, parts capped', q6.level === 'ok' && served < 4 * 65536 ? 'ok, a few parts' : `${q6.level}: ${q6.detail} (${served} bytes for ${roomy.length})`]);
+  const wanted = [...rows.map(([what, , , want]) => [what, want]), ['Q6 a header in the start, parts capped', 'ok, a few parts']];
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
 await test('a host that caps a ranged answer: the short bytes said, never read as the directory (r80 Q6)', async () => {

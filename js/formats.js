@@ -113,6 +113,33 @@ export const GLTF_WORDS = {
   noJson: (file) => `${file} is damaged: it holds no glTF JSON`,
   needs: (file, uri) => `${file} needs ${uri}: drop it together with the .${extOf(file)}`,
 };
+// The reader's refusal of a glTF JSON's shape before its buffers are read, in its order -- no JSON,
+// one not an object, a list that is not one, an extension it does not read -- or null; and of one
+// buffer (hasBin: a GLB with its BIN chunk; found(name): a companion beside it). The one set of rules
+// for js/mesh-formats.js parseGLTF and the list check, which skipped each and said "ok" of seven
+// files the page refuses (r84 A3)
+const isPlain = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+export function gltfShapeRefusal(json, file) {
+  const damaged = (w) => `${file} is damaged: ${w}`;
+  if (!json) return GLTF_WORDS.noJson(file);
+  if (!isPlain(json)) return damaged('its JSON is not an object');
+  const notList = (x) => x !== undefined && !Array.isArray(x);
+  if (notList(json.extensionsRequired)) return damaged('"extensionsRequired" is not a list');
+  const ext = gltfRefusal(json, file);
+  if (ext) return ext;
+  for (const k of ['accessors', 'bufferViews', 'nodes', 'meshes', 'buffers']) if (notList(json[k])) return damaged(`"${k}" is not a list`);
+  return null;
+}
+export function gltfBufferRefusal(b, i, file, hasBin, found) {
+  const damaged = (w) => `${file} is damaged: ${w}`;
+  if (!isPlain(b)) return damaged(`buffer ${i} is not an object`);
+  if (b.uri === undefined) return i === 0 && hasBin ? null : damaged(`buffer ${i} has no data`);
+  if (typeof b.uri !== 'string') return damaged(`buffer ${i}'s uri is not text`);
+  if (b.uri.startsWith('data:')) return null;
+  let nm;
+  try { nm = decodeURIComponent(b.uri); } catch { return damaged(`buffer ${i}'s uri "${b.uri.length > 80 ? `${b.uri.slice(0, 80)}...` : b.uri}" cannot be read`); }
+  return found(nm) ? null : GLTF_WORDS.needs(file, b.uri);
+}
 // A GLB's chunks as its reader walks them, from read(at, n) (async: bytes of a file of `size`): its
 // header, then each chunk's length and type -> { chunks: [{ type, at, len }] } or { damaged } in the
 // reader's words; most: the chunks walked at most (the list check's, by range), past it { more }.

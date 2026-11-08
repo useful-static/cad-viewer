@@ -104,5 +104,25 @@ await test('a format that refuses is that format\'s result: the others still wri
   const broken = { ...EXPORTS, glb: { ...EXPORTS.glb, write: async () => { throw new TypeError("Cannot read properties of undefined (reading 'length')"); } } };
   await assert.rejects(exportCadmesh(readFileSync(inp), { modelUp: 'y', table: broken }), TypeError, 'must fire: reported as glb\'s refusal');
 });
+await test('a model in another unit is refused, not written as mm; an inherited key is no format; dwg-check imports without running (r84 A5, A7, Q8)', async () => {
+  // (a 1-inch triangle read back as 1 mm from every writer: r84 A5)
+  const inch = encodeCadmesh({ units: 'inch', sourceUnits: 'in', meshes: [tri], root: { name: '', meshes: [0], children: [] } });
+  const inchFile = join(dir, 'inch.cadmesh');
+  writeFileSync(inchFile, Buffer.from(inch instanceof ArrayBuffer ? inch : inch.buffer));
+  const ri = run(inchFile, '--out', join(dir, 'inch'));
+  assert.equal(ri.status, 1, ri.stdout);
+  assert.match(ri.stderr, /lengths are in inch, not converted/);
+  for (const ext of ['stl', '3mf', 'glb']) assert.ok(!existsSync(join(dir, `inch.${ext}`)), `must fire: inch.${ext} written`);
+  const { geomIsMm, notMmWords } = await import('../js/cadmesh.js');
+  assert.deepEqual([geomIsMm(null), geomIsMm({}), geomIsMm({ units: 'millimeter' }), geomIsMm({ units: 'mm' }), geomIsMm({ units: 'inch' })], [true, true, true, true, false]);
+  assert.equal(notMmWords({ units: 'mm' }, 'x'), null);
+  // (own keys only: "constructor" passed the plain lookup and threw past the usage words: r84 A7)
+  for (const k of ['constructor', '__proto__', 'toString']) assert.equal(run(inp, '--to', k).status, 2, `--to ${k}`);
+  for (const k of ['constructor', 'toString']) assert.equal(run(inp, '--model-up', k).status, 2, `--model-up ${k}`);
+  // (imported, it runs nothing and exits nothing, as the other CLIs: r84 Q8)
+  const imp = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(join(here, '..', 'dwg-check.mjs'))}); console.log('imported')`], { encoding: 'utf8' });
+  assert.equal(imp.status, 0, imp.stderr);
+  assert.equal(imp.stdout.trim(), 'imported');
+});
 
 done();

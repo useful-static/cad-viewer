@@ -67,16 +67,30 @@ export const VERSION = 1;
 // (OpenCascade's linearUnit word), and what the viewer's unit display needs
 // to convert lengths (main.js geomMm)
 export const MM = 'millimeter';
+// Whether a decoded header's geometry is in millimetres -- the one rule the display (main.js geomMm),
+// the exports, the drawing and the mass all read (r84 A5: the display alone kept it, and the
+// writers took an inch file's numbers as mm). No header, or no units, is millimetres.
+export const geomIsMm = (header) => !header || header.units == null || header.units === MM || header.units === 'mm';
+// What a consumer that writes or weighs millimetres says of a header in another unit, or null:
+// the page's own words for a length it does not convert (main.js unitsrc "(not converted)")
+export const notMmWords = (header, what) => (geomIsMm(header) ? null : `this model's lengths are in ${header.units}, not converted: ${what} not made here`);
 // a body's colour when nothing gives it one (the readers, the One colour scheme)
 export const DEFAULT_GREY = [0.72, 0.74, 0.78];
 // 0..1 -> a byte, rounded (every writer of colour bytes: the grey's 0.74 * 255 = 188.7 is 189,
 // where a truncating Uint8Array store made it 188)
 export const toByte = (x) => Math.round(Math.min(1, Math.max(0, x)) * 255);
 
-const SECTIONS = ['position', 'normal', 'color', 'id', 'index'];
+// The required sections, one table: each one's element type and its bytes per vertex (or per index).
+// The encoder's list, the decoder's views and validateHeader's sizes all read it -- each kept its own,
+// and a new section was three edits (r84 A6)
+const REQUIRED_SECTIONS = {
+  position: { type: Float32Array, perVertex: 12 }, normal: { type: Int16Array, perVertex: 8 },
+  color: { type: Uint8Array, perVertex: 4 }, id: { type: Uint8Array, perVertex: 4 }, index: { type: Uint32Array, perIndex: 4 },
+};
+const SECTIONS = Object.keys(REQUIRED_SECTIONS);
 // name -> element type; written only when the model carries them
 const OPTIONAL = { faces: Uint32Array, edges: Uint32Array, silhouettes: Uint32Array, silhouetteNormals: Int16Array };
-const REQUIRED = { position: Float32Array, normal: Int16Array, color: Uint8Array, id: Uint8Array, index: Uint32Array };
+const REQUIRED = Object.fromEntries(Object.entries(REQUIRED_SECTIONS).map(([n, s]) => [n, s.type]));
 // The sections the decoder views, in its order -- every required one, and an optional one the header
 // names -- and its refusal of the first missing or past `size` bytes, or null. The one walk for
 // decodeCadmesh and cadmeshCut (the list check's), which kept a copy that disagreed both ways: a
@@ -639,50 +653,59 @@ export function deflateCadmesh(buf) {
 // null. decodeCadmesh's rule, the list check's too: a download stopped halfway was "ok", the page
 // refusing it -- section normal out of range (r82 A3)
 export function cadmeshCut(head, size) {
-  if (size < 12 || head.length < 12) return size < 12 ? 'cadmesh: file too short' : { need: 12 };
-  const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
-  if (dv.getUint32(0, true) !== MAGIC || dv.getUint32(4, true) !== VERSION) return null; // (the decoder says those)
-  const jlen = dv.getUint32(8, true);
-  if (12 + jlen > size) return 'cadmesh: truncated header';
-  if (12 + jlen > head.length) return { need: 12 + jlen };
-  let header;
-  try { header = JSON.parse(new TextDecoder().decode(head.subarray(12, 12 + jlen))); } catch { return null; }
-  if (!header || typeof header.sections !== 'object' || !header.sections) return null;
-  // (the decoder's own walk: sectionRefusal -- r83 A4)
-  return sectionRefusal(header, align8(12 + jlen), size);
+  // (the decoder's own reading of its header, every check it makes before the data: readHeader --
+  // the check's copy skipped validateHeader and a header not JSON, and said "ok" of four the page
+  // refuses: r84 A2)
+  try {
+    const r = readHeader(head, size);
+    return r.need ? { need: r.need } : null;
+  } catch (e) { return e.message; }
 }
 
-// Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,
-//           id:Uint8Array, index:Uint32Array, faces:Uint32Array|null } as views
-// into buf (no copies). An optional section the file lacks is null.
-export function decodeCadmesh(buf) {
-  if (buf.byteLength < 12) throw new Error('cadmesh: file too short');
-  const dv = new DataView(buf);
+// A .cadmesh's header read as the decoder reads it, from u8 (its first bytes, or all) of a file of
+// `size` bytes -> { header, dataStart }, or { need: n } when the header runs past u8; its refusals
+// thrown in the decoder's words: the magic, the version, the length, the JSON, the sections,
+// validateHeader, every section the decoder views within the file. decodeCadmesh's and cadmeshCut's
+// one reading (r84 A2)
+function readHeader(u8, size) {
+  if (size < 12) throw new Error('cadmesh: file too short');
+  if (u8.length < 12) return { need: 12 };
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   if (dv.getUint32(0, true) !== MAGIC) throw new Error('cadmesh: bad magic (not a .cadmesh file)');
   const ver = dv.getUint32(4, true);
   if (ver !== VERSION) throw new Error(`cadmesh: unsupported version ${ver}`);
   const jlen = dv.getUint32(8, true);
-  if (12 + jlen > buf.byteLength) throw new Error('cadmesh: truncated header');
+  if (12 + jlen > size) throw new Error('cadmesh: truncated header');
+  if (12 + jlen > u8.length) return { need: 12 + jlen };
   // a header that is not JSON, or JSON that is not an object, said as such,
   // not as the engine's own words ("Cannot read properties of null")
   let header;
   try {
-    header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 12, jlen)));
+    header = JSON.parse(new TextDecoder().decode(u8.subarray(12, 12 + jlen)));
   } catch (e) {
     throw new Error(`cadmesh: the header is not JSON (${e.message})`);
   }
   if (!header || typeof header !== 'object' || Array.isArray(header) || !header.sections || typeof header.sections !== 'object') {
     throw new Error('cadmesh: the header is not a cadmesh header (no sections)');
   }
+  validateHeader(header);
   const dataStart = align8(12 + jlen);
+  // (every section it views within the file, by the one walk: sectionRefusal -- r83 A4)
+  const wrong = sectionRefusal(header, dataStart, size);
+  if (wrong) throw new Error(wrong);
+  return { header, dataStart };
+}
+
+// Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,
+//           id:Uint8Array, index:Uint32Array, faces:Uint32Array|null } as views
+// into buf (no copies). An optional section the file lacks is null.
+export function decodeCadmesh(buf) {
+  // (its header by the one reading, the list check's too: readHeader -- r84 A2)
+  const { header, dataStart } = readHeader(new Uint8Array(buf), buf.byteLength);
   const view = (name, Ctor) => {
     const s = header.sections[name];
     return new Ctor(buf, dataStart + s.offset, s.byteLength / Ctor.BYTES_PER_ELEMENT);
   };
-  validateHeader(header);
-  // (every section it views within the file, by the one walk: sectionRefusal -- r83 A4)
-  const wrong = sectionRefusal(header, dataStart, buf.byteLength);
-  if (wrong) throw new Error(wrong);
   const out = { header };
   for (const [s, Ctor] of Object.entries(REQUIRED)) out[s] = view(s, Ctor);
   for (const [s, Ctor] of Object.entries(OPTIONAL)) out[s] = header.sections[s] ? view(s, Ctor) : null;
@@ -750,7 +773,7 @@ function validateHeader(h) {
   if (h.indexCount % 3) bad('index count is not a whole number of triangles');
   if (h.vertexCount ? !box(h.bbox) : h.bbox !== null) bad('header bounding box malformed');
   // each section must be exactly the size its count implies
-  const want = { position: 12 * h.vertexCount, normal: 8 * h.vertexCount, color: 4 * h.vertexCount, id: 4 * h.vertexCount, index: 4 * h.indexCount };
+  const want = Object.fromEntries(Object.entries(REQUIRED_SECTIONS).map(([n, s]) => [n, s.perVertex ? s.perVertex * h.vertexCount : s.perIndex * h.indexCount]));
   for (const [s, len] of Object.entries(want)) {
     const sec = h.sections && h.sections[s];
     if (!sec || !ok(sec.offset) || sec.byteLength !== len || sec.offset % 8) bad(`section ${s} does not match the header counts`);

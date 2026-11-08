@@ -4,7 +4,7 @@
 // through their readers, loaded on first use), orbit camera, part tree,
 // picking, section plane. Rendering is on demand.
 
-import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead } from './cadmesh.js';
+import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead, geomIsMm, notMmWords } from './cadmesh.js';
 import { SNIFF_BYTES, extOf, formatOfName, drawingReaderOf, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions, openedName } from './formats.js';
 import { companionsOverText, readCompanions } from './companions.js';
 import { directFor, fileUrl } from './open-url.js';
@@ -1353,7 +1353,10 @@ function closedOf(mesh, mi) {
 const ownHidden = () => (app.tour ? new Set(app.tour.base.hidden) : app.hidden);
 const exportState = () => (app.tour ? { hidden: ownHidden(), color: inScheme(app.baseMesh, ownOverrides(), ownFaces() || new Map()).color } : { hidden: app.hidden, color: app.mesh.color });
 async function exportMesh(fmt) {
-  if (!app.header || !EXPORTS[fmt]) return;
+  if (!app.header || !Object.hasOwn(EXPORTS, fmt)) return;
+  // (the writers write millimetres: a model in another unit refused in words -- r84 A5)
+  const notMm = notMmWords(app.header, `a ${fmt.toUpperCase()} file is`);
+  if (notMm) { tellReady(`export refused: ${notMm}`); return; }
   const own = exportState();
   const model = { ...app.baseMesh, color: own.color };
   // (the bodies shown that have a triangle: what is written, counted and said -- js/export-mesh.js)
@@ -1630,6 +1633,9 @@ function saveDrawing() {
   const hidden = ownHidden();
   const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !hidden.has(id));
   if (!ids.length) { tell('nothing shown to draw'); return; }
+  // (a drawing at 1:1 in mm: a model in another unit refused in words -- r84 A5)
+  const notMm = notMmWords(app.header, 'a drawing is');
+  if (notMm) { tell(notMm); return; }
   const preset = nearestPreset(app.cam);
   const [yaw, pitch] = VIEWS[preset];
   const c = { q: presetQuat(yaw, pitch, app.cam.orient) };
@@ -6317,7 +6323,7 @@ function select(ids, additive, name = null) {
 // is in mm (OpenCascade converts on import); a file whose header names
 // another unit is shown in that unit, unconverted.
 // ('mm': a mesh file's .cadmesh saved before the mesh readers wrote MM)
-const geomMm = () => !app.header || app.header.units === MM || app.header.units === 'mm';
+const geomMm = () => geomIsMm(app.header);
 // (the model's largest extent, in mm, for Auto's choice: units.js autoUnit)
 const modelSizeMm = () => {
   const b = app.header && app.header.bbox;
@@ -6409,6 +6415,9 @@ function syncMassRow() {
   $('densitybox').hidden = $('material').value !== 'custom';
   if (!show) return;
   const d = density();
+  // (a volume in mm³ weighed: another unit said first, whatever else is missing -- weighed 16,387x off
+  // before: r84 A5)
+  if (!geomMm()) { $('massval').textContent = notMmWords(app.header, 'a mass is'); return; }
   if (!f.closed) { $('massval').textContent = 'none closed: no volume'; return; }
   if (d === null) { $('massval').textContent = 'type a density (g/cm³, water is 1)'; return; }
   const g = (f.vol / 1000) * d;

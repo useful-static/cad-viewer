@@ -1537,11 +1537,11 @@ await test('the note contract: each page state against each writer of a note or 
       // (an embed's card asks the document for its parts: the poster row is an embed)
       const doc = { querySelector: () => el(), createElement: () => el(), documentElement: { classList: { add() {} } } };
       const run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
-        'startLoad', 'beginLoad', 'EXPORTS', 'exportable', 'meshLabel', 'saveBase', 'exportBasis', 'downloadBlob', 'document', 'location',
+        'startLoad', 'beginLoad', 'EXPORTS', 'exportable', 'meshLabel', 'saveBase', 'exportBasis', 'downloadBlob', 'document', 'location', 'notMmWords',
         `${body}; return { tell, tellReady, sayNoFacts, setStatus, openFile, exportMesh, cancelLoad, failApart, recovered, recoveryStarts, listsRead, cannotHold };`)(
         app, (id) => dom[id], (t, ms) => shown.push([t, ms]), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30,
         () => {}, () => {}, { stl: { write: async () => new Uint8Array(4), type: 'model/stl', up: 'z' } }, (m, ids) => ids, () => 'B', () => 'm', () => [1, 0, 0, 0, 1, 0, 0, 0, 1], () => {},
-        doc, { href: 'https://example.test/?embed=1' });
+        doc, { href: 'https://example.test/?embed=1' }, CADMESH.notMmWords || (() => null)); // (main.js imports it since r84 A5)
       const act = { tell: () => run.tell('copied', 3000), tellReady: () => run.tellReady(W), sayNoFacts: () => run.sayNoFacts(N), loadFails: () => run.setStatus('error', E),
         cancel: () => run.cancelLoad(), oversize: () => run.openFile({ name: 'big.stl', size: 3e9 }), failApart: () => run.failApart(G), recovered: () => run.recovered(),
         recoveryStarts: () => run.recoveryStarts('device lost'), listFails: () => run.listsRead({ errors: [{ url: 'l.json', message: 'HTTP 404' }], entries: [] }, false),

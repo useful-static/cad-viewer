@@ -19,7 +19,7 @@ import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_
 import { crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32Turning } from './crc32.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, GLB_BIN, GLB_JSON, GLTF_WORDS, companionKey, companionOf, glbChunks, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, GLB_BIN, GLB_JSON, GLTF_WORDS, companionKey, companionOf, glbChunks, gltfBufferRefusal, gltfShapeRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -1075,11 +1075,13 @@ async function parseGLTF(buf, format, base, files) {
   // its refusals name the file as the other readers do: name and extension
   const file = `${base}.${format}`;
   const damaged = (what) => new Error(`${file} is damaged: ${what}`);
-  if (!json) throw new Error(GLTF_WORDS.noJson(file));
+  // (its shape before its buffers by the one set of rules, the list check's too: js/formats.js
+  // gltfShapeRefusal -- r84 A3)
+  const shape = gltfShapeRefusal(json, file);
+  if (shape) throw new Error(shape);
   // the JSON's shapes are checked where they are used: a list that is not one, or an index to
   // an entry that is not an object, is a damaged file, not the engine's "is not a function"
   const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
-  if (!isObj(json)) throw damaged('its JSON is not an object');
   const list = (x, what) => { if (x === undefined) return []; if (!Array.isArray(x)) throw damaged(`${what} is not a list`); return x; };
   const at = (arr, i) => (Number.isInteger(i) && i >= 0 && i < arr.length && isObj(arr[i]) ? arr[i] : null);
   const nat = (x) => Number.isInteger(x) && x >= 0;
@@ -1099,27 +1101,20 @@ async function parseGLTF(buf, format, base, files) {
   // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
   // must not load such an asset; ignored, an instanced part opened as one copy without a word).
   // Compression keeps its own words, since the fix is the same for each.
-  list(json.extensionsRequired, '"extensionsRequired"');
-  const refusedExt = gltfRefusal(json, file);
-  if (refusedExt) throw new Error(refusedExt);
   const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
   const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
   const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {
-    if (!isObj(b)) throw damaged(`buffer ${i} is not an object`);
-    if (b.uri === undefined) { if (i === 0 && bin) return bin; throw damaged(`buffer ${i} has no data`); }
-    if (typeof b.uri !== 'string') throw damaged(`buffer ${i}'s uri is not text`);
-    // a uri that does not decode (a bad % escape, a data: URI fetch refuses) is a damaged file,
-    // not the engine's "URIError: URI malformed" / "TypeError: fetch failed"
-    const unread = () => damaged(`buffer ${i}'s uri "${b.uri.length > 80 ? `${b.uri.slice(0, 80)}...` : b.uri}" cannot be read`);
-    // (a data: URI decoded by fetch: new Response(uri) gave the URI's own text as the buffer)
+    // (each buffer by the one rule, the list check's too: js/formats.js gltfBufferRefusal -- r84 A3;
+    // a uri that does not decode is a damaged file, not the engine's "URIError: URI malformed")
+    const refused = gltfBufferRefusal(b, i, file, !!bin, (nm) => companion(files, nm));
+    if (refused) throw new Error(refused);
+    if (b.uri === undefined) return bin;
+    // (a data: URI decoded by fetch: new Response(uri) gave the URI's own text as the buffer; one fetch
+    // refuses, the damaged words -- "TypeError: fetch failed" otherwise)
     if (b.uri.startsWith('data:')) {
-      try { return await (await fetch(b.uri)).arrayBuffer(); } catch { throw unread(); }
+      try { return await (await fetch(b.uri)).arrayBuffer(); } catch { throw damaged(`buffer ${i}'s uri "${b.uri.length > 80 ? `${b.uri.slice(0, 80)}...` : b.uri}" cannot be read`); }
     }
-    let nm;
-    try { nm = decodeURIComponent(b.uri); } catch { throw unread(); }
-    const f = companion(files, nm);
-    if (!f) throw new Error(GLTF_WORDS.needs(file, b.uri));
-    return f;
+    return companion(files, decodeURIComponent(b.uri));
   }));
   // each accessor read once, however many placements (instances, nodes) use it: a mesh placed
   // 40 times walked its 22 M-colour COLOR_0 40 times. (Its values are not written by a reader.)

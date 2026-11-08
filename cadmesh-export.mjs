@@ -24,7 +24,7 @@
 // Test: tests/test-cadmesh-export.mjs.
 import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { bodyLabels, decodeCadmesh, inflateCadmesh } from './js/cadmesh.js';
+import { bodyLabels, decodeCadmesh, inflateCadmesh, notMmWords } from './js/cadmesh.js';
 import { EXPORTS, ExportRefused, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
 import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
@@ -45,6 +45,9 @@ const usage = (msg) => { throw new CliError(msg); };
 export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp = 'z', orient = MODEL_UP[modelUp], skip = null, base = 'model', table = EXPORTS } = {}) {
   const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const model = decodeCadmesh(await inflateCadmesh(ab));
+  // (the writers write millimetres: a model in another unit refused, as the page refuses -- r84 A5)
+  const notMm = notMmWords(model.header, 'an export is');
+  if (notMm) throw new Error(notMm);
   // (bodies labelled as the page labels them, "owner › body"; --skip matches the label or the name;
   // the bodies with a triangle, as the page exports, counted as written)
   const labels = bodyLabels(model.header);
@@ -78,13 +81,14 @@ async function main() {
   if (!inp) usage('no input file');
   const to = (opt('--to') || KINDS.join(',')).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   if (!to.length) usage('--to names no format');
-  for (const k of to) if (!EXPORTS[k]) usage(`--to: unknown format "${k}" ${KIND_WORDS}`);
+  // (own keys only: "constructor" or "__proto__" passed the plain lookup and threw past the usage words, r84 A7)
+  for (const k of to) if (!Object.hasOwn(EXPORTS, k)) usage(`--to: unknown format "${k}" ${KIND_WORDS}`);
   // (a format named twice wrote and printed the one file twice)
   if (new Set(to).size < to.length) usage('--to names a format twice');
   // (--orient and --model-up are alternatives: the one silently overrode the other)
   if (opt('--orient') && opt('--model-up')) usage('give one of --orient / --model-up');
   const modelUp = opt('--model-up') || 'z';
-  if (!MODEL_UP[modelUp]) usage(`--model-up must be y or z, not "${modelUp}"`);
+  if (!Object.hasOwn(MODEL_UP, modelUp)) usage(`--model-up must be y or z, not "${modelUp}"`);
   let orient = MODEL_UP[modelUp];
   if (opt('--orient')) { try { orient = parseOrient(opt('--orient')); } catch (e) { usage(`--orient: ${e.message}`); } }
   const skipSrc = opt('--skip');
