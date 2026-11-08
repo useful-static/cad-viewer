@@ -1266,6 +1266,23 @@ await test('a 3MF inside a zip, or named .zip, is read by the page\'s 3MF reader
     nr.push(`${r.level} ${/has no triangles to show/.test(r.detail) ? 'none' : ''}${/· 3MF\b/.test(r.detail) ? '3MF' : ''}`);
   }
   assert.deepEqual(nr, ['bad none3MF', 'ok 3MF', 'ok 3MF'], JSON.stringify(nr));
+  // (and past 64 KB, from the page's own site (a Response of type 'basic': no count, only the head
+  // read) and from another: the arm above is read whole by its sniff and never reached the whole
+  // fetch -- r90 Q1's mutant passed it, r91 Q2. A stored part, so the package stays past 64 KB)
+  const asType = (res, type) => new Proxy(res, { get(t, k) { if (k === 'type') return type; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } });
+  const noRangeAs = (b, type) => async () => asType(new Response(b, { status: 200, headers: { 'content-length': String(b.length) } }), type);
+  const big = (part) => miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', Buffer.from(part)]]);
+  const bigNoTri = model3mf(100000).replace(/<triangles>.*<\/triangles>/, '<triangles></triangles>');
+  const nb = [];
+  for (const type of ['basic', 'cors']) {
+    for (const [part, url] of [[bigNoTri, 'x.3mf'], [model3mf(100000), 'x.3mf'], [bigNoTri, 'x.zip']]) {
+      const bytes = big(part);
+      assert.ok(bytes.length > 65536);
+      const r = await checkFile(`${B}${url}`, { fetchFn: noRangeAs(bytes, type), sniff: true });
+      nb.push(`${type} ${r.level} ${/has no triangles to show/.test(r.detail) ? 'none' : ''}`);
+    }
+  }
+  assert.deepEqual(nb, ['basic bad none', 'basic ok ', 'basic bad none', 'cors bad none', 'cors ok ', 'cors bad none'], JSON.stringify(nb));
 });
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

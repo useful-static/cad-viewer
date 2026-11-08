@@ -5456,11 +5456,8 @@ function fillInfo2D(el) {
   if (e) {
     // in Auto's unit for the drawing's, by its size, as 2D Measure and the 3D panel: by the one rule
     // (js/units.js unconvertedNum: r89 A5, r90 A2)
-    const span = Math.max(e.max[0] - e.min[0], e.max[1] - e.min[1]) || 1;
-    const shown = unconvertedUnit(d.units, span);
-    const u = shown ? unitWord(shown) : d.units ? unitWord(d.units) : 'units';
-    const n = (v) => unconvertedNum(v, 'size', d.units, span);
-    row(`size (${u})`, `${n(e.max[0] - e.min[0])} × ${n(e.max[1] - e.min[1])}`);
+    // (the span and the unit's word by 2D Measure's own functions: r91 A2, Q3)
+    row(...dxfViewLib.sizeRow(e, d.units));
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   row('layers', `${fmtInt(d.layers.length)}`);
@@ -6343,8 +6340,10 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 // written, r88 A8; modelSizeMm is then in the model's own units)
 const shownUnconverted = () => unconvertedUnit(app.header.units, modelSizeMm());
 const lenUnit = () => (geomMm() ? curUnit() : shownUnconverted() || headerUnitWord(app.header.units));
-// (and the 2D view's noise floor, a billionth of the model's size: "-1e-9" read as an overhang -- r90 A5)
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm(), modelSizeMm() * 1e-9)); // (r87 Q3, r88 A3)
+// (and a noise floor at float32's resolution of the model's size, a ten-millionth: "-1e-9" read as an
+// overhang -- r90 A5; at a billionth a face-to-face gap of a 10 ft model read "-0.000000762939" -- r91 Q5)
+const LEN_NOISE = 1e-7;
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm(), modelSizeMm() * LEN_NOISE)); // (r87 Q3, r88 A3)
 // a length typed in lenUnit, back in model units (the section field)
 const lenBack = (v) => (geomMm() ? v * MM_PER[curUnit()] : unconvertedBack(v, app.header.units, modelSizeMm()));
 
@@ -6395,6 +6394,7 @@ function setUnitChoice(u) {
   setPref('cadv.units', app.unitChoice === 'auto' ? null : app.unitChoice);
   showInfo();
   updateButtons(); // the section readout
+  app.measure?.relabel(); // (and Measure's results: r91 Q1)
 }
 
 function showInfo() {

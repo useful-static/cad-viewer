@@ -13,7 +13,7 @@
 
 import { itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
-import { unconvertedNum, unconvertedUnit, unitWord } from './units.js';
+import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
@@ -42,9 +42,23 @@ const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 // from its points), shown as 0
 export function measureText(d, dx, dy, unit, span) {
   const fmt = (v) => unconvertedNum(v, 'measure', unit, span, span * 1e-9);
-  const shown = unconvertedUnit(unit, span);
-  const word = shown ? unitWord(shown) : unit ? unitWord(unit) : '';
-  return `${fmt(d)}${word ? ` ${word}` : ''} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}`;
+  return `${lengthText(d, unit, span)} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}`;
+}
+// One length of 2D Measure with its unit's word, by measureText's rule: the readout and the hover's
+// Ø (the hover kept a deleted formatter and threw at every circle's centre -- r91 A1)
+export function lengthText(v, unit, span) {
+  const word = unconvertedWord(unit, span);
+  return `${unconvertedNum(v, 'measure', unit, span, span * 1e-9)}${word ? ` ${word}` : ''}`;
+}
+// A drawing's size in its own units, from its extents: the one span 2D Measure and the 2D info read
+export const drawingSpan = (ext) => (ext ? Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) : 0) || 1;
+// The 2D info panel's size row of a drawing of these extents and unit: [its label, its value], by
+// 2D Measure's unit and span (pure, so a test reaches it: taking the span out passed every test --
+// r91 Q3)
+export function sizeRow(ext, unit) {
+  const span = drawingSpan(ext);
+  const n = (v) => unconvertedNum(v, 'size', unit, span);
+  return [`size (${unconvertedWord(unit, span) || 'units'})`, `${n(ext.max[0] - ext.min[0])} × ${n(ext.max[1] - ext.min[1])}`];
 }
 export function finitePointIds(xy, n) {
   const ids = new Uint32Array(n);
@@ -244,8 +258,6 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // an item not shown: its layer off, or a frozen layer of a block reference it is drawn under
   // (js/dxf.js layersOf / hold: a reference on a frozen layer draws none of its block -- r64 Q1)
   const hid = (it) => layersOf(it).some((n) => st.off.has(n));
-  // the drawing's unit as written for a reader ("µm"), as the info panel writes it
-  const units = drawing.units ? unitWord(drawing.units) : '';
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
@@ -494,7 +506,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // that finds no line
   let txtIndex = null;
   const textsIndexed = () => txtIndex || (txtIndex = textIndex(drawing.texts, (t) => textCorners(t, linesOf(t), widthOf(t)), o));
-  const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
+  const span = drawingSpan(ext);
   function measureClick(px, py) {
     const s = snapAt(px, py);
     const p = s ? [s[0], s[1]] : toUnits(px, py);
@@ -549,7 +561,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     if (!pts.has(e.pointerId)) {
       if (st.measure) {
         const s = snapAt(...p);
-        if (s !== st.snap) { st.snap = s; draw(); if (cb.onHover) cb.onHover(s ? `${s[2]}${s[2] === 'centre' ? ` (Ø ${fmt(2 * s[4])}${units ? ` ${units}` : ''})` : ''}` : null, true); }
+        if (s !== st.snap) { st.snap = s; draw(); if (cb.onHover) cb.onHover(s ? `${s[2]}${s[2] === 'centre' ? ` (Ø ${lengthText(2 * s[4], drawing.units, span)})` : ''}` : null, true); }
         return;
       }
       // hover: the layer under the pointer, un-faded

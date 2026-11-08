@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { UNITS, blockKey, parseDXF,layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
+import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, sizeRow, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
 import { boxTree, nearestItem } from '../js/box-tree.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
@@ -122,6 +122,14 @@ test('2D Measure\'s readout by the 3D panel\'s rule: its unit\'s decimals, Auto\
   assert.equal(measureText(4, 4, 0, 'm', 5), '4.0000 m · ΔX 4.0000 · ΔY 0.0000');
   assert.equal(measureText(1.5, 1.5, 1e-12, 'US ft', 10), '1.5 US ft · ΔX 1.5 · ΔY 0');
   assert.equal(measureText(1.5, 0, 1.5, null, 10), '1.5 · ΔX 0 · ΔY 1.5');
+});
+test('the 2D info\'s size row by 2D Measure\'s unit and span: a drawing in metres 0.1 m across in mm, 5 m across in m (r91 Q3)', () => {
+  // (must fire: "size (m) 0.100 × 0.050" beside 2D Measure's mm -- r90 A2's fault in the info panel)
+  const ext = (w, h) => ({ min: [0, 0], max: [w, h] });
+  assert.deepEqual(sizeRow(ext(0.1, 0.05), 'm'), ['size (mm)', '100.0 × 50.0']);
+  assert.deepEqual(sizeRow(ext(5, 2), 'm'), ['size (m)', '5.000 × 2.000']);
+  assert.deepEqual(sizeRow(ext(100, 50), 'mm'), ['size (mm)', '100.0 × 50.0']);
+  assert.deepEqual(sizeRow(ext(3, 1), null), ['size (units)', '3 × 1']);
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)
@@ -1239,6 +1247,26 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.ok(v.snapAt(400, 300));
     v.destroy();
     fail = false;
+  });
+  // (r91 A1: the hover, driven by the view's own pointermove listener -- a deleted formatter threw
+  // "fmt is not defined" at every circle's centre and the label kept "end")
+  await test('2D Measure\'s hover over a circle\'s centre: its Ø by the readout\'s rule, in mm and in a 0.1 m drawing (r91 A1)', () => {
+    const on = {};
+    const cv = { ...canvas, addEventListener(k, f) { on[k] = f; } };
+    const drawingIn = (ins, k) => parseDXF(dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, ins], [0, 'ENDSEC'],
+      [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 100 * k], [21, 0],
+      [0, 'CIRCLE'], [8, '0'], [10, 50 * k], [20, 20 * k], [40, 2 * k], [0, 'ENDSEC'], [0, 'EOF']]));
+    for (const [ins, k] of [[4, 1], [6, 0.001]]) {
+      const hovers = [];
+      const v = createDxfView(cv, drawingIn(ins, k), { onHover: (w) => hovers.push(w) });
+      v.setMeasure(true);
+      const e0 = v.toPx(0, 0);
+      on.pointermove({ pointerId: 1, clientX: e0[0], clientY: e0[1] });
+      const c = v.toPx(50 * k, 20 * k);
+      on.pointermove({ pointerId: 1, clientX: c[0], clientY: c[1] });
+      assert.deepEqual(hovers, ['end', 'centre (Ø 4.00 mm)'], `$INSUNITS ${ins}`);
+      v.destroy();
+    }
   });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];

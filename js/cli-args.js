@@ -12,6 +12,7 @@
 // -h) as its value -- another word beginning with "-" is a value ("--orient -z+y"); an option
 // given twice; more than `max`
 // positional words. `--opt=value` is the same as `--opt value`. A lone "-" is a positional word.
+// "--" ends the options: every word after it is positional ("-old.dwg" -- r90 Q4, r91 A4).
 //
 //   runCli('split-board', main, USAGE)
 //     the rule's other half: an input the tool cannot read (main throws an Error) is said in one

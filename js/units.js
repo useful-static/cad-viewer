@@ -1,9 +1,11 @@
 // Every quantity the viewer shows goes through here. The geometry is in its
 // header's units: mm for every reader of ours (OpenCascade converts on import);
 // a .cadmesh from another writer in another unit is not converted: its volume and
-// area are shown in that unit "(not converted)" (fmtUnconverted), its lengths in
-// the display unit Auto gives that unit (unconvertedNum, unconvertedUnit: one in
-// metres under a metre across in mm, as converted -- r89 Q1), and it is refused by
+// area are shown in that unit "(not converted)" (fmtUnconverted), its lengths, where
+// that unit is a display row (mm, cm, m, in), in the display unit Auto gives it
+// (unconvertedNum, unconvertedUnit, unconvertedWord: one in metres under a metre
+// across in mm, as converted -- r89 Q1), else in that unit itself to 6 significant
+// digits (ft, dm, km, yd, µm: r91 A3), and it is refused by
 // the exports, Save drawing and the mass (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
 // the user's choice, or Auto, the unit the file declares (header.sourceUnits).
 //
@@ -132,7 +134,8 @@ export function unconvertedNum(x, kind = 'measure', word = null, size = Infinity
   if (Math.abs(x) < noise) x = 0;
   const d = unconvertedUnit(word, size);
   if (d) return fmtNum(x * LENGTH_MM[lengthUnitOf(word)], kind, d);
-  return String(Number(x.toPrecision(6)));
+  // (never in exponent form: a 0.4 mm part of a km model read "4e-7 km" -- r91 A3)
+  return Number(x.toPrecision(6)).toLocaleString('en-US', { maximumSignificantDigits: 6, useGrouping: false });
 }
 // The display unit such a length is shown in, where the header's unit is a display row: Auto's
 // choice for that unit, as the converted path makes it -- a model in metres under a metre across in
@@ -141,6 +144,14 @@ export function unconvertedNum(x, kind = 'measure', word = null, size = Infinity
 export function unconvertedUnit(word, size = Infinity) {
   const u = lengthUnitOf(word);
   return u && Object.hasOwn(MM_PER, u) ? autoUnit(u, size * MM_PER[u]) : null;
+}
+// The word for the unit such a length is shown in: unconvertedUnit's, else the header's unit as
+// written (headerUnitWord), null for no unit -- the one answer for the 3D panel's lengths, the 2D
+// info's size row, 2D Measure's readout and its hover's Ø (four spellings, and the hover's broke:
+// r91 A1, A2)
+export function unconvertedWord(word, size = Infinity) {
+  const shown = unconvertedUnit(word, size);
+  return shown ? unitWord(shown) : word ? headerUnitWord(word) : null;
 }
 // A length typed in the unit unconvertedUnit shows, back in the model's own units
 export function unconvertedBack(v, word, size = Infinity) {

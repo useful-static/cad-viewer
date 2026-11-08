@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unconvertedWord, unitSaid, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
@@ -39,6 +39,11 @@ test('a geometry unit by its one name, and a volume or area in a unit not conver
   assert.equal(unconvertedNum(1e-12, 'measure', 'furlong', Infinity, 1e-9), '0');
   assert.equal(unconvertedNum(1e-12, 'measure', 'mm', Infinity, 1e-9), '0.00');
   assert.equal(unconvertedNum(0.5, 'measure', 'm', Infinity), '0.5000');
+  // (no exponent form: a 0.4 mm part of a km model "4e-7" -- must fire, r91 A3)
+  assert.deepEqual([4e-7, 1234567.891, -0, -2.5e-8].map((x) => unconvertedNum(x, 'size', 'km', 0.5)), ['0.0000004', '1234570', '0', '-0.000000025']);
+  // (the shown unit's word, one answer for every site: Auto's for a display row, else the header's
+  // as written, null for none -- r91 A2)
+  assert.deepEqual([['m', 0.1], ['m', 5], ['INCH', 3], ['um', 500], ['furlong', 1], [null, 1]].map(([w, s]) => unconvertedWord(w, s)), ['mm', 'm', 'in', 'µm', 'furlong', null]);
   // (must fire: an inch cube's volume "≈ 1 mm³", its area "≈ 6 mm²")
   assert.equal(fmtUnconverted(1, 'inch', 3), '1 inch³ (not converted)');
   assert.equal(fmtUnconverted(6, 'inch', 2), '6 inch² (not converted)');

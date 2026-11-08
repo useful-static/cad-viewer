@@ -2164,15 +2164,16 @@ await test('the units row names the unit the lengths are shown in, for geometry 
       const rereading = () => false;
       ${code}
       syncUnitsRow();
-      return [lenUnit(), lenNum(0.0004, 'size'), lenNum(-1e-12, 'size'), lenBack(12.3)];`)(U, CADMESH.geomIsMm, $, app);
-    rows.push(`${$('unitsrc').textContent} | ${$('unitsel').options[0].text} [${$('unitsel').value}] | ${r[0]} ${r[1]} ${r[2]} ${+r[3].toPrecision(6)}`);
+      return [lenUnit(), lenNum(0.0004, 'size'), lenNum(-1e-12, 'size'), lenBack(12.3), lenNum(-0.8e-7 * app.header.bbox.max[0], 'measure')];`)(U, CADMESH.geomIsMm, $, app);
+    rows.push(`${$('unitsrc').textContent} | ${$('unitsel').options[0].text} [${$('unitsel').value}] | ${r[0]} ${r[1]} ${r[2]} ${+r[3].toPrecision(6)} ${r[4]}`);
   }
   // (must fire: "Auto (mm)" of the 5 m and the inch models, "[in]" of one shown in mm, "INCH"; and the
   // page's own lengths -- a 0.4 mm part "0.000" with no size given, a cut typed as 12.3 mm read back
-  // as 12.3 m, float noise "-0.0" -- r90 A1, Q2)
-  assert.deepEqual(rows, ['m (not converted) | Auto (m) [auto] | m 0.000 0.000 12.3', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123',
-    'in (not converted) | Auto (in) [auto] | in 0.00 0.00 12.3', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123',
-    'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3']);
+  // as 12.3 m, float noise "-0.0" -- r90 A1, Q2; float32's noise on a computed length, a ten-millionth
+  // of the size, "-0.00000024" in a unit with no display row -- r91 Q5)
+  assert.deepEqual(rows, ['m (not converted) | Auto (m) [auto] | m 0.000 0.000 12.3 0.0000', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123 0.00',
+    'in (not converted) | Auto (in) [auto] | in 0.00 0.00 12.3 0.000', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123 0.00',
+    'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3 0']);
 });
 
 done();
