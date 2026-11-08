@@ -96,6 +96,13 @@ test('merge: models in different units are refused in words, either order; mm by
   const x0 = lid.position[0];
   const moved = mergeModels([{ base: inch, name: 'a' }, { base: inch, name: 'b', offset: [25.4, 0, 0] }]);
   assert.ok(Math.abs(moved.position[lid.header.vertexCount * 3] - (x0 + 1)) < 1e-5, `x ${moved.position[lid.header.vertexCount * 3]}`);
+  // (mm by any of its names is mm, to the scene and to every reader of geomIsMm, in either order --
+  // [millimetre, millimeter] was "not converted" and refused every export: r87 A1)
+  for (const order of [['millimeter', 'millimetre'], ['millimetre', 'millimeter'], ['MM', 'millimeters']]) {
+    const sc = mergeModels(order.map((u, i) => ({ base: spelled(u), name: `m${i}` })));
+    assert.equal(CADMESH.geomIsMm(sc.header), true, `${order}: ${sc.header.units}`);
+  }
+  assert.equal(CADMESH.notMmWords({ units: 'millimetre' }, 'x'), null);
   const odd = { ...lid, header: { ...lid.header, units: 'furlong' } };
   assert.throws(() => mergeModels([{ base: odd, name: 'a' }, { base: odd, name: 'b', offset: [1, 0, 0] }]), /b cannot be moved: its lengths are in furlong, which this viewer does not convert from mm/);
   assert.equal(mergeModels([{ base: odd, name: 'a' }, { base: odd, name: 'b' }]).header.meshes.length, 2);

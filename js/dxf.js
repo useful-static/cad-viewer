@@ -289,12 +289,23 @@ export function parseDXF(s, opts = {}) {
     }
   }
   if (!layers.has('0')) layers.set('0', { name: '0', colour: aciColour(7), on: true });
+  // (a layer named by any case is one layer, its table's spelling, as AutoCAD and the line types
+  // here take it: a LINE on "walls" with "WALLS" frozen was drawn, and listed as a second layer --
+  // r87 Q4. One no table names takes the first spelling met.)
+  const layerByUpper = new Map([...layers.keys()].map((n) => [n.toUpperCase(), n]));
+  const layerName = (n) => {
+    const u = String(n).toUpperCase();
+    if (!layerByUpper.has(u)) layerByUpper.set(u, n);
+    return layerByUpper.get(u);
+  };
   // blocks: name -> { base, recs }
   const blocks = new Map();
   if (sec.BLOCKS) {
     let cur = null;
     for (const r of records(ps, ...sec.BLOCKS)) {
-      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20)], recs: [] }; blocks.set(get(r, 2, ''), cur); } else if (r.type === 'ENDBLK') cur = null;
+      // (by upper-case name, as an INSERT finds it: one naming "door" for BLOCK "DOOR" drew nothing
+      // and said nothing -- r87 Q4)
+      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20)], recs: [] }; blocks.set(get(r, 2, '').toUpperCase(), cur); } else if (r.type === 'ENDBLK') cur = null;
       else if (cur) cur.recs.push(r);
     }
   }
@@ -322,7 +333,7 @@ export function parseDXF(s, opts = {}) {
   // each item drawn under them carries them, and is shown only while every one is: r64 Q1; the
   // outermost alone let a frozen reference inside another show, its outer layer turned on: r65 A3)
   const ctxOf = (o) => {
-    const c = { layers, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null };
+    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null };
     c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; addItem(budget, o.paths, p, p.pts.length); } };
     // (an INSERT's ATTRIB comes held already, by its insert's frozen layer: r65 A2)
     c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; addItem(budget, o.texts, t, 2); } };
@@ -372,7 +383,7 @@ export function parseDXF(s, opts = {}) {
     emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
     // a viewport's frame, on its layer
     const frame = (v, rect) => {
-      const layer = get(v, 8, '0');
+      const layer = layerName(get(v, 8, '0'));
       lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
         pts: Float64Array.of(rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]), closed: true, fill: false, frame: true });
     };
@@ -614,6 +625,7 @@ function blockRef(r) {
   return r.ins;
 }
 function walkSize(ctx, name, depth = 0, open = new Set()) {
+  name = String(name).toUpperCase(); // (a block by any case is one block, its chain too: r87 Q4)
   const memo = ctx.walkSizes || (ctx.walkSizes = new Map());
   if (memo.has(name)) return memo.get(name);
   const b = ctx.blocks.get(name);
@@ -679,7 +691,7 @@ function emit(recs, M, byBlock, depth, ctx) {
       }
       continue;
     }
-    let layer = get(r, 8, '0');
+    let layer = ctx.layerName(get(r, 8, '0')); // (by its table's spelling: r87 Q4)
     // an entity on layer 0 inside a block takes the insert's layer
     if (layer === '0' && byBlock && byBlock.layer) layer = byBlock.layer;
     const colour = colourOf(r, ctx, byBlock && byBlock.colour, layer);
@@ -979,7 +991,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // a dimension of any kind draws its block (blockRef). (A DXF's tables and arc dimensions
         // were counted "not drawn", while the same drawing's DWG drew them)
         const q = blockRef(r);
-        const b = ctx.blocks.get(get(q, 2, ''));
+        const b = ctx.blocks.get(get(q, 2, '').toUpperCase());
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)

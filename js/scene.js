@@ -8,7 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, geomIsMm, idToBytes } from './cadmesh.js';
-import { LENGTH_MM, lengthUnitOf, unitWord } from './units.js';
+import { LENGTH_MM, lengthUnitOf, unitSaid } from './units.js';
 import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
@@ -26,8 +26,6 @@ const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 // the first model in another unit than the first's. (A unit by its one name, js/units.js
 // lengthUnitOf: "in" and "inch" were refused as two units -- r86 A8.)
 const unitKey = (h) => (geomIsMm(h) ? 'mm' : lengthUnitOf(h.units) || String(h.units));
-const SAID = { mm: 'millimetres', cm: 'centimetres', m: 'metres', um: 'micrometres', in: 'inches', ft: 'feet', yd: 'yards' };
-const unitSaid = (k) => SAID[k] || (Object.hasOwn(LENGTH_MM, k) ? unitWord(k) : k);
 export function sceneUnitsRefusal(models) {
   const first = unitKey(models[0].base.header);
   const other = models.find((m) => unitKey(m.base.header) !== first);
@@ -115,6 +113,8 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   }
   const first = models[0].base.header;
   const header = {
+    // (the first model's spelling: every reader of it, js/cadmesh.js geomIsMm, takes a unit by its one
+    // name, so [millimetre, millimeter] is mm in either order -- r87 A1)
     units: first.units, vertexCount: vc, indexCount: ic, meshes,
     bbox: min[0] === Infinity ? null : { min, max },
     root: { name: 'Scene', meshes: [], children },

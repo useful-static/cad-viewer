@@ -459,6 +459,9 @@ function parseOBJ(s, files, base) {
   // reached a second, different "o"/"g" branch)
   const ws = (c) => (c <= 32 ? c === 32 || c === 9 || c === 13 || c === 11 || c === 12 : c >= 160 && /\s/.test(String.fromCharCode(c)));
   const n = s.length;
+  // a line's end before its comment, if it has one (searched within the line: a search of the
+  // whole text from each line was a pass per line -- r87 Q5)
+  const lineEnd = (a, e) => { for (let j = a; j < e; j++) if (s.charCodeAt(j) === 35) return j; return e; };
   // the "v" lines and the faces' triangles counted against the caps first, by a pass that makes
   // no strings (a 20 MB face of alternating corners was 10 M triangles built, 4.2 s and 1.6 GB);
   // the vertices the bodies copy are held as they are made
@@ -477,7 +480,8 @@ function parseOBJ(s, files, base) {
       if (c0 === 118) nv++; // "v"
       else if (c0 === 102) { // "f": its corners, less 2
         let k = 0, inTok = false;
-        for (let j = a + 1; j < e; j++) { const w = ws(s.charCodeAt(j)); if (!w && !inTok) k++; inTok = !w; }
+        const le = lineEnd(a, e); // (its comment no corners: r87 Q5)
+        for (let j = a + 1; j < le; j++) { const w = ws(s.charCodeAt(j)); if (!w && !inTok) k++; inTok = !w; }
         if (k > 2) nt += k - 2;
       }
     }
@@ -495,8 +499,11 @@ function parseOBJ(s, files, base) {
     if (a === e) continue;
     const c0 = s.charCodeAt(a);
     if (c0 === 35) continue; // '#'
-    if ((c0 === 103 || c0 === 111) && (a + 1 === e || ws(s.charCodeAt(a + 1)))) { start(a + 1, e, base); continue; } // "g", "o"
-    const line = s.slice(a, e).trim();
+    // (a comment after a statement is the line's end: "f 1 2 3 # face" refused the file, "refers to
+    // vertex # of 3", and "usemtl red # paint" named the material with it -- r87 Q5)
+    const le = lineEnd(a, e);
+    if ((c0 === 103 || c0 === 111) && (a + 1 === le || ws(s.charCodeAt(a + 1)))) { start(a + 1, le, base); continue; } // "g", "o"
+    const line = s.slice(a, le).trim();
     if (!line || line[0] === '#') continue;
     const sp = line.split(/\s+/);
     const k = sp[0];

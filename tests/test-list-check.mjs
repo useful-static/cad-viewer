@@ -203,9 +203,11 @@ await test('a DWG of a release the page does not read is bad, in the reader\'s w
   const r2 = await checkFile(`${B}r2-named-dxf.dxf`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(r2.level, 'bad', r2.detail);
   assert.match(r2.detail, /an AC2\.10 DWG \(older than R13\) is not read \(named DXF\)/);
-  // must accept: a release it reads stays ok
+  // must accept: a release it reads is not refused by its release (its reader, past the 16 MB read
+  // here, said not run: r87 A4)
   const r2000 = await checkFile(`${B}r2000.dwg`, { fetchFn: fakeFetch, sniff: true });
-  assert.equal(r2000.level, 'ok', r2000.detail);
+  assert.equal(r2000.level, 'warn', r2000.detail);
+  assert.match(r2000.detail, /^[^·]+· DWG · its reader was not run here/);
 });
 await test('a STEP the site sends without CORS is a warning (a download link needs none); a model so is bad', async () => {
   const step = await checkFile('https://other.example/x.stp', { fetchFn: fakeFetch, method: 'HEAD', download: true });
@@ -554,7 +556,7 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['A1 gzipped', 'pk.stl.gz', gzipSync(stl('PK')), 'ok'],
     // ... and a zip's part.stl holding a zip: the page reads it as an STL, damaged (must fire: "ok")
     // ... in a zip, a 95 MB one, judged by its size, not read whole as a zip (must fire: "not read here")
-    ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', deflateRawSync(Buffer.concat([bigPk.subarray(0, 84), Buffer.alloc(50 * 2_000_000)])), 84 + 50 * 2_000_000, 8]]), 'ok'], // (true to its data: r79 Q2)
+    ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', deflateRawSync(Buffer.concat([bigPk.subarray(0, 84), Buffer.alloc(50 * 2_000_000)])), 84 + 50 * 2_000_000, 8]]), 'warn:its reader was not run here'], // (true to its data: r79 Q2; 100 MB, past what is read here: r87 A4)
     ['A1 a zip as part.stl', 'outer.zip', miniZip([['part.stl', miniZip([['in.stl', stl()]])]]), 'bad'],
     // A2: the rels part past 64 KB naming the root (must fire: "no model part"); a bzip2 rels (must fire: "ok")
     ['A2 rels past 64 KB', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/plate.model', 70000)], ['3D/plate.model', model3mf()]]), 'ok'],
@@ -568,7 +570,7 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['r79 A8 a PLY named .obj', 'part.zip', miniZip([['part.obj', 'ply\nformat ascii 1.0\nelement vertex 0\nend_header\n'], ['part.png', 'x', undefined, 12]]), 'warn:opens as one'],
     ['r78 A1 an STL\'s', 'part.zip', miniZip([['part.stl', stl()], ['part.png', 'x', undefined, 12]]), 'ok'],
     ['r78 A1 a STEP\'s', 'part.zip', miniZip([['part.step', 'ISO-10303-21;\nHEADER;\n'], ['preview.png', 'x', undefined, 12]]), 'ok'],
-    ['r78 A1 a DXF\'s', 'plan.zip', miniZip([['plan.dxf', '0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n'], ['a.png', bigDeflate, 1.5 * 2 ** 30, 8], ['b.png', bigDeflate, 1.5 * 2 ** 30, 8]]), 'ok'],
+    ['r78 A1 a DXF\'s', 'plan.zip', miniZip([['plan.dxf', '0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n'], ['a.png', bigDeflate, 1.5 * 2 ** 30, 8], ['b.png', bigDeflate, 1.5 * 2 ** 30, 8]]), 'ok'],
     // (deflated, past 1 MB each: sized by the directory, as the page holds a deflated entry -- stored ones
     // claiming 1.5 GB were 1 byte each to the page, which opened the OBJ: r78 Q2)
     // (r79 A2: each held to what the ones before leave, as the page reads it -- a.png's 1.1 MB, then
@@ -1053,7 +1055,7 @@ await test('an STL, OBJ, PLY or OFF the page\'s reader refuses is refused by the
   for (const [what, fmt, n, want] of [
     ['an 18 MB PLY, binary_middle_endian', 'binary_middle_endian', 1500000, 'bad:format binary_middle_endian is not ascii or binary'],
     ['an 18 MB PLY counting 24 MB of vertices', 'binary_little_endian', 2000000, 'bad:element vertex counts 2000000, more than the file holds'],
-    ['an 18 MB PLY (control)', 'binary_little_endian', 1500000, 'ok']]) {
+    ['an 18 MB PLY (control): its header held, its reader said not run', 'binary_little_endian', 1500000, 'warn:its reader was not run here']]) {
     const r = await checkFile(`${B}big.ply`, { fetchFn: ranged(bigPly(fmt, n)), sniff: true });
     const [lv, word] = want.split(/:(.*)/);
     wanted.push([what, want]);
@@ -1131,6 +1133,64 @@ await test('every mesh and 2D format by the page\'s own reader, one verdict what
   wanted.push(['Q1 a HEAD naming the gzip\'s length', 'not bad']);
   got.push(['Q1 a HEAD naming the gzip\'s length', q1.level !== 'bad' ? 'not bad' : `${q1.level}: ${q1.detail}`]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((x, i) => x[1] !== wanted[i][1])));
+});
+await test('a drawing that draws nothing, the companions a reader is handed, a reader not run said (r87 A2-A4)', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const ranged = (b) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    if (+m[1] >= b.length) return new Response(null, { status: 416 });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(e - a + 1), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const empty = Buffer.from('0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n');
+  const oneLine = Buffer.from('0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n');
+  const badObj = Buffer.from(OBJ_TRI.replace('f 1 2 3', 'f 1 2 9'));
+  const noTri = Buffer.from('solid x\nendsolid x\n');
+  const bigPng = Buffer.alloc(17 * 2 ** 20, 7);
+  const z = (entries) => miniZip(entries.map(([n, b]) => [n, deflateRawSync(b), b.length, 8]));
+  // a 17 MB OBJ whose last line names a vertex past its three (r87 A4)
+  const bigObj = Buffer.concat([Buffer.from(`${OBJ_TRI.slice(0, OBJ_TRI.indexOf('f '))}${'# '.padEnd(99, 'x')}\n`.repeat(1)), Buffer.alloc(17 * 2 ** 20, 0x23).fill('\n', 0, 1), Buffer.from('\nf 1 2 9\n')]);
+  const rows = [
+    // A2: the page refuses a drawing that draws nothing (must fire: "ok"); served, gzipped, zipped
+    ['A2 an empty DXF', 'plan.dxf', empty, 'bad:plan.dxf has nothing to draw'],
+    ['A2 an empty DXF, gzipped', 'plan.dxf.gz', gzipSync(empty), 'bad:plan.dxf has nothing to draw'],
+    ['A2 an empty DXF, zipped', 'plan.zip', z([['plan.dxf', empty]]), 'bad:plan.dxf has nothing to draw'],
+    ['A2 one LINE (control)', 'plan.dxf', oneLine, 'ok'],
+    // A3: a damaged model beside a 17 MB picture -- read, the picture too large to hand here: not "ok"
+    // (must fire: "ok · zip"); an STL is handed none, so read whatever is beside it (must fire: "ok")
+    ['A3 an OBJ beside a 1 KB picture', 'c.zip', z([['chair.obj', badObj], ['texture.png', Buffer.alloc(1024, 7)]]), 'bad:refers to vertex 9 of 3'],
+    ['A3 an OBJ beside a 17 MB picture', 'c.zip', z([['chair.obj', badObj], ['texture.png', bigPng]]), 'warn:its companion files come to more than'],
+    ['A3 an STL beside a 17 MB picture', 'p.zip', z([['part.stl', noTri], ['texture.png', bigPng]]), 'bad:part.stl has no triangles to show'],
+    // A4: past the 16 MB read here, its reader said not run (must fire: "ok · 17.1 MB · OBJ")
+    ['A4 a 17 MB OBJ', 'big.obj', bigObj, 'warn:its reader was not run here'],
+    // (and one held whole past it: a small gzip of it, kept unpacked -- must fire: "ok")
+    ['A4 a 17 MB OBJ in a small gzip', 'big.obj.gz', gzipSync(bigObj), 'warn:its reader was not run here'],
+  ];
+  // Q2: nginx's add_header without "always": its 416 carries no CORS, so the one byte past the HEAD's
+  // length is a rejected fetch to another site's page -- the size unconfirmed, the file still read for
+  // its reader (must fire: "warn · size not given", the reader never run)
+  const noCors416 = (b) => async (u, o = {}) => {
+    if (o.method === 'HEAD') return new Response(null, { status: 200, headers: { 'content-length': String(b.length) } });
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    if (+m[1] >= b.length) throw new TypeError('Failed to fetch');
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(e - a + 1) } });
+  };
+  const longBad = Buffer.from(`${'# a comment line of the kind exporters write\n'.repeat(4500)}${badObj}`);
+  const longGood = Buffer.from(`${'# a comment line of the kind exporters write\n'.repeat(4500)}${OBJ_TRI}`);
+  rows.push(['Q2 a 200 KB OBJ the page refuses, a 416 with no CORS', 'q.obj', longBad, 'bad:refers to vertex 9 of 3', noCors416]);
+  rows.push(['Q2 a 200 KB OBJ it opens, a 416 with no CORS (control)', 'q.obj', longGood, 'warn:size not given', noCors416]);
+  const got = [];
+  for (const [what, name, b, want, host = ranged] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: host(b), sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  const wanted = rows.map(([what, , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

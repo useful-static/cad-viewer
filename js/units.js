@@ -28,8 +28,14 @@ export const LENGTH_MM = {
 const LONG_NAMES = {
   nanometer: 'nm', nanometre: 'nm', micrometer: 'um', micrometre: 'um', micron: 'um', millimeter: 'mm', millimetre: 'mm',
   centimeter: 'cm', centimetre: 'cm', decimeter: 'dm', decimetre: 'dm', meter: 'm', metre: 'm', kilometer: 'km', kilometre: 'km',
-  inch: 'in', inches: 'in', foot: 'ft', feet: 'ft', yard: 'yd', mile: 'mi',
+  inch: 'in', foot: 'ft', feet: 'ft', yard: 'yd', mile: 'mi',
 };
+// (each name's plural too: "inches" was one and "millimeters" not -- r87 A1)
+for (const [n, k] of Object.entries({ ...LONG_NAMES })) if (n !== 'feet' && n !== 'foot') LONG_NAMES[n.endsWith('ch') ? `${n}es` : `${n}s`] = k;
+// The words for a unit in a sentence ("millimetres", "inches"), its short name past these: the one
+// table the scene's refusal and the re-read's words read (r87 A5: three tables disagreed)
+const SAID = { mm: 'millimetres', cm: 'centimetres', m: 'metres', um: 'micrometres', in: 'inches', ft: 'feet', yd: 'yards' };
+export const unitSaid = (k) => SAID[k] || (Object.hasOwn(LENGTH_MM, k) ? unitWord(k) : String(k));
 export function lengthUnitOf(word) {
   if (typeof word !== 'string') return null;
   const w = word.trim();
@@ -107,6 +113,9 @@ export function fmtArea(mm2, unit) {
 // A volume (power 3) or an area (power 2) of a model whose geometry is in a unit the viewer does not
 // convert (js/cadmesh.js geomIsMm false): in that unit, as its lengths are shown -- fmtVolume and
 // fmtArea read their number as mm³ / mm², and an inch cube read "≈ 1 mm³" (r86 A4)
+// A length in such a unit, as a plain number of 4 significant digits (it may be typed back, as the
+// section's is): to one decimal, a 0.062 in board read "0.1" and a 2.25 in one "2.3" -- r87 Q3
+export const unconvertedNum = (x) => (Number.isFinite(x) ? String(Number(x.toPrecision(4))) : String(x));
 export function fmtUnconverted(x, unit, power) {
   return `${sig4(x)} ${unit}${power === 3 ? '³' : '²'} (not converted)`;
 }

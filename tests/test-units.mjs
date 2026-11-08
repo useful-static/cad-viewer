@@ -3,12 +3,19 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedNum, unitSaid, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
 test('a geometry unit by its one name, and a volume or area in a unit not converted (r86 A4, A5, A8)', () => {
   assert.deepEqual(['in', 'inch', 'INCH', 'Inches', 'millimeter', 'mm', 'metre', 'cm', 'furlong', 7].map(lengthUnitOf), ['in', 'in', 'in', 'in', 'mm', 'mm', 'm', 'cm', null, null]);
+  // (each name's plural too: "inches" was one and "millimeters" not -- r87 A1)
+  assert.deepEqual(['millimeters', 'meters', 'centimetres', 'inches', 'feet'].map(lengthUnitOf), ['mm', 'm', 'cm', 'in', 'ft']);
+  // (a unit in a sentence by one table: "read in cm" beside "in centimetres" -- r87 A5)
+  assert.deepEqual(['mm', 'cm', 'in', 'um', 'furlong'].map(unitSaid), ['millimetres', 'centimetres', 'inches', 'micrometres', 'furlong']);
+  // (a length in such a unit to 4 significant digits, typed back as it reads: "2.3 × 1.5 × 0.1" of a
+  // 2.25 × 1.5 × 0.062 in board -- r87 Q3)
+  assert.deepEqual([2.25, 1.5, 0.062, 1234.56, 0].map(unconvertedNum), ['2.25', '1.5', '0.062', '1235', '0']);
   // (must fire: an inch cube's volume "≈ 1 mm³", its area "≈ 6 mm²")
   assert.equal(fmtUnconverted(1, 'inch', 3), '1 inch³ (not converted)');
   assert.equal(fmtUnconverted(6, 'inch', 2), '6 inch² (not converted)');

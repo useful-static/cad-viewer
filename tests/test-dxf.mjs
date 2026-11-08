@@ -88,6 +88,16 @@ test('the hatch is filled; the ellipse spans 20 x 10; the spline is a line', () 
   const s = d.paths.find((x) => range(x, 1)[0] === 200);
   assert.ok(s && Math.abs(range(s, 0)[1] - 10) < 1e-9, 'spline');
 });
+test('a layer or block named in another case is that layer or block (r87 Q4)', () => {
+  const p = (...a) => new TextEncoder().encode(a.join('\n') + '\n').buffer;
+  const line = (l) => ['0', 'LINE', '8', l, '10', '0', '20', '0', '11', '1', '21', '1'];
+  const d = parseDXF(p('0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '0', 'LAYER', '2', 'WALLS', '70', '1', '62', '7', '0', 'ENDTAB', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'BLOCKS', '0', 'BLOCK', '2', 'Door', '10', '0', '20', '0', ...line('0'), '0', 'ENDBLK', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES', ...line('walls'), '0', 'INSERT', '2', 'door', '8', '0', '10', '5', '20', '5', '0', 'ENDSEC', '0', 'EOF'));
+  // (must fire: a second, visible "walls" layer, and the door drawing nothing)
+  assert.deepEqual(d.layers.map((l) => l.name), ['WALLS', '0']);
+  assert.deepEqual(d.paths.map((x) => x.layer), ['WALLS', '0']);
+});
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)
   assert.equal(mtextPlain(String.raw`one\Ncol`), 'one\ncol');

@@ -13,7 +13,7 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, takesCompanions, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
 import { gltfPlanRefusal, parseMesh, plyPlanRefusal } from './mesh-formats.js';
 import { readDrawing } from './read-file.js';
@@ -30,26 +30,59 @@ const ZIP_KEPT = 64 * 2 ** 20;
 // check kept a hand list of four, and said "ok" of files of the other five the page refuses (r85 Q3,
 // r86 A1). A larger PLY is held to its header's rules, from its start (plyPlanRefusal).
 const readsHere = (label) => FORMATS.find((f) => f.label === label && (f.kind === 'mesh' || f.kind === '2d')) || null;
-// (the bound on what is read here, and what it costs: the readers run on this page's own thread, not
-// in the page's worker with its 60 s limit -- a 16 MB OBJ took 803 ms, a 3.8 MB face of 2 M corners
-// 1,357 ms, in node -- so it holds the check page about a second a file at most, and a list yields
-// between entries: r86 Q3. Also the most of a body counted where its length may be an encoding's.)
+// (the bound on what is read here: the readers run in js/read-worker.js under CHECK_READ_MS, as the
+// page reads in its own worker -- on this page's thread a 108 KB DXF the page opens held it 11 s,
+// where round 86 said "about a second at most": r86 Q3, r87 Q1. Also the most of a body counted
+// where its length may be an encoding's.)
 const READ_HERE_BYTES = 16 * 2 ** 20;
-// -> the reader's refusal, or null. name: the file's; companions: [{ name, arrayBuffer(max) }], the
-// files the page hands the reader with it (a zip's: js/formats.js zipCompanions), read as the page
-// reads them (js/companions.js readCompanions); past what is read here, not read
-async function readerRefusal(label, bytes, name, companions = []) {
+// The reader's verdict -> { level: 'bad', words } its refusal in its words; { level: 'warn', words }
+// not run here, said (larger than READ_HERE_BYTES, or its companions past what is read here); null,
+// run and opened -- one null for "opened" and "never run" said "ok" of a zip whose 17 MB picture kept
+// its damaged model unread, and of a 17 MB OBJ the page refuses (r87 A3, A4). name: the file's;
+// bytes: the whole file, or null where it is not in hand; companions: [{ name, arrayBuffer(max) }],
+// the files the page hands this reader (a zip's: companionsHanded), read as the page reads them
+// (js/companions.js readCompanions)
+const NOT_RUN = (what) => ({ level: 'warn', words: `its reader was not run here (${what})` });
+async function readerVerdict(label, bytes, name, companions = []) {
   const f = readsHere(label);
-  if (!f || !bytes || bytes.length > READ_HERE_BYTES) return null;
+  if (!f) return null;
+  if (!bytes) return NOT_RUN(`larger than the ${sizeMb(READ_HERE_BYTES)} read here, or not read whole`);
+  if (bytes.length > READ_HERE_BYTES) return NOT_RUN(`larger than the ${sizeMb(READ_HERE_BYTES)} read here`);
   let files = new Map();
-  try { files = await readCompanions(companions, name, () => false, READ_HERE_BYTES - bytes.length); } catch { return null; }
+  try { files = await readCompanions(companions, name, () => false, READ_HERE_BYTES - bytes.length); } catch { return NOT_RUN(`its companion files come to more than the ${sizeMb(READ_HERE_BYTES)} read here`); }
   const buf = bytes.slice().buffer;
+  // (in a worker where there is one, under CHECK_READ_MS, as the page reads in its own: a 108 KB DXF
+  // the page opens held the check page's thread 11 s -- r87 Q1; inline where there is none, node)
+  const msg = { kind: 'check', mesh: f.kind === 'mesh', format: f.kind === 'mesh' ? f.ext[0] : f.label, buf, name, files };
+  const w = await readOffThread(msg);
+  if (w) return w.ok ? null : w.timeout ? NOT_RUN(`it did not finish within ${CHECK_READ_MS / 1000} s here`) : { level: 'bad', words: w.message };
+  const own = bytes.slice().buffer; // (the posted copy is gone with the worker)
   try {
-    if (f.kind === 'mesh') await parseMesh(f.ext[0], buf, name, files);
-    else readDrawing({ buf, format: f.label });
+    if (f.kind === 'mesh') await parseMesh(f.ext[0], own, name, files);
+    else readDrawing({ buf: own, format: f.label, name });
     return null;
-  } catch (e) { return e.message || String(e); }
+  } catch (e) { return { level: 'bad', words: e.message || String(e) }; }
 }
+const CHECK_READ_MS = 10000;
+// msg read by js/read-worker.js -> { ok: true } | { ok: false, message } | { timeout: true }, or null
+// where no worker can run it (none in node, or one that could not start: then read inline)
+function readOffThread(msg) {
+  if (typeof Worker !== 'function' || typeof window === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let w;
+    try { w = new Worker(new URL('./read-worker.js', import.meta.url), { type: 'module' }); } catch { resolve(null); return; }
+    let started = false;
+    const end = (v) => { clearTimeout(t); w.terminate(); resolve(v); };
+    const t = setTimeout(() => end({ timeout: true }), CHECK_READ_MS);
+    w.onmessage = (ev) => { if (ev.data && ev.data.ready) { started = true; return; } end(ev.data && ev.data.ok ? { ok: true } : { ok: false, message: (ev.data && ev.data.message) || 'the read failed' }); };
+    w.onerror = (e) => { e.preventDefault?.(); end(started ? { ok: false, message: e.message || 'the read failed' } : null); };
+    try { w.postMessage(msg, [msg.buf]); } catch { end(null); }
+  });
+}
+// The companions the page hands this reader, from a zip: the reader's own rule, js/formats.js
+// takesCompanions over zipCompanions -- this check handed every reader the zip's companions, where
+// the page hands an STL none (r87 A3)
+const companionsHanded = (label, files, model, opens) => (takesCompanions(label) ? zipCompanions(files, model, opens) : []);
 // (a gzip's size by its last four bytes alone: what else those bytes mean -- r84 Q7)
 const TRAILER_OR_CUT = ' by its last four bytes (or it is cut short, and those bytes are not its size)';
 import { fileUrl } from './open-url.js';
@@ -412,7 +445,7 @@ async function zipEntriesVerdict(src, label, depth) {
   // else its name: js/formats.js takesCompanions; a STEP's or a DXF's were judged, which the page
   // never reads -- r78 A1)
   // (the reader by js/formats.js meshReaderOf, the page's one rule: r79 A8)
-  const companions = meshReaderOf(model, start)?.companions ? zipCompanions(zm.files, model, zm.opens).map((c) => byName(c.path)).filter(Boolean) : [];
+  const companions = companionsHanded(meshReaderOf(model, start)?.label, zm.files, model, zm.opens).map((c) => byName(c.path)).filter(Boolean);
   // (each as the page reads it, main.js loadZip's arrayBuffer(max): its method, its claim against the
   // budget the ones before leave -- a .mtl claiming 3 GB was "ok", the page refusing it, r79 A2 --
   // then counted to that budget)
@@ -489,22 +522,29 @@ async function zipEntriesVerdict(src, label, depth) {
   // (its size as the page has it: r78 Q2; one too large to count here said, not "ok": r80 Q1)
   const sv = startVerdict(model, start, xi.size);
   if (sv) return sv;
-  // (by the page's own reader, the entry read whole with the companions the page hands it (a zip's:
-  // zipCompanions); a larger PLY by its header, from its start -- r85 Q3, r86 A1)
+  // (by the page's own reader, the entry read whole with the companions the page hands it
+  // (companionsHanded); a larger PLY by its header, from its start, and said not run -- r85 Q3,
+  // r86 A1, r87 A3, A4)
   const ml = start ? readerOf(model, start)?.label : null;
+  let readWarn = null;
   if (readsHere(ml)) {
     const name = model.split('/').pop();
-    let said = null;
+    let v = null;
     if (x.usize <= READ_HERE_BYTES) {
       let bytes = null;
       try { bytes = await whole(x, READ_HERE_BYTES); } catch { /* said by the entry's own reading */ }
-      const extras = zipCompanions(zm.files, model, zm.opens).map((c) => ({ name: c.name, arrayBuffer: async (max) => (await whole(byName(c.path), max)).slice().buffer }));
-      said = bytes && await readerRefusal(ml, bytes, name, extras);
-    } else if (ml === 'PLY') said = plyPlanRefusal(start, name.replace(/\.[^.]+$/, ''), xi.size);
-    if (said) return { level: 'bad', words: `its ${model}: ${said}` };
+      const extras = companionsHanded(ml, zm.files, model, zm.opens).map((c) => ({ name: c.name, arrayBuffer: async (max) => (await whole(byName(c.path), max)).slice().buffer }));
+      if (bytes) v = await readerVerdict(ml, bytes, name, extras);
+    } else {
+      const ply = ml === 'PLY' ? plyPlanRefusal(start, name.replace(/\.[^.]+$/, ''), xi.size) : null;
+      v = ply ? { level: 'bad', words: ply } : await readerVerdict(ml, null, name);
+    }
+    if (v && v.level === 'bad') return { level: 'bad', words: `its ${model}: ${v.words}` };
+    if (v) readWarn = { level: 'warn', words: `its ${model}: ${v.words}` };
   }
   if (glWarn) return glWarn;
   if (cmWarn) return cmWarn;
+  if (readWarn) return readWarn;
   if (!(xi.unchecked || anyUnchecked)) return null;
   return { level: 'warn', words: `${xi.unchecked ? `its ${model}` : `a companion of ${model}`} holds more than ${sizeMb(ZIP_KEPT)} of data: its data and size were not checked here` };
 }
@@ -526,9 +566,9 @@ async function bytesVerdict(bytes, name, depth) {
   if (typeof cut === 'string') return { level: 'bad', words: `its ${name}: ${cut}` };
   const sv = startVerdict(name, bytes.subarray(0, 65536), bytes.length);
   if (sv) return sv;
-  // (and the page's own reader, the whole in hand: r85 Q3)
-  const said = await readerRefusal(label, bytes, name);
-  return said ? { level: 'bad', words: `its ${name}: ${said}` } : null;
+  // (and the page's own reader, the whole in hand: r85 Q3; or said not run, r87 A4)
+  const v = await readerVerdict(label, bytes, name);
+  return v ? { level: v.level, words: `its ${name}: ${v.words}` } : null;
 }
 // A file of this name, start and size by the size and text rules: past the file limit, empty, a text
 // format past the text limit, a binary STL cut short
@@ -844,17 +884,21 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   if (sniff && readsHere(sizeFormat)) {
     const file = fileNameOfUrl(url).replace(/\.gz$/i, '');
     let whole = sizeGz ? gzKept : wholeStart;
-    if (!whole && total && total <= READ_HERE_BYTES) {
+    // (and where its size is not known -- a HEAD's length unconfirmed, nginx sending its 416 with no
+    // CORS -- fetched and counted to READ_HERE_BYTES as well: a 200 KB OBJ the page refuses read
+    // "size not given", a warning, its reader never run -- r87 Q2)
+    if (!whole && (total ? total <= READ_HERE_BYTES : !uncounted)) {
       try {
         const w = await fetchFn(fetchUrl, { cache: 'no-store' });
         if (w.ok) {
-          const all = new Uint8Array(await w.arrayBuffer());
-          whole = sizeGz && isGzip(all) ? new Uint8Array(await gunzip(all, READ_HERE_BYTES)) : all;
+          const got = await bodyCounted(w, 0, READ_HERE_BYTES, READ_HERE_BYTES);
+          if (got.all) whole = sizeGz && isGzip(got.all) ? new Uint8Array(await gunzip(got.all, READ_HERE_BYTES)) : got.all;
         }
       } catch { /* not fetched whole, or unpacking past what is read here: not read */ }
     }
-    if (whole) readSaid = await readerRefusal(sizeFormat, whole, file);
-    else if (sizeFormat === 'PLY' && sizeStart) readSaid = plyPlanRefusal(sizeStart, file.replace(/\.[^.]+$/, ''), sizeGz ? (exact ? size : null) : total);
+    // (readSaid: the reader's verdict, { level, words } or null -- not run said, a warning: r87 A4)
+    const ply = !whole && sizeFormat === 'PLY' && sizeStart ? plyPlanRefusal(sizeStart, file.replace(/\.[^.]+$/, ''), sizeGz ? (exact ? size : null) : total) : null;
+    readSaid = ply ? { level: 'bad', words: ply } : await readerVerdict(sizeFormat, whole, file);
   }
   // (a length that may be an encoding's is counted where the body arrives, above: r84 A1's
   // re-fetch of a cut verdict, bounded at 64 MB and only for a file longer than its length, is gone
@@ -900,9 +944,9 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // (a .cadmesh cut short: the decoder's refusal -- r82 A3; or its header not read here: r83 A2)
     bits.push(cutSaid.words);
     level = cutSaid.level === 'bad' || level === 'bad' ? 'bad' : 'warn';
-  } else if (readSaid) {
-    // (a mesh the page's own reader refuses: r85 Q3)
-    bits.push(readSaid);
+  } else if (readSaid && readSaid.level === 'bad') {
+    // (a file the page's own reader refuses: r85 Q3)
+    bits.push(readSaid.words);
     level = 'bad';
   } else if (sniff && total === null) {
     // (no size given and more than is in hand: the size limits not told, said, not "ok · size not
@@ -920,6 +964,8 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
         : `unpacks to ${sizeMb(unpacked)}, or that and a multiple of 4 GB (a gzip keeps the size mod 4 GB)`);
     if (level === 'ok') level = 'warn';
   }
+  // (its reader not run here: said, never "ok" -- r87 A4)
+  if (readSaid && readSaid.level === 'warn' && level !== 'bad') { bits.push(readSaid.words); level = 'warn'; }
   return { level, detail: bits.join(' · '), url };
 }
 

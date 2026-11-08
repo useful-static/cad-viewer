@@ -163,6 +163,12 @@ await test('every mesh format (STL, OBJ, PLY, OFF, 3MF, GLB) says its geometry i
   assert.equal(models.length, 7);
   for (const m of models) assert.equal(decodeCadmesh(encodeCadmesh(m)).header.units, MM);
 });
+await test('an OBJ comment after a statement ends its line: a face, a vertex, a material (r87 Q5)', async () => {
+  const t = 'v 0 0 0 # a corner\nv 1 0 0\nv 0 1 0\nusemtl red # paint\nf 1 2 3 # face\n';
+  // (must fire: "\"f 1 2 3 # face\" refers to vertex # of 3")
+  const m = await parseMesh('obj', new TextEncoder().encode(t).buffer, 'a.obj');
+  assert.deepEqual([m.meshes.length, m.meshes[0].indices.length], [1, 3]);
+});
 await test('STL binary, header starting "solid"', async () => {
   const b = stlBinary();
   assert.equal(meshFormatOf('cube.stl', b), 'stl');

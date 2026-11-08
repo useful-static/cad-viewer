@@ -52,7 +52,7 @@ import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
 import { isCompanion, zipModel } from '../js/formats.js';
 import * as CADMESH from '../js/cadmesh.js'; // (OVERSIZE_WORDS, main.js's import since r72 A8; none in an older tree)
-import { MM_PER } from '../js/units.js';
+import { MM_PER, unitSaid } from '../js/units.js';
 
 export const SITE = 'https://site.example/v/';
 
@@ -378,7 +378,7 @@ export async function runStart(c) {
     'fetchFailedText', 'fakeLoad', 'startTourIn', 'syncModelList', 'showProgress', 'syncMenuButtons', 'setEmbedActive', 'applyView', 'decodeView',
     'orientOrNull', 'isCompanion', 'gaveUp', 'console', 'modelUrlFrom', 'modelNameFrom', 'earlyLists', 'posterAsked', 'timedFetch', 'releaseEarly',
     'isRelative', 'listedUrlFrom', 'isTimeout', 'answeredFrom', 'history', 'closeMenus', 'tourParts', 'syncTreeChecks', 'pushState', 'updateButtons',
-    'viewChanged', 'shownLacksGpu', 'MM_PER', 'tourEnded', 'fakeReread', 'zipModel',
+    'viewChanged', 'shownLacksGpu', 'MM_PER', 'tourEnded', 'fakeReread', 'zipModel', 'unitSaid',
     `${BODY}; function wireCancel() { ${CANCEL} }
     return { startFromUrl, viewIn3D, addPicked, earlyPick, openFile, openListed, wireHistory, entryShown, wireCancel, listedNow, setMeshUnit, unitNow: () => unitRead };`)(
     app, (id) => dom[id], (t) => o.shown.push(t), new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE', 2 * 2 ** 30, params,
@@ -391,7 +391,7 @@ export async function runStart(c) {
     // (a view: the fragment's own text, so which one landed is seen)
     (v) => { o.views++; o.events.push(`view ${v}`); }, (s) => s, orientOrNull, isCompanion, null, { error() {} }, modelUrlFrom, modelNameFrom, earlyListsOf,
     posterAsked, fetchFake, () => { o.released++; return 0; }, isRelative, listedUrlFrom, isTimeout, answeredFrom,
-    history, () => {}, () => ({ ids: ['hidden-part'] }), () => {}, () => {}, () => {}, () => { o.events.push('hide'); }, () => false, MM_PER, () => o.events.push('tour-end'), fakeReread, zipModel); // (pickModelFile's choice: r80 A3)
+    history, () => {}, () => ({ ids: ['hidden-part'] }), () => {}, () => {}, () => {}, () => { o.events.push('hide'); }, () => false, MM_PER, () => o.events.push('tour-end'), fakeReread, zipModel, unitSaid); // (pickModelFile's choice: r80 A3)
   try {
     if (typeof run.wireHistory === 'function') run.wireHistory();
     run.wireCancel();

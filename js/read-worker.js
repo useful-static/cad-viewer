@@ -10,6 +10,7 @@
 //   a refusal                                          -> { ok: false, message }
 
 import { readDrawing, readMeshFile } from './read-file.js';
+import { parseMesh } from './mesh-formats.js';
 
 onmessage = async (ev) => {
   const m = ev.data;
@@ -17,6 +18,12 @@ onmessage = async (ev) => {
     if (m.kind === 'mesh') {
       const { raw, unitless } = await readMeshFile(m);
       postMessage({ ok: true, raw, unitless }, [raw]);
+    } else if (m.kind === 'check') {
+      // (the list check's read: the reader alone, its refusal or nothing -- off the check page's
+      // thread, under its limit, as the page reads: r87 Q1)
+      if (m.mesh) await parseMesh(m.format, m.buf, m.name, m.files);
+      else readDrawing(m);
+      postMessage({ ok: true });
     } else {
       postMessage({ ok: true, drawing: readDrawing(m) });
     }

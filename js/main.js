@@ -19,7 +19,7 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbit
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, unitWord } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, unconvertedNum, unitSaid, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
@@ -5165,8 +5165,8 @@ function addressUnit(url) {
   } catch { return 'mm'; }
 }
 
-// a unit as words read it ("read in in" -- r65 A8)
-const unitName = (u) => (u === 'in' ? 'inches' : u);
+// a unit as words read it ("read in in" -- r65 A8), by the one table: js/units.js unitSaid (r87 A5)
+const unitName = (u) => unitSaid(u);
 // whether a re-read of the shown mesh is under way (the load under way is setMeshUnit's): the one
 // test, written three times in setMeshUnit -- r68 A6
 const rereading = () => PROGRESS_STATES.has(app.status) && app.rereadSeq === app.loadSeq;
@@ -5286,11 +5286,11 @@ async function loadDxf(buf, name, seq) {
   // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
   // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page.
   // Off the page's thread (readInWorker), else here.
-  const got = await readInWorker({ kind: '2d', buf, format }, name);
+  // (one that draws nothing refused by readDrawing itself, in either: r87 A2)
+  const got = await readInWorker({ kind: '2d', buf, format, name }, name);
   if (stale(seq)) return;
   await twoD();
-  const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, format });
-  if (dxfLib.drawsNothing(drawing)) throw new Error(`${name} has nothing to draw`);
+  const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, format, name });
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
 }
@@ -6336,7 +6336,7 @@ const modelSizeMm = () => {
 };
 const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, modelSizeMm());
 const lenUnit = () => (geomMm() ? curUnit() : app.header.units);
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : v.toFixed(1));
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v)); // (r87 Q3)
 
 // What the file declares, as a reader spells it (js/units.js unitWord)
 const UNIT_WORDS = { mixed: 'mixed (its parts disagree)' };

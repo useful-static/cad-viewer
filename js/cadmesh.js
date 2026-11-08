@@ -60,6 +60,7 @@
 // the Node converter.
 
 import { buildEdges, FACTS_RULE, factsRuleHolds, BODY_FACTS, KINDS, momentaryFailure } from './edges.js';
+import { lengthUnitOf } from './units.js';
 
 export const MAGIC = 0x4d444143; // 'CADM' little-endian
 export const VERSION = 1;
@@ -70,7 +71,9 @@ export const MM = 'millimeter';
 // Whether a decoded header's geometry is in millimetres -- the one rule the display (main.js geomMm),
 // the exports, the drawing and the mass all read (r84 A5: the display alone kept it, and the
 // writers took an inch file's numbers as mm). No header, or no units, is millimetres.
-export const geomIsMm = (header) => !header || header.units == null || header.units === MM || header.units === 'mm';
+// (by the unit's one name, js/units.js lengthUnitOf -- the scene's rule too: "millimetre" and "MM"
+// were millimetres to the scene and another unit to the display and the exports, r87 A1)
+export const geomIsMm = (header) => !header || header.units == null || lengthUnitOf(header.units) === 'mm';
 // What a consumer that writes or weighs millimetres says of a header in another unit, or null:
 // the page's own words for a length it does not convert (main.js unitsrc "(not converted)")
 export const notMmWords = (header, what) => (geomIsMm(header) ? null : `this model's lengths are in ${header.units}, not converted: ${what} not made here`);

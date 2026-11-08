@@ -7,7 +7,7 @@
 import { parseMesh } from './mesh-formats.js';
 import { MAX_COORD, MAX_COORD_WORDS, encodeCadmesh, KEEP_WITHOUT_EDGES } from './cadmesh.js';
 import { MM_PER } from './units.js';
-import { parseDXF } from './dxf.js';
+import { drawsNothing, parseDXF } from './dxf.js';
 import { readDWG, drawDWG } from './dwg.js';
 
 // A mesh file's bytes as a .cadmesh, in `unit` where the file stores none (STL, OBJ, PLY, OFF are
@@ -33,10 +33,16 @@ export async function readMeshFile({ buf, format, name, extras, unit = 'mm', edg
 // holds; a DXF is passed as its bytes (parseDXF reads a binary one from them, an ASCII one in the
 // drawing's own code page). format: the reader's label, js/formats.js drawingReaderOf -- a case each,
 // a 2D format added is one more (a boolean "DWG or not" read any other as a DXF: r80 A4)
-export function readDrawing({ buf, format }) {
+// (and a drawing that draws nothing refused here, in its name's words, where every reader of one
+// meets it -- the page's worker and its fallback, the list check: main.js loadDxf held it alone, and
+// the check said "ok" of a DXF the page refuses -- r87 A2)
+export function readDrawing({ buf, format, name = 'the drawing' }) {
+  let drawing;
   switch (format) {
-    case 'DWG': return drawDWG(readDWG(buf));
-    case 'DXF': return parseDXF(buf);
+    case 'DWG': drawing = drawDWG(readDWG(buf)); break;
+    case 'DXF': drawing = parseDXF(buf); break;
     default: throw new Error(`no 2D reader for ${format}`);
   }
+  if (drawsNothing(drawing)) throw new Error(`${name} has nothing to draw`);
+  return drawing;
 }
