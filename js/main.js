@@ -19,7 +19,7 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbit
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedNum, unitSaid, unitWord } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, pastWords, rangesFrom } from './datum.js';
@@ -3797,20 +3797,20 @@ function wireFullscreen() {
   syncFullscreen();
 }
 
-// The cut at a position along its axis (mm, model coordinates), clamped to the
-// model's extent
-function setSectionAtMm(mm) {
+// The cut at a position along its axis (model units: mm where the geometry is, else the header's
+// unit -- r89 A7), clamped to the model's extent
+function setSectionAt(at) {
   const s = app.section;
   if (s.axis === 'off' || !app.header) return;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
   const { min, max } = sectionBox();
-  s.t = max[k] > min[k] ? Math.min(1, Math.max(0, (mm - min[k]) / (max[k] - min[k]))) : 0.5;
+  s.t = max[k] > min[k] ? Math.min(1, Math.max(0, (at - min[k]) / (max[k] - min[k]))) : 0.5;
   updateButtons();
   viewChanged();
 }
 
-// The readout turned into a field: type the cut position in the display
-// unit, Enter puts the cut there, Esc (or leaving it) keeps it where it was
+// The readout turned into a field: type the cut position in the unit its readout shows (lenUnit),
+// Enter puts the cut there, Esc (or leaving it) keeps it where it was
 function secEdit() {
   const p = sectionPlane();
   if (!p || app.secEditing) return;
@@ -3830,7 +3830,7 @@ function secEdit() {
     over = true;
     app.secEditing = false;
     const v = Number(inp.value);
-    if (apply && inp.value.trim() && Number.isFinite(v)) setSectionAtMm(geomMm() ? v * MM_PER[curUnit()] : v);
+    if (apply && inp.value.trim() && Number.isFinite(v)) setSectionAt(lenBack(v));
     else updateButtons();
     $('secval').focus();
   };
@@ -3847,7 +3847,7 @@ function wireOptbar() {
     const b = app.selected.size && drawnBox([...app.selected]);
     if (!b) return;
     const k = { x: 0, y: 1, z: 2 }[app.section.axis];
-    setSectionAtMm((b.min[k] + b.max[k]) / 2);
+    setSectionAt((b.min[k] + b.max[k]) / 2);
   };
   $('section').onclick = () => {
     closeMenus();
@@ -5455,8 +5455,8 @@ function fillInfo2D(el) {
   const e = d.extents;
   if (e) {
     const u = d.units ? unitWord(d.units) : 'units';
-    // in the drawing's own unit, to 6 significant figures
-    const n = (v) => String(Number(v.toPrecision(6)));
+    // in the drawing's own unit, by the one rule (js/units.js unconvertedNum: r89 A5)
+    const n = (v) => unconvertedNum(v, 'size', d.units);
     row(`size (${u})`, `${n(e.max[0] - e.min[0])} × ${n(e.max[1] - e.min[1])}`);
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
@@ -6335,8 +6335,14 @@ const modelSizeMm = () => {
   return b ? Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : Infinity;
 };
 const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, modelSizeMm());
-const lenUnit = () => (geomMm() ? curUnit() : headerUnitWord(app.header.units)); // (as written for a reader: r88 A8)
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units)); // (r87 Q3, r88 A3)
+// (geometry not converted: in Auto's display unit where the header's unit is a display row, as a
+// converted model is -- in m, a 0.4 mm part read "0.000": r89 Q1 -- else in the header's unit as
+// written, r88 A8; modelSizeMm is then in the model's own units)
+const shownUnconverted = () => unconvertedUnit(app.header.units, modelSizeMm());
+const lenUnit = () => (geomMm() ? curUnit() : shownUnconverted() || headerUnitWord(app.header.units));
+const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm())); // (r87 Q3, r88 A3)
+// a length typed in lenUnit, back in model units (the section field)
+const lenBack = (v) => (geomMm() ? v * MM_PER[curUnit()] : unconvertedBack(v, app.header.units, modelSizeMm()));
 
 // What the file declares, as a reader spells it (js/units.js unitWord)
 const UNIT_WORDS = { mixed: 'mixed (its parts disagree)' };
@@ -6590,7 +6596,9 @@ function fillInfo(el) {
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
     // (in a unit not converted, in that unit, as the lengths are: r86 A4)
-    const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, u, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, u, 2);
+    // (its number in the header's unit, so named: lenUnit may be Auto's mm for one in m -- r89 Q1)
+    const hu = geomMm() ? u : headerUnitWord(app.header.units);
+    const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
     add('volume', `≈ ${volWords} · ${counts}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
     add('area', `≈ ${areaWords}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));

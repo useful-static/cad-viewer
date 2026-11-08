@@ -21,6 +21,10 @@ test('above / below said by the distance as shown, in the unit shown (r88 A4)', 
   assert.equal(pastWords(0.00001, 'above', inM), 'none above');
   assert.equal(pastWords(-1, 'below', inM), 'none below');
   assert.equal(pastWords(4, 'above', (x) => x.toFixed(1)), '4.0 above');
+  // (and 0.4 mm above, in a 0.123 m board in metres: shown in mm as converted, must fire "none above"
+  // -- r89 Q1)
+  const board = (x) => unconvertedNum(x, 'size', 'm', 0.123);
+  assert.equal(pastWords(0.0004, 'above', board), '0.4 above');
 });
 test('ranges from the reference corner, an overhang reads negative', () => {
   assert.deepEqual(rangesFrom(hdmi, pcb).map((r) => r.map((v) => +v.toFixed(6))), [[-1.5, 13.5], [10, 25], [1.6, 9.4]]);

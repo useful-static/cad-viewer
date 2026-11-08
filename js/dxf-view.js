@@ -13,7 +13,7 @@
 
 import { itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
-import { unitWord } from './units.js';
+import { unconvertedNum, unitWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
@@ -482,10 +482,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // that finds no line
   let txtIndex = null;
   const textsIndexed = () => txtIndex || (txtIndex = textIndex(drawing.texts, (t) => textCorners(t, linesOf(t), widthOf(t)), o));
-  // 6 significant figures; a value a billionth of the drawing's size is float
-  // noise (a circle centre averaged from its points), shown as 0
+  // by js/units.js unconvertedNum, as the 3D panel's lengths: the drawing's unit's decimals where it
+  // is a display unit, else 6 significant figures; a value a billionth of the drawing's size is float
+  // noise (a circle centre averaged from its points), shown as 0 (r89 A5, Q3)
   const span = Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) || 1;
-  const fmt = (v) => (Math.abs(v) < span * 1e-9 ? '0' : String(Number(v.toPrecision(6))));
+  const fmt = (v) => unconvertedNum(v, 'measure', drawing.units, Infinity, span * 1e-9);
   function measureClick(px, py) {
     const s = snapAt(px, py);
     const p = s ? [s[0], s[1]] : toUnits(px, py);

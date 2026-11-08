@@ -217,8 +217,15 @@ function headerValue(u8, name, re) {
 // drawn: what drawDWG counts its own drops against, one reach for both)
 // A block's key, as parseDXF holds its name (\U+ / \M+ decoded): by upper case, the one rule for the
 // blocks, the insert chain, the layouts and the `walked` set its readers keep -- three spellings of
-// one name went into and out of that set, and a layout's drops went uncounted (r88 A1, A6)
-export const blockKey = (name) => String(name).toUpperCase();
+// one name went into and out of that set, and a layout's drops went uncounted (r88 A1, A6). Trimmed,
+// as parseDXF's `get` reads every value: drawDWG's adapter keeps "Door " whole, and a drop in that
+// block went uncounted (r89 A2)
+// The fold, one character to one: a character whose upper case is two keeps its own ("ß", "ﬁ"),
+// so "Straße" and "STRASSE", two blocks, are two keys -- by String's full mapping one, every insert
+// of the first drew the second (r89 Q2). The one key for every symbol-table name: blocks, layers,
+// line types
+export const nameKey = (name) => { let o = ''; for (const c of String(name).trim()) { const u = c.toUpperCase(); o += u.length === c.length ? u : c; } return o; };
+export const blockKey = nameKey;
 export function parseDXF(s, opts = {}) {
   const walked = opts.walked || null;
   // (a Uint8Array or a Node Buffer read as its bytes: it failed with the engine's "text.split is not
@@ -279,7 +286,7 @@ export function parseDXF(s, opts = {}) {
         // 49: each element's length (+ dash, - gap, 0 dot); shapes and text in a
         // pattern are not drawn (their space is kept)
         const els = all(r, 49);
-        ltypes.set(get(r, 2, '').toUpperCase(), els.length ? els.map((x) => (x === 0 ? 0.0001 : Math.abs(x))) : null);
+        ltypes.set(nameKey(get(r, 2, '')),els.length ? els.map((x) => (x === 0 ? 0.0001 : Math.abs(x))) : null);
         continue;
       }
       if (r.type !== 'LAYER') continue;
@@ -289,16 +296,16 @@ export function parseDXF(s, opts = {}) {
       // its entities on other layers too, where one on a layer that is off hides only what takes
       // the insert's layer -- r64 Q1)
       layers.set(get(r, 2, '0'), { name: get(r, 2, '0'), colour: tc !== null ? trueColour(Number(tc)) : aciColour(Math.abs(aci)), on: aci >= 0 && !(num(r, 70) & 1),
-        frozen: !!(num(r, 70) & 1), ltype: get(r, 6, 'CONTINUOUS').toUpperCase(), weight: num(r, 370, -3) });
+        frozen: !!(num(r, 70) & 1), ltype: nameKey(get(r, 6, 'CONTINUOUS')),weight: num(r, 370, -3) });
     }
   }
   if (!layers.has('0')) layers.set('0', { name: '0', colour: aciColour(7), on: true });
   // (a layer named by any case is one layer, its table's spelling, as AutoCAD and the line types
   // here take it: a LINE on "walls" with "WALLS" frozen was drawn, and listed as a second layer --
   // r87 Q4. One no table names takes the first spelling met.)
-  const layerByUpper = new Map([...layers.keys()].map((n) => [n.toUpperCase(), n]));
+  const layerByUpper = new Map([...layers.keys()].map((n) => [nameKey(n), n]));
   const layerName = (n) => {
-    const u = String(n).toUpperCase();
+    const u = nameKey(n);
     if (!layerByUpper.has(u)) layerByUpper.set(u, n);
     return layerByUpper.get(u);
   };
@@ -353,8 +360,9 @@ export function parseDXF(s, opts = {}) {
   // handle (the 330 of its AcDbLayout part; the first 330 is its owner) names the paper space block
   // through the BLOCK_RECORD table. A drawing without them keeps the file's order, "Layout N"
   const recName = new Map();
-  if (sec.TABLES) for (const r of records(ps, ...sec.TABLES)) if (r.type === 'BLOCK_RECORD') recName.set(get(r, 5, '').toUpperCase(), get(r, 2, '').toUpperCase());
-  const sheetOf = new Map(); // paper space block name (upper case) -> { name, tab }
+  if (sec.TABLES) for (const r of records(ps, ...sec.TABLES)) if (r.type === 'BLOCK_RECORD') recName.set(get(r, 5, '').toUpperCase(), blockKey(get(r, 2, '')));
+  // (keyed by blockKey, as `blocks` is: each kept its own upper case, one rule in two places -- r89 A4)
+  const sheetOf = new Map(); // paper space block's key (blockKey) -> { name, tab }
   if (sec.OBJECTS) {
     for (const r of records(ps, ...sec.OBJECTS)) {
       if (r.type !== 'LAYOUT') continue;
@@ -369,7 +377,7 @@ export function parseDXF(s, opts = {}) {
   }
   const sets = [];
   const active = every.filter(inPaper);
-  if (active.length) sets.push({ recs: active, sheet: sheetOf.get('*PAPER_SPACE') });
+  if (active.length) sets.push({ recs: active, sheet: sheetOf.get(blockKey('*Paper_Space')) });
   // (a layout's block is walked as its sheet: opts.walked holds it, so drawDWG need not know the
   // layouts' naming)
   for (const [name, b] of blocks) {
@@ -703,7 +711,7 @@ function emit(recs, M, byBlock, depth, ctx) {
     // units ($LTSCALE x the entity's 48 x the insert's scale), and the line
     // weight in mm (370: 1/100 mm; -1 BYLAYER, -2 BYBLOCK, -3 the default)
     const L = ctx.layers.get(layer) || {};
-    let lt = get(r, 6, 'BYLAYER').toUpperCase();
+    let lt = nameKey(get(r, 6, 'BYLAYER'));
     if (lt === 'BYLAYER') lt = L.ltype || 'CONTINUOUS';
     else if (lt === 'BYBLOCK') lt = (byBlock && byBlock.ltype) || 'CONTINUOUS';
     const pat = ctx.ltypes.get(lt);

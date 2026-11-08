@@ -122,12 +122,31 @@ export function fmtArea(mm2, unit) {
 // A length of geometry in a unit not converted (word: the header's), as a plain number that may be
 // typed back: by that unit's own decimals where it is a display unit -- one length, one precision,
 // converted or not; at 4 significant digits 120.375 in read "120.4" and Enter moved the cut (r87 Q3,
-// r88 A3) -- else to 6 significant digits, at least as many as a display unit's
-export function unconvertedNum(x, kind = 'measure', word = null) {
+// r88 A3) -- else to 6 significant digits, at least as many as a display unit's.
+// size: the model's largest extent, in its own units, for Auto's choice (unconvertedUnit); Infinity
+// keeps the unit (a drawing's, whose label names it). noise: below it, 0 (a 2D circle's centre
+// averaged from its points). The one rule for a length in a unit not converted -- the 3D panel's,
+// the 2D info's and 2D Measure's: three copies, 2D Measure's "123457 mm" where 3D said "123456.79",
+// and a noise floor in one alone (r89 A5, Q3)
+export function unconvertedNum(x, kind = 'measure', word = null, size = Infinity, noise = 0) {
   if (!Number.isFinite(x)) return String(x);
-  const u = lengthUnitOf(word);
-  if (u && Object.hasOwn(MM_PER, u)) return fmtNum(x * MM_PER[u], kind, u);
+  if (Math.abs(x) < noise) x = 0;
+  const d = unconvertedUnit(word, size);
+  if (d) return fmtNum(x * LENGTH_MM[lengthUnitOf(word)], kind, d);
   return String(Number(x.toPrecision(6)));
+}
+// The display unit such a length is shown in, where the header's unit is a display row: Auto's
+// choice for that unit, as the converted path makes it -- a model in metres under a metre across in
+// mm; in m, a 0.4 mm part read "0.000" and a part 0.4 mm above its board "none above" (r89 Q1).
+// null where the header's unit is no display row (its lengths in that unit, unconvertedNum's 6 digits)
+export function unconvertedUnit(word, size = Infinity) {
+  const u = lengthUnitOf(word);
+  return u && Object.hasOwn(MM_PER, u) ? autoUnit(u, size * MM_PER[u]) : null;
+}
+// A length typed in the unit unconvertedUnit shows, back in the model's own units
+export function unconvertedBack(v, word, size = Infinity) {
+  const d = unconvertedUnit(word, size);
+  return d ? (v * MM_PER[d]) / LENGTH_MM[lengthUnitOf(word)] : v;
 }
 // A header's unit as written for a reader: its one name's spelling where it has one ("in" for
 // "INCH"), else as the header gives it -- printed as written, "12 INCH³" (r88 A8)

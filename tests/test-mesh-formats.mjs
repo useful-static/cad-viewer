@@ -176,6 +176,13 @@ await test('an OBJ comment after a statement of numbers ends its line; a name ke
     const r = await parseMesh('obj', enc(obj), 'a.obj', new Map([[lib.toLowerCase(), mtl(mat)]]));
     assert.deepEqual(r.meshes[0].color.map((c) => Math.round(c * 100) / 100), [1, 0, 0], `${lib} / ${mat}`);
   }
+  // (and the .mtl's own statement of numbers ended by its comment, its name kept whole -- must fire:
+  // "Kd 0.25 # a grey" and "Kd 1 0 0#red" read no colour, r89 A3)
+  for (const [kd, want] of [['Kd 0.25 # a grey', [0.25, 0.25, 0.25]], ['Kd 1 0 0#red', [1, 0, 0]], ['Kd 0 1 0', [0, 1, 0]]]) {
+    const obj = 'mtllib a.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl c #1\nf 1 2 3 # a face\n';
+    const r = await parseMesh('obj', enc(obj), 'a.obj', new Map([['a.mtl', enc(`newmtl c #1\n${kd}\n`)]]));
+    assert.deepEqual(r.meshes[0].color && r.meshes[0].color.map((c) => Math.round(c * 100) / 100), want, kd);
+  }
 });
 await test('STL binary, header starting "solid"', async () => {
   const b = stlBinary();

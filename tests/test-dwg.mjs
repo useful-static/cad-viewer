@@ -608,8 +608,9 @@ t('a drop in a block the drawing walks is counted not drawn, the block by any ca
     P.stats = { notPassed: [{ kind: 'ATTRIB (multi-line)', block: blockName }] };
     return P;
   };
-  // (must fire: {} for a DWG's own "*Paper_Space0" spelling, and for an insert "door" of "Door")
-  for (const [b, ins] of [['*Paper_Space0', null], ['*PAPER_SPACE0', null], ['Door', 'door'], ['Door', 'Door']]) {
+  // (must fire: {} for a DWG's own "*Paper_Space0" spelling, and for an insert "door" of "Door";
+  // and of a block "Door " or " Door", which the adapter keeps whole and parseDXF reads trimmed -- r89 A2)
+  for (const [b, ins] of [['*Paper_Space0', null], ['*PAPER_SPACE0', null], ['Door', 'door'], ['Door', 'Door'], ['Door ', 'Door '], [' Door', ' Door']]) {
     assert.deepEqual(drawDWG({ failures: [] }, pairs(b, ins)).notDrawn, { 'ATTRIB (multi-line)': 1 }, `${b} / ${ins}`);
   }
 });

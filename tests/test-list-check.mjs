@@ -1231,7 +1231,7 @@ await test('the reader in a worker: its companions posted with it, a worker that
     if (saved.window === undefined) delete globalThis.window;
   }
 });
-await test('a 3MF inside a zip is read by the page\'s 3MF reader, as one served plain or gzipped (r88 A5)', async () => {
+await test('a 3MF inside a zip, or named .zip, is read by the page\'s 3MF reader, as one served plain or gzipped (r88 A5, r89 A1)', async () => {
   const { deflateRawSync } = await import('node:zlib');
   const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
   const m3 = (part) => miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', deflateRawSync(Buffer.from(part)), Buffer.byteLength(part), 8]]);
@@ -1244,13 +1244,17 @@ await test('a 3MF inside a zip is read by the page\'s 3MF reader, as one served 
   };
   const got = [];
   for (const [what, part, want] of [['no triangle', noTri, 'bad'], ['a triangle (control)', model3mf(), 'ok']]) {
-    for (const [how, url, bytes] of [['plain', 'x.3mf', m3(part)], ['zipped', 'x.zip', miniZip([['x.3mf', m3(part)]])]]) {
+    // (and a 3MF package by its directory, whatever its name, as main.js loadZip opens one: named .zip,
+    // or at a URL naming no format, it was "ok · zip" -- r89 A1)
+    for (const [how, url, bytes] of [['plain', 'x.3mf', m3(part)], ['zipped', 'x.zip', miniZip([['x.3mf', m3(part)]])], ['named .zip', 'x.zip', m3(part)], ['no format named', 'get?id=5', m3(part)]]) {
       const r = await checkFile(`${B}${url}`, { fetchFn: host(bytes), sniff: true });
-      // (must fire, zipped: "ok · zip")
-      got.push([`${what}, ${how}`, r.level === want && (want === 'ok' || /x\.3mf has no triangles to show/.test(r.detail)) ? want : `${r.level}: ${r.detail}`]);
+      // (must fire, zipped: "ok · zip"; named .zip or no format: "ok · zip"; its name said once, not
+      // "its x.3mf: its x.3mf: …" -- r89 A6)
+      got.push([`${what}, ${how}`, r.level === want && (want === 'ok' || (/has no triangles to show/.test(r.detail) && !/(its [^:]+: )\1/.test(r.detail))) ? want : `${r.level}: ${r.detail}`]);
     }
   }
-  assert.deepEqual(got, [['no triangle, plain', 'bad'], ['no triangle, zipped', 'bad'], ['a triangle (control), plain', 'ok'], ['a triangle (control), zipped', 'ok']], JSON.stringify(got));
+  assert.deepEqual(got, [['no triangle, plain', 'bad'], ['no triangle, zipped', 'bad'], ['no triangle, named .zip', 'bad'], ['no triangle, no format named', 'bad'],
+    ['a triangle (control), plain', 'ok'], ['a triangle (control), zipped', 'ok'], ['a triangle (control), named .zip', 'ok'], ['a triangle (control), no format named', 'ok']], JSON.stringify(got));
 });
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

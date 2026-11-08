@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedNum, unitSaid, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
@@ -21,6 +21,24 @@ test('a geometry unit by its one name, and a volume or area in a unit not conver
   // 120.375 in "120.4" -- r88 A3; else 6 significant digits)
   assert.deepEqual([2.25, 0.062, 120.375, 1234.5].map((x) => unconvertedNum(x, 'measure', 'inch')), ['2.250', '0.062', '120.375', '1234.500']);
   assert.deepEqual([2.25, 1234.567891].map((x) => unconvertedNum(x, 'measure', 'furlong')), ['2.25', '1234.57']);
+  // (in Auto's display unit for the header's, as converted: a 0.123 m board in mm, its 0.4 mm part
+  // "0.4", its section field typed back in mm -- must fire: "0.000" m, a cut moved 0.34 mm, r89 Q1)
+  assert.equal(unconvertedUnit('m', 0.123), 'mm');
+  assert.equal(unconvertedUnit('m', 2), 'm');
+  assert.equal(unconvertedUnit('furlong', 1), null);
+  assert.deepEqual([0.0004, 0.0016, 0.123].map((x) => unconvertedNum(x, 'size', 'm', 0.123)), ['0.4', '1.6', '123.0']);
+  assert.equal(unconvertedNum(0.0004, 'size', 'm', 2), '0.000');
+  const shown = unconvertedNum(0.01234, 'section', 'm', 0.123);
+  assert.equal(shown, '12.3');
+  assert.ok(Math.abs(unconvertedBack(Number(shown), 'm', 0.123) - 0.0123) < 1e-12);
+  assert.equal(unconvertedBack(2.5, 'inch', 3), 2.5);
+  assert.equal(unconvertedBack(2.5, 'furlong', 3), 2.5);
+  // (the one rule for 2D too: a site plan in mm by mm's decimals, "123457" in 2D Measure beside 3D's
+  // "123456.79"; a drawing's noise floor -- r89 A5, Q3)
+  assert.equal(unconvertedNum(123456.789, 'measure', 'mm'), '123456.79');
+  assert.equal(unconvertedNum(1e-12, 'measure', 'furlong', Infinity, 1e-9), '0');
+  assert.equal(unconvertedNum(1e-12, 'measure', 'mm', Infinity, 1e-9), '0.00');
+  assert.equal(unconvertedNum(0.5, 'measure', 'm', Infinity), '0.5000');
   // (must fire: an inch cube's volume "≈ 1 mm³", its area "≈ 6 mm²")
   assert.equal(fmtUnconverted(1, 'inch', 3), '1 inch³ (not converted)');
   assert.equal(fmtUnconverted(6, 'inch', 2), '6 inch² (not converted)');

@@ -1556,7 +1556,7 @@ export function dwgToPairs(dwg) {
   let model = null, paper = null;
   for (const o of objects.values()) {
     if (!o.decoded || o.name !== 'BLOCK_RECORD') continue;
-    const n = o.d.name.toUpperCase();
+    const n = blockKey(o.d.name); // (the blocks' one key: r89 Q2)
     if (n === '*MODEL_SPACE') model = o;
     else if (n === '*PAPER_SPACE' && (activePaper !== undefined ? o.handle === activePaper : !paper)) paper = o;
     blocks.push(o);

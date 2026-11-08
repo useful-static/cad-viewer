@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { UNITS, parseDXF, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
+import { UNITS, blockKey, parseDXF,layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, nearestPoint, nearestSegment, pointTree, segmentIndex, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -102,6 +102,18 @@ test('a layer or block named in another case is that layer or block (r87 Q4)', (
   // (must fire: a second, visible "walls" layer, and the door drawing nothing)
   assert.deepEqual(d.layers.map((l) => l.name), ['WALLS', '0']);
   assert.deepEqual(d.paths.map((x) => x.layer), ['WALLS', '0']);
+  // (a name whose upper case is longer keeps its own characters: "Straße" and "STRASSE", "oﬁce" and
+  // "OFICE", two blocks and two layers -- must fire: both inserts drew the second's line, r89 Q2;
+  // "Tür" / "TÜR" one, as before)
+  const pairs = (a) => p(...a.flatMap(([c, v]) => [String(c), String(v)]));
+  const block = (name, x1) => [[0, 'BLOCK'], [8, '0'], [2, name], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, x1], [21, 0], [0, 'ENDBLK']];
+  const insert = (name, y) => [[0, 'INSERT'], [8, name], [2, name], [10, 0], [20, y]];
+  for (const [a, b, want] of [['Straße', 'STRASSE', [10, 99]], ['oﬁce', 'OFICE', [10, 99]], ['Tür', 'TÜR', [99, 99]]]) {
+    const q = parseDXF(pairs([[0, 'SECTION'], [2, 'BLOCKS'], ...block(a, 10), ...block(b, 99), [0, 'ENDSEC'],
+      [0, 'SECTION'], [2, 'ENTITIES'], ...insert(a, 0), ...insert(b, 5), [0, 'ENDSEC'], [0, 'EOF']]));
+    assert.deepEqual(q.paths.map((x) => Math.abs(x.pts[2] - x.pts[0])), want, `${a} / ${b}`);
+  }
+  assert.equal(blockKey(' Straße '), 'STRAßE');
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)

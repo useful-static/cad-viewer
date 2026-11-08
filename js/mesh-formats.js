@@ -572,10 +572,13 @@ function parseOBJ(s, files, base) {
   }
   return bodies;
 }
+// (the OBJ's comment rule, its own statement of numbers -- Kd -- ended by a "#", a name -- newmtl --
+// kept whole: "Kd 0.25 # a grey" read no colour beside an OBJ that takes "f 1 2 3 # a face" -- r89 A3)
 function readMTL(s, out) {
   let cur = null;
   for (const raw of s.split(/\r?\n/)) {
-    const sp = raw.trim().split(/\s+/);
+    let sp = raw.trim().split(/\s+/);
+    if (sp[0] === 'Kd') { const h = raw.indexOf('#'); if (h >= 0) sp = raw.slice(0, h).trim().split(/\s+/); }
     if (sp[0] === 'newmtl') cur = sp.slice(1).join(' ');
     else if (sp[0] === 'Kd' && cur) {
       // "Kd r [g b]": one value is a grey (the MTL form); a colour that is not numbers is not one
