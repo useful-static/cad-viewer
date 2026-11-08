@@ -19,7 +19,7 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbit
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, rangesFrom } from './datum.js';
@@ -6589,8 +6589,10 @@ function fillInfo(el) {
       open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
-    add('volume', `≈ ${fmtVolume(vol, u)} · ${counts}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
-    add('area', `≈ ${fmtArea(area, u)}`);
+    // (in a unit not converted, in that unit, as the lengths are: r86 A4)
+    const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, u, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, u, 2);
+    add('volume', `≈ ${volWords} · ${counts}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
+    add('area', `≈ ${areaWords}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
     if (!ids.length) add('mass', 'select parts (a whole model is rarely one material)');

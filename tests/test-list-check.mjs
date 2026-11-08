@@ -29,6 +29,19 @@ const tour = JSON.stringify({ cadtour: 1, title: 'A tour', steps: [{ title: 'one
 // and a stub -- a PLY with no end_header, an STL with no triangle -- is a file the page refuses)
 const PLY_TRI = 'ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n';
 const OBJ_TRI = 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n';
+// (since r86 A1 every mesh and 2D reader is run on a file the check holds: a glTF with a triangle,
+// its accessors first -- a start that only hints -- its buffer a data: URI, or a file named by uri)
+const TRI_BIN = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+const gltfTri = (uri = `data:application/octet-stream;base64,${TRI_BIN.toString('base64')}`, extra = {}) => JSON.stringify({
+  accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }], asset: { version: '2.0' },
+  buffers: [{ uri, byteLength: 36 }], bufferViews: [{ buffer: 0, byteLength: 36 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+  nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], ...extra,
+});
+// a 3MF model part with one triangle (pad: a comment of that many bytes, for a part past a size)
+const model3mf = (pad = 0) => `<?xml version="1.0"?><model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><!--${' '.repeat(pad)}--><resources><object id="1" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object></resources><build><item objectid="1"/></build></model>`;
+// a DWG past what the check reads whole (16 MB): judged by its start alone, as the arms ask, no
+// real DWG being in the public tree
+const bigDwg = (version) => Buffer.concat([Buffer.from(`${version}\0\0\0\0`), Buffer.alloc(17 * 2 ** 20)]);
 const STL_TRI = (name) => `solid ${name}\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid ${name}\n`;
 // a binary STL of n triangles that each have an area
 const stlOf = (n) => { const b = Buffer.alloc(84 + 50 * n); b.writeUInt32LE(n, 80); for (let t = 0; t < n; t++) { const o = 84 + 50 * t + 12; b.writeFloatLE(t, o); b.writeFloatLE(t + 1, o + 12); b.writeFloatLE(t, o + 24); b.writeFloatLE(1, o + 28); } return b; };
@@ -69,16 +82,16 @@ const FILES = {
   [`${B}bad.cadtour.json`]: '{ "cadtour": 1, "steps": [] }',
   // formats whose start only hints: the viewer opens these by name
   [`${B}normals-first.obj`]: '# exported\n\nvn 0 0 1\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1//1 2//1 3//1\n',
-  [`${B}sorted.gltf`]: '{"accessors":[],"asset":{"version":"2.0"}}',
+  [`${B}sorted.gltf`]: gltfTri(),
   [`${B}get?file=board.stl`]: STL_TRI('b'),
   [`${B}ply-named-obj.obj`]: PLY_TRI,
-  [`${B}case.3mf`]: miniZip([['3D/3dmodel.model', '<?xml version="1.0"?><model unit="millimeter"/>']]),
+  [`${B}case.3mf`]: miniZip([['3D/3dmodel.model', model3mf()]]),
   [`${B}ply-named-stl.stl`]: PLY_TRI,
-  [`${B}dwg-named-dxf.dxf`]: Buffer.from('AC1015\0\0\0\0'),
-  [`${B}r12.dwg`]: Buffer.from('AC1009\0\0\0\0'),
-  [`${B}r12-named-dxf.dxf`]: Buffer.from('AC1009\0\0\0\0'),
-  [`${B}r2000.dwg`]: Buffer.from('AC1015\0\0\0\0'),
-  [`${B}r2-named-dxf.dxf`]: Buffer.from('AC2.10\0\0\0\0'),
+  [`${B}dwg-named-dxf.dxf`]: bigDwg('AC1015'),
+  [`${B}r12.dwg`]: bigDwg('AC1009'),
+  [`${B}r12-named-dxf.dxf`]: bigDwg('AC1009'),
+  [`${B}r2000.dwg`]: bigDwg('AC1015'),
+  [`${B}r2-named-dxf.dxf`]: bigDwg('AC2.10'),
   // sent with Content-Encoding: gzip: the browser has unpacked it by the time it is read
   [`${B}unpacked.stp.gz`]: 'ISO-10303-21;\nHEADER;\n',
   [`${B}text.stp.gz`]: 'hello',
@@ -95,6 +108,8 @@ async function fakeFetch(url, opts = {}) {
   // when the server does not expose it (libre.computer, 2026-10-31)
   // (the range asked, from where it starts: a zip's directory is read from its end -- r75)
   const m = ranged ? /bytes=(\d+)-(\d*)/.exec(ranged) : null;
+  // (a range starting past the end: 416, as a server answers it -- the check confirms a size so: r86 Q1)
+  if (m && +m[1] >= len) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${len}` } });
   const from = m ? Math.min(+m[1], len) : 0;
   const to = m ? Math.min(m[2] === '' ? len - 1 : +m[2], len - 1, from + 65535) : len - 1;
   const partLen = Math.max(0, to - from + 1);
@@ -316,8 +331,11 @@ await test('a PLY is text by its reader\'s own header rule: a late format line, 
 await test('a gzip is held to the limits by what it unpacks to, its trailer read with a range (r72 Q1: a 1.8 MB .stl.gz of 546 MB ASCII STL said "ok")', async () => {
   const { gzipSync } = await import('node:zlib');
   // (a server answering each range: the file's start, a real gzip, and its last 4 bytes, ISIZE)
+  // (a stand-in for a gzip of megabytes: asked for it whole -- the reader's read since r86 A3 -- it
+  // has no such bytes to send, so it refuses, and the check judges by the start and the trailer)
   const served = (start, total, isize) => async (u, o = {}) => {
     const r = (o.headers && o.headers.Range) || '';
+    if (!r) throw new TypeError('the stand-in holds no whole file');
     const tail = Buffer.alloc(4);
     tail.writeUInt32LE(isize >>> 0, 0);
     const body = r.startsWith(`bytes=${total - 4}-`) ? tail : start;
@@ -382,8 +400,10 @@ await test('a gzip\'s start is read as the page reads it: a short first member, 
   // a PLY whose header is over 4 KB, its format line late, in 5 MB of gzip saying 540 MB (must fire: "ok")
   const hdr = `ply\n${'comment a long header line of the kind scanners write\n'.repeat(90)}format ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nend_header\n`;
   const ply = gzipSync(Buffer.from(hdr));
+  // (a stand-in: no whole file to send, as above)
   const served = (start, total, isize) => async (u, o = {}) => {
     const r = (o.headers && o.headers.Range) || '';
+    if (!r) throw new TypeError('the stand-in holds no whole file');
     const tail = Buffer.alloc(4);
     tail.writeUInt32LE(isize >>> 0, 0);
     const body = r.startsWith(`bytes=${total - 4}-`) ? tail : start;
@@ -420,7 +440,8 @@ await test('a 3MF is held to the text limit by its model part, read from its dir
   assert.match(big.detail, /its model part 3D\/3dmodel\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/); // (the reader's words: r76 Q5)
   // must accept: under it (its directory true to its data, which is empty: one claiming 40 MB of an
   // empty stream is a damaged zip to the page since r79 Q2)
-  const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(zipOf('3D/3dmodel.model', 0)), sniff: true });
+  // (a part with a triangle: an empty one the page refuses, "has no triangles to show" -- r86 A1)
+  const ok = await checkFile(`${B}plate.3mf`, { fetchFn: ranged(miniZip([['3D/3dmodel.model', model3mf()]])), sniff: true });
   assert.notEqual(ok.level, 'bad', ok.detail);
 });
 await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root from its rels, the zip\'s entry loadZip opens, a gzipped one, a zip64 one (r75 A1-A4)', async () => {
@@ -435,14 +456,14 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/plate.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
   // (each large entry deflated, its size the directory's: a stored entry is the bytes it holds -- r78 Q2)
   // A1: rooted at /3D/plate.model by its rels (must fire: "ok · zip", by 3D/3dmodel.model)
-  const rooted = miniZip([['_rels/.rels', rels], ['3D/plate.model', '<model/>', big, 8]]);
+  const rooted = miniZip([['_rels/.rels', rels], ['3D/plate.model', model3mf(), big, 8]]);
   const a1 = await checkFile(`${B}plate.3mf`, { fetchFn: host(rooted), sniff: true });
   assert.equal(a1.level, 'bad', a1.detail);
   assert.match(a1.detail, /its model part \/3D\/plate\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/);
   // (r75 Q3: its rels read by the reader's own walker -- a Relationship inside a comment passed over,
   // an entity in its Target decoded; a regex of the check's own took the commented-out one)
   const rels2 = '<?xml version="1.0"?><Relationships><!-- <Relationship Target="/3D/decoy.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/> --><Relationship Target="/3D/pl&#97;te.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
-  const q3 = await checkFile(`${B}plate.3mf`, { fetchFn: host(miniZip([['_rels/.rels', rels2], ['3D/plate.model', '<model/>', big, 8]])), sniff: true });
+  const q3 = await checkFile(`${B}plate.3mf`, { fetchFn: host(miniZip([['_rels/.rels', rels2], ['3D/plate.model', model3mf(), big, 8]])), sniff: true });
   assert.equal(q3.level, 'bad', `${q3.detail} (must fire: ok, by the decoy)`);
   // A2: a zip whose entry loadZip opens is a 520 MB OBJ (must fire: "ok")
   // (deflated and true to its directory: 520 MB of text in under 1 MB of data -- a claim of 520 MB
@@ -458,7 +479,7 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   assert.equal(a3.level, 'bad', a3.detail);
   assert.match(a3.detail, /its model part \/3D\/plate\.model unpacks to 520 MB, more than the 500 MB of text this viewer reads/);
   // A4: a zip64 archive, refused by the page in its words (must fire: "ok")
-  const z64 = Buffer.from(miniZip([['3D/3dmodel.model', '<model/>']]));
+  const z64 = Buffer.from(miniZip([['3D/3dmodel.model', model3mf()]]));
   z64.writeUInt16LE(0xffff, z64.length - 22 + 10);
   const a4 = await checkFile(`${B}z64.3mf`, { fetchFn: host(z64), sniff: true });
   assert.equal(a4.level, 'bad', a4.detail);
@@ -478,7 +499,7 @@ await test('a zip\'s entry is judged as the page opens it: a gzip in it, a 3MF i
   const check = async (name, zip) => checkFile(`${B}${name}`, { fetchFn: host(zip), sniff: true });
   const stl = stlOf(1);
   const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
-  const big3mf = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>', 600 * 2 ** 20, 8]]); // (deflated: its size the directory's -- r78 Q2)
+  const big3mf = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', model3mf(), 600 * 2 ** 20, 8]]); // (deflated: its size the directory's -- r78 Q2)
   const rows = [
     // A2: a valid zipped part.stl.gz opens (must fire: "damaged"); a zipped 3MF of a 600 MB part is refused (must fire: "ok")
     ['A2 gz entry', 'part.zip', miniZip([['part.stl.gz', gzipSync(stl)]]), 'ok'],
@@ -488,7 +509,7 @@ await test('a zip\'s entry is judged as the page opens it: a gzip in it, a 3MF i
     // A4: a name twice in two cases: the last one, 3 GB, is what the page opens (must fire: "ok" by the first)
     ['A4 a name twice', 'part.zip', miniZip([['A.stl', stl], ['a.stl', stl, 3 * 2 ** 30, 8]]), 'bad'],
     // A5: a 3MF whose root part is missing (must fire: "ok")
-    ['A5 no root', 'd.3mf', miniZip([['_rels/.rels', rels.replace('3dmodel.model', 'plate.model')], ['3D/3dmodel.model', '<model/>']]), 'bad'],
+    ['A5 no root', 'd.3mf', miniZip([['_rels/.rels', rels.replace('3dmodel.model', 'plate.model')], ['3D/3dmodel.model', model3mf()]]), 'bad'],
     // A6: a 3MF named download.zip, judged as one: its 600 MB part (must fire: "holds no model")
     ['A6 3MF by its directory', 'download.zip', big3mf, 'bad:model part'],
     // Q2: an encrypted entry (flag bit 0) is refused (must fire: "ok")
@@ -536,8 +557,8 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['A1 "PK" entry', 'part.zip', miniZip([['pk.stl', deflateRawSync(Buffer.concat([bigPk.subarray(0, 84), Buffer.alloc(50 * 2_000_000)])), 84 + 50 * 2_000_000, 8]]), 'ok'], // (true to its data: r79 Q2)
     ['A1 a zip as part.stl', 'outer.zip', miniZip([['part.stl', miniZip([['in.stl', stl()]])]]), 'bad'],
     // A2: the rels part past 64 KB naming the root (must fire: "no model part"); a bzip2 rels (must fire: "ok")
-    ['A2 rels past 64 KB', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/plate.model', 70000)], ['3D/plate.model', '<model/>']]), 'ok'],
-    ['A2 rels bzip2', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model'), undefined, 12], ['3D/3dmodel.model', '<model/>']]), 'bad:_rels/.rels uses compression method 12'],
+    ['A2 rels past 64 KB', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/plate.model', 70000)], ['3D/plate.model', model3mf()]]), 'ok'],
+    ['A2 rels bzip2', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model'), undefined, 12], ['3D/3dmodel.model', model3mf()]]), 'bad:_rels/.rels uses compression method 12'],
     // A3: a companion the page reads before the model and cannot (must fire: "ok"); companions over 2 GB
     ['A3 companion bzip2', 'part.zip', miniZip([['part.obj', OBJ_TRI], ['part.png', 'x', undefined, 12]]), 'bad:part.png uses compression method 12'],
     // (r78 A1: only for a reader that reads them -- an STL's, a STEP's, a DXF's are never read; must
@@ -583,7 +604,7 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     // ... past it by the local header's own lengths, which the directory cannot see (must fire: the
     // short bytes in hand read as the entry, "ok")
     ['Q2 by the local header', 'part.zip.gz', gzipSync(localPast), 'bad:a damaged zip'],
-    ['A10 named 3MF', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>']]), 'ok:· 3MF'],
+    ['A10 named 3MF', 'x.3mf', miniZip([['_rels/.rels', relsTo('/3D/3dmodel.model')], ['3D/3dmodel.model', model3mf()]]), 'ok:· 3MF'],
   ];
   const got = [];
   for (const [what, name, bytes, want, plain] of rows) {
@@ -649,7 +670,7 @@ await test('the reader the page meets, an entry\'s data counted and its checksum
   const rnd = randomBytes(1.5 * 2 ** 20), rndData = deflateRawSync(rnd);
   const stl = Buffer.alloc(134); stl.writeUInt32LE(1, 80);
   const flipped = miniZip([['part.stl', stl]]); flipped[30 + 'part.stl'.length + 90] ^= 1;
-  const gltf = (uri) => JSON.stringify({ asset: { version: '2.0' }, buffers: [{ uri, byteLength: 36 }] });
+  const gltf = (uri) => gltfTri(uri); // (a triangle: one with none the page refuses -- r86 A1)
   const rows = [
     // A6: a DXF named part.stl, read by the page as an STL and refused (must fire: a warning)
     ['A6 a DXF named .stl', 'part.stl', Buffer.from(dxf), ranged, 'bad:neither a binary STL'],
@@ -665,8 +686,8 @@ await test('the reader the page meets, an entry\'s data counted and its checksum
     // Q3: a .gltf by URL whose buffer is a file of its own; zipped without it; zipped with it (must fire: "ok", "ok")
     ['Q3 a .gltf by URL', 'tri.gltf', Buffer.from(gltf('tri.bin')), ranged, 'bad:tri.gltf needs tri.bin'],
     ['Q3 zipped without its .bin', 'g.zip', miniZip([['tri.gltf', gltf('tri.bin')]]), ranged, 'bad:tri.gltf needs tri.bin'],
-    ['Q3 zipped with it', 'g.zip', miniZip([['tri.gltf', gltf('tri.bin')], ['tri.bin', Buffer.alloc(36)]]), ranged, 'ok'],
-    ['Q3 a data: URI', 'tri.gltf', Buffer.from(gltf(`data:application/octet-stream;base64,${Buffer.alloc(36).toString('base64')}`)), ranged, 'ok'],
+    ['Q3 zipped with it', 'g.zip', miniZip([['tri.gltf', gltf('tri.bin')], ['tri.bin', TRI_BIN]]), ranged, 'ok'],
+    ['Q3 a data: URI', 'tri.gltf', Buffer.from(gltf(`data:application/octet-stream;base64,${TRI_BIN.toString('base64')}`)), ranged, 'ok'],
     // Q4: a changed byte in a stored entry, refused by its CRC-32 (must fire: "ok")
     ['Q4 a changed byte', 'part.zip', flipped, ranged, 'bad:does not match its checksum'],
   ];
@@ -691,9 +712,9 @@ await test('a 3MF\'s parts and a glTF\'s JSON read as the page reads them (r81 A
   const rels = (target) => `<?xml version="1.0"?><Relationships><Relationship Target="${target}" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
   // (a byte changed in an entry's stored data, its CRC-32 left as it was)
   const flip = (z, name, at = 0) => { const b = Buffer.from(z); b[b.indexOf(Buffer.from(name)) + name.length + at] ^= 1; return b; };
-  const relsBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>']]), '_rels/.rels', 40);
-  const partBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>'], ['3D/Objects/o1.model', '<model><resources/></model>']]), '3D/Objects/o1.model', 3);
-  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const relsBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', model3mf()]]), '_rels/.rels', 40);
+  const partBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', model3mf()], ['3D/Objects/o1.model', '<model><resources/></model>']]), '3D/Objects/o1.model', 3);
+  const gltf = (o) => JSON.stringify({ ...JSON.parse(gltfTri()), ...o }); // (a triangle, as the page opens: r86 A1)
   const glb = (json) => { const j = Buffer.from(json); const pad = (4 - (j.length % 4)) % 4; const jj = Buffer.concat([j, Buffer.alloc(pad, 0x20)]); const h = Buffer.alloc(20); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(20 + jj.length, 8); h.writeUInt32LE(jj.length, 12); h.write('JSON', 16); return Buffer.concat([h, jj]); };
   const draco = { extensionsRequired: ['KHR_draco_mesh_compression'], extensionsUsed: ['KHR_draco_mesh_compression'] };
   const longJson = gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }], extras: { pad: 'x'.repeat(100000) } });
@@ -717,8 +738,8 @@ await test('a 3MF\'s parts and a glTF\'s JSON read as the page reads them (r81 A
     // Q8: a GLB with an external buffer by URL; a %-escaped uri beside its file; a companion in another case
     // (must fire: "ok"; "needs my%20part.bin"; "needs tri.bin")
     ['Q8 a GLB by URL', 'tri.glb', glb(gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }] })), 'bad:tri.glb needs tri.bin'],
-    ['Q8 a %-escaped uri', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'my%20part.bin', byteLength: 36 }] })], ['my part.bin', Buffer.alloc(36)]]), 'ok'],
-    ['Q8 a companion in another case', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }] })], ['Tri.BIN', Buffer.alloc(36)]]), 'ok'],
+    ['Q8 a %-escaped uri', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'my%20part.bin', byteLength: 36 }] })], ['my part.bin', TRI_BIN]]), 'ok'],
+    ['Q8 a companion in another case', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }] })], ['Tri.BIN', TRI_BIN]]), 'ok'],
   ];
   const got = [];
   for (const [what, name, bytes, want] of rows) {
@@ -739,7 +760,7 @@ await test('a glTF and GLB by their whole JSON and chunks wherever they are, a .
     const a = +m[1], e = Math.min(+m[2], b.length - 1, a + cap - 1);
     return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
   };
-  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const gltf = (o) => JSON.stringify({ ...JSON.parse(gltfTri()), ...o }); // (a triangle, as the page opens: r86 A1)
   const chunk = (type, data) => { const d = Buffer.from(data); const pad = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + pad, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(pad, type === 'JSON' ? 0x20 : 0)]); };
   const glbOf = (...chunks) => { const body = Buffer.concat(chunks); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
   const long = { extras: { pad: 'x'.repeat(100000) } };
@@ -763,7 +784,7 @@ await test('a glTF and GLB by their whole JSON and chunks wherever they are, a .
     // A4: a GLB whose BIN chunk comes first (must fire: "ok")
     ['A4 BIN first', 'd.glb', glbOf(chunk('BIN\0', Buffer.alloc(16)), chunk('JSON', draco)), 'bad:which this viewer does not decode'],
     // A5: a 3MF whose other part holds more than 64 MB of data, said (must fire: "ok")
-    ['A5 a 70 MB object part', 'x.3mf', miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>'], ['3D/Objects/object_1.model', bigPart]]), 'warn:its model part 3D/Objects/object_1.model holds more than'],
+    ['A5 a 70 MB object part', 'x.3mf', miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', model3mf()], ['3D/Objects/object_1.model', bigPart]]), 'warn:its model part 3D/Objects/object_1.model holds more than'],
     // Q4: a .gltf whose JSON does not parse (must fire: "ok")
     ['Q4 a cut .gltf', 'cut.gltf', Buffer.from(gltf({}).slice(0, -2)), 'bad:is damaged: its JSON does not parse'],
   ];
@@ -812,7 +833,7 @@ await test('a long .cadmesh header read from every host, a size sent encoded, a 
     const h = Buffer.alloc(12); cm.copy(h, 0, 0, 8); h.writeUInt32LE(j.length, 8);
     return Buffer.concat([h, j, data]);
   };
-  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const gltf = (o) => JSON.stringify({ ...JSON.parse(gltfTri()), ...o }); // (a triangle, as the page opens: r86 A1)
   const chunk = (type, data) => { const d = Buffer.from(data); const p = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + p, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(p, type === 'JSON' ? 0x20 : 0)]); };
   const glbOf = (...cs) => { const body = Buffer.concat(cs); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
   const draco = gltf({ extensionsRequired: ['KHR_draco_mesh_compression'] });
@@ -885,7 +906,7 @@ await test('a size another site hides the encoding of, a .cadmesh header the dec
   const ver2 = Buffer.from(good); ver2.writeUInt32LE(2, 4);
   // A3, A4, Q2: glTF shapes the reader refuses before its buffers; a Draco GLB with the file's own
   // keys "more" and "bad"; two JSON chunks, the first broken
-  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const gltf = (o) => JSON.stringify({ ...JSON.parse(gltfTri()), ...o }); // (a triangle, as the page opens: r86 A1)
   const chunk = (type, data) => { const d = Buffer.from(data); const p = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + p, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(p, type === 'JSON' ? 0x20 : 0)]); };
   const glbOf = (...cs) => { const body = Buffer.concat(cs); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
   // Q4: a large gzip -- past the size fetched whole -- of a model whose header is past 64 KB, cut short
@@ -945,33 +966,39 @@ await test('a size another site hides the encoding of, a .cadmesh header the dec
   const wanted = [...rows.map(([what, , , want]) => [what, want]), ['Q6 a header in the start, parts capped', 'ok, a few parts']];
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
-await test('a length another site\'s page cannot tell from an encoding\'s: the body counted as it arrives, either way, past 64 MB too (r85 Q1, Q2)', async () => {
+await test('a length another site\'s page cannot tell from an encoding\'s: the body counted as it arrives, either way, to 16 MB and said past it (r85 Q1, Q2, r86 Q2)', async () => {
   // (a host sending a file stored gzipped as another site's page meets it: the length the gzip's,
   // Content-Encoding unread, the range ignored, the body the file -- streamed, a part at a time,
-  // as no test may hold 545 MB)
+  // as no test may hold 545 MB; sent: the bytes it handed over)
+  let sent = 0;
   const streamed = (headBytes, partBytes, parts, length) => async () => {
     let i = -1;
-    const body = new ReadableStream({ pull(c) { i += 1; if (i === 0) c.enqueue(headBytes); else if (i <= parts) c.enqueue(partBytes); else c.close(); } });
+    const body = new ReadableStream({ pull(c) { i += 1; if (i === 0) { sent += headBytes.length; c.enqueue(headBytes); } else if (i <= parts) { sent += partBytes.length; c.enqueue(partBytes); } else c.close(); } });
     return new Response(body, { status: 200, headers: { 'content-length': String(length) } });
   };
+  const PAST = 'warn:its length may be a stored encoding\'s'; // (past what is counted: a warning, never "ok" or "bad")
   const stlHead = (n) => { const h = Buffer.alloc(84); h.writeUInt32LE(n, 80); return h; };
   const MB = 2 ** 20;
   const rec = stlOf(20000).subarray(84); // (20,000 records a part, 1,000,000 B, each a triangle with an area)
   const facet = Buffer.from(' facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\n'.repeat(Math.ceil(MB / 100)));
   const rows = [
     // Q1 (a): 80,000,084 B of binary STL, its gzip given as 66 MB -- past r84's 64 MB re-check (must fire: "bad · damaged")
-    ['Q1 a valid STL, its gzip past 64 MB', 'a.stl', streamed(stlHead(1600000), rec, 80, 66 * MB), 'ok'],
+    ['Q1 a valid STL, its gzip past 64 MB', 'a.stl', streamed(stlHead(1600000), rec, 80, 66 * MB), PAST],
     // Q1 (b): an STL that does not compress, its gzip longer than the file (must fire: "bad · damaged")
     ['Q1 a valid STL, its gzip longer than it', 'b.stl', streamed(stlHead(200000), rec, 10, 10003120), 'ok'],
     // Q2: 545 MB of ASCII STL, its gzip given as 1.8 MB (must fire: "ok · 1.8 MB")
-    ['Q2 a text STL past 500 MB, its gzip 1.8 MB', 'c.stl', streamed(Buffer.from('solid c\n'), facet, 545, 1851095), 'bad:more than the 500 MB of text this viewer reads'],
+    ['Q2 a text STL past 500 MB, its gzip 1.8 MB', 'c.stl', streamed(Buffer.from('solid c\n'), facet, 545, 1851095), PAST],
+    // r86 Q2: a valid 50 MB STL, its length its own (must fire below: 50 MB moved to say "ok")
+    ['r86 Q2 a 50 MB STL, its length true', 'd.stl', streamed(stlHead(1000000), rec, 50, 50000084), PAST],
   ];
   const got = [];
   for (const [what, name, host, want] of rows) {
     let r;
+    sent = 0;
     try { r = await checkFile(`${B}${name}`, { fetchFn: host, sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
     const [lv, word] = want.split(/:(.*)/);
-    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+    // (and what it cost: the count let go past 16 MB, a part of 1 MB over at most -- r86 Q2)
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? (sent <= 18 * MB ? want : `${want}, but ${sent} bytes read`) : `${r.level}: ${r.detail}`]);
   }
   assert.deepEqual(got, rows.map(([what, , , want]) => [what, want]), JSON.stringify(got));
 });
@@ -1018,15 +1045,92 @@ await test('an STL, OBJ, PLY or OFF the page\'s reader refuses is refused by the
       got.push([what + how, opens ? (r.level === 'ok' ? 'ok' : `${r.level}: ${r.detail}`) : r.level === 'bad' && r.detail.includes(page) ? 'bad in its words' : `${r.level}: ${r.detail} (page: ${page})`]);
     }
   }
-  // a PLY past what the check reads whole (20 MB), its header refused (must fire: "ok"), and its control
-  const bigPly = (fmt) => Buffer.concat([Buffer.from(`ply\nformat ${fmt} 1.0\nelement vertex 1000000\n${xyz}end_header\n`), Buffer.alloc(12e6)]);
-  for (const [what, fmt, want] of [['a 12 MB PLY, binary_middle_endian', 'binary_middle_endian', 'bad:format binary_middle_endian is not ascii or binary'], ['a 12 MB PLY (control)', 'binary_little_endian', 'ok']]) {
-    const r = await checkFile(`${B}big.ply`, { fetchFn: ranged(bigPly(fmt)), sniff: true });
+  // a PLY past what the check reads whole (18 MB, over its 16 MB), held to its header's rules from its
+  // start: a format it does not read (must fire: "ok"), and counts past what the file holds -- 2,000,000
+  // vertices of 12 bytes in 18 MB (r86 A2, must fire: "ok") -- and its control, 1,500,000 that fit
+  // (r86 Q5: at 12 MB it was read whole, and this path had no arm)
+  const bigPly = (fmt, n) => Buffer.concat([Buffer.from(`ply\nformat ${fmt} 1.0\nelement vertex ${n}\n${xyz}end_header\n`), Buffer.alloc(18e6)]);
+  for (const [what, fmt, n, want] of [
+    ['an 18 MB PLY, binary_middle_endian', 'binary_middle_endian', 1500000, 'bad:format binary_middle_endian is not ascii or binary'],
+    ['an 18 MB PLY counting 24 MB of vertices', 'binary_little_endian', 2000000, 'bad:element vertex counts 2000000, more than the file holds'],
+    ['an 18 MB PLY (control)', 'binary_little_endian', 1500000, 'ok']]) {
+    const r = await checkFile(`${B}big.ply`, { fetchFn: ranged(bigPly(fmt, n)), sniff: true });
     const [lv, word] = want.split(/:(.*)/);
     wanted.push([what, want]);
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
+await test('every mesh and 2D format by the page\'s own reader, one verdict whatever the host\'s ranges; a HEAD\'s gzip length not taken for the file\'s (r86 A1, A3, Q1)', async () => {
+  const { parseMesh } = await import('../js/mesh-formats.js');
+  const { readDrawing } = await import('../js/read-file.js');
+  const { deflateRawSync } = await import('node:zlib');
+  // (two hosts: one honouring ranges, one sending the whole -- r86 A3: one OBJ "ok" from the first,
+  // "bad" from the second)
+  const ranged = (b) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    if (+m[1] >= b.length) return new Response(null, { status: 416 });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(e - a + 1), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const whole = (b) => async () => new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+  const tri = JSON.parse(gltfTri());
+  const idx = `data:application/octet-stream;base64,${Buffer.from(new Uint32Array([0, 1, 9]).buffer).toString('base64')}`;
+  const g = (edit) => Buffer.from(JSON.stringify({ ...tri, ...edit }));
+  const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
+  const m3 = (part) => miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', deflateRawSync(Buffer.from(part)), Buffer.byteLength(part), 8]]);
+  const pairs = (...p) => Buffer.from(p.join('\n') + '\n');
+  const line = ['0', 'LINE', '10', '0', '20', '0', '11', '1', '21', '1'];
+  // a 200 KB OBJ, past the 64 KB start, its face past its vertices (r86 A3)
+  const longObj = Buffer.from(`${'# a comment line of the kind exporters write\n'.repeat(4500)}${OBJ_TRI.replace('f 1 2 3', 'f 1 2 9')}`);
+  const cases = [
+    ['glTF', 'm.gltf', g({}), true],
+    ['glTF an accessor past its view', 'm.gltf', g({ accessors: [{ bufferView: 0, componentType: 5126, count: 30, type: 'VEC3' }] })],
+    ['glTF a view past its buffer', 'm.gltf', g({ bufferViews: [{ buffer: 0, byteLength: 3600 }] })],
+    ['glTF an index past its vertices', 'm.gltf', g({ accessors: [tri.accessors[0], { bufferView: 1, componentType: 5125, count: 3, type: 'SCALAR' }],
+      bufferViews: [tri.bufferViews[0], { buffer: 1, byteLength: 12 }], buffers: [tri.buffers[0], { uri: idx, byteLength: 12 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }] })],
+    ['3MF', 'x.3mf', m3(model3mf()), true],
+    ['3MF a triangle past its vertices', 'x.3mf', m3(model3mf().replace('v3="2"', 'v3="9"'))],
+    ['3MF its build naming object 7', 'x.3mf', m3(model3mf().replace('objectid="1"', 'objectid="7"'))],
+    ['DXF', 'a.dxf', pairs('0', 'SECTION', '2', 'ENTITIES', ...line, '0', 'ENDSEC', '0', 'EOF'), true],
+    ['DXF a block inserting itself', 'a.dxf', pairs('0', 'SECTION', '2', 'BLOCKS', '0', 'BLOCK', '2', 'LOOP', '10', '0', '20', '0', '0', 'INSERT', '2', 'LOOP', '10', '0', '20', '0', '0', 'ENDBLK', '0', 'ENDSEC',
+      '0', 'SECTION', '2', 'ENTITIES', '0', 'INSERT', '2', 'LOOP', '10', '0', '20', '0', ...line, '0', 'ENDSEC', '0', 'EOF')],
+    ['DXF a HATCH counting 999999', 'a.dxf', pairs('0', 'SECTION', '2', 'ENTITIES', '0', 'HATCH', '8', '0', '70', '1', '91', '1', '92', '1', '93', '999999', ...line, '0', 'ENDSEC', '0', 'EOF')],
+    ['an OBJ of 200 KB, a face past its vertices', 'long.obj', longObj],
+  ];
+  const got = [], wanted = [];
+  for (const [what, name, b, opens] of cases) {
+    const ext = name.split('.').pop();
+    let page = null;
+    try {
+      const buf = b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
+      if (ext === 'dxf') readDrawing({ buf, format: 'DXF' }); else await parseMesh(ext, buf, name);
+    } catch (e) { page = e.message; }
+    assert.equal(page === null, !!opens, `${what}: the page ${page === null ? 'opens it' : `refuses it: ${page}`}`);
+    for (const [how, host] of [['ranged', ranged], ['whole', whole]]) {
+      const r = await checkFile(`${B}${name}`, { fetchFn: host(b), sniff: true });
+      wanted.push([`${what}, ${how}`, opens ? 'ok' : 'bad in its words']);
+      got.push([`${what}, ${how}`, opens ? (r.level === 'ok' ? 'ok' : `${r.level}: ${r.detail}`) : r.level === 'bad' && r.detail.includes(page) ? 'bad in its words' : `${r.level}: ${r.detail} (page: ${page})`]);
+    }
+  }
+  // Q1: a valid 2 MB STL on a host keeping its .gz beside it (gzip_static): the ranged GET a 206 whose
+  // Content-Range another site cannot read, the HEAD the gzip's length (must fire: "bad · damaged … it
+  // is 206,356 bytes"), a byte past that length there
+  const stl = stlOf(40000), stlGzLen = gzipSync(stl).length;
+  const gzStatic = async (u, o = {}) => {
+    if (o.method === 'HEAD') return new Response(null, { status: 200, headers: { 'content-length': String(stlGzLen) } });
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(stl, { status: 200, headers: { 'content-length': String(stlGzLen) } });
+    if (+m[1] >= stl.length) return new Response(null, { status: 416 });
+    const a = +m[1], e = Math.min(+m[2], stl.length - 1);
+    return new Response(stl.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(e - a + 1) } });
+  };
+  const q1 = await checkFile(`${B}big.stl`, { fetchFn: gzStatic, sniff: true });
+  wanted.push(['Q1 a HEAD naming the gzip\'s length', 'not bad']);
+  got.push(['Q1 a HEAD naming the gzip\'s length', q1.level !== 'bad' ? 'not bad' : `${q1.level}: ${q1.detail}`]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((x, i) => x[1] !== wanted[i][1])));
 });
 await test('a glTF the page refuses from its JSON alone is refused by the check in the page\'s own words (r85 A2)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');
@@ -1082,7 +1186,7 @@ await test('a host that caps a ranged answer: the short bytes said, never read a
 await test('an encrypted 3MF root over the text limit: the page and the check refuse it in one order, by one name (r77 Q5)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');
   const rels = '<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
-  const z = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>', 600 * 2 ** 20, 8, 1]]);
+  const z = miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', model3mf(), 600 * 2 ** 20, 8, 1]]);
   let page = '';
   try { await parseMesh('3mf', new Uint8Array(z).buffer, 'x'); } catch (e) { page = e.message; }
   const r = await checkFile(`${B}x.3mf`, { fetchFn: async (u, o = {}) => {

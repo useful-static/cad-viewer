@@ -86,8 +86,19 @@ test('merge: models in different units are refused in words, either order; mm by
   const inch = { ...lid, header: { ...lid.header, units: 'inch' } };
   const mmWord = { ...lid, header: { ...lid.header, units: 'millimeter' } };
   // (must fire: merged as the first model's unit, an inch part shown and exported as mm)
-  assert.throws(() => mergeModels([{ base: board, name: 'board' }, { base: inch, name: 'case.cadmesh' }]), /case\.cadmesh is in inch and the view's model in millimetres: models in different units are not shown together/);
-  assert.throws(() => mergeModels([{ base: inch, name: 'case.cadmesh' }, { base: board, name: 'board' }]), /board is in millimetres and the view's model in inch/);
+  assert.throws(() => mergeModels([{ base: board, name: 'board' }, { base: inch, name: 'case.cadmesh' }]), /case\.cadmesh is in inches and the view's model in millimetres: models in different units are not shown together/);
+  assert.throws(() => mergeModels([{ base: inch, name: 'case.cadmesh' }, { base: board, name: 'board' }]), /board is in millimetres and the view's model in inches/);
+  // (one unit by its one name: "in", "inch" and "INCH" are one -- r86 A8, must fire: "is in in and the view's model in inch")
+  const spelled = (u) => ({ ...lid, header: { ...lid.header, units: u } });
+  assert.equal(SCENE.sceneUnitsRefusal([{ base: spelled('in') }, { base: spelled('inch') }, { base: spelled('INCH') }]), null);
+  // (a scene's offsets are mm, the move fields' and ?addat's, put into its unit: two inch models, the
+  // second moved by X 25.4 mm, lands 1 inch over -- r86 A5, must fire: 25.4 inches)
+  const x0 = lid.position[0];
+  const moved = mergeModels([{ base: inch, name: 'a' }, { base: inch, name: 'b', offset: [25.4, 0, 0] }]);
+  assert.ok(Math.abs(moved.position[lid.header.vertexCount * 3] - (x0 + 1)) < 1e-5, `x ${moved.position[lid.header.vertexCount * 3]}`);
+  const odd = { ...lid, header: { ...lid.header, units: 'furlong' } };
+  assert.throws(() => mergeModels([{ base: odd, name: 'a' }, { base: odd, name: 'b', offset: [1, 0, 0] }]), /b cannot be moved: its lengths are in furlong, which this viewer does not convert from mm/);
+  assert.equal(mergeModels([{ base: odd, name: 'a' }, { base: odd, name: 'b' }]).header.meshes.length, 2);
   assert.equal(mergeModels([{ base: board, name: 'board' }, { base: mmWord, name: 'case' }]).header.meshes.length, 3);
   const { sceneUnitsRefusal } = SCENE;
   assert.equal(sceneUnitsRefusal([{ base: inch }, { base: inch }]), null);

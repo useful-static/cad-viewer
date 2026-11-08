@@ -128,11 +128,20 @@ await test('the exported API holds own keys too; every tool imports without runn
   const { exportCadmesh } = await import('../cadmesh-export.mjs');
   // (must fire: "TypeError ex.write is not a function" in place of the tool's words)
   for (const k of ['constructor', 'toString', 'nope']) await assert.rejects(exportCadmesh(readFileSync(inp), { modelUp: 'y', to: [k] }), new RegExp(`^Error: unknown format "${k}"`), k);
-  // (one guard, js/cli-args.js runCliIfMain: stp2mesh had none and ran when imported)
+  // (one guard, js/cli-args.js runCliIfMain: stp2mesh had none and ran when imported. Imported by a
+  // program of its own -- argv[1] that program, the guard's comparison what keeps the tool still: the
+  // arm's "node -e" had no argv[1], returned before the comparison, and passed with it deleted (r86
+  // Q4) -- and by "node -e" given an argument that is no file, which rejected with ENOENT (r86 A6))
+  const importer = join(dir, 'importer.mjs');
+  writeFileSync(importer, "await import(process.argv[2]); console.log('imported');\n");
   for (const t of ['stp2mesh', 'cadmesh-export', 'dwg-check', 'split-board', 'set-colours']) {
-    const imp = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(join(here, '..', `${t}.mjs`))}); console.log('imported')`], { encoding: 'utf8' });
-    assert.equal(imp.status, 0, `${t}: ${imp.stderr}`);
+    const tool = join(here, '..', `${t}.mjs`);
+    const imp = spawnSync(process.execPath, [importer, tool], { encoding: 'utf8' });
+    assert.equal(imp.status, 0, `${t} from a program: ${imp.stderr}`);
     assert.equal(imp.stdout.trim(), 'imported', t);
+    const e = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(tool)}); console.log('imported')`, 'some-arg'], { encoding: 'utf8' });
+    assert.equal(e.status, 0, `${t} from -e with an argument: ${e.stderr}`);
+    assert.equal(e.stdout.trim(), 'imported', t);
   }
 });
 

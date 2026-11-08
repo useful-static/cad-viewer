@@ -1,8 +1,8 @@
 // Every quantity the viewer shows goes through here. The geometry is in its
 // header's units: mm for every reader of ours (OpenCascade converts on import);
 // a .cadmesh from another writer in another unit is shown in that unit "(not
-// converted)" and refused by the exports, Save drawing and the mass
-// (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
+// converted)" -- its lengths, volume and area (fmtUnconverted) -- and refused by
+// the exports, Save drawing and the mass (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
 // the user's choice, or Auto, the unit the file declares (header.sourceUnits).
 //
 // Lengths have fixed decimals per unit, so a readout does not jump in width as
@@ -20,6 +20,24 @@ export const LENGTH_MM = {
   'Å': 1e-7, uin: 25.4e-6, mil: 0.0254, in: 25.4, ft: 304.8, 'US ft': 1200 / 3937 * 1000, yd: 914.4,
   mi: 1609344, AU: 1.495978707e14, ly: 9.4607304725808e18, pc: 3.0856775814913673e19,
 };
+
+// A geometry unit as a header may name it -- a short name above, OpenCascade's word ("inch",
+// "millimeter"), in any case -- as its LENGTH_MM name, or null for one with no length known here.
+// One name per unit for a scene's comparison and its offsets (r86 A5, A8: "in" and "inch" were two
+// units, and a scene's mm offsets went into inch positions as inches).
+const LONG_NAMES = {
+  nanometer: 'nm', nanometre: 'nm', micrometer: 'um', micrometre: 'um', micron: 'um', millimeter: 'mm', millimetre: 'mm',
+  centimeter: 'cm', centimetre: 'cm', decimeter: 'dm', decimetre: 'dm', meter: 'm', metre: 'm', kilometer: 'km', kilometre: 'km',
+  inch: 'in', inches: 'in', foot: 'ft', feet: 'ft', yard: 'yd', mile: 'mi',
+};
+export function lengthUnitOf(word) {
+  if (typeof word !== 'string') return null;
+  const w = word.trim();
+  if (Object.hasOwn(LENGTH_MM, w)) return w;
+  const l = w.toLowerCase();
+  if (Object.hasOwn(LONG_NAMES, l)) return LONG_NAMES[l];
+  return Object.keys(LENGTH_MM).find((k) => k.toLowerCase() === l) || null;
+}
 
 // A unit as it is written for a reader: the short names above that are not plain letters
 // spelled as typeset ("um" -> "µm")
@@ -84,6 +102,13 @@ export function fmtArea(mm2, unit) {
   if (mm2 < 1e4) return `${sig4(mm2)} mm²`;
   if (mm2 / 100 < 1e4) return `${sig4(mm2 / 100)} cm²`;
   return `${sig4(mm2 / 1e6)} m²`;
+}
+
+// A volume (power 3) or an area (power 2) of a model whose geometry is in a unit the viewer does not
+// convert (js/cadmesh.js geomIsMm false): in that unit, as its lengths are shown -- fmtVolume and
+// fmtArea read their number as mm³ / mm², and an inch cube read "≈ 1 mm³" (r86 A4)
+export function fmtUnconverted(x, unit, power) {
+  return `${sig4(x)} ${unit}${power === 3 ? '³' : '²'} (not converted)`;
 }
 
 export function fmtVolume(mm3, unit) {

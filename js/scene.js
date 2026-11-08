@@ -8,6 +8,7 @@
 // Pure ES module, no DOM.
 
 import { bodyAngle, geomIsMm, idToBytes } from './cadmesh.js';
+import { LENGTH_MM, lengthUnitOf, unitWord } from './units.js';
 import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
@@ -22,12 +23,24 @@ const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 // Why these models cannot share one scene, or null: their geometry in different units. A scene has one
 // header and one unit (js/cadmesh.js geomIsMm, the display's, the exports' and the mass's rule), and
 // an inch model added to a mm one was shown, measured and exported as mm (r85 A1). The words name
-// the first model in another unit than the first's.
+// the first model in another unit than the first's. (A unit by its one name, js/units.js
+// lengthUnitOf: "in" and "inch" were refused as two units -- r86 A8.)
+const unitKey = (h) => (geomIsMm(h) ? 'mm' : lengthUnitOf(h.units) || String(h.units));
+const SAID = { mm: 'millimetres', cm: 'centimetres', m: 'metres', um: 'micrometres', in: 'inches', ft: 'feet', yd: 'yards' };
+const unitSaid = (k) => SAID[k] || (Object.hasOwn(LENGTH_MM, k) ? unitWord(k) : k);
 export function sceneUnitsRefusal(models) {
-  const unitOf = (h) => (geomIsMm(h) ? 'millimetres' : h.units);
-  const first = unitOf(models[0].base.header);
-  const other = models.find((m) => unitOf(m.base.header) !== first);
-  return other ? `${other.name || 'this model'} is in ${unitOf(other.base.header)} and the view's model in ${first}: models in different units are not shown together (open it on its own with Open…)` : null;
+  const first = unitKey(models[0].base.header);
+  const other = models.find((m) => unitKey(m.base.header) !== first);
+  return other ? `${other.name || 'this model'} is in ${unitSaid(unitKey(other.base.header))} and the view's model in ${unitSaid(first)}: models in different units are not shown together (open it on its own with Open…)` : null;
+}
+// A model's offset, given in mm (the move fields, ?addat), in its geometry's unit -- added to its
+// positions as they are: two inch models, the second "moved by X 25.4 mm", put it 25.4 inches over
+// (r86 A5). A unit with no length known here and an offset: refused in words.
+function offsetInUnit(h, offset, name) {
+  if (geomIsMm(h) || offset.every((o) => o === 0)) return offset;
+  const k = lengthUnitOf(h.units);
+  if (!k) throw new Error(`${name || 'this model'} cannot be moved: its lengths are in ${h.units}, which this viewer does not convert from mm`);
+  return offset.map((o) => o / LENGTH_MM[k]);
 }
 
 export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
@@ -55,8 +68,9 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   let v0 = 0, i0 = 0, m0 = 0, t0 = 0, f0 = 0;
   const units = new Set();
-  for (const { base, name, offset = [0, 0, 0] } of models) {
+  for (const { base, name, offset: mmOffset = [0, 0, 0] } of models) {
     const h = base.header;
+    const offset = offsetInUnit(h, mmOffset, name);
     const n = h.vertexCount;
     // vertices: moved by the offset; ids renumbered after the models before
     const p = base.position;

@@ -573,11 +573,24 @@ function readMTL(s, out) {
 const PLY_T = { char: 'Int8', int8: 'Int8', uchar: 'Uint8', uint8: 'Uint8', short: 'Int16', int16: 'Int16', ushort: 'Uint16', uint16: 'Uint16',
   int: 'Int32', int32: 'Int32', uint: 'Uint32', uint32: 'Uint32', float: 'Float32', float32: 'Float32', double: 'Float64', float64: 'Float64' };
 const PLY_SIZE = { Int8: 1, Uint8: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, Float32: 4, Float64: 8 };
+// the counts the data cannot hold are a damaged header, refused before looping on them (1e999
+// vertices looped until the tab ran out of memory). Summed over the elements, each record
+// charged its least size and at least 1: checked one by one, 2000 empty elements each
+// counting the file's size looped 11.8 s.
+function plyCounts(els, base, room, least) {
+  let sum = 0;
+  for (const e of els) {
+    sum += Number.isInteger(e.n) && e.n >= 0 ? e.n * Math.max(1, least(e)) : Infinity;
+    if (sum > room) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
+  }
+}
 // A PLY's header as its reader reads it, every refusal it makes there in the reader's words: no
 // end_header, a format it does not read, a type PLY does not have, a vertex element with no x, y, z,
-// more vertices than it opens -> { els, fmt, bodyStart }. parsePLY and the list check (on a PLY's
-// start, where the whole file is not in hand) both run it (r85 Q3).
-export function plyPlan(u8, base) {
+// more vertices than it opens, and -- size given, a binary body -- more records than the file holds
+// (r86 A2: that one was parsePLY's alone, and the check, holding the header and the size, said "ok")
+// -> { els, fmt, bodyStart }. parsePLY and the list check (on a PLY's start, where the whole file is
+// not in hand) both run it (r85 Q3). (An ASCII body's counts need its tokens: parsePLY's.)
+export function plyPlan(u8, base, size = null) {
   // (its header and format by the one rule, the list check's too: js/formats.js plyHeader -- r73 A2)
   const ph = plyHeader(u8);
   if (!ph) throw new Error(`${base}.ply is damaged: it has no end_header line`);
@@ -610,16 +623,17 @@ export function plyPlan(u8, base) {
     if (!['x', 'y', 'z'].every((c) => e.props.some((pr) => pr.name === c && !pr.list))) throw new Error(`${who} is damaged: its vertex element has no x, y, z properties`);
     if (e.n > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
   }
+  if (size !== null && fmt !== 'ascii') plyCounts(els, base, size - bodyStart, (e) => e.props.reduce((s, pr) => s + PLY_SIZE[pr.list ? pr.ct : pr.t], 0));
   return { els, fmt, bodyStart };
 }
-// gltfPlan's PLY sibling: plyPlan's refusal in its words, or null
-export function plyPlanRefusal(u8, base) {
-  try { plyPlan(u8, base); return null; } catch (e) { return e.message || String(e); }
+// gltfPlan's PLY sibling: plyPlan's refusal in its words, or null (size: the file's, when known)
+export function plyPlanRefusal(u8, base, size = null) {
+  try { plyPlan(u8, base, size); return null; } catch (e) { return e.message || String(e); }
 }
 
 function parsePLY(buf, base) {
   const u8 = new Uint8Array(buf);
-  const { els, fmt, bodyStart } = plyPlan(u8, base);
+  const { els, fmt, bodyStart } = plyPlan(u8, base, buf.byteLength);
   const who = `${base}.ply`;
   const hold = counter(who);
   const corners = (e, pr, c) => { if (e.name === 'face' && pr.name === e.tlist && c > 2) hold('triangles', c - 2); return c; };
@@ -646,17 +660,7 @@ function parsePLY(buf, base) {
       for (let i = 1; i + 1 < ids.length; i++) { tri.push(ids[0], ids[i], ids[i + 1]); fcol.push(fc); }
     }
   };
-  // the counts the data cannot hold are a damaged header, refused before looping on them (1e999
-  // vertices looped until the tab ran out of memory). Summed over the elements, each record
-  // charged its least size and at least 1: checked one by one, 2000 empty elements each
-  // counting the file's size looped 11.8 s.
-  const checkCounts = (room, least) => {
-    let sum = 0;
-    for (const e of els) {
-      sum += Number.isInteger(e.n) && e.n >= 0 ? e.n * Math.max(1, least(e)) : Infinity;
-      if (sum > room) throw new Error(`${base}.ply is damaged: element ${e.name} counts ${e.n}, more than the file holds`);
-    }
-  };
+  // (the counts the data cannot hold: plyCounts -- a binary body's by plyPlan, given the size)
   // a list's count: a whole number the rest of the data can hold
   const listCount = (c, pr, e, room) => {
     if (!Number.isInteger(c) || c < 0 || c > room) throw new Error(`${base}.ply is damaged: a ${pr.name} list in element ${e.name} counts ${c} items${c > room ? ', more than the file holds' : ''}`);
@@ -666,7 +670,7 @@ function parsePLY(buf, base) {
     // (through text(): its limit and words, as every other text reader; a 540 MB body met the
     // engine's "Cannot create a string longer than 0x1fffffe8 characters")
     const toks = text(u8.subarray(bodyStart), who, 'latin1').trim().split(/\s+/);
-    checkCounts(toks.length, (e) => e.props.length);
+    plyCounts(els, base, toks.length, (e) => e.props.length);
     let p = 0;
     for (const e of els) {
       if (!e.props.length) continue; // (its records hold nothing to read)
@@ -681,8 +685,7 @@ function parsePLY(buf, base) {
   } else {
     const le = fmt === 'binary_little_endian'; // (else big-endian: any other format refused by plyPlan)
     const dv = new DataView(buf);
-    let o = bodyStart;
-    checkCounts(buf.byteLength - bodyStart, (e) => e.props.reduce((s, pr) => s + PLY_SIZE[pr.list ? pr.ct : pr.t], 0));
+    let o = bodyStart; // (its counts against the file held by plyPlan, given its size)
     const rd = (t) => {
       if (o + PLY_SIZE[t] > buf.byteLength) throw new Error(`${base}.ply is damaged: its data ends early`);
       const v = dv[`get${t}`](o, le); o += PLY_SIZE[t]; return v;

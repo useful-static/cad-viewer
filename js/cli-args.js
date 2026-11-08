@@ -111,7 +111,11 @@ export async function runCli(name, main, usage = '') {
 export async function runCliIfMain(url, name, main, usage = '') {
   if (typeof process === 'undefined' || !process.argv || !process.argv[1]) return;
   const [{ realpathSync }, { pathToFileURL }] = await Promise.all([import('node:fs'), import('node:url')]);
-  if (url !== pathToFileURL(realpathSync(process.argv[1])).href) return;
+  // (argv[1] not a file -- node -e with an argument, a REPL -- is not this tool: the import rejected
+  // with ENOENT where it should run nothing: r86 A6)
+  let main1;
+  try { main1 = pathToFileURL(realpathSync(process.argv[1])).href; } catch { return; }
+  if (url !== main1) return;
   await runCli(name, main, usage);
 }
 

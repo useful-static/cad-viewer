@@ -1296,12 +1296,12 @@ function hatchLoops(r) {
   return loops;
 }
 
-// MTEXT without its formatting codes; \P is a new line
+// MTEXT without its formatting codes; \P (a paragraph) and \N (a column break) are each a new line
 // (a code's value ends at its ";" and holds no backslash, so a run of codes with no ";" fails
 // each match at the next backslash: one pass, not a rescan to the end from every code; a stack
 // \S splits at its first separator, which its first part may not hold)
 // One pass, left to right, so an escape is read before what it escapes: \\ a backslash, \{ \} a
-// brace (bare braces group and are dropped), \P a new line, \~ a space, \L \O \K and their ends
+// brace (bare braces group and are dropped), \P and \N a new line, \~ a space, \L \O \K and their ends
 // dropped, a code up to its ";" dropped, \Sa^b; a/b, \U+nnnn its character; a code with no ";"
 // before the next backslash stays as written. (Run as replaces one after another, a typed path
 // "C:\Projects" lost its "P" to a new line, "\\" then "{3}" read wrong, and a typed "\\U+00B0"

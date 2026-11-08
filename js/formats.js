@@ -5,7 +5,9 @@
 // (stp2mesh.mjs). manifest.webmanifest's file_handlers is checked against it
 // (tests/test-formats.mjs). A new format is a row here, its sniff below if it has one, and its
 // reader by kind: a mesh format a case in js/mesh-formats.js parseMesh, a 2D one in
-// js/read-file.js readDrawing, a CAD one OpenCascade's reader named by `cad`. A text format is
+// js/read-file.js readDrawing, a CAD one OpenCascade's reader named by `cad` -- and the list check
+// runs the mesh and 2D readers by these rows too (js/list-check.js readsHere), so the new reader is
+// held there with nothing more. A text format is
 // also a case in readsAsText (and textBytes, if its reader holds less than the whole to the text
 // limit), so the page's limit and the list check hold it; one whose reader reads the files beside
 // it is `companions: true` (r78 A9).

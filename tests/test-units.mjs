@@ -3,10 +3,16 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtVolume, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtLength, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
+test('a geometry unit by its one name, and a volume or area in a unit not converted (r86 A4, A5, A8)', () => {
+  assert.deepEqual(['in', 'inch', 'INCH', 'Inches', 'millimeter', 'mm', 'metre', 'cm', 'furlong', 7].map(lengthUnitOf), ['in', 'in', 'in', 'in', 'mm', 'mm', 'm', 'cm', null, null]);
+  // (must fire: an inch cube's volume "≈ 1 mm³", its area "≈ 6 mm²")
+  assert.equal(fmtUnconverted(1, 'inch', 3), '1 inch³ (not converted)');
+  assert.equal(fmtUnconverted(6, 'inch', 2), '6 inch² (not converted)');
+});
 test('fixed decimals per unit: a measurement', () => {
   assert.equal(fmtLength(25.4, 'measure', 'mm'), '25.40 mm');
   if (DISPLAY_UNITS.includes('um')) assert.match(fmtLength(1, 'measure', 'um'), / µm$/, 'the unit as written, not its id');
