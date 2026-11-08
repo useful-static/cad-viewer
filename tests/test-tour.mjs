@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -157,9 +157,16 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     writeFileSync(join(dir, 'l.json'), JSON.stringify({ 'm.cadmesh': { name: 'M', labels: { plate: 'Plate' } } }));
     writeFileSync(join(dir, 'lt.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.cadmesh', steps: [{ frame: ['Plate'] }] }));
     assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'lt.cadtour.json'), `--labels=${join(dir, 'l.json')}`], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
-    let misspelt = 0;
-    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--lables', join(dir, 'l.json')], { encoding: 'utf8' }); } catch (e) { misspelt = e.status; }
+    let misspelt = 0, said = null;
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--lables', join(dir, 'l.json')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { misspelt = e.status; said = [e.stdout, e.stderr]; }
     assert.equal(misspelt, 2, 'a misspelt option');
+    // (on stderr, as the other tools say a usage error: r82 Q5; must fire, on stdout)
+    assert.deepEqual([said[0], /check-tour: unknown option --lables/.test(said[1])], ['', true]);
+    // (r82 A6: a local model read with the files beside it in its folder, as a drop carries them;
+    // must fire, "needs chair.bin")
+    const own = join(dir, 'own'); mkdirSync(own);
+    writeFileSync(join(own, 'chair.gltf'), gltf); writeFileSync(join(own, 'chair.bin'), bin);
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(own, 'chair.gltf')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
     writeFileSync(join(dir, 'bad.json'), '{ not json');
     let badList = '';
     try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--labels', join(dir, 'bad.json')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { badList = `${e.status} ${e.stdout}`; }

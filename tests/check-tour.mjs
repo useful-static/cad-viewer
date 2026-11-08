@@ -11,13 +11,14 @@
 // resolves; 1: a name matches nothing (each listed), or the file is refused.
 
 import { readFile } from 'node:fs/promises';
+import { readdirSync, statSync } from 'node:fs';
 import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
-import { fileNameOfUrl, formatOfName, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
+import { fileNameOfUrl, formatOfName, isCompanion, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
 import { meshFormatOf, unzip } from '../js/mesh-formats.js';
 import { companionsOverText, readCompanions } from '../js/companions.js';
 import { CliError, parseCli } from '../js/cli-args.js';
 import { readMeshFile } from '../js/read-file.js';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseModelList, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour, partIndex, resolveParts, tourNames } from '../js/tour.js';
@@ -28,11 +29,12 @@ const USAGE = 'usage: node tests/check-tour.mjs TOUR.cadtour.json [MODEL.cadmesh
 let parsed;
 try { parsed = parseCli(process.argv.slice(2), { values: ['--labels'], max: 2 }); } catch (e) {
   if (!(e instanceof CliError)) throw e;
-  console.log(`check-tour: ${e.message}\n${USAGE}`);
+  // (a usage error on stderr, as the other tools say it -- js/cli-args.js runCli: r82 Q5)
+  console.error(`check-tour: ${e.message}\n${USAGE}`);
   process.exit(2);
 }
 if (parsed.help) { console.log(USAGE); process.exit(0); }
-if (!parsed.pos.length) { console.log(USAGE); process.exit(2); }
+if (!parsed.pos.length) { console.error(USAGE); process.exit(2); }
 const labelsFile = parsed.opts['--labels'] || null;
 const [tourPath, modelArg] = parsed.pos;
 
@@ -95,6 +97,13 @@ try {
         extras = await readCompanions(zipCompanions(zm.files, zm.model, zm.opens).map((c) => ({ name: c.name, arrayBuffer: (max) => z.get(c.path, max, over) })), name);
       }
     }
+  } else if (!/^https?:/.test(model) && meshReaderOf(name, new Uint8Array(raw))?.companions) {
+    // (a local model with the files beside it in its folder, as a drop carries them to the page
+    // (main.js pickModelFile, companionsOf): a .gltf beside its .bin FAILed, "needs tri.bin" -- r82 A6.
+    // From a URL the page has none, so none here)
+    const dir = dirname(resolve(model));
+    const near = readdirSync(dir).filter((f) => isCompanion(f) && statSync(join(dir, f)).isFile());
+    extras = await readCompanions(near.map((f) => ({ name: f, size: statSync(join(dir, f)).size, arrayBuffer: async () => { const b = await readFile(join(dir, f)); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } })), name);
   }
   const mesh = meshFormatOf(name, raw);
   // (no edges or facts: the tour's check reads the bodies only -- r42 Q10)

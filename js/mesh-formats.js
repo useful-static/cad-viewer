@@ -19,7 +19,7 @@ import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_
 import { crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32Turning } from './crc32.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, companionKey, companionOf, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, GLB_BIN, GLB_JSON, companionKey, companionOf, glbChunks, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -1064,16 +1064,12 @@ async function parseGLTF(buf, format, base, files) {
   let json, bin = null;
   if (format === 'glb') {
     // (a file shorter than the header met the engine's "Offset is outside the bounds of the DataView")
-    if (buf.byteLength < 12) throw new Error(`${base}.glb is damaged: ${buf.byteLength} bytes, shorter than a GLB header`);
-    const dv = new DataView(buf);
-    if (dv.getUint32(0, true) !== 0x46546c67) throw new Error(`${base}.glb: not a GLB file`);
-    let o = 12;
-    while (o + 8 <= buf.byteLength) {
-      const len = dv.getUint32(o, true), type = dv.getUint32(o + 4, true);
-      if (o + 8 + len > buf.byteLength) throw new Error(`${base}.glb is damaged: a chunk runs past the end of the file`);
-      if (type === 0x4e4f534a) json = parseJSON(text(new Uint8Array(buf, o + 8, len), `${base}.glb's JSON`), `${base}.glb`);
-      else if (type === 0x004e4942) bin = buf.slice(o + 8, o + 8 + len);
-      o += 8 + len;
+    // (its chunks by the one walk, the list check's too: js/formats.js glbChunks -- r82 A4)
+    const g = await glbChunks(async (at, n) => new Uint8Array(buf, at, n), buf.byteLength, `${base}.glb`);
+    if (g.damaged) throw new Error(g.damaged);
+    for (const c of g.chunks) {
+      if (c.type === GLB_JSON) json = parseJSON(text(new Uint8Array(buf, c.at, c.len), `${base}.glb's JSON`), `${base}.glb`);
+      else if (c.type === GLB_BIN) bin = buf.slice(c.at, c.at + c.len);
     }
   } else json = parseJSON(text(buf, `${base}.gltf`), `${base}.gltf`);
   // its refusals name the file as the other readers do: name and extension

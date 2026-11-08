@@ -92,10 +92,6 @@ export function companionOf(files, ref) {
   for (const [n, f] of files) if (companionKey(n) === k) return f;
   return null;
 }
-// The files a glTF's JSON names that its reader must find beside it: each buffer's uri that is no
-// data: URI, as written (js/mesh-formats.js parseGLTF reads those from its companions; a GLB's own
-// buffer has no uri; images are optional). The list check's, which never read them: a .gltf by URL,
-// its .bin beside it on the server, was "ok" where the page says "needs tri.bin" (r80 Q3)
 // The extensions a glTF may require: KHR_mesh_quantization (integer and normalized attributes are
 // read, its dequantization the node transform, baked in) and EXT_mesh_gpu_instancing (each instance
 // placed); every other is refused by name, compression in its own words. -> the reader's refusal of
@@ -110,9 +106,34 @@ export function gltfRefusal(json, file) {
   const unread = required.filter((x) => !GLTF_EXTENSIONS_READ.includes(x)).map((x) => String(x).slice(0, 80));
   return unread.length ? `${file} needs the glTF extension${unread.length > 1 ? 's' : ''} ${unread.join(', ')}, which this viewer does not read` : null;
 }
+// The files a glTF's JSON names that its reader must find beside it: each buffer's uri that is no
+// data: URI, as written (js/mesh-formats.js parseGLTF reads those from its companions; a GLB's own
+// buffer has no uri; images are optional). The list check's, which never read them: a .gltf by URL,
+// its .bin beside it on the server, was "ok" where the page says "needs tri.bin" (r80 Q3)
 export function gltfNeeds(json) {
   const buffers = json && Array.isArray(json.buffers) ? json.buffers : [];
   return buffers.filter((b) => b && typeof b.uri === 'string' && !b.uri.startsWith('data:')).map((b) => b.uri);
+}
+// A GLB's chunks as its reader walks them, from read(at, n) (async: bytes of a file of `size`): its
+// header, then each chunk's length and type -> { chunks: [{ type, at, len }] } or { damaged } in the
+// reader's words; most: the chunks walked at most (the list check's, by range), past it { more }.
+// The one walk for js/mesh-formats.js parseGLTF and the list check, which read the JSON at byte 20
+// whatever the first chunk was, and never saw one cut short (r82 A3, A4)
+export const GLB_JSON = 0x4e4f534a, GLB_BIN = 0x004e4942;
+export async function glbChunks(read, size, file, most = Infinity) {
+  if (size < 12) return { damaged: `${file} is damaged: ${size} bytes, shorter than a GLB header` };
+  const h = await read(0, 12);
+  if (new DataView(h.buffer, h.byteOffset, 12).getUint32(0, true) !== 0x46546c67) return { damaged: `${file}: not a GLB file` };
+  const chunks = [];
+  for (let o = 12; o + 8 <= size;) {
+    if (chunks.length >= most) return { chunks, more: true };
+    const c = await read(o, 8), dv = new DataView(c.buffer, c.byteOffset, 8);
+    const len = dv.getUint32(0, true), type = dv.getUint32(4, true);
+    if (o + 8 + len > size) return { chunks, damaged: `${file} is damaged: a chunk runs past the end of the file` };
+    chunks.push({ type, at: o + 8, len });
+    o += 8 + len;
+  }
+  return { chunks };
 }
 // Whether a model of this format (its label) is read with its companions: the one rule for the page
 // (main.js loadMeshFile reads them only then) and the list check (which judges them only then) -- the

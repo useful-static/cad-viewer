@@ -712,6 +712,58 @@ await test('a 3MF\'s parts and a glTF\'s JSON read as the page reads them (r81 A
   const wanted = rows.map(([what, , , want]) => [what, want]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
+await test('a glTF and GLB by their whole JSON and chunks wherever they are, a .cadmesh by its header, a part answer not the file (r82 A1-A5, Q3, Q4)', async () => {
+  const { encodeCadmesh } = await import('../js/cadmesh.js');
+  // (capped: a host whose parts are at most `cap` bytes, its Content-Range naming the whole)
+  const ranged = (b, cap = Infinity) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1, a + cap - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const chunk = (type, data) => { const d = Buffer.from(data); const pad = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + pad, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(pad, type === 'JSON' ? 0x20 : 0)]); };
+  const glbOf = (...chunks) => { const body = Buffer.concat(chunks); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8); return Buffer.concat([h, body]); };
+  const long = { extras: { pad: 'x'.repeat(100000) } };
+  const needsBin = gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }], ...long });
+  const draco = gltf({ extensionsRequired: ['KHR_draco_mesh_compression'], ...long });
+  const quad = { name: 'plate', color: null, positions: Float32Array.of(0, 0, 0, 1, 0, 0, 1, 1, 0), normals: null, colors: null, indices: Uint32Array.of(0, 1, 2) };
+  const cm = Buffer.from(encodeCadmesh({ meshes: [quad], root: { name: 'asm', meshes: [0], children: [] } }));
+  const rels = `<?xml version="1.0"?><Relationships><Relationship Target="/3D/3dmodel.model" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
+  const bigPart = Buffer.alloc(70 * 2 ** 20, 0x20);
+  const rows = [
+    // A1: a .gltf.gz and a .glb.gz past 64 KB of JSON by URL (must fire: "ok")
+    ['A1 a long .gltf.gz', 'tri.gltf.gz', gzipSync(needsBin), 'bad:tri.gltf needs tri.bin'],
+    ['A1 a long Draco .glb.gz', 'd.glb.gz', gzipSync(glbOf(chunk('JSON', draco))), 'bad:which this viewer does not decode'],
+    // A2: a 70 MB GLB, its JSON read by its own length; a 70 MB .gltf said not checked (must fire: "ok")
+    ['A2 a 70 MB GLB', 'big.glb', glbOf(chunk('JSON', draco), chunk('BIN\0', Buffer.alloc(70 * 2 ** 20))), 'bad:which this viewer does not decode'],
+    ['A2 a 70 MB .gltf', 'big.gltf', Buffer.from(gltf({ extras: { pad: 'x'.repeat(70 * 2 ** 20) } })), 'warn:its extensions and buffers were not checked here'],
+    // A3: a GLB and a .cadmesh cut short (must fire: "ok")
+    ['A3 a cut GLB', 'cut.glb', glbOf(chunk('JSON', gltf({})), chunk('BIN\0', Buffer.alloc(1000))).subarray(0, 600), 'bad:a chunk runs past the end of the file'],
+    ['A3 a cut .cadmesh', 'cut.cadmesh', cm.subarray(0, cm.length - 8), 'bad:out of range (truncated file?)'],
+    ['A3 a whole .cadmesh (control)', 'whole.cadmesh', cm, 'ok'],
+    // A4: a GLB whose BIN chunk comes first (must fire: "ok")
+    ['A4 BIN first', 'd.glb', glbOf(chunk('BIN\0', Buffer.alloc(16)), chunk('JSON', draco)), 'bad:which this viewer does not decode'],
+    // A5: a 3MF whose other part holds more than 64 MB of data, said (must fire: "ok")
+    ['A5 a 70 MB object part', 'x.3mf', miniZip([['_rels/.rels', rels], ['3D/3dmodel.model', '<model/>'], ['3D/Objects/object_1.model', bigPart]]), 'warn:its model part 3D/Objects/object_1.model holds more than'],
+    // Q4: a .gltf whose JSON does not parse (must fire: "ok")
+    ['Q4 a cut .gltf', 'cut.gltf', Buffer.from(gltf({}).slice(0, -2)), 'bad:is damaged: its JSON does not parse'],
+  ];
+  const got = [];
+  for (const [what, name, bytes, want] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: ranged(Buffer.from(bytes)), sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  // Q3: a host capping its parts at 32 KB, its Content-Range naming the 200 KB zip: its first part is
+  // no whole file (must fire: "bad · not a zip file")
+  const z = miniZip(Array.from({ length: 2000 }, (_, i) => [`p${i}.stl`, 'x'.repeat(40)]));
+  const capped = await checkFile(`${B}many.zip`, { fetchFn: ranged(z, 32768), sniff: true });
+  got.push(['Q3 parts capped at 32 KB', capped.level === 'warn' && /sent less than it was asked/.test(capped.detail) ? 'ok' : `${capped.level}: ${capped.detail}`]);
+  const wanted = [...rows.map(([what, , , want]) => [what, want]), ['Q3 parts capped at 32 KB', 'ok']];
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
 await test('a host that caps a ranged answer: the short bytes said, never read as the directory (r80 Q6)', async () => {
   const z = miniZip(Array.from({ length: 3000 }, (_, i) => [`p${i}.stl`, 'x']));
   assert.ok(z.length > 65557, 'its directory past one capped answer');

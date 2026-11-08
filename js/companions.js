@@ -6,9 +6,10 @@
 //
 // readCompanions(files, name, stale?, max?) -> Map(lower-case name -> ArrayBuffer), or null when
 // stale() turns true between reads
-//   files: [{ name, arrayBuffer(max) }] -- a File ignores max; a zip's entry (main.js loadZip) is read
-//   to it and refused past it in these words; name: the model's, for the words; max: the limit (the
-//   file limit; a test passes a small one).
+//   files: [{ name, size?, arrayBuffer(max) }] -- a size given (a File's) is refused by before the
+//   file is read; a File ignores max; a zip's entry (main.js loadZip) is read to it and refused past it
+//   in these words; name: the model's, for the words; max: the limit (the file limit; a test passes a
+//   small one).
 
 import { MAX_FILE_BYTES, OVERSIZE_WORDS } from './cadmesh.js';
 

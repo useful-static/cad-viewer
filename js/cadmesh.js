@@ -621,6 +621,30 @@ export function deflateCadmesh(buf) {
   return pipeBytes(buf, new CompressionStream('gzip'));
 }
 
+// A .cadmesh cut short, by its own header: head (its first bytes) and its size -> the decoder's
+// refusal in its words, { need: n } when the header runs past head (read n bytes and ask again), or
+// null. decodeCadmesh's rule, the list check's too: a download stopped halfway was "ok", the page
+// refusing it -- section normal out of range (r82 A3)
+export function cadmeshCut(head, size) {
+  if (size < 12 || head.length < 12) return size < 12 ? 'cadmesh: file too short' : { need: 12 };
+  const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
+  if (dv.getUint32(0, true) !== MAGIC || dv.getUint32(4, true) !== VERSION) return null; // (the decoder says those)
+  const jlen = dv.getUint32(8, true);
+  if (12 + jlen > size) return 'cadmesh: truncated header';
+  if (12 + jlen > head.length) return { need: 12 + jlen };
+  let header;
+  try { header = JSON.parse(new TextDecoder().decode(head.subarray(12, 12 + jlen))); } catch { return null; }
+  if (!header || typeof header.sections !== 'object' || !header.sections) return null;
+  const dataStart = align8(12 + jlen);
+  // (in the decoder's order: the sections it views first)
+  const names = ['position', 'normal', 'color', 'id', 'index', ...Object.keys(header.sections).filter((n) => !['position', 'normal', 'color', 'id', 'index'].includes(n))];
+  for (const name of names) {
+    const s = header.sections[name];
+    if (s && dataStart + s.offset + s.byteLength > size) return `cadmesh: section ${name} out of range (truncated file?)`;
+  }
+  return null;
+}
+
 // Returns { header, position:Float32Array, normal:Int16Array, color:Uint8Array,
 //           id:Uint8Array, index:Uint32Array, faces:Uint32Array|null } as views
 // into buf (no copies). An optional section the file lacks is null.
