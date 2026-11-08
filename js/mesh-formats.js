@@ -19,7 +19,7 @@ import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_
 import { crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32Turning } from './crc32.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, companionKey, companionOf, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, companionKey, companionOf, gltfRefusal, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -1050,11 +1050,8 @@ const isNorm = (a) => a.normalized === true;
 const orList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}` : xs[0]);
 // the primitive modes drawn: TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN (points and lines are not)
 const TRI_MODES = [4, 5, 6];
-// the extensions a file may require: KHR_mesh_quantization (integer and normalized attributes
-// are read, and its dequantization is the node transform, baked in) and EXT_mesh_gpu_instancing
-// (each instance placed); every other is refused by name, compression in its own words
-const GLTF_EXTENSIONS_READ = ['KHR_mesh_quantization', 'EXT_mesh_gpu_instancing'];
-const GLTF_COMPRESSION = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
+// (the extensions a file may require, and the refusal of the others: js/formats.js gltfRefusal, the
+// list check's too -- r81 A5)
 const INSTANCING = 'EXT_mesh_gpu_instancing';
 const INSTANCE_USES = ['TRANSLATION', 'ROTATION', 'SCALE'];
 
@@ -1106,11 +1103,9 @@ async function parseGLTF(buf, format, base, files) {
   // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
   // must not load such an asset; ignored, an instanced part opened as one copy without a word).
   // Compression keeps its own words, since the fix is the same for each.
-  const required = list(json.extensionsRequired, '"extensionsRequired"');
-  const packed = required.filter((x) => GLTF_COMPRESSION.includes(x));
-  if (packed.length) throw new Error(`${file} needs ${packed.join(', ')}, which this viewer does not decode: export it without compression`);
-  const unread = required.filter((x) => !GLTF_EXTENSIONS_READ.includes(x)).map((x) => String(x).slice(0, 80));
-  if (unread.length) throw new Error(`${file} needs the glTF extension${unread.length > 1 ? 's' : ''} ${unread.join(', ')}, which this viewer does not read`);
+  list(json.extensionsRequired, '"extensionsRequired"');
+  const refusedExt = gltfRefusal(json, file);
+  if (refusedExt) throw new Error(refusedExt);
   const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
   const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
   const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {

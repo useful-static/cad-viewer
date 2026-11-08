@@ -6,7 +6,7 @@
 //
 //   (on start)                                         -> { ready: true }
 //   { kind: 'mesh', buf, format, name, extras, unit }  -> { ok, raw (a .cadmesh), unitless }
-//   { kind: '2d', buf, dwg }                           -> { ok, drawing }
+//   { kind: '2d', buf, format }                        -> { ok, drawing }  (format: 'DXF' | 'DWG', js/formats.js drawingReaderOf)
 //   a refusal                                          -> { ok: false, message }
 
 import { readDrawing, readMeshFile } from './read-file.js';

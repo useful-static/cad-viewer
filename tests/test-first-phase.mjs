@@ -48,8 +48,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // hole read by its wall, fillets and drill points, no new import; 897 KB in 41 at r73, formats.js's
   // size and header rules and main.js's tour waits, no new import; 911 KB in 41 at r77, the zip's
   // companions moved from main.js into formats.js beside zipModel and the gzip reader's turns, no new
-  // import)
-  assert.ok(bytes < 925e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // import; 926 KB in 42 at r81, js/companions.js (r80) and formats.js's glTF, reader and companion
+  // rules moved into it from mesh-formats.js and list-check.js)
+  assert.ok(bytes < 940e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

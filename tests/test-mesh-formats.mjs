@@ -527,6 +527,16 @@ await test('a broken zip: "damaged", not the engine\'s DataView error; an entry 
   const uf = await unzip(flipped.buffer);
   await assert.rejects(uf.get('a.txt'), /^Error: a damaged zip \(a\.txt's data does not match its checksum\)$/);
   assert.equal(new TextDecoder().decode(await (await unzip(z.buffer)).get('a.txt')), 'hello', 'must accept: the whole one');
+  // (a deflated entry inflating cleanly to bytes its CRC-32 is not: refused as well -- r81 Q6; must
+  // fire, "hellp" handed on)
+  const dz = new Uint8Array(await zipDeflated('a.txt', Buffer.from('hellp')));
+  new DataView(dz.buffer).setUint32(dz.length - 22 - (46 + 5) + 16, crc32(Buffer.from('hello')), true);
+  await assert.rejects((await unzip(dz.buffer)).get('a.txt'), /^Error: a damaged zip \(a\.txt's data does not match its checksum\)$/);
+  // (a Cancel during a large entry's checksum ends it: crc32Turning's stop -- r81 Q7; must fire, the
+  // sum run to the end)
+  const { StopRead } = await import('../js/cadmesh.js');
+  const large = new Uint8Array(zipStored([['big.stl', new Uint8Array(40 * 2 ** 20)]]));
+  await assert.rejects((await unzip(large.buffer, () => true)).get('big.stl'), (e) => e instanceof StopRead);
 });
 await test('a .gltf whose buffer is a base64 data: URI opens (the URI\'s text was read as the buffer)', async () => {
   const f = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);

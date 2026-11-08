@@ -18,6 +18,9 @@ export async function readCompanions(files, name, stale = () => false, max = MAX
   const extras = new Map();
   let total = 0;
   for (const f of files) {
+    // (a File says its size: refused by it before it is read, as the model is -- each was read whole
+    // first, 64 MB of a companion against a 1 MB limit: r81 A8)
+    if (typeof f.size === 'number' && total + f.size > max) throw new Error(companionsOverText(name));
     const b = await f.arrayBuffer(max - total);
     if (stale()) return null;
     total += b.byteLength;

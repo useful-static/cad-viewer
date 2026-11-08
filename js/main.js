@@ -5877,11 +5877,14 @@ function pickModelFile(files) {
   // (the model by the zip's one choice, js/formats.js zipModel: a format the viewer opens -- the first
   // file not a companion took a notes .pdf over the board.step beside it, and refused it: r80 A3;
   // with none, the first not a companion, which is refused in its own words)
+  // (then a zip, which zipModel passes over inside a zip and a drop opens: [notes.pdf, board.zip]
+  // opened the .pdf -- r81 A3)
   const chosen = zipModel(files.map((x) => x.name)).model;
-  const f = files.find((x) => x.name === chosen) || files.find((x) => !isCompanion(x.name)) || files[0];
+  const f = files.find((x) => x.name === chosen) || files.find((x) => formatOfName(x.name)) || files.find((x) => !isCompanion(x.name)) || files[0];
   const extras = files.filter((x) => x !== f && isCompanion(x.name));
   companionsOf.set(f, extras);
-  const rest = files.length - 1 - extras.length;
+  // (the others the viewer would open, not every file: "1 more" of a .pdf -- r81 A10)
+  const rest = files.filter((x) => x !== f && !extras.includes(x) && formatOfName(x.name)).length;
   if (rest > 0) announce(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`);
   return f;
 }

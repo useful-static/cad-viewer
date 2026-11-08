@@ -405,7 +405,14 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
 // (onChunk: each chunk as it comes, none kept -- the list check's CRC of a zip entry: r80 Q4)
 export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES, onChunk = null) {
   if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (no DecompressionStream)');
-  return readMembers(buf, format, max, onChunk ? (v) => onChunk(v) : () => {});
+  // (each byte once, in order: a gzip member read again in Chromium hands the same output over from its
+  // start -- passed on only past what was handed already, so a CRC over it is the file's: r81 A11)
+  let next = 0;
+  return readMembers(buf, format, max, onChunk ? (v, at) => {
+    if (at + v.length <= next) return;
+    onChunk(at >= next ? v : v.subarray(next - at));
+    next = at + v.length;
+  } : () => {});
 }
 
 // (a stream's input, written FEED bytes at a time; the most of a member's output a stopped stream

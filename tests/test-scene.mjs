@@ -1686,6 +1686,10 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
   {
     const { f } = run(false);
     assert.equal(f.pickModelFile([file('assembly-notes.pdf'), file('board.step')]).name, 'board.step');
+    // (and a zip, which zipModel passes over: r81 A3; must fire, the .pdf)
+    assert.equal(f.pickModelFile([file('notes.pdf'), file('board.zip')]).name, 'board.zip');
+    // (a File's size held to the budget before it is read: r81 A8; must fire, "read")
+    await assert.rejects(readCompanions([{ name: 'big.png', size: 2000, arrayBuffer: async () => { throw new Error('read'); } }], 'm.obj', () => false, 1000), /^Error: m\.obj: its companion files come to /);
     assert.equal(isCompanion('photo.png.gz'), false, 'a .png.gz is no picture a reader reads');
     assert.equal(isCompanion('photo.png'), true);
   }

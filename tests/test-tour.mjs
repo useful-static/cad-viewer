@@ -190,6 +190,11 @@ test('a list\'s labels name the first model\'s bodies only: an added model\'s pa
   // (a label that is its part's name in another case: the index put into the list it walked, which
   // grew until "Invalid array length" -- met by r80's check-tour arm; must fire, the throw)
   assert.deepEqual(resolveParts(['Part_7'], partIndex(header, { PART_7: 'Part_7' })).ids.sort(), [1, 3]);
+  // (a label names what the model's own names name, not another label: { a: "b", b: "c" } gave "c"
+  // both parts, the keys swapped one -- r81 A4; must fire, [1, 2, 3] against [2])
+  const ab = { PART_7: 'PART_8', PART_8: 'Fan' }, ba = { PART_8: 'Fan', PART_7: 'PART_8' };
+  assert.deepEqual(resolveParts(['Fan'], partIndex(header, ab)).ids.sort(), [2]);
+  assert.deepEqual(resolveParts(['Fan'], partIndex(header, ba)).ids.sort(), [2]);
 });
 
 test('partIndex in a scene: 1000 labels naming one assembly of 100,000 bodies, each node tested once', () => {

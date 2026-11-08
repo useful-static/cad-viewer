@@ -25,10 +25,11 @@ const crcOf = (d, method) => { if (method === 0) return crc32(d); try { return c
 const miniZip = (entries) => {
   const parts = [], cds = [];
   let off = 0;
-  for (const [name, data, claimed, method = 0, flags = 0] of entries) {
+  for (const [name, data, claimed, method = 0, flags = 0, crc] of entries) {
     const nm = Buffer.from(name), d = Buffer.from(data);
     const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(flags, 6); local.writeUInt16LE(method, 8); local.writeUInt32LE(d.length, 18); local.writeUInt32LE(d.length, 22); local.writeUInt16LE(nm.length, 26);
-    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(flags, 8); cd.writeUInt16LE(method, 10); cd.writeUInt32LE(crcOf(d, method), 16); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
+    // (crc: one given in place of the true one -- a deflated entry that inflates cleanly to the wrong bytes)
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(flags, 8); cd.writeUInt16LE(method, 10); cd.writeUInt32LE(crc ?? crcOf(d, method), 16); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
     parts.push(local, nm, d); cds.push(cd, nm);
     off += 30 + nm.length + d.length;
   }
@@ -659,6 +660,56 @@ await test('the reader the page meets, an entry\'s data counted and its checksum
     got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
   }
   const wanted = rows.map(([what, , , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
+await test('a 3MF\'s parts and a glTF\'s JSON read as the page reads them (r81 A1, A2, A5-A7)', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const ranged = (b) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const rels = (target) => `<?xml version="1.0"?><Relationships><Relationship Target="${target}" Id="r" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
+  // (a byte changed in an entry's stored data, its CRC-32 left as it was)
+  const flip = (z, name, at = 0) => { const b = Buffer.from(z); b[b.indexOf(Buffer.from(name)) + name.length + at] ^= 1; return b; };
+  const relsBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>']]), '_rels/.rels', 40);
+  const partBad = flip(miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', '<model/>'], ['3D/Objects/o1.model', '<model><resources/></model>']]), '3D/Objects/o1.model', 3);
+  const gltf = (o) => JSON.stringify({ asset: { version: '2.0' }, ...o });
+  const glb = (json) => { const j = Buffer.from(json); const pad = (4 - (j.length % 4)) % 4; const jj = Buffer.concat([j, Buffer.alloc(pad, 0x20)]); const h = Buffer.alloc(20); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(20 + jj.length, 8); h.writeUInt32LE(jj.length, 12); h.write('JSON', 16); return Buffer.concat([h, jj]); };
+  const draco = { extensionsRequired: ['KHR_draco_mesh_compression'], extensionsUsed: ['KHR_draco_mesh_compression'] };
+  const longJson = gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }], extras: { pad: 'x'.repeat(100000) } });
+  const rows = [
+    // A1: a rels part whose data is not its CRC-32 (must fire: "ok · 3MF")
+    ['A1 rels, CRC wrong', 'x.3mf', relsBad, 'bad:a damaged zip (_rels/.rels\'s data does not match its checksum)'],
+    // A2: another model part damaged -- refused if the root uses it (must fire: "ok · 3MF")
+    ['A2 another part damaged', 'x.3mf', partBad, 'warn:the viewer refuses the model if it uses 3D/Objects/o1.model'],
+    // A5: a Draco GLB and glTF, by URL and zipped (must fire: "ok")
+    ['A5 a Draco GLB', 'd.glb', glb(gltf(draco)), 'bad:which this viewer does not decode'],
+    ['A5 a zipped Draco glTF', 'd.zip', miniZip([['d.gltf', gltf(draco)]]), 'bad:which this viewer does not decode'],
+    // A6: a .gltf of more than 64 KB of JSON with an external buffer (must fire: "ok")
+    ['A6 long JSON by URL', 'tri.gltf', Buffer.from(longJson), 'bad:tri.gltf needs tri.bin'],
+    ['A6 long JSON zipped', 'g.zip', miniZip([['tri.gltf', deflateRawSync(Buffer.from(longJson)), longJson.length, 8]]), 'bad:tri.gltf needs tri.bin'],
+    // A7: a zipped chair.gltf.gz without its chair.bin (must fire: "ok")
+    ['A7 a gzipped glTF in a zip', 'g.zip', miniZip([['chair.gltf.gz', gzipSync(gltf({ buffers: [{ uri: 'chair.bin', byteLength: 36 }] }))]]), 'bad:chair.gltf needs chair.bin'],
+    // Q3: a 3MF whose root holds more data than is counted here, said (must fire: "ok")
+    ['Q3 a 70 MB stored root', 'x.3mf', miniZip([['_rels/.rels', rels('/3D/3dmodel.model')], ['3D/3dmodel.model', Buffer.alloc(70 * 2 ** 20, 0x20)]]), 'warn:were not checked here'],
+    // Q6: a deflated entry that inflates cleanly to bytes its CRC-32 is not (must fire: "ok")
+    ['Q6 deflated, CRC wrong', 'p.zip', miniZip([['part.obj', deflateRawSync(Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n')), 32, 8, 0, 12345]]), 'bad:does not match its checksum'],
+    // Q8: a GLB with an external buffer by URL; a %-escaped uri beside its file; a companion in another case
+    // (must fire: "ok"; "needs my%20part.bin"; "needs tri.bin")
+    ['Q8 a GLB by URL', 'tri.glb', glb(gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }] })), 'bad:tri.glb needs tri.bin'],
+    ['Q8 a %-escaped uri', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'my%20part.bin', byteLength: 36 }] })], ['my part.bin', Buffer.alloc(36)]]), 'ok'],
+    ['Q8 a companion in another case', 'g.zip', miniZip([['tri.gltf', gltf({ buffers: [{ uri: 'tri.bin', byteLength: 36 }] })], ['Tri.BIN', Buffer.alloc(36)]]), 'ok'],
+  ];
+  const got = [];
+  for (const [what, name, bytes, want] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: ranged(Buffer.from(bytes)), sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  const wanted = rows.map(([what, , , want]) => [what, want]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
 });
 await test('a host that caps a ranged answer: the short bytes said, never read as the directory (r80 Q6)', async () => {

@@ -96,6 +96,20 @@ export function companionOf(files, ref) {
 // data: URI, as written (js/mesh-formats.js parseGLTF reads those from its companions; a GLB's own
 // buffer has no uri; images are optional). The list check's, which never read them: a .gltf by URL,
 // its .bin beside it on the server, was "ok" where the page says "needs tri.bin" (r80 Q3)
+// The extensions a glTF may require: KHR_mesh_quantization (integer and normalized attributes are
+// read, its dequantization the node transform, baked in) and EXT_mesh_gpu_instancing (each instance
+// placed); every other is refused by name, compression in its own words. -> the reader's refusal of
+// a JSON's extensionsRequired, or null: js/mesh-formats.js parseGLTF's and the list check's (a Draco
+// GLB was "ok" there, the page refusing it: r81 A5)
+const GLTF_EXTENSIONS_READ = ['KHR_mesh_quantization', 'EXT_mesh_gpu_instancing'];
+const GLTF_COMPRESSION = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
+export function gltfRefusal(json, file) {
+  const required = json && Array.isArray(json.extensionsRequired) ? json.extensionsRequired : [];
+  const packed = required.filter((x) => GLTF_COMPRESSION.includes(x));
+  if (packed.length) return `${file} needs ${packed.join(', ')}, which this viewer does not decode: export it without compression`;
+  const unread = required.filter((x) => !GLTF_EXTENSIONS_READ.includes(x)).map((x) => String(x).slice(0, 80));
+  return unread.length ? `${file} needs the glTF extension${unread.length > 1 ? 's' : ''} ${unread.join(', ')}, which this viewer does not read` : null;
+}
 export function gltfNeeds(json) {
   const buffers = json && Array.isArray(json.buffers) ? json.buffers : [];
   return buffers.filter((b) => b && typeof b.uri === 'string' && !b.uri.startsWith('data:')).map((b) => b.uri);

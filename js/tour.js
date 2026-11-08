@@ -312,11 +312,13 @@ export function partIndex(header, labels = null, labelled = Infinity) {
       }
       return nodeCovered.get(r);
     };
+    // (each label names what the model's own names name, read before any label is put: labels built
+    // on labels put before them, so { a: "b", b: "c" } gave "c" parts a and b, and the keys swapped
+    // b alone -- r81 A4; and a label that is its part's name in another case put into the very list
+    // being walked, which grew until "Invalid array length": r80)
+    const own = new Map([...refs].map(([k, v]) => [k, [...v]]));
     for (const [name, label] of Object.entries(labels)) {
-      // (a copy walked: a label that is its part's name in another case -- "plate": "Plate" -- puts
-      // into the very list being walked, which grew without end until "Invalid array length": met by
-      // r80's check-tour arm)
-      for (const r of [...(refs.get(name.trim().toLowerCase()) || [])]) if (covered(r)) put(label, r);
+      for (const r of own.get(name.trim().toLowerCase()) || []) if (covered(r)) put(label, r);
     }
   }
   return {

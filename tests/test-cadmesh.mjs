@@ -621,6 +621,12 @@ await test('a gzip of several members is read whole, member after member, where 
     const members = Buffer.concat([gzipSync(a), gzipSync(b), gzipSync(c)]);
     const got = Buffer.from(await gunzip(members));
     assert.ok(got.equals(Buffer.concat([a, b, c])), `${got.length} bytes of ${a.length + b.length + c.length} (must fire: "corrupt or truncated (Junk found…)")`);
+    // (inflateCount's chunks each byte once, a member read again handing its start over twice: r81 A11
+    // -- must fire, a's first half twice)
+    const { inflateCount } = await import('../js/cadmesh.js');
+    const seen = [];
+    await inflateCount(members, 'gzip', undefined, (v) => seen.push(Buffer.from(v)));
+    assert.ok(Buffer.concat(seen).equals(Buffer.concat([a, b, c])), `${Buffer.concat(seen).length} bytes handed on`);
     // (r74 A2: an empty member, and a one-byte one, in the middle -- their trailers 12 and 13 bytes in;
     // looked for from 18, passed over, the file refused)
     for (const mid of [Buffer.alloc(0), Buffer.from('x')]) {
