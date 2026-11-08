@@ -124,5 +124,16 @@ await test('a model in another unit is refused, not written as mm; an inherited 
   assert.equal(imp.status, 0, imp.stderr);
   assert.equal(imp.stdout.trim(), 'imported');
 });
+await test('the exported API holds own keys too; every tool imports without running (r85 A4, A6)', async () => {
+  const { exportCadmesh } = await import('../cadmesh-export.mjs');
+  // (must fire: "TypeError ex.write is not a function" in place of the tool's words)
+  for (const k of ['constructor', 'toString', 'nope']) await assert.rejects(exportCadmesh(readFileSync(inp), { modelUp: 'y', to: [k] }), new RegExp(`^Error: unknown format "${k}"`), k);
+  // (one guard, js/cli-args.js runCliIfMain: stp2mesh had none and ran when imported)
+  for (const t of ['stp2mesh', 'cadmesh-export', 'dwg-check', 'split-board', 'set-colours']) {
+    const imp = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(join(here, '..', `${t}.mjs`))}); console.log('imported')`], { encoding: 'utf8' });
+    assert.equal(imp.status, 0, `${t}: ${imp.stderr}`);
+    assert.equal(imp.stdout.trim(), 'imported', t);
+  }
+});
 
 done();

@@ -117,6 +117,14 @@ export function timeLeft(fc, factor, step, fraction, inStep, quiet = 0) {
   return here + later;
 }
 
+// Whether a download's progress may be told as a percent of its length: a length given, no
+// Content-Encoding read, and no more come than that length -- another site's page cannot read
+// Content-Encoding, so an encoded body is known only once it passes its length ("245.3 of 1.8 MB" and
+// a negative time left before: r85 Q4)
+export function percentKnown(got, total, encoded) {
+  return !!total && !encoded && got <= total;
+}
+
 // A download's speed for its progress card, and with the bytes still to come
 // the time left at that speed: kB/s below 1 MB/s, since a phone's link read
 // "0.0 MB/s" for the whole of a minute-long download.

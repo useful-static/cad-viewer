@@ -1331,7 +1331,9 @@ export function mtextPlain(s, codepage = 'windows-1252') {
     if (c !== '\\' || i + 1 >= n) { out += c; continue; }
     const k = s[i + 1];
     if (k === '\\' || k === '{' || k === '}') { out += k; i++; continue; }
-    if (k === 'P') { out += '\n'; i++; continue; }
+    // (\P a paragraph, \N a column break: each a new line here -- \N was drawn as the two
+    // characters: r85 Q5)
+    if (k === 'P' || k === 'N') { out += '\n'; i++; continue; }
     if (k === '~') { out += ' '; i++; continue; } // (non-breaking: the wrap does not break there)
     if ('LlOoKk'.includes(k)) { i++; continue; }
     if ('ACcFfHhQTWp'.includes(k)) {

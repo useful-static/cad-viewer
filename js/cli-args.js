@@ -105,6 +105,16 @@ export async function runCli(name, main, usage = '') {
   }
 }
 
+// runCli, only when the module at url is the command node was given -- imported, a tool runs
+// nothing and exits nothing. The five tools' one guard: four had a copy each and stp2mesh none,
+// so importing it ran it (r85 A6). (node:fs and node:url loaded when called, as readInput's are.)
+export async function runCliIfMain(url, name, main, usage = '') {
+  if (typeof process === 'undefined' || !process.argv || !process.argv[1]) return;
+  const [{ realpathSync }, { pathToFileURL }] = await Promise.all([import('node:fs'), import('node:url')]);
+  if (url !== pathToFileURL(realpathSync(process.argv[1])).href) return;
+  await runCli(name, main, usage);
+}
+
 // A value option's positive number, or a CliError naming it
 export function positive(opts, k, fallback) {
   if (!(k in opts)) return fallback;

@@ -17,7 +17,7 @@ import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, list
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
-import { deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft } from './import-progress.js';
+import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtVolume, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
@@ -26,7 +26,7 @@ import { aboveBelow, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
-import { mergeModels, modelRanges, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
+import { mergeModels, sceneUnitsRefusal, modelRanges, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -4368,6 +4368,9 @@ async function addToScene(base, name, seq) {
   if (app.scene.length === 1 && app.scene[0].url && listEntry(app.scene[0].url)?.name) app.scene[0].name = listEntry(app.scene[0].url).name;
   const models = [...app.scene, { base, name, url, offset: app.addOffset ? app.addOffset.slice() : [0, 0, 0] }];
   app.addOffset = null;
+  // (one unit to a scene: refused before anything is shown, as a 2D drawing is -- r85 A1)
+  const unitsClash = sceneUnitsRefusal(models);
+  if (unitsClash) throw new Error(unitsClash);
   setStatus('loading', `adding ${name}`);
   showProgress(`Adding ${name}`, null, `uploading ${fmtInt(base.header.indexCount / 3)} more triangles to the GPU`);
   await nextPaint();
@@ -5808,7 +5811,8 @@ async function loadUrl(url) {
   // br) it is the compressed size and the decoded bytes overshoot it, so a
   // percentage is shown only for an unencoded body.
   const total = Number(res.headers.get('content-length')) || 0;
-  const pct = total && !res.headers.get('content-encoding');
+  // (a percent while js/import-progress.js percentKnown holds, chunk by chunk: r85 Q4)
+  const encoded = !!res.headers.get('content-encoding');
   let buf;
   if (res.body) {
     const chunks = [];
@@ -5827,6 +5831,7 @@ async function loadUrl(url) {
       if (stale(seq)) { rd.cancel(); return; }
       chunks.push(value);
       got += value.length;
+      const pct = percentKnown(got, total, encoded);
       if (got > MAX_FILE_BYTES) {
         rd.cancel();
         throw new Error(oversizeText(name));

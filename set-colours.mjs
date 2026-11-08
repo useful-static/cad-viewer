@@ -14,11 +14,10 @@
 // recoloured is refused (its colours are no longer the converter's), unless
 // --again.
 
-import { realpathSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { writeFileSync } from 'node:fs';
 import { gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, gunzip, isGzip, splitCadmesh, withHeader } from './js/cadmesh.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -92,4 +91,4 @@ async function main() {
 
 // run as a command (a path with a space or through a symlink included: the plain "file://"
 // + argv[1] test was false there, and the tool exited 0 doing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('set-colours', main, USAGE);
+await runCliIfMain(import.meta.url, 'set-colours', main, USAGE);

@@ -7,7 +7,7 @@
 //
 // Pure ES module, no DOM.
 
-import { bodyAngle, idToBytes } from './cadmesh.js';
+import { bodyAngle, geomIsMm, idToBytes } from './cadmesh.js';
 import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
@@ -19,8 +19,21 @@ const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
 // model's angular deflection (the default where the model records none); the
 // scene has none of its own. opts.silhouetteCap: past it the scene's silhouettes are left out and
 // counted (js/edges.js SILHOUETTE_CAP; the viewer passes a phone's smaller cap).
+// Why these models cannot share one scene, or null: their geometry in different units. A scene has one
+// header and one unit (js/cadmesh.js geomIsMm, the display's, the exports' and the mass's rule), and
+// an inch model added to a mm one was shown, measured and exported as mm (r85 A1). The words name
+// the first model in another unit than the first's.
+export function sceneUnitsRefusal(models) {
+  const unitOf = (h) => (geomIsMm(h) ? 'millimetres' : h.units);
+  const first = unitOf(models[0].base.header);
+  const other = models.find((m) => unitOf(m.base.header) !== first);
+  return other ? `${other.name || 'this model'} is in ${unitOf(other.base.header)} and the view's model in ${first}: models in different units are not shown together (open it on its own with Open…)` : null;
+}
+
 export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   if (!models.length) throw new Error('scene: no models');
+  const unitsClash = sceneUnitsRefusal(models);
+  if (unitsClash) throw new Error(unitsClash);
   let vc = 0, ic = 0, mc = 0, fc = 0;
   for (const { base } of models) {
     vc += base.header.vertexCount;

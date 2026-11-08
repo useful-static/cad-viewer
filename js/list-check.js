@@ -13,13 +13,25 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, gltfShapeRefusal, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
+import { gltfPlanRefusal, parseMesh, plyPlanRefusal } from './mesh-formats.js';
 import { MAX_FILE_BYTES, OVERSIZE_WORDS, cadmeshCut, gunzip, inflate, inflateCount, inflateHead, isGzip } from './cadmesh.js';
 import { ZIP_TAIL, crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
 import { crc32 } from './crc32.js';
 // (the most of a gzipped zip kept unpacked, to read its directory)
 const ZIP_KEPT = 64 * 2 ** 20;
+// The mesh readers the check runs itself on a file it holds whole, up to READ_HERE_BYTES, by the
+// format's label: the page's own reader (js/mesh-formats.js parseMesh), its refusal in its words --
+// the check had none of their rules, and said "ok" of 13 files the page refuses from those same bytes
+// (r85 Q3). A larger PLY is held to its header's rules, from its start (plyPlanRefusal).
+const READS_HERE = { STL: 'stl', OBJ: 'obj', PLY: 'ply', OFF: 'off' };
+const READ_HERE_BYTES = 16 * 2 ** 20;
+// -> the reader's refusal, or null (name: the file's, its format's extension or not)
+async function readerRefusal(label, bytes, name) {
+  if (!Object.hasOwn(READS_HERE, label) || !bytes || bytes.length > READ_HERE_BYTES) return null;
+  try { await parseMesh(READS_HERE[label], bytes.slice().buffer, name); return null; } catch (e) { return e.message || String(e); }
+}
 // (a gzip's size by its last four bytes alone: what else those bytes mean -- r84 Q7)
 const TRAILER_OR_CUT = ' by its last four bytes (or it is cut short, and those bytes are not its size)';
 import { fileUrl } from './open-url.js';
@@ -43,6 +55,34 @@ const sure = (label) => !!BY_LABEL.get(label)?.magic;
 
 // Read up to n bytes of a response's body, then stop (a server that ignores
 // Range sends it all; the rest is never downloaded)
+// A whole body read as it arrives: its first n bytes (start), the whole of it while it is at most
+// keep bytes (all, else null), and its length counted (count) -- past stop, the read let go and
+// count is stop + 1. (What the page itself would receive, counted where its given length may be an
+// encoding's: r85 Q1, Q2.)
+async function bodyCounted(res, n, keep, stop) {
+  if (!res.body || !res.body.getReader) {
+    const all = new Uint8Array(await res.arrayBuffer());
+    return { start: all.subarray(0, n), all: all.length <= keep ? all : null, count: Math.min(all.length, stop + 1) };
+  }
+  const reader = res.body.getReader();
+  let parts = [], count = 0;
+  const first = [];
+  let firstLen = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (firstLen < n) { first.push(value); firstLen += value.length; }
+      count += value.length;
+      if (parts) { if (count <= keep) parts.push(value); else parts = null; }
+      if (count > stop) { count = stop + 1; break; }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const join = (ps, len) => { const out = new Uint8Array(len); let o = 0; for (const p of ps) { const t = Math.min(p.length, len - o); out.set(p.subarray(0, t), o); o += t; if (o >= len) break; } return out; };
+  return { start: join(first, Math.min(firstLen, n)), all: parts ? join(parts, count) : null, count };
+}
 async function head(res, n) {
   if (!res.body || !res.body.getReader) return new Uint8Array(await res.arrayBuffer()).subarray(0, n);
   const reader = res.body.getReader();
@@ -194,10 +234,11 @@ async function cadmeshJudge(src, size, file) {
 // (hasBin: a GLB holding its BIN chunk, which a first buffer with no uri is: a GLB cut after its JSON
 // was "ok", the page refusing it, "buffer 0 has no data" -- r83 Q1)
 function gltfVerdict(json, file, found = () => false, hasBin = false) {
-  // (the reader's own rules, its shape then each buffer: js/formats.js gltfShapeRefusal and
-  // gltfBufferRefusal -- this check's own skipped seven refusals: r84 A3)
-  const shape = gltfShapeRefusal(json, file);
-  if (shape) return shape;
+  // (the reader's own rules, all its JSON alone says then each buffer: js/mesh-formats.js
+  // gltfPlanRefusal and js/formats.js gltfBufferRefusal -- the check's shorter lists said "ok" of
+  // seven refusals at r84 A3, and of seven more at r85 A2)
+  const plan = gltfPlanRefusal(json, file);
+  if (plan) return plan;
   const buffers = json.buffers || [];
   for (let i = 0; i < buffers.length; i++) {
     const refused = gltfBufferRefusal(buffers[i], i, file, hasBin, found);
@@ -430,6 +471,19 @@ async function zipEntriesVerdict(src, label, depth) {
   // (its size as the page has it: r78 Q2; one too large to count here said, not "ok": r80 Q1)
   const sv = startVerdict(model, start, xi.size);
   if (sv) return sv;
+  // (an STL, OBJ, PLY or OFF by the page's own reader, the entry read whole; a larger PLY by its
+  // header, from its start -- r85 Q3)
+  const ml = start ? readerOf(model, start)?.label : null;
+  if (Object.hasOwn(READS_HERE, ml)) {
+    const name = model.split('/').pop();
+    let said = null;
+    if (x.usize <= READ_HERE_BYTES) {
+      let bytes = null;
+      try { bytes = await whole(x, READ_HERE_BYTES); } catch { /* said by the entry's own reading */ }
+      said = bytes && await readerRefusal(ml, bytes, name);
+    } else if (ml === 'PLY') said = plyPlanRefusal(start, name.replace(/\.[^.]+$/, ''));
+    if (said) return { level: 'bad', words: `its ${model}: ${said}` };
+  }
   if (glWarn) return glWarn;
   if (cmWarn) return cmWarn;
   if (!(xi.unchecked || anyUnchecked)) return null;
@@ -451,7 +505,11 @@ async function bytesVerdict(bytes, name, depth) {
   const label = readerOf(name, bytes)?.label;
   const cut = label === 'cadmesh' ? cadmeshCut(bytes, bytes.length) : null;
   if (typeof cut === 'string') return { level: 'bad', words: `its ${name}: ${cut}` };
-  return startVerdict(name, bytes.subarray(0, 65536), bytes.length);
+  const sv = startVerdict(name, bytes.subarray(0, 65536), bytes.length);
+  if (sv) return sv;
+  // (and the page's own reader, the whole in hand: r85 Q3)
+  const said = await readerRefusal(label, bytes, name);
+  return said ? { level: 'bad', words: `its ${name}: ${said}` } : null;
 }
 // A file of this name, start and size by the size and text rules: past the file limit, empty, a text
 // format past the text limit, a binary STL cut short
@@ -551,15 +609,26 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   if (sniff) {
     // (a body that fails after its headers -- a dropped connection -- is this file's fault: it
     // threw through the whole list check, which stopped with no verdict)
-    let start;
-    try { start = await head(res, 65536); } catch (e) { return { level: 'bad', detail: `its start could not be read: ${e && e.message ? e.message : e}`, url }; }
-    if (!start.length) return { level: 'bad', detail: [...bits, EMPTY_WORDS].join(' · '), url };
     // (a file sent with Content-Encoding -- stored gzipped, the browser unpacking it on the way -- has
-    // the encoding's length, not its own: seen as more bytes read than that length, a Content-Encoding
-    // the page can read, or the plain retry above; its size then not given -- r73 Q2's host, whose
-    // valid .cadmesh and STL the cut-short rules called damaged: r83 A1)
+    // the encoding's length, not its own, and another site's page cannot read Content-Encoding to
+    // know: a valid model was "bad", cut short by the gzip's length, and a 520 MB text file "ok" by
+    // its 1.8 MB one -- r83 A1, r84 A1, r85 Q1, Q2. Where the whole body is arriving anyway -- the
+    // range ignored, or the plain retry above -- and its length may be an encoding's (an answer from
+    // another site, or an encoding read), it is counted as it arrives, as the page receives it: up to
+    // 64 MB kept, none past it, the count let go past the file limit.)
     const enc = (res.headers.get('content-encoding') || '').toLowerCase();
-    if (total !== null && (decodedRetry || (enc && enc !== 'identity') || start.length > total)) { total = null; bits[0] = 'size not given'; }
+    const encoded = !!enc && enc !== 'identity';
+    const counting = res.status === 200 && (decodedRetry || encoded || res.type !== 'basic');
+    let start, body = null;
+    try {
+      if (counting) { body = await bodyCounted(res, 65536, ZIP_KEPT, MAX_FILE_BYTES); start = body.start; } else start = await head(res, 65536);
+    } catch (e) { return { level: 'bad', detail: `its start could not be read: ${e && e.message ? e.message : e}`, url }; }
+    if (!start.length) return { level: 'bad', detail: [...bits, EMPTY_WORDS].join(' · '), url };
+    if (body) { total = body.count; bits[0] = total > MAX_FILE_BYTES ? `over ${mb(MAX_FILE_BYTES)} MB` : `${mb(total)} MB`; }
+    // (a part decoded past its length -- a ranged answer of an encoding: its size then not given)
+    else if (total !== null && (encoded || start.length > total)) { total = null; bits[0] = 'size not given'; }
+    // (the whole counted and kept: the file itself, in hand)
+    if (body && body.all && body.all.length > start.length) wholeStart = body.all;
     // (an answer that ended inside the bytes read -- a whole one, or a part shorter than the range asked
     // -- is the file itself, in hand, and its size: with none given, a cut STL and a 3-byte one read
     // "ok · size not given" -- r79 A4)
@@ -601,7 +670,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
           try {
             // (a glTF's, a GLB's or a .cadmesh's kept too, up to 64 MB, for its JSON or its header --
             // a .gltf.gz past 64 KB of JSON was judged on its start alone: r82 A1)
-            const keep = isZip || ['glTF', 'GLB', 'cadmesh'].includes(sizeFormat);
+            const keep = isZip || ['glTF', 'GLB', 'cadmesh', ...Object.keys(READS_HERE)].includes(sizeFormat); // (and a mesh the reader reads here: r85 Q3)
             if (keep) {
               try { const b = new Uint8Array(await gunzip(all, ZIP_KEPT)); unpacked = b.length; if (isZip) zipBytes = b; else gzKept = b; } catch (e) {
                 if (!/too big/.test(e.message)) throw e;
@@ -730,29 +799,18 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       } else cutSaid = { level: 'warn', words: `${file}'s header was not read here (the server sent no range): whether it is whole was not checked` };
     }
   }
-  // (a cut-short verdict that rests on a length given -- Content-Length, Content-Range -- confirmed by
-  // the file itself, fetched whole up to ZIP_KEPT: another site's page cannot read Content-Encoding,
-  // so a length may be a stored gzip's, and a valid model read "section position out of range" -- r84
-  // A1; a length that is the file's own leaves the verdict as it was)
-  const cutBy = (v) => !!v && v.level === 'bad' && /out of range|truncated|runs past the end|has no data/.test(v.words);
-  if (sniff && !sizeGz && total && total <= ZIP_KEPT && !wholeStart && (rule?.cut || cutBy(cutSaid) || cutBy(urlSaid))) {
-    try {
-      const w = await fetchFn(fetchUrl, { cache: 'no-store' });
-      if (w.ok) {
-        const all = new Uint8Array(await w.arrayBuffer());
-        // (only a file longer than its length given -- a decoded body; one shorter is the cut the
-        // verdict already says)
-        if (all.length > total) {
-          const file = fileNameOfUrl(url).replace(/\.gz$/i, '');
-          total = all.length;
-          bits[0] = `${mb(total)} MB`;
-          rule = sizeRule(sizeFormat, sizeStart, all.length);
-          if (sizeFormat === 'cadmesh') cutSaid = await cadmeshJudge(bytesSource(all), all.length, file);
-          if (sizeFormat === 'glTF' || sizeFormat === 'GLB') urlSaid = await gltfJudge(sizeFormat, bytesSource(all), file);
-        }
-      }
-    } catch { /* not fetched whole: the verdict as it was */ }
+  // (an STL, OBJ, PLY or OFF by the page's own reader, the whole in hand: its refusal in its words;
+  // a PLY not in hand by its header's rules, from its start -- r85 Q3)
+  let readSaid = null;
+  if (sniff && Object.hasOwn(READS_HERE, sizeFormat)) {
+    const file = fileNameOfUrl(url).replace(/\.gz$/i, '');
+    const whole = sizeGz ? gzKept : wholeStart;
+    if (whole) readSaid = await readerRefusal(sizeFormat, whole, file);
+    else if (sizeFormat === 'PLY' && sizeStart) readSaid = plyPlanRefusal(sizeStart, file.replace(/\.[^.]+$/, ''));
   }
+  // (a length that may be an encoding's is counted where the body arrives, above: r84 A1's
+  // re-fetch of a cut verdict, bounded at 64 MB and only for a file longer than its length, is gone
+  // -- r85 Q1)
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);
     level = 'bad';
@@ -794,6 +852,10 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // (a .cadmesh cut short: the decoder's refusal -- r82 A3; or its header not read here: r83 A2)
     bits.push(cutSaid.words);
     level = cutSaid.level === 'bad' || level === 'bad' ? 'bad' : 'warn';
+  } else if (readSaid) {
+    // (a mesh the page's own reader refuses: r85 Q3)
+    bits.push(readSaid);
+    level = 'bad';
   } else if (sniff && total === null) {
     // (no size given and more than is in hand: the size limits not told, said, not "ok · size not
     // given" -- a gzip of 501 MB of text, a cut STL and a corrupt gzip were: r80 Q2)

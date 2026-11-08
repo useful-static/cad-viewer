@@ -1,5 +1,8 @@
-// Every quantity the viewer shows goes through here. The geometry is in mm
-// (OpenCascade converts on import); the DISPLAY unit is one of mm, cm, m, in:
+// Every quantity the viewer shows goes through here. The geometry is in its
+// header's units: mm for every reader of ours (OpenCascade converts on import);
+// a .cadmesh from another writer in another unit is shown in that unit "(not
+// converted)" and refused by the exports, Save drawing and the mass
+// (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
 // the user's choice, or Auto, the unit the file declares (header.sourceUnits).
 //
 // Lengths have fixed decimals per unit, so a readout does not jump in width as

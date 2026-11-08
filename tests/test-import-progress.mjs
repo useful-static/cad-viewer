@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  COEF, QUIET_S, deviceFactor, forecast, forecastDone, forecastTotal, rateText, stepOf, timeLeft,
+  COEF, QUIET_S, deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft,
 } from '../js/import-progress.js';
 import { stepFeatures } from '../js/step-features.js';
 
@@ -108,6 +108,12 @@ test('the bar: done grows through the steps and stays under the total', () => {
     assert.ok(d <= forecastTotal(fc));
     last = d;
   }
+});
+test('a download\'s percent: only while no more has come than its length, no encoding read (r85 Q4)', () => {
+  // (another site's page reads no Content-Encoding: a 520 MB file under a 1.8 MB gzip length)
+  assert.deepEqual([percentKnown(1e6, 1.8e6, false), percentKnown(1.8e6, 1.8e6, false)], [true, true]);
+  assert.equal(percentKnown(245e6, 1.8e6, false), false, 'must fire: "245.3 of 1.8 MB"');
+  assert.deepEqual([percentKnown(1e6, 1.8e6, true), percentKnown(1e6, 0, false)], [false, false]);
 });
 test('a download\'s rate: kB/s on a slow link, MB/s on a fast one, and the time left', () => {
   // the 3G case measured on a 1.9 MB model: ~45 kB/s, which read "0.0 MB/s"

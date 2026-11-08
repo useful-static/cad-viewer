@@ -22,12 +22,11 @@
 // input refused (damaged, or nothing to export), or a format refused (a 3MF past the text the
 // viewer reads: the other formats written first, the refusal said after them); 2 = usage.
 // Test: tests/test-cadmesh-export.mjs.
-import { realpathSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { writeFileSync } from 'node:fs';
 import { bodyLabels, decodeCadmesh, inflateCadmesh, notMmWords } from './js/cadmesh.js';
 import { EXPORTS, ExportRefused, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -57,7 +56,8 @@ export async function exportCadmesh(bytes, { to = Object.keys(EXPORTS), modelUp 
   const names = ids.map((id) => labels[id - 1]);
   const out = [];
   for (const kind of to) {
-    const ex = table[kind];
+    // (own keys only, the CLI's rule too: "constructor" threw "ex.write is not a function" -- r85 A4)
+    const ex = Object.hasOwn(table, kind) ? table[kind] : null;
     if (!ex) throw new Error(`unknown format "${kind}" ${KIND_WORDS}`);
     // (a format that refuses -- a 3MF past the reader's text, "STL or GLB writes it" -- is that
     // format's result: the others still written, as its words say; one refusal wrote none -- r72 A10)
@@ -120,4 +120,4 @@ async function main() {
 
 // run as a command (a path with a space, or through a symlink, included: the plain
 // "file://" + argv[1] test was false there, and the tool exited 0 writing nothing)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('cadmesh-export', main, USAGE);
+await runCliIfMain(import.meta.url, 'cadmesh-export', main, USAGE);

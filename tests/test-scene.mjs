@@ -12,6 +12,7 @@ import { encodeCadmesh, decodeCadmesh, bytesToId, writtenSizeLimit, StopRead } f
 import * as CADMESH from '../js/cadmesh.js';
 const OVERSIZE_WORDS = CADMESH.OVERSIZE_WORDS || ''; // (main.js imports it since r72 A8; none in an older tree)
 import { mergeModels, modelRanges, staleModels, sceneEdgesFacts } from '../js/scene.js';
+import * as SCENE from '../js/scene.js';
 import { buildEdges, FACTS_RULE, factsCurrent, momentaryFailure, overSilhouetteCap } from '../js/edges.js';
 import { clearance } from '../js/clearance.js';
 import { triangleDistance } from '../js/tri-distance.js';
@@ -80,6 +81,16 @@ test('the edges and facts\' merge that fails part way leaves the scene as it was
   const huge = { ...lid, silhouettes: { length: 9e15 }, silhouetteNormals: { length: 3.6e16 } };
   const u = mergeModels([{ base: board, name: 'board' }, { base: huge, name: 'case' }]);
   assert.deepEqual([u.mergeError?.message ?? null, u.silhouettes, u.header.silhouettesOmitted >= 4.5e15], [null, null, true]);
+});
+test('merge: models in different units are refused in words, either order; mm by either spelling is one unit (r85 A1)', () => {
+  const inch = { ...lid, header: { ...lid.header, units: 'inch' } };
+  const mmWord = { ...lid, header: { ...lid.header, units: 'millimeter' } };
+  // (must fire: merged as the first model's unit, an inch part shown and exported as mm)
+  assert.throws(() => mergeModels([{ base: board, name: 'board' }, { base: inch, name: 'case.cadmesh' }]), /case\.cadmesh is in inch and the view's model in millimetres: models in different units are not shown together/);
+  assert.throws(() => mergeModels([{ base: inch, name: 'case.cadmesh' }, { base: board, name: 'board' }]), /board is in millimetres and the view's model in inch/);
+  assert.equal(mergeModels([{ base: board, name: 'board' }, { base: mmWord, name: 'case' }]).header.meshes.length, 3);
+  const { sceneUnitsRefusal } = SCENE;
+  assert.equal(sceneUnitsRefusal([{ base: inch }, { base: inch }]), null);
 });
 test('merge: counts, ids, tree, moved bodies', () => {
   const s = mergeModels([{ base: board, name: 'board.stp' }, { base: lid, name: 'case.stp', offset: [0, 0, 1] }]);
@@ -2050,11 +2061,11 @@ await test('loadUrl takes the model\'s early download and readLists the early re
   const app = { loadSeq: 0 }, got = [], loc = { href: 'https://s.example/', search: '' };
   const el = () => ({ hidden: false, textContent: '' });
   const f = new Function('app', '$', 'setStatus', 'announce', 'fileName', 'showProgress', 'directFor', 'earlyFetch', 'fetchFailedText', 'isRelative',
-    'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad', 'mbSoFar',
+    'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad', 'mbSoFar', 'percentKnown',
     `${cut('function beginLoad() {')}${cut('function stale(seq) {')}${cut('async function loadUrl(url) {')}${cut('async function readLists(lists, openFirst) {')}; return { loadUrl, readLists };`)(
     app, () => el(), () => {}, () => {}, (u) => u.split('/').pop(), () => {}, (u) => ({ url: u }), ef.earlyFetch, async () => 'x', isRelative,
     2 ** 31, (n) => n, () => '', () => '0', async (buf, name) => { got.push([name, buf.byteLength]); }, loc,
-    ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {}, () => '0'); // (mbSoFar: r74 A10)
+    ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {}, () => '0', (await import('../js/import-progress.js')).percentKnown); // (mbSoFar: r74 A10; percentKnown: r85 Q4)
   // (the early ones, as js/early.js starts them)
   ef.startEarly('https://s.example/a.stl');
   ef.setEarlyLists(['l.json'], fetchModelLists(['l.json'], 'https://s.example/', (u) => fetch(u)));

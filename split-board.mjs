@@ -19,11 +19,10 @@
 // Works on .cadmesh files with the faces section (stp2mesh.mjs writes it):
 // a vertex belongs to exactly one b-rep face, so the cut never splits one.
 
-import { realpathSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { writeFileSync } from 'node:fs';
 import { gzipSync, constants as zc } from 'node:zlib';
-import { decodeCadmesh, encodeCadmesh, gunzip, isGzip, modelFactsOf, refuseWithoutEdges } from './js/cadmesh.js';
-import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
+import { decodeCadmesh, encodeCadmesh, gunzip, isGzip, modelFactsOf, notMmWords, refuseWithoutEdges } from './js/cadmesh.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report] [--sliver MM]
 
@@ -47,6 +46,10 @@ function args(argv) {
 const toAB = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 
 export function splitBoard(d, { sliver = 1.2 } = {}) {
+  // (its reaches and rows are millimetres: a model in another unit refused, as the exports refuse
+  // one -- an inch board was cut into 0 parts, exit 0: r85 A3)
+  const notMm = notMmWords(d.header, 'a board split is');
+  if (notMm) throw new Error(notMm);
   const P = d.position, I = d.index, F = d.faces, N = d.normal, C = d.color;
   if (!F) throw new Error('the file has no faces section: convert it again with stp2mesh.mjs');
   const meshes = d.header.meshes;
@@ -261,4 +264,4 @@ async function main() {
 }
 
 // run as a command (a path with a space or through a symlink included)
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await runCli('split-board', main, USAGE);
+await runCliIfMain(import.meta.url, 'split-board', main, USAGE);

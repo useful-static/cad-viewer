@@ -13,7 +13,7 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hash
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
-import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCli } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain } from './js/cli-args.js';
 import { circleMinPoints } from './js/measure-geom.js';
 import { flagsSaid } from './js/edges.js';
 
@@ -221,4 +221,5 @@ async function main() {
 
 // (a refused input or a failed write: one line, exit 1, by runCli as the other tools -- the stack
 // trace was printed whole)
-await runCli('stp2mesh', async () => process.exit(await main()), USAGE);
+// (run only as the command, as the other CLIs: importing it ran it -- r85 A6)
+await runCliIfMain(import.meta.url, 'stp2mesh', async () => process.exit(await main()), USAGE);

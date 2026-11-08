@@ -89,6 +89,8 @@ test('the hatch is filled; the ellipse spans 20 x 10; the spline is a line', () 
   assert.ok(s && Math.abs(range(s, 0)[1] - 10) < 1e-9, 'spline');
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
+  // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)
+  assert.equal(mtextPlain(String.raw`one\Ncol`), 'one\ncol');
   assert.deepEqual(d.texts.map((t) => t.text), ['Hello Ø5', 'Line1\nLine2']);
   assert.equal(mtextPlain('\\A1;{\\H2.5x;big}\\~x'), 'big x');
   // (the spline's end is evaluated a hair inside its last knot)

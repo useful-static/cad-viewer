@@ -123,4 +123,11 @@ test('refuses a file without b-rep faces', () => {
   assert.throws(() => splitBoard({ ...d, faces: null }), /no faces section/);
 });
 
+test('refuses a board in another unit than mm, its reaches being mm (r85 A3)', () => {
+  const { d } = fusedBoard();
+  // (must fire: the same board in inches cut into 0 parts, exit 0)
+  assert.throws(() => splitBoard({ ...d, header: { ...d.header, units: 'inch' } }), /lengths are in inch, not converted: a board split is not made here/);
+  assert.equal(splitBoard({ ...d, header: { ...d.header, units: 'mm' } }).parts, 2);
+});
+
 done();

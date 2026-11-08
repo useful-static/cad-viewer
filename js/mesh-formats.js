@@ -573,12 +573,16 @@ function readMTL(s, out) {
 const PLY_T = { char: 'Int8', int8: 'Int8', uchar: 'Uint8', uint8: 'Uint8', short: 'Int16', int16: 'Int16', ushort: 'Uint16', uint16: 'Uint16',
   int: 'Int32', int32: 'Int32', uint: 'Uint32', uint32: 'Uint32', float: 'Float32', float32: 'Float32', double: 'Float64', float64: 'Float64' };
 const PLY_SIZE = { Int8: 1, Uint8: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, Float32: 4, Float64: 8 };
-function parsePLY(buf, base) {
-  const u8 = new Uint8Array(buf);
+// A PLY's header as its reader reads it, every refusal it makes there in the reader's words: no
+// end_header, a format it does not read, a type PLY does not have, a vertex element with no x, y, z,
+// more vertices than it opens -> { els, fmt, bodyStart }. parsePLY and the list check (on a PLY's
+// start, where the whole file is not in hand) both run it (r85 Q3).
+export function plyPlan(u8, base) {
   // (its header and format by the one rule, the list check's too: js/formats.js plyHeader -- r73 A2)
   const ph = plyHeader(u8);
   if (!ph) throw new Error(`${base}.ply is damaged: it has no end_header line`);
   const { lines: hdr, format: fmt, bodyStart } = ph;
+  if (!['ascii', 'binary_little_endian', 'binary_big_endian'].includes(fmt)) throw new Error(`${base}.ply: format ${fmt} is not ascii or binary`);
   const els = [];
   for (const l of hdr) {
     const sp = l.trim().split(/\s+/);
@@ -599,7 +603,6 @@ function parsePLY(buf, base) {
   // property-less records, charged a byte each and none read, built 3 GB of empty positions);
   // the faces' triangles are held at each list's count, before its items are read
   const who = `${base}.ply`;
-  const hold = counter(who);
   for (const e of els) {
     // (the face list take() reads)
     e.tlist = e.props.some((pr) => pr.name === 'vertex_indices') ? 'vertex_indices' : 'vertex_index';
@@ -607,6 +610,18 @@ function parsePLY(buf, base) {
     if (!['x', 'y', 'z'].every((c) => e.props.some((pr) => pr.name === c && !pr.list))) throw new Error(`${who} is damaged: its vertex element has no x, y, z properties`);
     if (e.n > MAX_PLACED_VERTICES) throw tooMany(who, 'vertices', MAX_PLACED_VERTICES);
   }
+  return { els, fmt, bodyStart };
+}
+// gltfPlan's PLY sibling: plyPlan's refusal in its words, or null
+export function plyPlanRefusal(u8, base) {
+  try { plyPlan(u8, base); return null; } catch (e) { return e.message || String(e); }
+}
+
+function parsePLY(buf, base) {
+  const u8 = new Uint8Array(buf);
+  const { els, fmt, bodyStart } = plyPlan(u8, base);
+  const who = `${base}.ply`;
+  const hold = counter(who);
   const corners = (e, pr, c) => { if (e.name === 'face' && pr.name === e.tlist && c > 2) hold('triangles', c - 2); return c; };
   // a colour's scale is its red property's TYPE: a float is 0..1, an integer its type's top
   // (uchar 255, ushort 65535; a 32-bit integer is taken as bytes). Judged by the values, a uchar
@@ -664,8 +679,7 @@ function parsePLY(buf, base) {
       }
     }
   } else {
-    const le = fmt === 'binary_little_endian';
-    if (!le && fmt !== 'binary_big_endian') throw new Error(`${base}.ply: format ${fmt} is not ascii or binary`);
+    const le = fmt === 'binary_little_endian'; // (else big-endian: any other format refused by plyPlan)
     const dv = new DataView(buf);
     let o = bodyStart;
     checkCounts(buf.byteLength - bodyStart, (e) => e.props.reduce((s, pr) => s + PLY_SIZE[pr.list ? pr.ct : pr.t], 0));
@@ -1060,20 +1074,13 @@ function parseJSON(s, what) {
   try { return JSON.parse(s); } catch (e) { throw new Error(GLTF_WORDS.unparsed(what, e)); } // (the one wording: r83 A6)
 }
 
-async function parseGLTF(buf, format, base, files) {
-  let json, bin = null;
-  if (format === 'glb') {
-    // (a file shorter than the header met the engine's "Offset is outside the bounds of the DataView")
-    // (its chunks by the one walk, the list check's too: js/formats.js glbChunks -- r82 A4)
-    const g = await glbChunks(async (at, n) => new Uint8Array(buf, at, n), buf.byteLength, `${base}.glb`);
-    if (g.damaged) throw new Error(g.damaged);
-    for (const c of g.chunks) {
-      if (c.type === GLB_JSON) json = parseJSON(text(new Uint8Array(buf, c.at, c.len), `${base}.glb's JSON`), `${base}.glb`);
-      else if (c.type === GLB_BIN) bin = buf.slice(c.at, c.at + c.len);
-    }
-  } else json = parseJSON(text(buf, `${base}.gltf`), `${base}.gltf`);
-  // its refusals name the file as the other readers do: name and extension
-  const file = `${base}.${format}`;
+// The glTF reader's every refusal from its JSON alone, before a buffer byte is read -- its shape,
+// its lists, the materials' cap, the scene and the node tree, each placed primitive (an object, its
+// attributes, Draco, each accessor held to its use's types: ACC_USE), instancing and the placement
+// caps -- thrown in the reader's words; else what the rest of the reader reads. parseGLTF and the
+// list check (gltfPlanRefusal) both run it: the check kept a shorter list of its own and said "ok"
+// of seven files the page refuses (r85 A2).
+export function gltfPlan(json, file) {
   const damaged = (what) => new Error(`${file} is damaged: ${what}`);
   // (its shape before its buffers by the one set of rules, the list check's too: js/formats.js
   // gltfShapeRefusal -- r84 A3)
@@ -1098,11 +1105,105 @@ async function parseGLTF(buf, format, base, files) {
     const may = comps.map(([c, n]) => `${n ? 'normalized ' : ''}${COMP_NAME[c]}`);
     throw damaged(`${where}'s ${use} accessor ${ai} is ${shown(a.type)} of ${nz ? 'normalized ' : ''}${ct}; ${use} must be ${orList(types)} of ${orList(may)}`);
   };
-  // a required extension the reader does not read is refused by name (glTF 2.0 3.12: a loader
-  // must not load such an asset; ignored, an instanced part opened as one copy without a word).
-  // Compression keeps its own words, since the fix is the same for each.
   const accessors = list(json.accessors, '"accessors"'), views = list(json.bufferViews, '"bufferViews"');
   const nodes = list(json.nodes, '"nodes"'), meshDefs = list(json.meshes, '"meshes"');
+  list(json.buffers, '"buffers"');
+  const materials = list(json.materials, '"materials"');
+  if (materials.length > MAX_MATERIALS) throw tooMany(file, 'materials', MAX_MATERIALS);
+  const matsUsed = new Set(); // material indices a drawn primitive names
+  // a node's EXT_mesh_gpu_instancing: null (none, or no mesh to place), else { count, attrs }
+  const instancing = (ni) => {
+    const nd = nodes[ni];
+    const ex = isObj(nd.extensions) ? nd.extensions[INSTANCING] : undefined;
+    if (ex === undefined || nd.mesh === undefined) return null;
+    if (!isObj(ex) || !isObj(ex.attributes)) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
+    let count = null;
+    for (const k of INSTANCE_USES) {
+      if (ex.attributes[k] === undefined) continue;
+      const a = useType(`node ${ni}'s ${INSTANCING}`, k, ex.attributes[k]);
+      if (!nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} accessor ${ex.attributes[k]} has no count`);
+      if (count !== null && a.count !== count) throw damaged(`node ${ni}'s ${INSTANCING} attributes count ${count} and ${a.count} instances`);
+      count = a.count;
+    }
+    if (count === null) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
+    return { count, attrs: ex.attributes };
+  };
+  const si = json.scene ?? 0;
+  // with no scenes the roots are the nodes no node names as a child (every node as a root drew
+  // each child twice: under its parent and again at the origin)
+  const named = new Set();
+  if (json.scenes === undefined) for (const nd of nodes) if (isObj(nd) && Array.isArray(nd.children)) for (const c of nd.children) named.add(c);
+  const scene = json.scenes !== undefined ? at(list(json.scenes, '"scenes"'), si) : { nodes: nodes.map((_, i) => i).filter((i) => !named.has(i)) };
+  if (!scene) throw damaged(`its scene ${si} is not there`);
+  const roots = list(scene.nodes, `scene ${si}'s "nodes"`);
+  // the node tree counted before it is built: a node among its own ancestors (a cycle), a
+  // missing node, or a tree deeper than 64 is a damaged file (a self-child overflowed the
+  // stack), and a node shared past the caps is refused (each node holding the next twice,
+  // 40 deep, was 2^40 visits)
+  // a mesh's triangles (by its indices, else its positions) and the vertices each placement of
+  // it copies (its POSITION count)
+  // (each placed primitive held to the reader's rules here, before anything is read or counted --
+  // the mesh named, an object, its attributes, Draco, each accessor's types: see ACC_USE; the build
+  // met the first four only after every buffer was read, and the list check never: r85 A2)
+  const meshCounts = (mi, ni) => {
+    const me = at(meshDefs, mi);
+    if (!me) throw damaged(`node ${ni} names mesh ${mi}, which is not there`);
+    let tris = 0, verts = 0;
+    list(me.primitives, `mesh ${mi}'s "primitives"`).forEach((pr, k) => {
+      if (!isObj(pr)) throw damaged(`mesh ${mi} primitive ${k + 1} is not an object`);
+      if (!TRI_MODES.includes(pr.mode ?? 4)) return; // points and lines: not drawn
+      if (pr.extensions && pr.extensions.KHR_draco_mesh_compression) throw new Error(`${file} uses Draco compression, which this viewer does not decode`);
+      if (!isObj(pr.attributes)) throw damaged(`mesh ${mi} primitive ${k + 1} has no attributes`);
+      if (Number.isInteger(pr.material) && pr.material >= 0 && pr.material < materials.length) matsUsed.add(pr.material);
+      const where = `mesh ${mi} primitive ${k + 1}`;
+      const attrs = pr.attributes;
+      const p = attrs.POSITION !== undefined ? useType(where, 'POSITION', attrs.POSITION) : null;
+      for (const u of ['NORMAL', 'COLOR_0']) if (attrs[u] !== undefined) useType(where, u, attrs[u]);
+      const a = pr.indices !== undefined ? useType(where, 'indices', pr.indices) : p;
+      // counted as built: every value the accessor holds (count x components), a vertex per 3
+      // POSITION values and a corner per index value
+      const corners = !a || !nat(a.count) ? 0 : a === p ? a.count * NCOMP[a.type] / 3 : a.count * NCOMP[a.type];
+      // a list: a triangle per 3 corners; a strip or fan: one per corner past the second
+      tris += (pr.mode ?? 4) === 4 ? Math.floor(corners / 3) : Math.max(0, corners - 2);
+      if (p && nat(p.count)) verts += p.count * NCOMP[p.type] / 3;
+    });
+    return { tris, verts };
+  };
+  placements(roots, (ni) => {
+    const nd = at(nodes, ni);
+    if (!nd) throw damaged(`node ${ni} is not there`);
+    return list(nd.children, `node ${ni}'s "children"`);
+  }, (ni) => {
+    if (nodes[ni].mesh === undefined) return { tris: 0, verts: 0 };
+    const c = meshCounts(nodes[ni].mesh, ni), ins = instancing(ni);
+    // (each instance is a part of its own and a copy of the mesh)
+    return ins ? { tris: c.tris * ins.count, verts: c.verts * ins.count, parts: ins.count } : c;
+  }, 64,
+  (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), file);
+  return { damaged, isObj, list, at, nat, accessors, views, nodes, meshDefs, materials, matsUsed, roots, instancing };
+}
+// gltfPlan's refusal in its words, or null: the list check's reading of a glTF's JSON
+export function gltfPlanRefusal(json, file) {
+  try { gltfPlan(json, file); return null; } catch (e) { return e.message || String(e); }
+}
+
+async function parseGLTF(buf, format, base, files) {
+  let json, bin = null;
+  if (format === 'glb') {
+    // (a file shorter than the header met the engine's "Offset is outside the bounds of the DataView")
+    // (its chunks by the one walk, the list check's too: js/formats.js glbChunks -- r82 A4)
+    const g = await glbChunks(async (at, n) => new Uint8Array(buf, at, n), buf.byteLength, `${base}.glb`);
+    if (g.damaged) throw new Error(g.damaged);
+    for (const c of g.chunks) {
+      if (c.type === GLB_JSON) json = parseJSON(text(new Uint8Array(buf, c.at, c.len), `${base}.glb's JSON`), `${base}.glb`);
+      else if (c.type === GLB_BIN) bin = buf.slice(c.at, c.at + c.len);
+    }
+  } else json = parseJSON(text(buf, `${base}.gltf`), `${base}.gltf`);
+  // its refusals name the file as the other readers do: name and extension
+  const file = `${base}.${format}`;
+  // (every refusal its JSON alone makes, before a buffer is read: gltfPlan, the list check's too --
+  // r85 A2)
+  const { damaged, isObj, list, at, nat, accessors, views, nodes, meshDefs, materials, matsUsed, roots, instancing } = gltfPlan(json, file);
   const buffers = await Promise.all(list(json.buffers, '"buffers"').map(async (b, i) => {
     // (each buffer by the one rule, the list check's too: js/formats.js gltfBufferRefusal -- r84 A3;
     // a uri that does not decode is a damaged file, not the engine's "URIError: URI malformed")
@@ -1192,9 +1293,7 @@ async function parseGLTF(buf, format, base, files) {
   // space and made sRGB (the viewer's colours) last: srgb(factor x texture x COLOR_0).
   // Worked out (below, once the node tree is counted) only for the materials a drawn primitive
   // names, one after another, each image decoded once however many materials name it.
-  const materials = list(json.materials, '"materials"');
-  if (materials.length > MAX_MATERIALS) throw tooMany(file, 'materials', MAX_MATERIALS);
-  const matsUsed = new Set(); // material indices a drawn primitive names
+  // (materials and matsUsed, the ones a drawn primitive names: gltfPlan)
   const matLinear = new Map(); // material index -> linear colour, or null
   const imageAvg = new Map(); // image index -> linear average, or null
   const linearOf = async (mi) => {
@@ -1215,70 +1314,7 @@ async function parseGLTF(buf, format, base, files) {
     if (!tex) return f;
     return (f || [1, 1, 1]).map((c, k) => c * tex[k]);
   };
-  // a node's EXT_mesh_gpu_instancing: null (none, or no mesh to place), else { count, attrs }
-  const instancing = (ni) => {
-    const nd = nodes[ni];
-    const ex = isObj(nd.extensions) ? nd.extensions[INSTANCING] : undefined;
-    if (ex === undefined || nd.mesh === undefined) return null;
-    if (!isObj(ex) || !isObj(ex.attributes)) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
-    let count = null;
-    for (const k of INSTANCE_USES) {
-      if (ex.attributes[k] === undefined) continue;
-      const a = useType(`node ${ni}'s ${INSTANCING}`, k, ex.attributes[k]);
-      if (!nat(a.count)) throw damaged(`node ${ni}'s ${INSTANCING} ${k} accessor ${ex.attributes[k]} has no count`);
-      if (count !== null && a.count !== count) throw damaged(`node ${ni}'s ${INSTANCING} attributes count ${count} and ${a.count} instances`);
-      count = a.count;
-    }
-    if (count === null) throw damaged(`node ${ni}'s ${INSTANCING} has no attributes`);
-    return { count, attrs: ex.attributes };
-  };
-  const si = json.scene ?? 0;
-  // with no scenes the roots are the nodes no node names as a child (every node as a root drew
-  // each child twice: under its parent and again at the origin)
-  const named = new Set();
-  if (json.scenes === undefined) for (const nd of nodes) if (isObj(nd) && Array.isArray(nd.children)) for (const c of nd.children) named.add(c);
-  const scene = json.scenes !== undefined ? at(list(json.scenes, '"scenes"'), si) : { nodes: nodes.map((_, i) => i).filter((i) => !named.has(i)) };
-  if (!scene) throw damaged(`its scene ${si} is not there`);
-  const roots = list(scene.nodes, `scene ${si}'s "nodes"`);
-  // the node tree counted before it is built: a node among its own ancestors (a cycle), a
-  // missing node, or a tree deeper than 64 is a damaged file (a self-child overflowed the
-  // stack), and a node shared past the caps is refused (each node holding the next twice,
-  // 40 deep, was 2^40 visits)
-  // a mesh's triangles (by its indices, else its positions) and the vertices each placement of
-  // it copies (its POSITION count)
-  // (each accessor a primitive uses is held to its use's types here, before anything is read or
-  // counted: see ACC_USE)
-  const meshCounts = (mi) => {
-    const me = at(meshDefs, mi);
-    let tris = 0, verts = 0;
-    (me && Array.isArray(me.primitives) ? me.primitives : []).forEach((pr, k) => {
-      if (!isObj(pr) || !TRI_MODES.includes(pr.mode ?? 4)) return;
-      if (Number.isInteger(pr.material) && pr.material >= 0 && pr.material < materials.length) matsUsed.add(pr.material);
-      const where = `mesh ${mi} primitive ${k + 1}`;
-      const attrs = isObj(pr.attributes) ? pr.attributes : {};
-      const p = attrs.POSITION !== undefined ? useType(where, 'POSITION', attrs.POSITION) : null;
-      for (const u of ['NORMAL', 'COLOR_0']) if (attrs[u] !== undefined) useType(where, u, attrs[u]);
-      const a = pr.indices !== undefined ? useType(where, 'indices', pr.indices) : p;
-      // counted as built: every value the accessor holds (count x components), a vertex per 3
-      // POSITION values and a corner per index value
-      const corners = !a || !nat(a.count) ? 0 : a === p ? a.count * NCOMP[a.type] / 3 : a.count * NCOMP[a.type];
-      // a list: a triangle per 3 corners; a strip or fan: one per corner past the second
-      tris += (pr.mode ?? 4) === 4 ? Math.floor(corners / 3) : Math.max(0, corners - 2);
-      if (p && nat(p.count)) verts += p.count * NCOMP[p.type] / 3;
-    });
-    return { tris, verts };
-  };
-  placements(roots, (ni) => {
-    const nd = at(nodes, ni);
-    if (!nd) throw damaged(`node ${ni} is not there`);
-    return list(nd.children, `node ${ni}'s "children"`);
-  }, (ni) => {
-    if (nodes[ni].mesh === undefined) return { tris: 0, verts: 0 };
-    const c = meshCounts(nodes[ni].mesh), ins = instancing(ni);
-    // (each instance is a part of its own and a copy of the mesh)
-    return ins ? { tris: c.tris * ins.count, verts: c.verts * ins.count, parts: ins.count } : c;
-  }, 64,
-  (why, ni) => damaged(why === 'cycle' ? `node ${ni} is its own ancestor` : 'its node tree is more than 64 deep'), file);
+  // (the scene, the node tree, each placed primitive and the caps: counted by gltfPlan, above)
   // (in sequence: one image decoded at a time, not every material's at once)
   for (const mi of matsUsed) matLinear.set(mi, await linearOf(mi));
   const bodies = [];
@@ -1291,14 +1327,12 @@ async function parseGLTF(buf, format, base, files) {
     const n = { name: textName(nd.name) || `node ${ni}`, meshes: [], children: [] };
     // the node's mesh placed by m into target's meshes (once, or once per instance)
     const emit = (target, m) => {
-      const me = at(meshDefs, nd.mesh);
-      if (!me) throw damaged(`node ${ni} names mesh ${nd.mesh}, which is not there`);
-      list(me.primitives, `mesh ${nd.mesh}'s "primitives"`).forEach((pr, k) => {
-        if (!isObj(pr)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} is not an object`);
+      // (the mesh, each primitive an object with attributes and no Draco: held by gltfPlan's
+      // meshCounts, which every placed node passed -- r85 A2)
+      const me = meshDefs[nd.mesh];
+      me.primitives.forEach((pr, k) => {
         const mode = pr.mode ?? 4;
         if (!TRI_MODES.includes(mode)) return; // points and lines: not drawn
-        if (pr.extensions && (pr.extensions.KHR_draco_mesh_compression)) throw new Error(`${file} uses Draco compression, which this viewer does not decode`);
-        if (!isObj(pr.attributes)) throw damaged(`mesh ${nd.mesh} primitive ${k + 1} has no attributes`);
         const P = acc(pr.attributes.POSITION);
         const I = pr.indices !== undefined ? acc(pr.indices) : undefined;
         const meName = textName(me.name) || n.name;
