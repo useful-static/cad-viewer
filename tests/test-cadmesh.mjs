@@ -802,6 +802,38 @@ await test('a gzip of several members is read whole, member after member, where 
         await assert.rejects(gunzip(all, undefined, () => true), (e) => e instanceof StopRead);
       } finally { globalThis.DecompressionStream = FirstMemberOnly; }
     }
+    // (r80 Q5: a valid member holding 300 header-like runs, each a trailer of about its size and a
+    // header, then a second member. A stand-in that stops at the member's end as the pieces cross it,
+    // as Chromium does, and hands on what it inflated when cut short: every run tried, from the
+    // member's start, ran out the budget and refused the file (must fire); searched from the piece it
+    // stopped in, it opens)
+    {
+      const M = 2 * 2 ** 20, body = Buffer.alloc(M, 0x20);
+      for (let i = 0; i < 300; i++) { const at = 4096 + i * Math.floor((M - 8192) / 300); body.writeUInt32LE(M + 1000, at); body[at + 4] = 0x1f; body[at + 5] = 0x8b; body[at + 6] = 8; }
+      const m1 = gzipSync(body, { level: 0 }), m2 = gzipSync(Buffer.from('tail\n')), all = Buffer.concat([m1, m2]);
+      class Crossing {
+        constructor(format) {
+          if (format !== 'gzip') return new real(format);
+          let got = Buffer.alloc(0), first = null;
+          const t = new TransformStream({
+            transform(c, ctl) {
+              got = Buffer.concat([got, Buffer.from(c)]);
+              if (first === null) first = got.subarray(0, 16).equals(m2.subarray(0, 16)) ? m2 : m1;
+              if (got.length > first.length) { ctl.enqueue(new Uint8Array(gunzipSync(first))); throw new TypeError('Junk found after end of compressed data.'); }
+            },
+            flush(ctl) {
+              if (got.length < first.length) { ctl.enqueue(new Uint8Array(gunzipSync(got, { finishFlush: zlibConstants.Z_SYNC_FLUSH }))); throw new TypeError('unexpected end of file'); }
+              ctl.enqueue(new Uint8Array(gunzipSync(first)));
+            },
+          });
+          this.readable = t.readable; this.writable = t.writable;
+        }
+      }
+      globalThis.DecompressionStream = Crossing;
+      let g;
+      try { g = await gunzip(all); } finally { globalThis.DecompressionStream = FirstMemberOnly; }
+      assert.equal(g.byteLength, M + 5, 'a member holding 300 header-like runs, and the next (must fire: "corrupt or truncated")');
+    }
     // (r79 Q1: a member corrupt at its first byte, then copies of a header with a trailer of size 0
     // before each: every one a try at the member's end, each inflating nothing and charged nothing --
     // 700 KB held Chromium 250 s. A try that fails is charged a piece: must fire, 20,000 streams)

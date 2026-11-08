@@ -31,7 +31,12 @@ export async function readMeshFile({ buf, format, name, extras, unit = 'mm', edg
 
 // A DXF's or DWG's bytes as a drawing: a DWG (js/dwg.js) is read into the group-code pairs a DXF
 // holds; a DXF is passed as its bytes (parseDXF reads a binary one from them, an ASCII one in the
-// drawing's own code page)
-export function readDrawing({ buf, dwg }) {
-  return dwg ? drawDWG(readDWG(buf)) : parseDXF(buf);
+// drawing's own code page). format: the reader's label, js/formats.js drawingReaderOf -- a case each,
+// a 2D format added is one more (a boolean "DWG or not" read any other as a DXF: r80 A4)
+export function readDrawing({ buf, format }) {
+  switch (format) {
+    case 'DWG': return drawDWG(readDWG(buf));
+    case 'DXF': return parseDXF(buf);
+    default: throw new Error(`no 2D reader for ${format}`);
+  }
 }

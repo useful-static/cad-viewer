@@ -6,8 +6,9 @@
 // must read as cad.place would meet it, and name the URL it tried.
 
 import assert from 'node:assert/strict';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, inflateRawSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
+import { crc32 } from '../js/crc32.js';
 import { checkFile, checkLists, insertInOrder, namedFormat, sniffFormat, summary } from '../js/list-check.js';
 import { fileNameOfUrl } from '../js/formats.js';
 
@@ -17,14 +18,17 @@ const B = 'https://example.com/boards/';
 const cadmesh = gzipSync(Buffer.concat([Buffer.from('CADM'), Buffer.alloc(200)]));
 const stepInside = gzipSync(Buffer.from('ISO-10303-21;\nHEADER;\n'));
 const tour = JSON.stringify({ cadtour: 1, title: 'A tour', steps: [{ title: 'one' }, { title: 'two' }] });
-// a zip of stored entries [name, bytes], its directory saying usize where given (a size claimed)
+// a zip of stored entries [name, bytes], its directory saying usize where given (a size claimed); each
+// entry's CRC-32 the true one of what it unpacks to (a deflated one's, where it inflates), as the page
+// holds it since r80 Q4
+const crcOf = (d, method) => { if (method === 0) return crc32(d); try { return crc32(inflateRawSync(d)); } catch { return 0; } };
 const miniZip = (entries) => {
   const parts = [], cds = [];
   let off = 0;
   for (const [name, data, claimed, method = 0, flags = 0] of entries) {
     const nm = Buffer.from(name), d = Buffer.from(data);
     const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(flags, 6); local.writeUInt16LE(method, 8); local.writeUInt32LE(d.length, 18); local.writeUInt32LE(d.length, 22); local.writeUInt16LE(nm.length, 26);
-    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(flags, 8); cd.writeUInt16LE(method, 10); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(flags, 8); cd.writeUInt16LE(method, 10); cd.writeUInt32LE(crcOf(d, method), 16); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(claimed ?? d.length, 24); cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(off, 42);
     parts.push(local, nm, d); cds.push(cd, nm);
     off += 30 + nm.length + d.length;
   }
@@ -426,10 +430,11 @@ await test('a zip or 3MF is checked by the page\'s own rules: the 3MF\'s root fr
   const q3 = await checkFile(`${B}plate.3mf`, { fetchFn: host(miniZip([['_rels/.rels', rels2], ['3D/plate.model', '<model/>', big, 8]])), sniff: true });
   assert.equal(q3.level, 'bad', `${q3.detail} (must fire: ok, by the decoy)`);
   // A2: a zip whose entry loadZip opens is a 520 MB OBJ (must fire: "ok")
-  // (its deflate data past 1 MB, so the check takes its size from the directory, as the page holds it)
+  // (deflated and true to its directory: 520 MB of text in under 1 MB of data -- a claim of 520 MB
+  // over 1.2 MB of data is a damaged zip since r79 Q2, read so here since r80 Q1)
   const { deflateRawSync } = await import('node:zlib');
-  const objData = deflateRawSync(Buffer.concat([Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'), randomBytes(1.2 * 2 ** 20)]));
-  const obj = miniZip([['readme.txt', 'hello'], ['part.obj', objData, big, 8]]);
+  const objText = Buffer.alloc(big, 0x20); objText.write('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+  const obj = miniZip([['readme.txt', 'hello'], ['part.obj', deflateRawSync(objText), big, 8]]);
   const a2 = await checkFile(`${B}part.zip`, { fetchFn: host(obj), sniff: true });
   assert.equal(a2.level, 'bad', a2.detail);
   assert.match(a2.detail, /its part\.obj unpacks to 520 MB of text/);
@@ -613,6 +618,61 @@ await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gz
   }
   const wanted = rows.map(([what, , , , want]) => [what, want]);
   assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1]))); // (the rows that differ, in the one line the harness prints)
+});
+await test('the reader the page meets, an entry\'s data counted and its checksum held, a size not given, a glTF\'s buffers (r80 A2, A6, Q1-Q4)', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const ranged = (b) => async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const chunked = (b) => async () => new Response(b, { status: 200 }); // (no length, no range)
+  const dxf = '0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n';
+  const rnd = randomBytes(1.5 * 2 ** 20), rndData = deflateRawSync(rnd);
+  const stl = Buffer.alloc(134); stl.writeUInt32LE(1, 80);
+  const flipped = miniZip([['part.stl', stl]]); flipped[30 + 'part.stl'.length + 90] ^= 1;
+  const gltf = (uri) => JSON.stringify({ asset: { version: '2.0' }, buffers: [{ uri, byteLength: 36 }] });
+  const rows = [
+    // A6: a DXF named part.stl, read by the page as an STL and refused (must fire: a warning)
+    ['A6 a DXF named .stl', 'part.stl', Buffer.from(dxf), ranged, 'bad:neither a binary STL'],
+    ['A6 a zipped one', 'part.zip', miniZip([['part.stl', dxf]]), ranged, 'bad:neither a binary STL'],
+    // A2: photo.png.gz is no companion -- no reader unpacks one (must fire: "bad · … method 12")
+    ['A2 a .png.gz beside an OBJ', 'part.zip', miniZip([['part.obj', 'v 0 0 0\n'], ['photo.png.gz', 'x', undefined, 12]]), ranged, 'ok'],
+    // Q1: 1.5 MB of data, 100 bytes past its directory's size, counted as the page inflates it (must fire: "ok")
+    ['Q1 past 1 MB, size wrong', 'part.zip', miniZip([['part.stl', rndData, rnd.length - 100, 8]]), ranged, 'bad:a damaged zip'],
+    // Q2: no size given, more than one read's 64 KB (must fire: "ok · size not given")
+    ['Q2 no size, long', 'big.stl', Buffer.concat([stl, Buffer.alloc(100000)]), chunked, 'warn:its size was not given'],
+    // Q3: a .gltf by URL whose buffer is a file of its own; zipped without it; zipped with it (must fire: "ok", "ok")
+    ['Q3 a .gltf by URL', 'tri.gltf', Buffer.from(gltf('tri.bin')), ranged, 'bad:tri.gltf needs tri.bin'],
+    ['Q3 zipped without its .bin', 'g.zip', miniZip([['tri.gltf', gltf('tri.bin')]]), ranged, 'bad:tri.gltf needs tri.bin'],
+    ['Q3 zipped with it', 'g.zip', miniZip([['tri.gltf', gltf('tri.bin')], ['tri.bin', Buffer.alloc(36)]]), ranged, 'ok'],
+    ['Q3 a data: URI', 'tri.gltf', Buffer.from(gltf(`data:application/octet-stream;base64,${Buffer.alloc(36).toString('base64')}`)), ranged, 'ok'],
+    // Q4: a changed byte in a stored entry, refused by its CRC-32 (must fire: "ok")
+    ['Q4 a changed byte', 'part.zip', flipped, ranged, 'bad:does not match its checksum'],
+  ];
+  const got = [];
+  for (const [what, name, bytes, host, want] of rows) {
+    let r;
+    try { r = await checkFile(`${B}${name}`, { fetchFn: host(Buffer.from(bytes)), sniff: true }); } catch (e) { r = { level: 'threw', detail: e.message }; }
+    const [lv, word] = want.split(/:(.*)/);
+    got.push([what, r.level === lv && (!word || r.detail.includes(word)) ? want : `${r.level}: ${r.detail}`]);
+  }
+  const wanted = rows.map(([what, , , , want]) => [what, want]);
+  assert.deepEqual(got, wanted, JSON.stringify(got.filter((g, i) => g[1] !== wanted[i][1])));
+});
+await test('a host that caps a ranged answer: the short bytes said, never read as the directory (r80 Q6)', async () => {
+  const z = miniZip(Array.from({ length: 3000 }, (_, i) => [`p${i}.stl`, 'x']));
+  assert.ok(z.length > 65557, 'its directory past one capped answer');
+  const capped = async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(z, { status: 200, headers: { 'content-length': String(z.length) } });
+    const a = +m[1], b = Math.min(+m[2], z.length - 1, a + 65535);
+    return new Response(z.subarray(a, b + 1), { status: 206, headers: { 'content-length': String(b - a + 1), 'content-range': `bytes ${a}-${b}/${z.length}` } });
+  };
+  const r = await checkFile(`${B}many.zip`, { fetchFn: capped, sniff: true });
+  assert.equal(r.level, 'warn', r.detail);
+  assert.match(r.detail, /the server sent less than it was asked/, 'must fire: the short bytes parsed as its directory');
 });
 await test('an encrypted 3MF root over the text limit: the page and the check refuse it in one order, by one name (r77 Q5)', async () => {
   const { parseMesh } = await import('../js/mesh-formats.js');

@@ -15,10 +15,11 @@
 // Pure ES module, no DOM (a worker may run it); 3MF needs
 // DecompressionStream for its deflated entries.
 
-import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, inflate, toByte } from './cadmesh.js';
-import { entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
+import { DEFAULT_GREY, MAX_COORD, MAX_COORD_WORDS, MAX_FILE_BYTES, MM, OVERSIZE_WORDS, StopRead, inflate, toByte } from './cadmesh.js';
+import { crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
+import { crc32Turning } from './crc32.js';
 import { threeMfRoot, xmlText, xmlWalk } from './xml-walk.js';
-import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
+import { FORMATS, MAX_ACCESSOR_VALUES, MAX_PLACED_PARTS, MAX_PLACED_TRIANGLES, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, companionKey, companionOf, meshReaderOf, plyHeader, sizeMb, sizeOver, sniffFormat, stlIsBinary, tooMuchText } from './formats.js';
 import { shellTurns, weldBits } from './edges.js';
 import { LENGTH_MM } from './units.js';
 import { SRGB_TO_LINEAR, linearToSrgb } from './srgb.js';
@@ -88,24 +89,11 @@ export function meshFormatOf(name, buf) {
   return s && s.magic && s.kind === 'mesh' ? s.ext[0] : null;
 }
 
-// A companion file's key: its name without a directory (cut at / or \) and without case. Every
-// reference a mesh file makes to another (an OBJ's mtllib, a glTF's buffers and images) is looked
-// up by this one rule, and the map's own keys are read by it too, so a map keyed by bare name (a
-// drop: js/main.js keys by File.name) and one keyed by path both match.
-export const companionKey = (ref) => String(ref).split(/[/\\]/).pop().toLowerCase();
-// ...but by its path first, where the map has paths (a zip's companions, named by their path from the
-// model's folder: js/formats.js zipCompanions): a glTF's "textures/wood.png" is that file, not a
-// wood.png beside the model, and "buffers/chair.bin" the one under the model's own folder (by name
-// alone, another folder's took its place -- r54 A3, Q1). \ is read as /, a leading ./ dropped.
-const pathKey = (ref) => String(ref).replace(/\\/g, '/').replace(/^(\.\/)+/, '').toLowerCase();
-function companion(files, ref) {
-  const p = pathKey(ref);
-  for (const [n, f] of files) if (pathKey(n) === p) return f;
-  const k = companionKey(ref);
-  if (files.has(k)) return files.get(k);
-  for (const [n, f] of files) if (companionKey(n) === k) return f;
-  return null;
-}
+// Every reference a mesh file makes to another (an OBJ's mtllib, a glTF's buffers and images) is
+// looked up by one rule, js/formats.js companionOf (by path, then by name without case), the list
+// check's too -- r80 Q3
+export { companionKey };
+const companion = companionOf;
 
 // A model from a mesh file. files: other dropped files by name (an OBJ's .mtl, a .gltf's .bin),
 // matched by companionKey. Throws in plain words on what it refuses.
@@ -814,11 +802,11 @@ export async function unzip(buf, stop = null) {
   // (its directory by the one reader, the list check's too: js/zip-dir.js -- r75 A4; each entry by
   // its key, zipKey, the one matching rule -- r77 A5)
   const out = new Map();
-  for (const { name, key, method, flags, csize, usize, lho } of await zipDirectory(u8, 0, len)) {
+  for (const { name, key, method, flags, csize, usize, lho, crc } of await zipDirectory(u8, 0, len)) {
     const at = entryDataAt(lho, u8.subarray(lho, lho + 30));
     need(at, csize, `${name}'s data`);
     const data = new Uint8Array(buf, at, csize);
-    out.set(key, { method, flags, data, name, usize });
+    out.set(key, { method, flags, data, name, usize, crc });
   }
   return {
     names: [...out.values()].map((f) => f.name),
@@ -835,12 +823,21 @@ export async function unzip(buf, stop = null) {
       // (a size past the limit rounded up, as the text readers say it: "500 MB, more than the 500 MB"
       // for one a byte over -- r74 A8, Q8)
       if (too && f.usize > max) throw too(sizeOver(f.usize));
+      // (what it hands on held to its directory's CRC-32, stored or inflated: js/zip-dir.js crcRefusal --
+      // a changed byte in a stored STL opened with wrong geometry: r80 Q4)
+      const checked = async (bytes) => {
+        const c = await crc32Turning(new Uint8Array(bytes), stop);
+        if (c === null) throw new StopRead();
+        const r = crcRefusal(f.name, c, f.crc);
+        if (r) throw new Error(r);
+        return bytes;
+      };
       // (a stored entry's usize is the bytes it holds, js/zip-dir.js: the check above is its too -- r79 A9)
-      if (f.method === 0) return f.data.slice().buffer;
+      if (f.method === 0) return checked(f.data.slice().buffer);
       // inflated with a count, refused past the viewer's file limit (a zip bomb stops there)
       if (f.usize > MAX_FILE_BYTES) throw new Error(`zip entry ${p} unpacks to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
       // (and the size it inflates to held to its directory's: js/zip-dir.js sizeRefusal -- r79 Q2)
-      const sized = (bytes) => { const r = sizeRefusal(f.name, bytes.byteLength, f.usize); if (r) throw new Error(r); return bytes; };
+      const sized = (bytes) => { const r = sizeRefusal(f.name, bytes.byteLength, f.usize); if (r) throw new Error(r); return checked(bytes); };
       if (!too) return sized(await inflate(f.data, 'deflate-raw', MAX_FILE_BYTES, stop));
       let inflated;
       try { inflated = await inflate(f.data, 'deflate-raw', max, stop); } catch (e) {

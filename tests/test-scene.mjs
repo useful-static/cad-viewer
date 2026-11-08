@@ -22,6 +22,7 @@ import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
 import { orientOrNull } from '../js/orient.js';
 import { formatOfName, isCompanion, takesCompanions, zipModel, zipCompanions as zipCompanionsOf } from '../js/formats.js';
+import { readCompanions } from '../js/companions.js';
 
 import { test, done } from './harness.mjs';
 import { runStart } from './startup-harness.mjs';
@@ -517,16 +518,23 @@ await test('Save drawing during a tour draws the visitor\'s own parts, not the s
   assert.deepEqual(drawn({ header, selected: new Set([2]), hidden: new Set([2]), tour: null }), [2]);
 });
 await test('a 2D file is a DWG by its bytes or by the formats table\'s DWG row, whatever extensions the row holds (main.js loadDxf, as written: r70 A5)', async () => {
+  // (since r80 A4 loadDxf asks js/formats.js drawingReaderOf, its format by the table's row -- an
+  // extension added to the DWG row reads as a DWG with no other change -- or a DWG's tag)
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
-  const head = '  const dwg = isDWGBytes(';
-  const i = src.indexOf(head);
-  assert.ok(i > 0, 'main.js has the line');
-  const line = src.slice(i, src.indexOf('\n', i));
-  const isDwg = (name, extra = []) => new Function('isDWGBytes', 'formatOfName', 'buf', 'name', `${line}\nreturn dwg;`)(
-    () => false, (n) => ([...['dwg'], ...extra].some((e) => n.toLowerCase().endsWith(`.${e}`)) ? { label: 'DWG' } : { label: 'DXF' }), new ArrayBuffer(8), name);
-  assert.equal(isDwg('a.dwg'), true);
-  assert.equal(isDwg('a.dxf'), false);
-  assert.equal(isDwg('a.dwt', ['dwt']), true, 'an extension added to the DWG row (must fire: read as a DXF)');
+  assert.ok(src.includes('const format = drawingReaderOf(name, '), 'main.js loadDxf asks drawingReaderOf');
+  const { drawingReaderOf, FORMATS } = await import('../js/formats.js');
+  const at = (name, start = new Uint8Array(8)) => drawingReaderOf(name, start)?.label;
+  assert.equal(at('a.dwg'), 'DWG');
+  assert.equal(at('a.dxf'), 'DXF');
+  assert.equal(at('a.dxf', new TextEncoder().encode('AC1015\0\0')), 'DWG', 'a DWG by its tag, whatever its name');
+  assert.equal(at('a.stl'), undefined, 'no drawing\'s name');
+  assert.ok(FORMATS.find((f) => f.label === 'DWG').ext.every((e) => at(`a.${e}`) === 'DWG'), 'every extension of the DWG row');
+  // (js/read-file.js readDrawing: a case each, a format it has none for refused, not read as a DXF --
+  // r80 A4; must fire, a boolean "DWG or not")
+  const { readDrawing } = await import('../js/read-file.js');
+  const dxf = new TextEncoder().encode('0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n');
+  assert.ok(readDrawing({ buf: dxf.buffer, format: 'DXF' }).paths.length >= 1);
+  assert.throws(() => readDrawing({ buf: dxf.buffer, format: 'XYZ' }), /no 2D reader for XYZ/);
 });
 await test('the units select during a re-read says the unit being read, after it the unit read (main.js syncMeshUnitRow, as written: r69 A5)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -1639,7 +1647,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     let release = null;
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
-      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions', 'StopRead',
+      'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions', 'StopRead', 'companionsOverText',
       `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
@@ -1648,7 +1656,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
       // (the reader: what it is handed, after the awaits a real one makes)
       async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
       async () => { if (unzipWait) await held; return { unzip: async (b) => { read.push(['unzip', b.byteLength]); return { names, get: async () => new ArrayBuffer(4) }; } }; },
-      async () => {}, formatOfName, 'OPENS', zipModel, (b) => gz && b.byteLength === 7, async (b) => new ArrayBuffer(9), () => [], StopRead); // (loadZip's choice, js/formats.js since r75 A2; its gunzip, r76 A1)
+      async () => {}, formatOfName, 'OPENS', zipModel, (b) => gz && b.byteLength === 7, async (b) => new ArrayBuffer(9), () => [], StopRead, (n) => `${n}: over`); // (loadZip's choice, js/formats.js since r75 A2; its gunzip, r76 A1)
     return { f, read, release, app };
   };
   const file = (name, size = 10) => ({ name, size, arrayBuffer: async () => { await tick(); return new ArrayBuffer(4); } });
@@ -1672,6 +1680,14 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     for (let i = 0; i < 10; i++) await tick();
     assert.deepEqual(read, [['x.obj', ['x.mtl']]], 'a superseded zip meanwhile');
     assert.ok(app.loadSeq >= 2);
+  }
+  // (r80 A3: the model a drop opens by the zip's one choice -- a notes .pdf beside a board.step, the
+  // .step, as zipped; must fire, the .pdf opened and refused; r80 A2: photo.png.gz no companion)
+  {
+    const { f } = run(false);
+    assert.equal(f.pickModelFile([file('assembly-notes.pdf'), file('board.step')]).name, 'board.step');
+    assert.equal(isCompanion('photo.png.gz'), false, 'a .png.gz is no picture a reader reads');
+    assert.equal(isCompanion('photo.png'), true);
   }
   // (d) a 3MF named download.zip: opened as a 3MF, whole (r76 A6); (e) a model.zip.gz: unpacked,
   // then unzipped by its name less .gz (r76 A1)
@@ -1990,15 +2006,15 @@ await test('a mesh\'s companion files together are capped at the size a file may
   const at = src.indexOf('async function loadMeshFile(buf, name, seq');
   const read = [];
   const loadMeshFile = new Function('isGzip', 'unpackGz', 'meshReaders', 'stale', 'OPENS', 'setStatus', 'showProgress', 'mb', 'nextPaint', 'MAX_FILE_BYTES',
-    'app', 'readUnit', 'addressUnit', 'meshFromSource', 'OVERSIZE_WORDS', 'takesCompanions', 'formatOfName', 'StopRead', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
+    'app', 'readUnit', 'addressUnit', 'meshFromSource', 'OVERSIZE_WORDS', 'takesCompanions', 'formatOfName', 'StopRead', 'readCompanions', `${src.slice(at, src.indexOf('\n}\n', at) + 2)}; return loadMeshFile;`)(
     () => false, null, async () => ({ meshFormatOf: (n) => n.split('.').pop() }), () => false, '', () => {}, () => {}, () => '0', async () => {}, 100,
-    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); }, 'over 0 GB, more than this viewer opens', takesCompanions, formatOfName, StopRead); // (the page's one wording, js/cadmesh.js: r73 A6)
+    {}, () => 'mm', () => 'mm', async (s) => { read.push([...s.extras.keys()]); }, 'over 0 GB, more than this viewer opens', takesCompanions, formatOfName, StopRead, readCompanions); // (the page's one wording, js/cadmesh.js: r73 A6)
   const extra = (name, n) => ({ name, arrayBuffer: async () => new ArrayBuffer(n) });
   // (under the cap: read, each by its name)
   await loadMeshFile(new ArrayBuffer(4), 'a.obj', 1, [extra('a.mtl', 40), extra('t.png', 40)]);
   assert.deepEqual(read, [['a.mtl', 't.png']]);
   // (over it together, though each is under: refused, the mesh never read)
-  await assert.rejects(loadMeshFile(new ArrayBuffer(4), 'b.obj', 1, [extra('b.mtl', 60), extra('t.png', 60)]), /^Error: b\.obj: its companion files come to over 0 GB, more than this viewer opens$/);
+  await assert.rejects(loadMeshFile(new ArrayBuffer(4), 'b.obj', 1, [extra('b.mtl', 60), extra('t.png', 60)]), new RegExp(`^Error: b\\.obj: its companion files come to ${OVERSIZE_WORDS}$`)); // (js/companions.js's one wording)
   assert.equal(read.length, 1);
   // (an STL's are not read at all: no reader of it looks at one, and a zipped STL was refused for a
   // picture beside it the page could not unpack -- r78 A2; must fire: the throw, or ['t.png'])

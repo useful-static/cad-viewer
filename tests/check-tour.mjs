@@ -14,22 +14,27 @@ import { readFile } from 'node:fs/promises';
 import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
 import { fileNameOfUrl, formatOfName, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
 import { meshFormatOf, unzip } from '../js/mesh-formats.js';
+import { companionsOverText, readCompanions } from '../js/companions.js';
+import { CliError, parseCli } from '../js/cli-args.js';
 import { readMeshFile } from '../js/read-file.js';
 import { resolve } from 'node:path';
 import { parseModelList, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour, partIndex, resolveParts, tourNames } from '../js/tour.js';
 
-const args = process.argv.slice(2);
-if (!args.length || args.includes('--help')) {
-  console.log('usage: node tests/check-tour.mjs TOUR.cadtour.json [MODEL.cadmesh(.gz)] [--labels LIST.json]');
-  process.exit(args.length ? 0 : 2);
+const USAGE = 'usage: node tests/check-tour.mjs TOUR.cadtour.json [MODEL.cadmesh(.gz)] [--labels LIST.json]';
+// (the tools' one argument rule, js/cli-args.js parseCli: --labels=list.json read, a misspelt option a
+// usage error -- its own parser ignored both, and a label-named tour FAILed: r80 A5)
+let parsed;
+try { parsed = parseCli(process.argv.slice(2), { values: ['--labels'], max: 2 }); } catch (e) {
+  if (!(e instanceof CliError)) throw e;
+  console.log(`check-tour: ${e.message}\n${USAGE}`);
+  process.exit(2);
 }
-const li = args.indexOf('--labels');
-const labelsFile = li >= 0 ? args.splice(li, 2)[1] : null;
-// (--labels with no file after it was dropped, and the check passed without the labels asked for)
-if (li >= 0 && (!labelsFile || labelsFile.startsWith('--'))) { console.log('usage: --labels needs a model list file'); process.exit(2); }
-const [tourPath, modelArg] = args;
+if (parsed.help) { console.log(USAGE); process.exit(0); }
+if (!parsed.pos.length) { console.log(USAGE); process.exit(2); }
+const labelsFile = parsed.opts['--labels'] || null;
+const [tourPath, modelArg] = parsed.pos;
 
 // a URL as the page fetches it (a GitHub blob, a Dropbox ?dl=0: js/open-url.js fileUrl)
 const fetchOk = async (p) => {
@@ -73,7 +78,7 @@ try {
   // (a zip opened as the page opens one: the entry js/formats.js zipModel chooses, a 3MF by its
   // directory -- r78 A7; and its companions handed to the reader that reads them, main.js loadZip and
   // loadMeshFile -- a zipped glTF "needs chair.bin": r79 A5)
-  const extras = new Map();
+  let extras = new Map();
   if (opensAsZip(name, new Uint8Array(raw)) && formatOfName(name)?.label !== '3MF') {
     const z = await unzip(raw);
     const zm = zipModel(z.names);
@@ -83,7 +88,12 @@ try {
       const inner = await z.get(zm.model);
       raw = isGzip(inner) ? await gunzip(inner) : inner;
       name = zm.model.split('/').pop().replace(/\.gz$/i, '');
-      if (meshReaderOf(name, new Uint8Array(raw))?.companions) for (const c of zipCompanions(zm.files, zm.model, zm.opens)) extras.set(c.name.toLowerCase(), await z.get(c.path));
+      // (read as the page reads them, each to what the ones before leave: js/companions.js -- with no
+      // limit here, a 10 MB zip of 2.36 GB of pictures passed: r80 A1)
+      if (meshReaderOf(name, new Uint8Array(raw))?.companions) {
+        const over = () => new Error(companionsOverText(name));
+        extras = await readCompanions(zipCompanions(zm.files, zm.model, zm.opens).map((c) => ({ name: c.name, arrayBuffer: (max) => z.get(c.path, max, over) })), name);
+      }
     }
   }
   const mesh = meshFormatOf(name, raw);
@@ -100,7 +110,9 @@ if (labelsFile) {
   // read as the viewer reads a list (js/model-list.js parseModelList: every form, the files
   // resolved against the list), and the model's entry found by its resolved URL. A local path
   // stands in as https://local.invalid/<its absolute path>, the list's and the model's alike.
-  const entries = parseModelList(new TextDecoder().decode(await read(labelsFile)), asUrl(labelsFile));
+  // (a list it cannot read or parse: a FAIL line, not node's stack trace -- r80 A5)
+  let entries;
+  try { entries = parseModelList(new TextDecoder().decode(await read(labelsFile)), asUrl(labelsFile)); } catch (e) { console.log(`FAIL ${labelsFile}: ${e.message}`); process.exit(1); }
   const entry = entries.find((e) => e.url === asUrl(model));
   if (!entry) { console.log(`FAIL ${labelsFile}: names no entry for ${model}`); process.exit(1); }
   labels = entry.labels || null;

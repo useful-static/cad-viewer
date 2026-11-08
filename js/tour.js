@@ -313,7 +313,10 @@ export function partIndex(header, labels = null, labelled = Infinity) {
       return nodeCovered.get(r);
     };
     for (const [name, label] of Object.entries(labels)) {
-      for (const r of refs.get(name.trim().toLowerCase()) || []) if (covered(r)) put(label, r);
+      // (a copy walked: a label that is its part's name in another case -- "plate": "Plate" -- puts
+      // into the very list being walked, which grew without end until "Invalid array length": met by
+      // r80's check-tour arm)
+      for (const r of [...(refs.get(name.trim().toLowerCase()) || [])]) if (covered(r)) put(label, r);
     }
   }
   return {

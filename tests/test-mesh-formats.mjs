@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { meshFormatOf, parseMesh, unzip, weld } from '../js/mesh-formats.js';
 import { MM, encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
+import { crc32 } from '../js/crc32.js';
 import { shellTurns } from '../js/edges.js';
 
 // (the shared harness; its name filter: node tests/test-mesh-formats.mjs <name-part>)
@@ -69,7 +70,8 @@ function zipStored(entries) {
     lh.setUint32(0, 0x04034b50, true); lh.setUint32(18, d.length, true); lh.setUint32(22, d.length, true); lh.setUint16(26, n.length, true);
     parts.push(new Uint8Array(lh.buffer), n, d);
     const ch = new DataView(new ArrayBuffer(46));
-    ch.setUint32(0, 0x02014b50, true); ch.setUint32(20, d.length, true); ch.setUint32(24, d.length, true); ch.setUint16(28, n.length, true); ch.setUint32(42, off0, true);
+    // (its true CRC-32, held since r80 Q4)
+    ch.setUint32(0, 0x02014b50, true); ch.setUint32(16, crc32(d), true); ch.setUint32(20, d.length, true); ch.setUint32(24, d.length, true); ch.setUint16(28, n.length, true); ch.setUint32(42, off0, true);
     central.push(new Uint8Array(ch.buffer), n);
     off0 += 30 + n.length + d.length;
   }
@@ -513,6 +515,18 @@ await test('a broken zip: "damaged", not the engine\'s DataView error; an entry 
   dvb.setUint32(cd + 24, 3 * 2 ** 30, true);
   const u = await unzip(big.buffer);
   await assert.rejects(u.get('a.txt'), /unpacks to over 2 GB/);
+  // (its data past the end by the local header's own extra length, which the directory cannot see:
+  // the damaged zip in words -- r80 Q6; must fire, "RangeError: Invalid typed array length")
+  const far = z.slice();
+  new DataView(far.buffer).setUint16(28, 60000, true);
+  await assert.rejects(unzip(far.buffer), /^Error: a damaged zip \(a\.txt's data lies outside the file\)$/);
+  // (a changed byte in a stored entry: refused by its CRC-32, as a .gz is -- r80 Q4; must fire,
+  // "hellp" handed on)
+  const flipped = z.slice();
+  flipped[30 + 5 + 4] ^= 1;
+  const uf = await unzip(flipped.buffer);
+  await assert.rejects(uf.get('a.txt'), /^Error: a damaged zip \(a\.txt's data does not match its checksum\)$/);
+  assert.equal(new TextDecoder().decode(await (await unzip(z.buffer)).get('a.txt')), 'hello', 'must accept: the whole one');
 });
 await test('a .gltf whose buffer is a base64 data: URI opens (the URI\'s text was read as the buffer)', async () => {
   const f = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
@@ -750,6 +764,7 @@ async function zipDeflated(name, raw) {
   const dv = new DataView(z.buffer);
   dv.setUint16(cd + 10, 8, true);
   dv.setUint32(cd + 24, raw.length, true);
+  dv.setUint32(cd + 16, crc32(raw), true); // (the CRC of what it unpacks to, held since r80 Q4)
   return z.buffer;
 }
 await test('r4-3 an ASCII STL holding 64 KB of blank lines: refused at once (the record regex\'s \\s* crossed newlines from every line start)', async () => {

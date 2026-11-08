@@ -402,9 +402,10 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
 // How many bytes a gzip (or deflate-raw) unpacks to, read as the page reads it -- every member, the
 // same limit and refusals -- none of them kept: the list check's measure of a gzip it can fetch
 // whole (its trailer is the LAST member's size, mod 4 GiB: r73 Q1)
-export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES) {
+// (onChunk: each chunk as it comes, none kept -- the list check's CRC of a zip entry: r80 Q4)
+export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES, onChunk = null) {
   if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (no DecompressionStream)');
-  return readMembers(buf, format, max, () => {});
+  return readMembers(buf, format, max, onChunk ? (v) => onChunk(v) : () => {});
 }
 
 // (a stream's input, written FEED bytes at a time; the most of a member's output a stopped stream
@@ -449,7 +450,7 @@ export class StopRead extends Error { constructor() { super('the read was stoppe
 async function readMembers(buf, format, max, take, head = 0, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let n = 0, off = 0, reread = 0, seen = 0, turned = 0, turnedAt = clock();
+  let n = 0, off = 0, reread = 0, seen = 0, turned = 0, turnedAt = clock(), fed = 0, allFed = false;
   // (a turn of the thread, then the caller's stop asked: true when the read is to stop)
   const turnNow = async () => {
     turned = seen; await turn(); turnedAt = clock();
@@ -467,14 +468,18 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
     // queued all at once, Chromium -- which stops after every member -- was handed the whole rest of
     // the file for each one, and a bgzip of 12,852 members held the page 126 s: r77 Q1)
     let over = false;
+    // (what it took before it stopped: fed, and whether that was all -- where a member's end can be,
+    // stream() returning: r80 Q5)
+    fed = 0; allFed = false;
     (async () => {
       try {
         for (let i = 0; i < bytes.length && !over; i += FEED) {
           await w.ready;
           if (over) break;
           await w.write(bytes.subarray(i, Math.min(bytes.length, i + FEED)));
+          fed = Math.min(bytes.length, i + FEED);
         }
-        if (!over) await w.close();
+        if (!over) { allFed = true; await w.close(); }
       } catch { /* the stream stopped: the rest is not written */ }
     })();
     const rd = ds.readable.getReader();
@@ -513,6 +518,11 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
     if (off && clock() - turnedAt >= TURN_MS && await turnNow()) throw new StopRead();
     const stopped = await stream(off ? u8.subarray(off) : u8);
     if (!stopped || stopped === 'head') return n;
+    // (a stream that stopped before taking all its input stopped at the member's end: in the piece it
+    // was given last, or the one before -- so the search starts there, and a valid member holding 300
+    // header-like runs before its end was refused in Chromium, each tried: r80 Q5. One that took it
+    // all, the whole member searched)
+    const searchFrom = allFed ? off + 12 : Math.max(off + 12, off + fed - FEED);
     let next = -1;
     if (format === 'gzip') {
       // (only a header whose member's trailer, just before it, could be this member's is read to: a
@@ -524,11 +534,12 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
       // and a count of 16 refused a valid file whose large first member held 17 by chance (r76 A7))
       // (from 12 bytes in: a header is 10, the shortest deflate 2 -- from 18, an empty member's end
       // was passed over: r74 A2, Q5)
-      for (let p = u8.indexOf(0x1f, off + 12); p >= 0 && p + 3 <= u8.length; p = u8.indexOf(0x1f, p + 1)) {
+      for (let p = u8.indexOf(0x1f, searchFrom); p >= 0 && p + 3 <= u8.length; p = u8.indexOf(0x1f, p + 1)) {
         if (u8[p + 1] !== 0x8b || u8[p + 2] !== 8) continue;
         const isize = (u8[p - 4] | (u8[p - 3] << 8) | (u8[p - 2] << 16) | (u8[p - 1] << 24)) >>> 0;
         // (at least what came, and no more than one piece's output past it: what a stopped stream
-        // drops -- r75 Q1, r76 A7)
+        // drops -- r75 Q1, r76 A7. The upper bound only spares tries, which the budget bounds anyway:
+        // a cost no arm can tell -- r80 Q7)
         if (isize < made || isize - made > DROPPED_MOST) continue;
         // (the budget from what this member's first stream gave too: from what came before alone, a
         // 100 MB first member with one chance header before its end was refused -- r76 Q1)

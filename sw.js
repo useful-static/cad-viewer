@@ -10,7 +10,7 @@
 // after one visit got the page and not js/main.js -- a dead page. (The converter, vendor/, is kept
 // once fetched: a STEP file opens offline after one has been converted online.) APP_JS is every
 // file in js/ (tests/test-sw.mjs holds the two to each other)
-const APP_JS = ['boot-check.js', 'box-tree.js', 'cadmesh.js', 'camera.js', 'check-page.js', 'clearance-worker.js', 'clearance.js', 'cli-args.js', 'codepages.js', 'converter-choice.js', 'crc32.js', 'datum.js',
+const APP_JS = ['boot-check.js', 'box-tree.js', 'cadmesh.js', 'camera.js', 'check-page.js', 'clearance-worker.js', 'clearance.js', 'cli-args.js', 'codepages.js', 'companions.js', 'converter-choice.js', 'crc32.js', 'datum.js',
   'drawing-svg.js', 'dwg.js', 'dxf-view.js', 'dxf.js', 'early-fetch.js', 'early.js', 'edges-worker.js', 'edges.js', 'export-mesh.js', 'face-order.js', 'formats.js',
   'import-progress.js', 'list-check.js', 'main.js', 'mat4.js', 'measure-geom.js', 'measure-ui.js', 'mesh-cache.js', 'mesh-formats.js',
   'model-list.js', 'open-url.js', 'orient.js', 'palettes.js', 'prefs.js', 'raycast.js', 'read-file.js', 'read-worker.js', 'renderer-webgl.js',

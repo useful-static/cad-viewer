@@ -2,7 +2,7 @@
 // the list check (js/list-check.js), which kept a reader of its own and was silent on a zip64
 // archive the page refuses (r75 A4).
 //
-// zipDirectory(tail, tailAt, len, readAt?) -> [{ name, key, method, flags, csize, usize, lho }]
+// zipDirectory(tail, tailAt, len, readAt?) -> [{ name, key, method, flags, csize, usize, lho, crc }]
 //   tail: bytes ending at the archive's end (the whole file, or its last 64 KB and more), from
 //   offset tailAt of an archive of len bytes; the directory read from it, or -- when it starts
 //   before the tail -- from readAt(offset, n) (async, the list check's range request). Every
@@ -61,7 +61,7 @@ export async function zipDirectory(tail, tailAt, len, readAt = null) {
     // page's map of them; the list check read the first, a small A.stl over the 3 GB a.stl the page
     // refused: r76 A4)
     const key = zipKey(name);
-    const e = { name, key, method, flags, csize, usize, lho };
+    const e = { name, key, method, flags, csize, usize, lho, crc: c.getUint32(o + 16, true) };
     if (at.has(key)) out[at.get(key)] = e; else { at.set(key, out.length); out.push(e); }
     o += 46 + nlen + xlen + clen;
   }
@@ -78,6 +78,11 @@ export const methodRefusal = (name, method, flags = 0) => (flags & 1 ? `zip entr
 // -- the one rule for the page's unzip and the list check: the check sized an entry past 1 MB of data
 // by its claim and the page by what it inflated to, and they disagreed both ways (r79 Q2)
 export const sizeRefusal = (name, got, said) => (got === said ? null : `a damaged zip (${name} unpacks to ${got.toLocaleString('en-US')} bytes, where its directory says ${said.toLocaleString('en-US')})`);
+
+// An entry whose data does not give the CRC-32 its directory holds is damaged, in these words, or null
+// -- the page's unzip and the list check: a changed byte in a stored STL opened with wrong geometry,
+// where the same damage in a .gz is refused (r80 Q4)
+export const crcRefusal = (name, got, said) => (got === said ? null : `a damaged zip (${name}'s data does not match its checksum)`);
 
 // An entry's data: where it starts, from its local header's 30 bytes (head) -- its name and extra
 // lengths there, which may differ from the directory's

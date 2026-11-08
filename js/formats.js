@@ -71,7 +71,35 @@ const BY_EXT = new Map(FORMATS.flatMap((f) => f.ext.map((e) => [e, f])));
 
 // files that come with a model and are not one: an OBJ's .mtl, a .gltf's buffers and pictures
 export const COMPANION_EXT = ['mtl', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'ktx2'];
-export const isCompanion = (name) => COMPANION_EXT.includes(extOf(name));
+// (by its own last extension: no reader unpacks a companion, so photo.png.gz is no picture -- by
+// extOf, which reads past a .gz, it was taken, and a bzip2 one refused the zip: r80 A2)
+export const isCompanion = (name) => { const m = /\.([a-z0-9]+)$/i.exec(String(name || '').split(/[?#]/)[0]); return !!m && COMPANION_EXT.includes(m[1].toLowerCase()); };
+// A companion file's key: its name without a directory (cut at / or \) and without case. A map's
+// own keys are read by it too, so a map keyed by bare name (a drop: main.js keys by File.name) and
+// one keyed by path both match.
+export const companionKey = (ref) => String(ref).split(/[/\\]/).pop().toLowerCase();
+// The file a reference names among a model's companions (a Map of name -> file), or null: by its path
+// first, where the map has paths (a zip's, named by their path from the model's folder: zipCompanions)
+// -- a glTF's "textures/wood.png" is that file, not a wood.png beside the model (by name alone,
+// another folder's took its place: r54 A3, Q1); \ read as /, a leading ./ dropped -- then by name.
+// The one lookup for the mesh readers and the list check (r80 Q3)
+const pathKey = (ref) => String(ref).replace(/\\/g, '/').replace(/^(\.\/)+/, '').toLowerCase();
+export function companionOf(files, ref) {
+  const p = pathKey(ref);
+  for (const [n, f] of files) if (pathKey(n) === p) return f;
+  const k = companionKey(ref);
+  if (files.has(k)) return files.get(k);
+  for (const [n, f] of files) if (companionKey(n) === k) return f;
+  return null;
+}
+// The files a glTF's JSON names that its reader must find beside it: each buffer's uri that is no
+// data: URI, as written (js/mesh-formats.js parseGLTF reads those from its companions; a GLB's own
+// buffer has no uri; images are optional). The list check's, which never read them: a .gltf by URL,
+// its .bin beside it on the server, was "ok" where the page says "needs tri.bin" (r80 Q3)
+export function gltfNeeds(json) {
+  const buffers = json && Array.isArray(json.buffers) ? json.buffers : [];
+  return buffers.filter((b) => b && typeof b.uri === 'string' && !b.uri.startsWith('data:')).map((b) => b.uri);
+}
 // Whether a model of this format (its label) is read with its companions: the one rule for the page
 // (main.js loadMeshFile reads them only then) and the list check (which judges them only then) -- the
 // page read every mesh's, and refused a zipped STL for a bzip2 picture beside it; the check judged a
@@ -87,6 +115,22 @@ export function meshReaderOf(name, start) {
   if (!f || f.kind !== 'mesh') return null;
   const s = start && start.length ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null;
   return s && s.magic && s.kind === 'mesh' ? s : f;
+}
+// The same for a 2D-named file: a DWG by its tag whatever its name (DWG_TAG), else the name's; null
+// when the name is no drawing's. main.js loadDxf's reader and js/read-file.js readDrawing's case, and
+// the list check's (a boolean "DWG or not" read any other 2D format as a DXF: r80 A4)
+export function drawingReaderOf(name, start) {
+  const f = formatOfName(name);
+  if (!f || f.kind !== '2d') return null;
+  return start && isDWGBytes(start) ? BY_EXT.get('dwg') : f;
+}
+// The reader the page meets for a file of this name and (unpacked) start: a mesh's or a drawing's by
+// the rules above, else the format its name says, else -- a name that says none -- its bytes'
+// (openedName). The list check's size and text rules run by it (they ran by the bytes' format, and a
+// DXF named part.stl, which the page reads as an STL and refuses, was a warning: r80 A6)
+export function readerOf(name, start) {
+  return meshReaderOf(name, start) || drawingReaderOf(name, start) || formatOfName(name)
+    || (start && start.length ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null);
 }
 
 // a name's extension, lower case, after any query and a .gz ("part.STP.gz?v=2" -> "stp")
@@ -234,11 +278,6 @@ export function zipCompanions(files, model, opens) {
   }
   return out;
 }
-// Whether the page opens a file of this name and these first bytes (unpacked) as a zip or a 3MF: by
-// its name where the name says a format (main.js loadAny; a mesh by a mesh format's magic, which a
-// zip's is not: js/mesh-formats.js meshFormatOf), else by its bytes (sniffFormat). The one rule for
-// the page and the list check, which took any "PK" start for a zip: a valid binary STL whose header
-// starts "PK" was "not a zip file" there, and a zip's part.stl holding a zip "ok" (r77 A1)
 // The name the page opens a file under, from its name and its (unpacked) first bytes: its own where
 // it says a format, else one its bytes say (".stl" for an ASCII STL at /download?id=7), else its own.
 // The one rule for main.js loadAny and tests/check-tour.mjs, which kept a copy that had drifted (r79 A5)
@@ -247,6 +286,11 @@ export function openedName(name, bytes) {
   const said = bytes && bytes.length ? sniffFormat(bytes.subarray(0, SNIFF_BYTES)) : null;
   return said ? `${name.replace(/\.gz$/i, '')}.${said.ext[0]}` : name;
 }
+// Whether the page opens a file of this name and these first bytes (unpacked) as a zip or a 3MF: by
+// its name where the name says a format (main.js loadAny; a mesh by a mesh format's magic, which a
+// zip's is not: js/mesh-formats.js meshFormatOf), else by its bytes (sniffFormat). The one rule for
+// the page and the list check, which took any "PK" start for a zip: a valid binary STL whose header
+// starts "PK" was "not a zip file" there, and a zip's part.stl holding a zip "ok" (r77 A1)
 export function opensAsZip(name, bytes) {
   const f = formatOfName(name) || (bytes ? sniffFormat(bytes.subarray(0, SNIFF_BYTES)) : null);
   return !!f && (f.kind === 'zip' || f.label === '3MF');

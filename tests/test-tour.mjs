@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeCadmesh } from '../js/cadmesh.js';
+import { crc32 } from '../js/crc32.js';
 import { parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
 import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
@@ -125,7 +126,7 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'dl?file=m.obj&token=abc')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
     const nm = Buffer.from('in/m.obj'), d = Buffer.from(obj);
     const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt32LE(d.length, 18); lh.writeUInt32LE(d.length, 22); lh.writeUInt16LE(nm.length, 26);
-    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(d.length, 24); cd.writeUInt16LE(nm.length, 28);
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt32LE(crc32(d), 16); cd.writeUInt32LE(d.length, 20); cd.writeUInt32LE(d.length, 24); cd.writeUInt16LE(nm.length, 28); // (its true CRC-32: r80 Q4)
     const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(46 + nm.length, 12); end.writeUInt32LE(30 + nm.length + d.length, 16);
     writeFileSync(join(dir, 'm.zip'), Buffer.concat([lh, nm, d, cd, nm, end]));
     assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'o.cadtour.json'), join(dir, 'm.zip')], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
@@ -137,7 +138,7 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
       for (const [n, data] of files) {
         const nb = Buffer.from(n), db = Buffer.from(data);
         const l = Buffer.alloc(30); l.writeUInt32LE(0x04034b50, 0); l.writeUInt32LE(db.length, 18); l.writeUInt32LE(db.length, 22); l.writeUInt16LE(nb.length, 26);
-        const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt32LE(db.length, 20); c.writeUInt32LE(db.length, 24); c.writeUInt16LE(nb.length, 28); c.writeUInt32LE(off, 42);
+        const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt32LE(crc32(db), 16); c.writeUInt32LE(db.length, 20); c.writeUInt32LE(db.length, 24); c.writeUInt16LE(nb.length, 28); c.writeUInt32LE(off, 42);
         parts.push(l, nb, db); cds.push(c, nb); off += 30 + nb.length + db.length;
       }
       const cdb = Buffer.concat(cds), e = Buffer.alloc(22); e.writeUInt32LE(0x06054b50, 0); e.writeUInt16LE(files.length, 8); e.writeUInt16LE(files.length, 10); e.writeUInt32LE(cdb.length, 12); e.writeUInt32LE(off, 16);
@@ -151,6 +152,22 @@ test('check-tour.mjs plays a local tour over the model its "model" names beside 
     writeFileSync(join(dir, 'download'), 'solid plate\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid plate\n');
     writeFileSync(join(dir, 'p.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'download', steps: [{}] }));
     assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'p.cadtour.json')], { encoding: 'utf8' }), /^OK {2}/);
+    // (r80 A5: the tools' argument rule -- --labels=FILE read, a misspelt option a usage error (exit 2),
+    // a list it cannot parse a FAIL line, not a stack trace; must fire, each ignored or thrown)
+    writeFileSync(join(dir, 'l.json'), JSON.stringify({ 'm.cadmesh': { name: 'M', labels: { plate: 'Plate' } } }));
+    writeFileSync(join(dir, 'lt.cadtour.json'), JSON.stringify({ cadtour: 2, model: 'm.cadmesh', steps: [{ frame: ['Plate'] }] }));
+    assert.match(execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 'lt.cadtour.json'), `--labels=${join(dir, 'l.json')}`], { encoding: 'utf8' }), /^OK {2}.*0 not in the model/);
+    let misspelt = 0;
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--lables', join(dir, 'l.json')], { encoding: 'utf8' }); } catch (e) { misspelt = e.status; }
+    assert.equal(misspelt, 2, 'a misspelt option');
+    writeFileSync(join(dir, 'bad.json'), '{ not json');
+    let badList = '';
+    try { execFileSync(process.execPath, [join(HERE, 'check-tour.mjs'), join(dir, 't.cadtour.json'), '--labels', join(dir, 'bad.json')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { badList = `${e.status} ${e.stdout}`; }
+    assert.match(badList, /^1 FAIL .*bad\.json: /, 'a list it cannot parse');
+    // (r80 A1: a zip's companions read through js/companions.js, each to what the ones before leave --
+    // with no limit, a 10 MB zip of 2.36 GB of pictures passed; the budget is test-scene's and
+    // test-cadmesh's to hold, a 2 GB fixture too large to build here)
+    assert.match(readFileSync(join(HERE, 'check-tour.mjs'), 'utf8'), /extras = await readCompanions\(zipCompanions\(/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -170,6 +187,9 @@ test('a list\'s labels name the first model\'s bodies only: an added model\'s pa
   assert.deepEqual(resolveParts(namesFor([3], header, idx, labels), idx).ids, [3]);
   // one model (no limit): as before
   assert.deepEqual(resolveParts(['Fan'], partIndex(header, labels)).ids.sort(), [1, 3]);
+  // (a label that is its part's name in another case: the index put into the list it walked, which
+  // grew until "Invalid array length" -- met by r80's check-tour arm; must fire, the throw)
+  assert.deepEqual(resolveParts(['Part_7'], partIndex(header, { PART_7: 'Part_7' })).ids.sort(), [1, 3]);
 });
 
 test('partIndex in a scene: 1000 labels naming one assembly of 100,000 bodies, each node tested once', () => {

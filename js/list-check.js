@@ -9,10 +9,11 @@
 
 import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
-import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, meshReaderOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
+import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, companionOf, extOf, gltfNeeds, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
 import { MAX_FILE_BYTES, OVERSIZE_WORDS, gunzip, inflate, inflateCount, inflateHead, isGzip } from './cadmesh.js';
-import { ZIP_TAIL, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
+import { ZIP_TAIL, crcRefusal, entryDataAt, methodRefusal, sizeRefusal, within, zipDirectory, zipKey } from './zip-dir.js';
+import { crc32 } from './crc32.js';
 // (the most of a gzipped zip kept unpacked, to read its directory)
 const ZIP_KEPT = 64 * 2 ** 20;
 import { fileUrl } from './open-url.js';
@@ -123,6 +124,23 @@ function stlCut(label, start, size) {
   const want = 84 + 50 * n, big = (v) => v.toLocaleString('en-US');
   return `damaged: its header counts ${big(n)} triangle${n === 1 ? '' : 's'}, so it should be ${big(want)} bytes, but it is ${big(size)} bytes`;
 }
+// The buffers a glTF's or a GLB's start names that its reader must find beside it (js/formats.js
+// gltfNeeds), or null when the start does not hold its JSON whole (r80 Q3)
+function gltfStartNeeds(label, start) {
+  try {
+    let text;
+    if (label === 'GLB') {
+      if (!start || start.length < 20) return null;
+      const n = new DataView(start.buffer, start.byteOffset, start.byteLength).getUint32(12, true);
+      if (20 + n > start.length) return null;
+      text = new TextDecoder().decode(start.subarray(20, 20 + n));
+    } else if (label === 'glTF') text = new TextDecoder().decode(start);
+    else return null;
+    return gltfNeeds(JSON.parse(text));
+  } catch { return null; }
+}
+// the reader's words for a buffer it cannot find (js/mesh-formats.js parseGLTF)
+const needsWords = (name, uri) => `${name} needs ${uri}: drop it together with the .${extOf(name)}`;
 // (an empty file: no reader opens one -- "ok" of a 0-byte STL, an empty OBJ and a zip of one: r77 A4)
 const EMPTY_WORDS = 'it is empty (0 bytes), which no reader of the viewer opens';
 
@@ -181,20 +199,30 @@ async function zipEntriesVerdict(src, label, depth) {
   // count stops: -> { over }. Its start read here when none is given: a 2 MB corrupt .mtl was "ok",
   // and twelve 1 GB companions were all counted for a refusal due after the third -- r79 A3, A6)
   const inflated = async (x, start = null, max = MAX_FILE_BYTES) => {
-    if (x.method !== 8) return { size: x.usize };
     const said = (e) => ({ bad: { level: 'bad', words: `its ${x.name}: ${e.message || e}` } });
-    if (x.csize > 1 << 20) {
+    const damaged = (words) => ({ bad: { level: 'bad', words: `the viewer cannot open it: ${words}` } });
+    // (a stored one's CRC-32 too, as the page holds it, up to ZIP_KEPT: js/zip-dir.js crcRefusal -- r80 Q4)
+    if (x.method !== 8) {
+      if (x.method !== 0 || x.csize > ZIP_KEPT) return { size: x.usize, unchecked: x.method === 0 };
+      const head = await src.read(x.lho, 30);
+      const wrongCrc = crcRefusal(x.name, crc32(await src.read(entryDataAt(x.lho, head), x.csize)), x.crc);
+      return wrongCrc ? damaged(wrongCrc) : { size: x.usize };
+    }
+    // (counted, as the page inflates it, up to ZIP_KEPT of data: past 1 MB the directory's size was
+    // taken, and a 1.5 MB-data STL 100 bytes past it was "ok" where the page says "a damaged zip" --
+    // r80 Q1; past ZIP_KEPT, its start read and the rest said not checked)
+    if (x.csize > ZIP_KEPT) {
       const s = start || await startOf(x);
-      return x.usize && s && !s.length ? said('the deflated data is corrupt or truncated (it inflates to nothing)') : { size: x.usize };
+      return x.usize && s && !s.length ? said('the deflated data is corrupt or truncated (it inflates to nothing)') : { size: x.usize, unchecked: true };
     }
     const head = await src.read(x.lho, 30);
     const raw = await src.read(entryDataAt(x.lho, head), x.csize);
-    let size;
-    try { size = await inflateCount(raw, 'deflate-raw', max); } catch (e) { return /too big/.test(e.message) ? { over: true, bad: max >= MAX_FILE_BYTES ? said(e).bad : null } : said(e); }
-    // (held to its directory's size, as the page holds it: js/zip-dir.js sizeRefusal -- r79 Q2; past
-    // 1 MB of data, the directory's size and the start are what is read here)
-    const wrong = sizeRefusal(x.name, size, x.usize);
-    return wrong ? { bad: { level: 'bad', words: `the viewer cannot open it: ${wrong}` } } : { size };
+    let size, c = 0;
+    try { size = await inflateCount(raw, 'deflate-raw', max, (v) => { c = crc32(v, 0, v.length, c); }); } catch (e) { return /too big/.test(e.message) ? { over: true, bad: max >= MAX_FILE_BYTES ? said(e).bad : null } : said(e); }
+    // (held to its directory's size and CRC-32, as the page holds it: js/zip-dir.js sizeRefusal,
+    // crcRefusal -- r79 Q2, r80 Q4)
+    const wrong = sizeRefusal(x.name, size, x.usize) || crcRefusal(x.name, c, x.crc);
+    return wrong ? damaged(wrong) : { size };
   };
   const corrupt = async (x, start = null) => (await inflated(x, start)).bad || null;
   const zm = zipModel(entries.map((x) => x.name));
@@ -249,14 +277,28 @@ async function zipEntriesVerdict(src, label, depth) {
   // budget the ones before leave -- a .mtl claiming 3 GB was "ok", the page refusing it, r79 A2 --
   // then counted to that budget)
   const overAll = { level: 'bad', words: `${model.split('/').pop().replace(/\.gz$/i, '')}: its companion files come to ${OVERSIZE_WORDS}` };
-  let held = 0;
+  let held = 0, anyUnchecked = false;
   for (const c of companions) {
     if (unread(c)) return unread(c);
     if (c.usize > MAX_FILE_BYTES - held) return overAll;
     const ci = await inflated(c, null, MAX_FILE_BYTES - held);
     if (ci.over) return overAll;
     if (ci.bad) return ci.bad;
+    if (ci.unchecked) anyUnchecked = true;
     held += ci.size; // (its claim, which it is held to: past the budget, refused above)
+  }
+  // (a glTF's or GLB's buffers found among them as its reader finds them, js/formats.js companionOf:
+  // a zipped .gltf without its .bin was "ok", the page refusing it -- r80 Q3)
+  const reader = meshReaderOf(model, start);
+  const needs = reader ? gltfStartNeeds(reader.label, start) : null;
+  if (needs && needs.length) {
+    const named = new Map(zipCompanions(zm.files, model, zm.opens).map((c) => [c.name, true]));
+    const base = model.split('/').pop().replace(/\.gz$/i, '');
+    for (const uri of needs) {
+      let ref = uri;
+      try { ref = decodeURIComponent(uri); } catch { /* the reader refuses it as damaged */ }
+      if (!companionOf(named, ref)) return { level: 'bad', words: needsWords(base, uri) };
+    }
   }
   // (the entry as the page opens it -- loadAny, by its own name: a gzip unpacked, a zip or a 3MF read
   // as one. The check ran its own short list on it, and called a zipped part.stl.gz damaged and a
@@ -274,7 +316,10 @@ async function zipEntriesVerdict(src, label, depth) {
     const v = await bytesVerdict(bytes, model.split('/').pop(), depth + 1);
     return v && { level: v.level, words: `its ${model}: ${v.words}` };
   }
-  return startVerdict(model, start, xi.size); // (its size as the page has it: r78 Q2)
+  // (its size as the page has it: r78 Q2; one too large to count here said, not "ok": r80 Q1)
+  const sv = startVerdict(model, start, xi.size);
+  if (sv || !(xi.unchecked || anyUnchecked)) return sv;
+  return { level: 'warn', words: `${xi.unchecked ? `its ${model}` : `a companion of ${model}`} holds more than ${sizeMb(ZIP_KEPT)} of data: its data and size were not checked here` };
 }
 // What the page does with a file of these bytes and this name -- a gzip unpacked, a zip or a 3MF by
 // its directory, else the size and text rules -- as a fault { level, words }, or null
@@ -298,12 +343,14 @@ function startVerdict(name, start, size) {
   const got = start ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null;
   const want = formatOfName(name)?.label || null;
   // (its format against its name, by the file's own rules: formatVerdict -- r76 Q3)
-  if (start) {
-    const fv = formatVerdict(want, got, start, size);
-    if (fv.level !== 'ok') return { level: fv.level, words: `its ${name}: ${fv.words}` };
-  }
-  const r = sizeRule(got || want, start, size);
+  const fv = start ? formatVerdict(want, got, start, size) : null;
+  if (fv && fv.level === 'bad') return { level: 'bad', words: `its ${name}: ${fv.words}` };
+  // (the size and text rules by the reader the page meets, js/formats.js readerOf, and its refusal
+  // before a warning: they ran by the bytes' format, and a DXF named part.stl, which the page reads
+  // as an STL and refuses, was a warning -- r80 A6)
+  const r = sizeRule(readerOf(name, start)?.label || got || want, start, size);
   if (r) return { level: 'bad', words: r.over ? `its ${name} unpacks to ${r.over}` : `its ${name} is ${r.cut}` };
+  if (fv && fv.level !== 'ok') return { level: fv.level, words: `its ${name}: ${fv.words}` };
   return null;
 }
 // The rules a file of this format, start and size meets once its size is known: past the text limit
@@ -405,7 +452,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       bits.push(fv.words);
       level = fv.level;
     }
-    sizeFormat = got || want;
+    sizeFormat = (inner && readerOf(fileNameOfUrl(url).replace(/\.gz$/i, ''), inner)?.label) || got || want; // (the page's reader: r80 A6)
     sizeStart = nothing ? null : inner; // (a start that gave nothing says nothing to the size rules)
     sizeGz = gz;
     // (a gzip's unpacked size, its last four bytes (ISIZE, mod 4 GiB), asked with a range: the page
@@ -500,6 +547,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   // "ok · size not given · zip" with no entry read -- r78 A3)
   else if (sniff && pk && total === null) zipSaid = { level: 'warn', words: 'its entries were not read here (its size was not given)' };
   const rule = sizeRule(sizeFormat, sizeStart, size); // (the size rules: one reading -- r77 A6)
+  const urlNeeds = sniff && sizeStart ? gltfStartNeeds(sizeFormat, sizeStart) : null; // (r80 Q3)
   if (total && total > MAX_FILE_BYTES) {
     bits.push(OVERSIZE_WORDS);
     level = 'bad';
@@ -528,6 +576,16 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // the reader's -- "ok · STL" here: r73 A4)
     bits.push(rule.cut);
     level = 'bad';
+  } else if (urlNeeds && urlNeeds.length) {
+    // (a glTF or GLB whose buffers are files of their own: opened from a URL the page has none of
+    // them, and refuses it in the reader's words -- "ok" here: r80 Q3)
+    bits.push(needsWords(fileNameOfUrl(url).replace(/\.gz$/i, ''), urlNeeds[0]));
+    level = 'bad';
+  } else if (sniff && total === null) {
+    // (no size given and more than is in hand: the size limits not told, said, not "ok · size not
+    // given" -- a gzip of 501 MB of text, a cut STL and a corrupt gzip were: r80 Q2)
+    bits.push('its size was not given and it is longer than is read here, so the size limits could not be checked');
+    if (level === 'ok') level = 'warn';
   } else if (sizeGz && sniff && sizeStart && !exact
     // (and only where the limits can be met: at the deflate's largest ratio its size could pass one)
     && total * 1032 > (readsAsText(sizeFormat, sizeStart, Infinity) ? MAX_TEXT_BYTES : MAX_FILE_BYTES)) {

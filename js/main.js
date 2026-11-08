@@ -5,7 +5,8 @@
 // picking, section plane. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, MM, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead } from './cadmesh.js';
-import { SNIFF_BYTES, extOf, formatOfName, isDWGBytes, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions, openedName } from './formats.js';
+import { SNIFF_BYTES, extOf, formatOfName, drawingReaderOf, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions, openedName } from './formats.js';
+import { companionsOverText, readCompanions } from './companions.js';
 import { directFor, fileUrl } from './open-url.js';
 import { samePlace } from './same-place.js';
 import { withoutBom } from './step-text.js';
@@ -5055,21 +5056,14 @@ async function loadMeshFile(buf, name, seq, drop = []) {
   // (the companions together under the size a file may be: a zip's are unpacked here -- r54 Q8)
   // (and only for a reader that reads them, js/formats.js takesCompanions: a zipped STL was refused
   // for a bzip2 picture beside it -- r78 A2)
-  const extras = new Map();
-  let total = 0;
-  for (const f of takesCompanions(formatOfName(`m.${format}`)?.label) ? drop : []) {
-    let b;
-    // (a zip's, inflated: stopped with the load -- r78 A6)
-    // (a zip's read to what is left of the budget: r79 A7; a File's arrayBuffer takes no argument)
-    try { b = await f.arrayBuffer(MAX_FILE_BYTES - total); } catch (e) {
-      if (e instanceof StopRead) return;
-      throw e;
-    }
-    if (stale(seq)) return;
-    total += b.byteLength;
-    if (total > MAX_FILE_BYTES) throw new Error(`${name}: its companion files come to ${OVERSIZE_WORDS}`); // (the one wording: r73 A6)
-    extras.set(f.name.toLowerCase(), b);
+  // (each read to what the ones before leave, js/companions.js, check-tour's reading too -- r79 A7,
+  // r80 A1; a zip's inflate stopped with the load -- r78 A6)
+  let extras;
+  try { extras = await readCompanions(takesCompanions(formatOfName(`m.${format}`)?.label) ? drop : [], name, () => stale(seq), MAX_FILE_BYTES); } catch (e) {
+    if (e instanceof StopRead) return;
+    throw e;
   }
+  if (!extras) return;
   if (stale(seq)) return;
   // (read in the unit the address gives for this file: a reload or a view link of a re-read one)
   // (a mesh added to a scene is read in the first model's unit: the scene's size)
@@ -5251,7 +5245,7 @@ async function loadZip(buf, name, seq) {
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   // (each read to the budget the ones before it leave, loadMeshFile's `max`, refused in its words past
   // it: each was inflated whole before the total was held, and a 2.9 MB zip held 3000 MB first -- r79 A7)
-  const over = () => new Error(`${model.split('/').pop().replace(/\.gz$/i, '')}: its companion files come to ${OVERSIZE_WORDS}`);
+  const over = () => new Error(companionsOverText(model.split('/').pop().replace(/\.gz$/i, '')));
   const extras = zipCompanions(files, model, opens).map((c) => ({ name: c.name, arrayBuffer: (max = MAX_FILE_BYTES) => z.get(c.path, max, over) }));
   let inner;
   try { inner = await z.get(model); } catch (e) {
@@ -5275,17 +5269,18 @@ async function loadDxf(buf, name, seq) {
   // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), or by
   // its name (a .dwg that is not one is refused by the reader as "not a DWG file")
   // (its name by the formats table, the one rule: an extension added to the DWG row was read as a DXF -- r70 A5)
-  const dwg = isDWGBytes(new Uint8Array(buf, 0, Math.min(6, buf.byteLength))) || formatOfName(name)?.label === 'DWG';
-  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${dwg ? 'DWG' : 'DXF'}`);
+  // (by js/formats.js drawingReaderOf, the list check's rule too: r80 A4)
+  const format = drawingReaderOf(name, new Uint8Array(buf, 0, Math.min(6, buf.byteLength)))?.label || 'DXF';
+  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format}`);
   await nextPaint();
   if (stale(seq)) return;
   // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
   // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page.
   // Off the page's thread (readInWorker), else here.
-  const got = await readInWorker({ kind: '2d', buf, dwg }, name);
+  const got = await readInWorker({ kind: '2d', buf, format }, name);
   if (stale(seq)) return;
   await twoD();
-  const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, dwg });
+  const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, format });
   if (dxfLib.drawsNothing(drawing)) throw new Error(`${name} has nothing to draw`);
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
@@ -5879,7 +5874,11 @@ function droppedFile(e) {
 // load takes (loadFile) whatever else is picked or loaded meanwhile
 const companionsOf = new WeakMap();
 function pickModelFile(files) {
-  const f = files.find((x) => !isCompanion(x.name)) || files[0];
+  // (the model by the zip's one choice, js/formats.js zipModel: a format the viewer opens -- the first
+  // file not a companion took a notes .pdf over the board.step beside it, and refused it: r80 A3;
+  // with none, the first not a companion, which is refused in its own words)
+  const chosen = zipModel(files.map((x) => x.name)).model;
+  const f = files.find((x) => x.name === chosen) || files.find((x) => !isCompanion(x.name)) || files[0];
   const extras = files.filter((x) => x !== f && isCompanion(x.name));
   companionsOf.set(f, extras);
   const rest = files.length - 1 - extras.length;
