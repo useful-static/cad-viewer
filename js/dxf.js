@@ -351,11 +351,29 @@ export function parseDXF(s, opts = {}) {
   // (hold: the frozen layers of the block references being walked, outermost first, if any are --
   // each item drawn under them carries them, and is shown only while every one is: r64 Q1; the
   // outermost alone let a frozen reference inside another show, its outer layer turned on: r65 A3)
+  // (via: the layers of every reference being walked, outermost first, which a viewport freezing
+  // one of them hides the item by; hold is its frozen ones, derived from it, one rule -- the two
+  // were kept side by side at four places, and their disagreeing was round 99's A1: r100 A4. Cached
+  // per chain, so the items under one reference share one array, as the view's groups key them)
+  const holdCache = new WeakMap();
+  const holdOf = (via) => {
+    if (!via) return null;
+    if (!holdCache.has(via)) {
+      const h = via.filter((l) => (layers.get(l) || {}).frozen);
+      holdCache.set(via, h.length ? h : null);
+    }
+    return holdCache.get(via);
+  };
   const ctxOf = (o) => {
-    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null, via: null };
-    c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; if (c.via !== null) p.via = c.via; addItem(budget, o.paths, p, p.pts.length); } };
-    // (an INSERT's ATTRIB comes held already, by its insert's frozen layer: r65 A2)
-    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; if (t.via === undefined && c.via !== null) t.via = c.via; addItem(budget, o.texts, t, 2); } };
+    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, via: null };
+    const mark = (it) => {
+      if (it.via === undefined && c.via !== null) it.via = c.via;
+      const h = holdOf(it.via);
+      if (h) it.hold = h;
+    };
+    c.add = (p) => { if (p.pts.every(Number.isFinite)) { mark(p); addItem(budget, o.paths, p, p.pts.length); } };
+    // (an INSERT's ATTRIB comes with its insert's layers already: r65 A2, r99 A1)
+    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { mark(t); addItem(budget, o.texts, t, 2); } };
     return c;
   };
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -365,8 +383,9 @@ export function parseDXF(s, opts = {}) {
   // point m lands at C + R(twist) (h / viewHeight) (m - viewCentre),
   // clipped to the viewport's frame, which is drawn too (frame: true), leaving out the layers frozen
   // in that viewport (341) and what references on them draw; one whose clip boundary is no rectangle
-  // (90 bit 0x10000, its entity 340) is cut to that outline instead, its frame not drawn. A DWG's
-  // viewport frozen layers and clip boundary are not read (js/dwg.js VIEWPORT stops before them)
+  // (90 bit 0x10000, its entity 340) is cut to that outline instead, its frame not drawn; one turned
+  // off (90 bit 0x20000) draws its frame alone. A DWG's, from R2000, as a DXF's (js/dwg.js VIEWPORT
+  // writes its 90, 340 and 341 -- r99 Q1)
   // Each sheet's name and place among the tabs, from its LAYOUT (OBJECTS), whose block-record
   // handle (the 330 of its AcDbLayout part; the first 330 is its owner) names the paper space block
   // through the BLOCK_RECORD table. A drawing without them keeps the file's order, "Layout N"
@@ -458,14 +477,22 @@ export function parseDXF(s, opts = {}) {
           const tmp = { paths: [], texts: [] };
           emit(recs.slice(at, end), IDENT, null, 0, ctxOf(tmp));
           const outline = tmp.paths.find((p) => p.closed && !p.outline && p.pts.length >= 6);
-          if (outline) { poly = []; for (let k = 0; k < outline.pts.length; k += 2) poly.push([outline.pts[k], outline.pts[k + 1]]); }
+          if (outline) {
+            poly = [];
+            for (let k = 0; k < outline.pts.length; k += 2) poly.push([outline.pts[k], outline.pts[k + 1]]);
+            // (a closed path's first point repeated at its end, dropped: it blocked the ears of the
+            // triangles, and a fill half inside an L drew nothing -- r100 A1)
+            while (poly.length > 3 && poly[0][0] === poly[poly.length - 1][0] && poly[0][1] === poly[poly.length - 1][1]) poly.pop();
+          }
         }
       }
       // (the layers frozen in this viewport alone, 341 by handle: drawn through it, a kitchen's
       // equipment tags its author froze on the electrical sheet showed there, 123 paths -- r98 Q2. A
       // path held under a layer -- inside a reference on it -- goes with it. A DWG's are not read:
       // its decoder stops before them)
-      const vpFrozen = new Set(v.g.filter(([c]) => c === 341).map(([, h]) => layerByHandle.get(String(h).trim().toUpperCase())).filter((n) => n !== undefined).map((n) => nameKey(layerName(n))));
+      // (by 341 or 331: ODA and LibreDWG write an R2007+ drawing's as 331, a soft pointer, and those
+      // were drawn -- 060's "SECTIONS AND DETAILS" differed from its own DWG on 8 layers: r100 Q2)
+      const vpFrozen = new Set(v.g.filter(([c]) => c === 341 || c === 331).map(([, h]) => layerByHandle.get(String(h).trim().toUpperCase())).filter((n) => n !== undefined).map((n) => nameKey(layerName(n))));
       const frozenHere = (it) => vpFrozen.size > 0 && (vpFrozen.has(nameKey(it.layer)) || (it.via || []).some((l) => vpFrozen.has(nameKey(l))));
       cull(budget, out.paths.length + out.texts.length);
       for (let k = 0; k < out.paths.length; k++) {
@@ -515,7 +542,9 @@ export function parseDXF(s, opts = {}) {
           // (wholly outside the outline -- its four corners and its centre, with no edge of the outline
           // crossing its box -- it is not drawn at all)
           const cs = [...c, [(bx[0] + bx[1]) / 2, (by[0] + by[1]) / 2]];
-          const crosses = poly.some(([x, y]) => x >= bx[0] && x <= bx[1] && y >= by[0] && y <= by[1]);
+          // (an edge of the outline through its box, not a vertex in it: a strip's edge across a text
+          // with no vertex inside dropped the text the line beside it kept -- r100 A2)
+          const crosses = poly.some((a, i) => segMeetsBox(a, poly[(i + 1) % poly.length], bx[0], by[0], bx[1], by[1]));
           if (!crosses && !cs.some(([x, y]) => insidePoly(poly, x, y))) continue;
         }
         addItem(budget, lo.texts, seen, 2);
@@ -613,15 +642,31 @@ function clipPath(p, M, s, rect, out) {
   flush();
 }
 
-// A point inside a polygon [[x, y], ...] (even-odd)
-function insidePoly(poly, x, y) {
+// Whether the segment a-b meets the box [x0, x1] x [y0, y1] (Liang-Barsky)
+function segMeetsBox(a, b, x0, y0, x1, y1) {
+  let t0 = 0, t1 = 1;
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return true;
+}
+// A point inside a polygon given flat, xy... (even-odd): the one test, for the clip here and the
+// view's clip and hover (js/dxf-view.js) -- written in both, two copies: r100 A5
+export function insideFlat(p, x, y) {
   let ins = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+    const xi = p[i], yi = p[i + 1], xj = p[j], yj = p[j + 1];
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ins = !ins;
   }
   return ins;
 }
+// the same of a polygon [[x, y], ...] (its flat form made once per outline: the clip asks it of every
+// piece)
+const FLAT = new WeakMap();
+const insidePoly = (poly, x, y) => { let f = FLAT.get(poly); if (!f) { f = poly.flat(); FLAT.set(poly, f); } return insideFlat(f, x, y); };
 // Whether a polygon is convex (every turn one way)
 function convexPoly(poly) {
   let sign = 0;
@@ -649,10 +694,18 @@ function earTriangles(poly) {
   while (idx.length > 3 && guard++ < n * n) {
     let cut = false;
     for (let i = 0; i < idx.length; i++) {
-      const a = poly[idx[(i + idx.length - 1) % idx.length]], b = poly[idx[i]], c = poly[idx[(i + 1) % idx.length]];
+      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
+      const a = poly[ia], b = poly[ib], c = poly[ic];
       if (cross(a, b, c) <= 0) continue;
       let ear = true;
-      for (const j of idx) { const p = poly[j]; if (p !== a && p !== b && p !== c && inTri(p, a, b, c)) { ear = false; break; } }
+      // (by index, and a point at a corner's own place no blocker: by identity, a repeated point
+      // blocked every ear it sat on -- r100 A1)
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        const p = poly[j];
+        if ((p[0] === a[0] && p[1] === a[1]) || (p[0] === b[0] && p[1] === b[1]) || (p[0] === c[0] && p[1] === c[1])) continue;
+        if (inTri(p, a, b, c)) { ear = false; break; }
+      }
       if (!ear) continue;
       out.push([a, b, c]);
       idx.splice(i, 1);
@@ -674,8 +727,24 @@ function clipPathPoly(p, M, s, poly, box, out) {
   for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
   const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
   if (p.fill) {
-    // (seen whole as it is; cut, no circle -- r98 Q4)
-    if (P.every(([x, y]) => insidePoly(poly, x, y))) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
+    // (seen whole as it is -- every point inside and, the outline not convex, no edge of it crossing
+    // the fill's: a hatch with its corners in a U's two arms was drawn whole across the gap between
+    // them, where a line at its height was cut -- r100 Q1; cut, no circle -- r98 Q4)
+    const crossed = () => {
+      for (let i = 0; i < P.length; i++) {
+        const a = P[i], b = P[(i + 1) % P.length];
+        for (let e = 0; e < poly.length; e++) {
+          const c = poly[e], d = poly[(e + 1) % poly.length];
+          const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+          if (!den) continue;
+          const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
+          const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
+          if (t > 0 && t < 1 && u > 0 && u < 1) return true;
+        }
+      }
+      return false;
+    };
+    if (P.every(([x, y]) => insidePoly(poly, x, y)) && (convexPoly(poly) || !crossed())) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
     delete base.circle;
     // (a convex outline cuts it once; one that is not, by each of its triangles -- by its box, a
     // hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
@@ -917,14 +986,12 @@ const holdUnder = (held, layer) => (held && held.includes(layer) ? held : [...(h
 function emit(recs, M, byBlock, depth, ctx) {
   if (depth > 16) return;
   walk(ctx.budget, recs.length);
-  // (the hold of the INSERT just walked, for the ATTRIBs after it: r65 A2)
-  let attHold = null;
-  // (and the layers of the reference they belong to, for a viewport freezing it: a block's line was
-  // hidden there and its ATTRIB value still drawn -- r99 A1)
+  // (the layers of the INSERT just walked, for the ATTRIBs after it: its frozen ones hold them --
+  // r65 A2 -- and a viewport freezing one hides them, as it hides the block -- r99 A1)
   let attVia = null;
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if (r.type !== 'ATTRIB' && r.type !== 'SEQEND') { attHold = null; attVia = null; }
+    if (r.type !== 'ATTRIB' && r.type !== 'SEQEND') attVia = null;
     // an entity marked invisible (60 = 1; a DWG's "invisibility") is not drawn: AutoCAD's dynamic
     // blocks mark every visibility state but the shown one so, and all of them were drawn on top
     // of each other (the records that belong to it -- a POLYLINE's VERTEXes, an INSERT's
@@ -1301,7 +1368,6 @@ function emit(recs, M, byBlock, depth, ctx) {
           delete item.dir;
           if (!item.fit && sy > 0 && Math.abs(sw / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sw / sy);
         }
-        if (r.type === 'ATTRIB' && attHold) item.hold = attHold;
         if (r.type === 'ATTRIB' && attVia) item.via = attVia;
         ctx.addText(item);
         break;
@@ -1315,7 +1381,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)
-        if (!b) { attHold = L.frozen ? holdUnder(ctx.hold, layer) : null; attVia = holdUnder(ctx.via, layer); ctx.count(r, r.type); break; }
+        if (!b) { attVia = holdUnder(ctx.via, layer); ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1), sz = isDim ? 1 : num(q, 43, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -1332,14 +1398,12 @@ function emit(recs, M, byBlock, depth, ctx) {
         const ix = isDim ? 0 : num(q, 10), iy = isDim ? 0 : num(q, 20);
         const inner = { colour, layer, ltype: lt, weight: lw };
         if (ctx.walked) ctx.walked.add(blockKey(get(q, 2, '')));
-        // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
-        const held = ctx.hold, via = ctx.via;
-        if (L.frozen) ctx.hold = holdUnder(held, layer);
-        // (and the layers of every reference it is drawn under, frozen or not: a viewport that freezes
-        // the reference's layer hides all it draws there -- r98 Q2)
+        // (the layers of every reference it is drawn under, outermost first: a frozen one holds all it
+        // draws -- r64 Q1, as hold, derived -- and a viewport freezing one hides all it draws there --
+        // r98 Q2)
+        const via = ctx.via;
         ctx.via = holdUnder(via, layer);
         // (and the ATTRIBs that follow it, to its SEQEND: they are the reference's -- r65 A2)
-        attHold = L.frozen ? ctx.hold : null;
         attVia = ctx.via;
         try {
           for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
@@ -1352,7 +1416,7 @@ function emit(recs, M, byBlock, depth, ctx) {
             const T = [ix + c * ci * dc - s * ri * dr - (X[0] * bx + Y[0] * by), iy + s * ci * dc + c * ri * dr - (X[1] * bx + Y[1] * by), -sz * bz];
             emit(b.recs, compose(isDim ? M : O, { X, Y, Z, T }), inner, depth + 1, ctx);
           }
-        } finally { ctx.hold = held; ctx.via = via; }
+        } finally { ctx.via = via; }
         break;
       }
       case 'LEADER': {

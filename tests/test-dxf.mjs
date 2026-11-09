@@ -359,6 +359,14 @@ test('a layer frozen in one viewport (341, by its handle) is not drawn through i
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 150], [20, 40], [40, 60], [41, 40], [69, 3], [12, 0], [22, 0], [45, 40],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].texts;
   assert.deepEqual(at.map((t) => [t.text, t.x < 100 ? 'first' : 'second']), [['TAG-VALUE', 'second']]);
+  // (and named by 331, as ODA and LibreDWG write an R2007+ drawing's: read by 341 alone, they were
+  // drawn -- r100 Q2)
+  const d331 = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [5, '8D'], [2, 'A'], [70, 0], [62, 1], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'A'], [10, -1], [20, 0], [11, 1], [21, 0],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [331, '8D'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => !p.frame);
+  assert.deepEqual(d331, []);
 });
 test('a clip boundary that is not convex cuts fills and texts to itself, not its box (r99 Q2); a viewport turned off draws its frame alone (r99 Q3)', () => {
   // (must fire, Q2: by the L's box, a hatch and a TEXT in its notch were drawn where a line beside
@@ -384,6 +392,38 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
   for (const p of sq) for (let k = 0; k < p.pts.length; k += 2) assert.ok(!inNotch(p.pts[k], p.pts[k + 1]), `a piece of the square in the notch at ${p.pts[k]}, ${p.pts[k + 1]}`);
   assert.ok(!d.paths.some((p) => p.layer === 'M' && !p.fill), 'the line in the notch drawn');
   assert.deepEqual(d.texts.map((t) => t.text), ['IN-L']);
+  // (the square's pieces fill what of it the L holds, 400 -- written with its first point repeated
+  // at its end too: the repeat blocked the ears, and the pieces were part of it or none -- r100 A1)
+  const area = (ps) => ps.reduce((s, p) => { let a = 0; for (let k = 0; k < p.pts.length; k += 2) { const j = (k + 2) % p.pts.length; a += p.pts[k] * p.pts[j + 1] - p.pts[j] * p.pts[k + 1]; } return s + Math.abs(a) / 2; }, 0);
+  assert.ok(Math.abs(area(sq) - 400) < 1e-6, `the square's pieces cover ${area(sq)}`);
+  const Lr = [...L, L[0]];
+  const d2 = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...square,
+    [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 7], [70, 1], ...Lr.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'L1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.ok(Math.abs(area(d2.paths.filter((p) => p.fill)) - 400) < 1e-6, `with its first point repeated: ${area(d2.paths.filter((p) => p.fill))}`);
+  // (a text an outline's edge crosses with no vertex in its box is drawn, cut by the outline -- by
+  // its vertices alone, it was dropped where the line beside it was kept: r100 A2; model (x, y) is
+  // paper (x + 50, y + 40), and a thin strip runs through the text's box above its centre, missing
+  // its corners and its centre)
+  const strip = [[0, 40.8], [100, 40.8], [100, 41.2], [0, 41.2]];
+  const d3 = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'TEXT'], [8, 'M'], [10, -2], [20, -1.5], [40, 3], [1, 'CROSSED'],
+    [0, 'LWPOLYLINE'], [5, 'S1'], [8, 'B'], [67, 1], [90, 4], [70, 1], ...strip.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'S1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.deepEqual(d3.texts.map((t) => t.text), ['CROSSED']);
+  // (a fill with its corners in a U's two arms is cut by the U, 200 of its 500: kept whole by its
+  // corners, it was drawn across the gap -- r100 Q1)
+  const U = [[20, 20], [80, 20], [80, 60], [65, 60], [65, 35], [35, 35], [35, 60], [20, 60]];
+  const bar = [[0, 'HATCH'], [8, 'S'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 4],
+    [72, 1], [10, -25], [20, 5], [11, 25], [21, 5], [72, 1], [10, 25], [20, 5], [11, 25], [21, 15],
+    [72, 1], [10, 25], [20, 15], [11, -25], [21, 15], [72, 1], [10, -25], [20, 15], [11, -25], [21, 5], [97, 0]];
+  const d4 = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...bar,
+    [0, 'LWPOLYLINE'], [5, 'U1'], [8, 'B'], [67, 1], [90, 8], [70, 1], ...U.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'U1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.ok(Math.abs(area(d4.paths.filter((p) => p.fill)) - 200) < 1e-6, `the bar across the U covers ${area(d4.paths.filter((p) => p.fill))}`);
   // (Q3: turned off, 90 bit 0x20000: its frame, nothing through it -- it drew model space)
   const off = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 0x20000],

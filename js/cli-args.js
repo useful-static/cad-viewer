@@ -101,7 +101,9 @@ export async function checkOutput(path, inputs) {
   if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
   // (a name ending in "/" names a directory, as the shell reads it: the slash dropped, "-o f.stp/"
   // overwrote f.stp, exit 0 -- r99 Q5)
-  if (/[\\/]$/.test(path)) throw new Error(`could not write ${path}: a name ending in / is a directory`);
+  // (and one whose last name is "." or "..", a directory's too: "-o victim.txt/." overwrote victim.txt,
+  // and "-o nothere/." made a file nothere, exit 0 -- r100 Q3)
+  if (/[\\/]$/.test(path) || /(^|[\\/])\.\.?$/.test(path)) throw new Error(`could not write ${path}: a name ending in / is a directory`);
   const { accessSync, constants, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
@@ -151,6 +153,13 @@ async function writeTarget(path) {
     try { d = realpathSync.native(dir); } catch {
       d = dir === raw || dir === '.' || dir === '/' ? resolve(dir) : real(dir);
       if (name === '..') throw Object.assign(new Error(`could not write ${path}: no such directory ${dir}`), { noDir: true });
+    }
+    // (nor after a name that is a file -- ENOTDIR: "f.txt/../out.bin" was ./out.bin, overwritten,
+    // exit 0 -- r100 A3)
+    if (name === '..') {
+      let isDir = false;
+      try { isDir = statSync(d).isDirectory(); } catch { /* not there: refused below */ }
+      if (!isDir) throw Object.assign(new Error(`could not write ${path}: no such directory ${dir}`), { noDir: true });
     }
     return resolve(d, name);
   };

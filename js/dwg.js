@@ -1095,8 +1095,8 @@ const DECODE = {
   },
   POINT(o, r) { o.d = { p: r.BD3(), thick: r.BT(), ext: r.BE(), xang: r.BD() }; this.entityHandles(o); },
   // 20.4.38: a layout's viewport -- its centre and size on paper, and from R2000 the view it shows
-  // (twist, view height, view centre); what follows (snap, grid, UCS, lights) is not read. R13-R14
-  // keep the view in the viewport entity header, not read: there the frame alone is known
+  // (twist, view height, view centre), and the rest as below. R13-R14 keep the view in the viewport
+  // entity header, not read: there the frame alone is known
   // (and from R2000 the rest, to its frozen layers and clip boundary, by LibreDWG's dwg.spec: the
   // snap, grid and UCS fields read past, the frozen-layer count and the status flags kept, then in
   // the handle stream the frozen layers' handles and the clip boundary's -- not read, a DWG drew

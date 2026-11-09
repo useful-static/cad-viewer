@@ -135,6 +135,9 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     ['dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')], /no such directory/],
     // (a name ending in "/": a directory's, refused -- the slash dropped, -o f.stp/ overwrote f.stp: r99 Q5)
     ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/'], /a name ending in \/ is a directory/],
+    // (and "." or ".." last: a directory's -- "m.stl/." overwrote m.stl, "nothere/." made a file: r100 Q3)
+    ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/.'], /a name ending in \/ is a directory/],
+    ['stp2mesh.mjs', ['x.stp', '-o', 'nothere/.'], /a name ending in \/ is a directory/],
     // (a link into a directory not there: that directory named, not the link's own -- r95 Q6)
     ['stp2mesh.mjs', ['x.stp', '-o', 'tonodir.cadmesh'], /no such directory .*\/nodir$/],
     // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
@@ -273,6 +276,12 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   assert.equal(nm.status, 1, nm.stderr);
   assert.match(nm.stderr, /no such directory/);
   assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced through a missing name');
+  // (nor ".." after a name that is a file -- ENOTDIR: "c.rgb/../zz/in.cadmesh" was ./zz/in.cadmesh,
+  // overwritten, exit 0: r100 A3)
+  const nf = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'zz/in.cadmesh', 'c.rgb', '-o', 'c.rgb/../zz/in.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(nf.status, 1, nf.stderr);
+  assert.match(nf.stderr, /no such directory/);
+  assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced through a file');
   // (a pipe after "outdir/..": the pipe the system names written, not the regular file ./pp.cadmesh
   // beside the link -- r98 A2)
   writeFileSync(join(sub, 'pp.cadmesh'), box);
