@@ -105,7 +105,9 @@ export async function checkOutput(path, inputs) {
   const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
   // (the file the write lands on, as writeOutput finds it: a link's own file, beside which it writes)
   const real = await writeTarget(path);
-  const d = dirname(real), dir = st(d), file = st(path);
+  // (the inputs compared with the file the write lands on, not with path as the system alone reads
+  // it: the two disagreed and the check passed a write that replaced an input -- r98 A1, A2)
+  const d = dirname(real), dir = st(d), file = st(real);
   // (the directory the write lands in, named: a link into a missing one named its own, which is
   // there -- r95 Q6; the path as given where it is not a link)
   if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${d === dirname(resolve(path)) ? dirname(path) : d}`);
@@ -135,10 +137,20 @@ async function writeTarget(path) {
   // colours input ./c.rgb -- r97 A1 -- and a link's "../target" replaced another ./target -- r96 Q2.
   // A directory not there: as written, "no such directory" said by checkOutput)
   // (realpathSync.native, the system's own: node's JS realpathSync drops "dir/.." by string first)
-  const real = (raw) => { let d; try { d = realpathSync.native(dirname(raw)); } catch { d = resolve(dirname(raw)); } return resolve(d, basename(raw)); };
+  // (a directory the system cannot read -- not there -- is read the same way one level up, never by
+  // string: the fallback resolve() dropped "L/.." and "-o L/../sub/a.stp" replaced the input
+  // ./sub/a.stp, exit 0 -- r98 A1)
+  const real = (raw) => {
+    const dir = dirname(raw);
+    let d;
+    try { d = realpathSync.native(dir); } catch { d = dir === raw || dir === '.' || dir === '/' ? resolve(dir) : real(dir); }
+    return resolve(d, basename(raw));
+  };
   // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
-  // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself
-  try { if (!statSync(path).isFile()) return resolve(path); } catch { /* not there yet: followed below */ }
+  // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself,
+  // its directory read as the system reads it (by string, "-o L/../x" replaced the regular input ./x
+  // and left the FIFO the system named -- r98 A2)
+  try { if (!statSync(path).isFile()) return real(path); } catch { /* not there yet: followed below */ }
   let p = real(path);
   for (let k = 0; k < 40; k++) {
     let s = null;

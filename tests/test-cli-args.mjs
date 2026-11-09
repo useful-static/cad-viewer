@@ -256,6 +256,24 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   assert.equal(dd.status, 0, dd.stderr);
   assert.ok(readFileSync(join(sub, 'c.rgb')).equals(rgbBefore), 'the colours input overwritten');
   assert.ok(existsSync(join(sub, 'real', 'c.rgb')), 'real/c.rgb not written');
+  // (a directory the system cannot read after "outdir/..": refused, "no such directory" -- read by
+  // string as a fallback, "outdir/../zz/in.cadmesh" was the input ./zz/in.cadmesh, replaced, exit 0:
+  // r98 A1)
+  mkdirSync(join(sub, 'zz'));
+  writeFileSync(join(sub, 'zz', 'in.cadmesh'), box);
+  const nz = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'zz/in.cadmesh', 'c.rgb', '-o', 'outdir/../zz/in.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(nz.status, 1, nz.stderr);
+  assert.match(nz.stderr, /no such directory/);
+  assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced');
+  // (a pipe after "outdir/..": the pipe the system names written, not the regular file ./pp.cadmesh
+  // beside the link -- r98 A2)
+  writeFileSync(join(sub, 'pp.cadmesh'), box);
+  if (spawnSync('mkfifo', [join(sub, 'real', 'pp.cadmesh')]).status === 0) {
+    const pr = spawnSync('bash', ['-c', `cat real/pp.cadmesh > real/pp.out & "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" real.cadmesh c.rgb -o outdir/../pp.cadmesh --by t --again; rc=$?; wait; exit $rc`], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+    assert.equal(pr.status, 0, pr.stderr);
+    assert.ok(readFileSync(join(sub, 'pp.cadmesh')).equals(box), 'the regular file beside the link replaced');
+    assert.ok(readFileSync(join(sub, 'real', 'pp.out')).length > 0, 'nothing through the pipe');
+  }
   // (a pipe written as it is, not replaced by a file; /dev/null written, not "permission denied":
   // r95 A2)
   if (spawnSync('mkfifo', [join(sub, 'pipe.cadmesh')]).status === 0) {

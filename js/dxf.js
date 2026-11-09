@@ -279,6 +279,8 @@ export function parseDXF(s, opts = {}) {
   }
   // layers (colour, line type, line weight) and line types (dash patterns)
   const layers = new Map();
+  // (a LAYER's handle -> its name: a viewport names the layers frozen in it by handle, 341)
+  const layerByHandle = new Map();
   const ltypes = new Map(); // upper-case name -> [dash, gap, ...] in drawing units, or null (continuous)
   if (sec.TABLES) {
     for (const r of records(ps, ...sec.TABLES)) {
@@ -297,6 +299,8 @@ export function parseDXF(s, opts = {}) {
       // the insert's layer -- r64 Q1)
       layers.set(get(r, 2, '0'), { name: get(r, 2, '0'), colour: tc !== null ? trueColour(Number(tc)) : aciColour(Math.abs(aci)), on: aci >= 0 && !(num(r, 70) & 1),
         frozen: !!(num(r, 70) & 1), ltype: nameKey(get(r, 6, 'CONTINUOUS')),weight: num(r, 370, -3) });
+      const hd = get(r, 5, null);
+      if (hd !== null) layerByHandle.set(String(hd).trim().toUpperCase(), get(r, 2, '0'));
     }
   }
   if (!layers.has('0')) layers.set('0', { name: '0', colour: aciColour(7), on: true });
@@ -344,10 +348,10 @@ export function parseDXF(s, opts = {}) {
   // each item drawn under them carries them, and is shown only while every one is: r64 Q1; the
   // outermost alone let a frozen reference inside another show, its outer layer turned on: r65 A3)
   const ctxOf = (o) => {
-    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null };
-    c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; addItem(budget, o.paths, p, p.pts.length); } };
+    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null, via: null };
+    c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; if (c.via !== null) p.via = c.via; addItem(budget, o.paths, p, p.pts.length); } };
     // (an INSERT's ATTRIB comes held already, by its insert's frozen layer: r65 A2)
-    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; addItem(budget, o.texts, t, 2); } };
+    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; if (c.via !== null) t.via = c.via; addItem(budget, o.texts, t, 2); } };
     return c;
   };
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -422,15 +426,44 @@ export function parseDXF(s, opts = {}) {
       // with one box test; each one clipped is walked (many viewports onto a big model
       // multiply it)
       const seen = viewInModel(M, rect);
+      // (a clip boundary that is no rectangle -- 90 bit 0x10000, its entity named by 340 on this
+      // sheet: what it shows is cut to that outline, and no rectangle is drawn, the outline being an
+      // entity of the sheet's own. Clipped to its rectangle, three of a house plan's viewports drew
+      // frames AutoCAD does not, and their lines past the boundary -- r98 Q3)
+      let poly = null;
+      const clipH = num(v, 90, 0) & 0x10000 ? get(v, 340, null) : null;
+      if (clipH !== null) {
+        const key = String(clipH).trim().toUpperCase();
+        const at = recs.findIndex((r) => String(get(r, 5, '')).trim().toUpperCase() === key);
+        if (at >= 0) {
+          let end = at + 1;
+          if (recs[at].type === 'POLYLINE') {
+            while (end < recs.length && recs[end].type === 'VERTEX') end++;
+            if (end < recs.length && recs[end].type === 'SEQEND') end++;
+          }
+          const tmp = { paths: [], texts: [] };
+          emit(recs.slice(at, end), IDENT, null, 0, ctxOf(tmp));
+          const outline = tmp.paths.find((p) => p.closed && !p.outline && p.pts.length >= 6);
+          if (outline) { poly = []; for (let k = 0; k < outline.pts.length; k += 2) poly.push([outline.pts[k], outline.pts[k + 1]]); }
+        }
+      }
+      // (the layers frozen in this viewport alone, 341 by handle: drawn through it, a kitchen's
+      // equipment tags its author froze on the electrical sheet showed there, 123 paths -- r98 Q2. A
+      // path held under a layer -- inside a reference on it -- goes with it. A DWG's are not read:
+      // its decoder stops before them)
+      const vpFrozen = new Set(v.g.filter(([c]) => c === 341).map(([, h]) => layerByHandle.get(String(h).trim().toUpperCase())).filter((n) => n !== undefined).map((n) => nameKey(layerName(n))));
+      const frozenHere = (it) => vpFrozen.size > 0 && (vpFrozen.has(nameKey(it.layer)) || (it.via || []).some((l) => vpFrozen.has(nameKey(l))));
       cull(budget, out.paths.length + out.texts.length);
       for (let k = 0; k < out.paths.length; k++) {
         const bb = pathBoxes[k];
         if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
+        if (frozenHere(out.paths[k])) continue;
         // (a clip costs the path's points, drawn or not: charged by them, so viewports x points
         // is bounded -- a path whose box overlaps the view while every segment misses the frame
         // drew nothing and cost its points per viewport)
         clipped(budget, out.paths[k].pts.length / 2);
-        clipPath(out.paths[k], M, s, rect, lo.paths);
+        if (poly) clipPathPoly(out.paths[k], M, s, poly, rect, lo.paths);
+        else clipPath(out.paths[k], M, s, rect, lo.paths);
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
       // not cancel with the sheet's hatches or another viewport's view of it)
@@ -445,6 +478,7 @@ export function parseDXF(s, opts = {}) {
       for (let k = p0; k < lo.paths.length; k++) coords += lo.paths[k].pts.length;
       charge(budget, lo.paths.length - p0, coords);
       for (const t of out.texts) {
+        if (frozenHere(t)) continue;
         const [x, y] = ap(M, t.x, t.y);
         // (every length of it scaled by the viewport, TEXT_LENGTHS: a fit width unscaled drew it 10
         // times too long through a 0.1 viewport, and a wrap width unscaled ran it on in one line)
@@ -457,10 +491,11 @@ export function parseDXF(s, opts = {}) {
         if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
         // (always clipped: whether it crosses the frame is the font's to say, not the estimate's --
         // "WWWWWWWW" boxed inside by 0.6 a character ran 30 units past the frame in the font)
-        seen.clip = rect.slice();
+        // (a text is clipped to a rectangle: by a polygon boundary, to that boundary's box)
+        seen.clip = poly ? [Math.min(...poly.map((q) => q[0])), Math.min(...poly.map((q) => q[1])), Math.max(...poly.map((q) => q[0])), Math.max(...poly.map((q) => q[1]))] : rect.slice();
         addItem(budget, lo.texts, seen, 2);
       }
-      frame(v, rect);
+      if (!poly) frame(v, rect);
     }
     return { name: sheet && sheet.name ? sheet.name : recs === active ? 'Layout' : `Layout ${li + 1}`, paths: lo.paths, texts: lo.texts, extents: extentsOf(lo, layers) };
   });
@@ -489,6 +524,13 @@ function clipPath(p, M, s, rect, out) {
   // (its lengths scaled as the drawing is: the dash pattern and a polyline's width)
   const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
   if (p.fill) {
+    // (a fill seen whole as it is; one the frame cuts is no circle: a half-disc kept its mark and 2D
+    // Measure offered its centre and Ø -- r98 Q4)
+    if (P.every(([x, y]) => x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])) {
+      out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true });
+      return;
+    }
+    delete base.circle;
     let poly = P;
     const edges = [[0, rect[0], 1], [0, rect[2], -1], [1, rect[1], 1], [1, rect[3], -1]];
     for (const [k, lim, sg] of edges) {
@@ -544,6 +586,100 @@ function clipPath(p, M, s, rect, out) {
     if (t1 < 1) flush();
   }
   flush();
+}
+
+// A point inside a polygon [[x, y], ...] (even-odd)
+function insidePoly(poly, x, y) {
+  let ins = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ins = !ins;
+  }
+  return ins;
+}
+// Whether a polygon is convex (every turn one way)
+function convexPoly(poly) {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
+    const z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    if (Math.abs(z) < 1e-12) continue;
+    if (sign === 0) sign = Math.sign(z); else if (Math.sign(z) !== sign) return false;
+  }
+  return true;
+}
+// One model path seen through a viewport whose clip boundary is a polygon (paper coordinates): a
+// line cut where it crosses the boundary, each piece kept by its middle; one seen whole as it is;
+// a fill by Sutherland-Hodgman against a convex boundary, against its box otherwise (clipped to its
+// rectangle, its lines drew past a triangle's sides -- r98 Q3)
+function clipPathPoly(p, M, s, poly, box, out) {
+  const n = p.pts.length / 2;
+  const P = [];
+  for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
+  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
+  if (p.fill) {
+    if (!convexPoly(poly)) { clipPath(p, M, s, box, out); return; }
+    // (seen whole as it is; cut, no circle -- r98 Q4)
+    if (P.every(([x, y]) => insidePoly(poly, x, y))) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
+    delete base.circle;
+    let sub = P;
+    const turn = Math.sign(poly.reduce((a, q, i) => { const r = poly[(i + 1) % poly.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
+    for (let i = 0; i < poly.length && sub.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const side = (q) => turn * ((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) >= 0;
+      const next = [];
+      for (let k = 0; k < sub.length; k++) {
+        const c = sub[k], d = sub[(k + 1) % sub.length];
+        if (side(c)) next.push(c);
+        if (side(c) !== side(d)) {
+          const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+          const t = den ? ((b[0] - a[0]) * (a[1] - c[1]) - (b[1] - a[1]) * (a[0] - c[0])) / den : 0;
+          next.push([c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t]);
+        }
+      }
+      sub = next;
+    }
+    if (sub.length) out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true });
+    return;
+  }
+  if (n === 1 || p.point) {
+    if (insidePoly(poly, P[0][0], P[0][1])) out.push({ ...base, pts: Float64Array.of(P[0][0], P[0][1], P[0][0], P[0][1]) });
+    return;
+  }
+  const segs = p.closed ? n : n - 1;
+  const cut = { ...base };
+  delete cut.circle;
+  const runs = [];
+  let run = null, whole = true;
+  for (let i = 0; i < segs; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    const ts = [0, 1];
+    for (let e = 0; e < poly.length; e++) {
+      const c = poly[e], d = poly[(e + 1) % poly.length];
+      const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+      if (!den) continue;
+      const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
+      const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
+      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+    }
+    ts.sort((x, y) => x - y);
+    for (let k = 0; k + 1 < ts.length; k++) {
+      const t0 = ts[k], t1 = ts[k + 1];
+      if (t1 - t0 < 1e-12) continue;
+      const tm = (t0 + t1) / 2;
+      const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const [mx, my] = at(tm);
+      if (!insidePoly(poly, mx, my)) { whole = false; if (run) { runs.push(run); run = null; } continue; }
+      const s0 = at(t0), s1 = at(t1);
+      if (!run || t0 > 0) { if (run) runs.push(run); run = [s0[0], s0[1]]; }
+      run.push(s1[0], s1[1]);
+      if (t1 < 1) { whole = false; runs.push(run); run = null; }
+    }
+  }
+  if (run) runs.push(run);
+  // (seen whole: as it is, closed if it was, a circle if it was)
+  if (whole && runs.length === 1) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed }); return; }
+  for (const r of runs) if (r.length >= 4) out.push({ ...cut, pts: Float64Array.from(r), closed: false });
 }
 
 // a path's box [x0, y0, x1, y1]
@@ -743,9 +879,10 @@ function emit(recs, M, byBlock, depth, ctx) {
     // an entity on layer 0 inside a block takes the insert's layer
     if (layer === '0' && byBlock && byBlock.layer) layer = byBlock.layer;
     const colour = colourOf(r, ctx, byBlock && byBlock.colour, layer);
-    // the line type (BYLAYER / BYBLOCK resolved) as a dash pattern in drawing
-    // units ($LTSCALE x the entity's 48 x the insert's scale), and the line
-    // weight in mm (370: 1/100 mm; -1 BYLAYER, -2 BYBLOCK, -3 the default)
+    // the line type (BYLAYER / BYBLOCK resolved) as a dash pattern in the entity's own units
+    // ($LTSCALE x its 48), made each shape's in drawing units by dashFor below, and the line
+    // weight in mm (370: 1/100 mm; -1 BYLAYER, -2 BYBLOCK, -3 the default) -- the comment named the
+    // insert's scale, the rule before r97 A2 (r98 A4)
     const L = ctx.layers.get(layer) || {};
     let lt = nameKey(get(r, 6, 'BYLAYER'));
     if (lt === 'BYLAYER') lt = L.ltype || 'CONTINUOUS';
@@ -756,6 +893,8 @@ function emit(recs, M, byBlock, depth, ctx) {
     // line along y in a 1 x 4 insert was drawn 40 long with 1-unit dashes, and in a tilted one
     // shortened but its dashes full -- r97 A2. Exact for a line, the mean along a curve)
     const own = pat ? pat.map((x) => x * ctx.ltscale * num(r, 48, 1)) : null;
+    // (whether a shape's own points, x y z in threes, are one z: flat in the view's plane)
+    const flatOf = (p3) => { for (let i = 5; i < p3.length; i += 3) if (p3[i] !== p3[2]) return false; return true; };
     const lenOf = (pts, dim, closed) => {
       let s = 0;
       const n = pts.length / dim;
@@ -768,10 +907,13 @@ function emit(recs, M, byBlock, depth, ctx) {
     // (under a turn and a uniform scale -- with no z column -- the transform's own scale, one number
     // for every path: measured per path, rounding split shapes that shared one stroke into many,
     // 278 strokes a frame to 6,115 -- r97 Q2; a stretched or tilted one by the ratio, to 9 digits)
-    const dashFor = (ownLen, drawn, closed, T = M) => {
+    // (and only for a shape flat in T's own plane -- its points one z: a tilted ELLIPSE took the
+    // shortcut and dashed 1 where the CIRCLE drawn the same dashed 0.8125, and a 3D LINE dashed 1.0 in
+    // a 1 x 1 insert and 0.6 in a 1 x 1.1 one -- r98 A3)
+    const dashFor = (ownLen, drawn, closed, T = M, flat = true) => {
       if (!own) return null;
       let k;
-      if (conformalOf(T) && !T[6] && !T[7]) k = Math.hypot(T[0], T[1]);
+      if (flat && conformalOf(T) && !T[6] && !T[7]) k = Math.hypot(T[0], T[1]);
       else {
         const d = lenOf(drawn, 2, closed);
         k = ownLen > 0 ? Number((d / ownLen).toPrecision(9)) : Math.hypot(T[0], T[1]);
@@ -781,7 +923,9 @@ function emit(recs, M, byBlock, depth, ctx) {
     let lw = num(r, 370, -1);
     if (lw === -1) lw = L.weight ?? -3;
     else if (lw === -2) lw = byBlock && byBlock.weight !== undefined ? byBlock.weight : -3;
-    const sty = { dash: own ? own.map((x) => x * Math.hypot(M[0], M[1])) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
+    // (no dash of its own: every shape's is dashFor's, and a point draws none -- the old rule's here
+    // was read by nothing but a POINT: r98 A4)
+    const sty = { dash: null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
     const O = compose(M, ocs(r));
     // (width: a polyline's width in its own units, scaled by the transform into drawing units)
     // (extra: outline -- a wide polyline's filled outline, not a shape of its own: not counted as
@@ -816,7 +960,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         const p3 = [num(r, 10), num(r, 20), num(r, 30, 0) || 0, num(r, 11), num(r, 21), num(r, 31, 0) || 0];
         const a = ap(M, p3[0], p3[1], p3[2]), b = ap(M, p3[3], p3[4], p3[5]);
         const f = Float64Array.of(a[0], a[1], b[0], b[1]);
-        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(p3, 3, false), f, false), pts: f, closed: false, fill: false });
+        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(p3, 3, false), f, false, M, flatOf(p3)), pts: f, closed: false, fill: false });
         break;
       }
       case 'POINT': {
@@ -865,7 +1009,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // tilted 1e-4 rad that a CIRCLE kept -- r96 A2; one seen tilted is not round in the view)
         const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
         const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
-        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
+        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -915,7 +1059,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (a 3D polyline's vertices are world coordinates, their z with them: r96 A1)
         if (flags & 8) {
           const f = Float64Array.from(xs.flatMap((x, k) => ap(M, x, ys[k], zs[k])));
-          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(xs.flatMap((x, k) => [x, ys[k], zs[k]]), 3, closed), f, closed), pts: f, closed, fill: false });
+          const own3 = xs.flatMap((x, k) => [x, ys[k], zs[k]]);
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, closed), f, closed, M, flatOf(own3)), pts: f, closed, fill: false });
         }
         else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
         break;
@@ -926,7 +1071,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           const f = new Float64Array((pts.length / 3) * 2);
           for (let k = 0, o = 0; k < pts.length; k += 3, o += 2) { const [x, y] = ap(M, pts[k], pts[k + 1], pts[k + 2]); f[o] = x; f[o + 1] = y; }
           const closed = (num(r, 70) & 1) === 1;
-          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 3, closed), f, closed), pts: f, closed, fill: false });
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 3, closed), f, closed, M, flatOf(pts)), pts: f, closed, fill: false });
         }
         break;
       }
@@ -959,13 +1104,13 @@ function emit(recs, M, byBlock, depth, ctx) {
         const hide = num(r, 70);
         if (!(hide & 15)) {
           const f = Float64Array.from(c.flat());
-          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own4.flat(), 3, true), f, true), pts: f, closed: true, fill: false });
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own4.flat(), 3, true), f, true, M, flatOf(own4.flat())), pts: f, closed: true, fill: false });
           break;
         }
         for (let e = 0; e < 4; e++) {
           if (hide & (1 << e)) continue;
           const a = c[e], b = c[(e + 1) % 4], f = Float64Array.of(a[0], a[1], b[0], b[1]);
-          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf([...own4[e], ...own4[(e + 1) % 4]], 3, false), f, false), pts: f, closed: false, fill: false });
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf([...own4[e], ...own4[(e + 1) % 4]], 3, false), f, false, M, own4[e][2] === own4[(e + 1) % 4][2]), pts: f, closed: false, fill: false });
         }
         break;
       }
@@ -1081,8 +1226,13 @@ function emit(recs, M, byBlock, depth, ctx) {
           // (end-on to a rounding of the frame's own size: a baseline along world z left 6e-17 of sx)
           const endOn = sx <= 1e-12 * (Math.hypot(F[0], F[1], F[2], F[3]) || 1);
           const sy = !endOn ? Math.abs(F[0] * F[3] - F[1] * F[2]) / sx : Math.hypot(-F[0] * dv[1] + F[2] * dv[0], -F[1] * dv[1] + F[3] * dv[0]) / dl;
+          // (seen end-on -- its baseline, or its height, to a rounding of the frame's size -- it is a
+          // line of no width in the view: not drawn. As width 0 the view drew it whole, a 0 width
+          // factor read as none, its box and wrap too; at 89.9° it was not drawn and at 90° drawn
+          // whole -- r98 Q1)
+          if (endOn || !(sy > 1e-12 * (Math.hypot(F[0], F[1], F[2], F[3]) || 1))) break;
           item.h *= sy;
-          const sw = endOn ? 0 : sx; // (no width, end-on: the two spellings one text)
+          const sw = sx;
           if (Number.isFinite(rw) && rw > 0) item.wrap = rw * sw;
           if (det < 0) { item.rot = item.dir - Math.PI; item.mirrorX = !item.mirrorX; } else item.rot = item.dir;
           if (!item.mirrorX) delete item.mirrorX;
@@ -1120,8 +1270,11 @@ function emit(recs, M, byBlock, depth, ctx) {
         const inner = { colour, layer, ltype: lt, weight: lw };
         if (ctx.walked) ctx.walked.add(blockKey(get(q, 2, '')));
         // (a reference on a frozen layer holds all it draws to that layer: r64 Q1)
-        const held = ctx.hold;
+        const held = ctx.hold, via = ctx.via;
         if (L.frozen) ctx.hold = holdUnder(held, layer);
+        // (and the layers of every reference it is drawn under, frozen or not: a viewport that freezes
+        // the reference's layer hides all it draws there -- r98 Q2)
+        ctx.via = holdUnder(via, layer);
         // (and the ATTRIBs that follow it, to its SEQEND: they are the reference's -- r65 A2)
         attHold = L.frozen ? ctx.hold : null;
         try {
@@ -1135,7 +1288,7 @@ function emit(recs, M, byBlock, depth, ctx) {
             const T = [ix + c * ci * dc - s * ri * dr - (X[0] * bx + Y[0] * by), iy + s * ci * dc + c * ri * dr - (X[1] * bx + Y[1] * by), -sz * bz];
             emit(b.recs, compose(isDim ? M : O, { X, Y, Z, T }), inner, depth + 1, ctx);
           }
-        } finally { ctx.hold = held; }
+        } finally { ctx.hold = held; ctx.via = via; }
         break;
       }
       case 'LEADER': {
@@ -1144,7 +1297,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (xs.length >= 2) {
           const pts = [];
           for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0, zs[k] || 0));
-          if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(xs.flatMap((x, k) => [x, ys[k] ?? 0, zs[k] || 0]), 3, false), pts, false), pts: Float64Array.from(pts), closed: false, fill: false });
+          const own3 = xs.flatMap((x, k) => [x, ys[k] ?? 0, zs[k] || 0]);
+          if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: false, fill: false });
         } else ctx.count(r, 'LEADER'); // (one without its vertices: a DWG's, whose are not decoded)
         break;
       }

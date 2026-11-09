@@ -187,6 +187,21 @@ test('line types and weights: BYLAYER pattern x $LTSCALE, the layer weight, an e
     [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [41, 1.3], [42, 3.7], [0, 'ENDSEC'], [0, 'EOF']])).paths;
   assert.equal(new Set(many.slice(0, 4).map((p) => JSON.stringify(p.dash))).size, 1, 'flat: one dash array');
   assert.equal(new Set(many.slice(4).map((p) => JSON.stringify(p.dash))).size, 1, `stretched alike: one dash array, got ${JSON.stringify(many.slice(4).map((p) => p.dash))}`);
+  // (a shape not flat in the view's plane takes no uniform-scale shortcut: a tilted CIRCLE and the
+  // ELLIPSE drawn the same dashed 0.8125 and 1; a 3D LINE dashed 1.0 in a 1 x 1 insert and 0.6 in a
+  // 1 x 1.1 one, a y stretch it does not touch -- r98 A3)
+  const T = L.slice(0, L.findIndex(([c, v], i) => c === 0 && v === 'ENDSEC' && i > 5) + 1);
+  const tN = [[210, 0.6], [220, 0], [230, 0.8]];
+  const [ci, el] = parseDXF(dxf([...T, [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'CIRCLE'], [8, 'DASH'], [10, 0], [20, 0], [40, 5], ...tN,
+    // (the same circle as an ELLIPSE of ratio 1: its major the circle's OCS x in world, (0, 1, 0) for N (0.6, 0, 0.8))
+    [0, 'ELLIPSE'], [8, 'DASH'], [10, 0], [20, 0], [30, 0], [11, 0], [21, 5], [31, 0], [40, 1], ...tN,
+    [0, 'ENDSEC'], [0, 'EOF']])).paths;
+  assert.ok(Math.abs(ci.dash[0] / el.dash[0] - 1) < 1e-3, `circle ${ci.dash}, ellipse ${el.dash}`);
+  const line3 = (sy) => parseDXF(dxf([...T, [0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0],
+    [0, 'LINE'], [8, 'DASH'], [10, 0], [20, 0], [30, 0], [11, 3], [21, 0], [31, 4], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [41, 1], [42, sy], [0, 'ENDSEC'], [0, 'EOF']])).paths[0].dash;
+  assert.deepEqual([line3(1), line3(1.1)], [[6, 3], [6, 3]], 'a 3D line dashed by its drawn length over its own, 3 of 5');
   const tilt = inserted([[210, Math.SQRT1_2], [220, 0], [230, Math.SQRT1_2]]);
   const seen = Math.hypot(tilt.pts[2] - tilt.pts[0], tilt.pts[3] - tilt.pts[1]);
   assert.ok(Math.abs(seen / 10 - tilt.dash[0] / 10) < 1e-9, `seen ${seen}, dash ${tilt.dash}`);
@@ -314,6 +329,43 @@ test('a viewport clips what it shows to its frame', () => {
   // scale 1 about (0, 0) -> paper x -150..250, clipped to the frame's 20..80
   assert.ok(Math.abs(xs[0] - 20) < 1e-9 && Math.abs(xs[1] - 80) < 1e-9, `x ${xs}`);
 });
+test('a layer frozen in one viewport (341, by its handle) is not drawn through it, nor a reference on it; another viewport draws them (r98 Q2)', () => {
+  // (must fire: every model layer was drawn through every viewport -- a kitchen's equipment tags
+  // frozen on its electrical sheet, 123 paths)
+  const d = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [5, '8D'], [2, 'A'], [70, 0], [62, 1], [0, 'LAYER'], [5, '8E'], [2, 'B'], [70, 0], [62, 2], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'K'], [10, 0], [20, 0], [0, 'LINE'], [8, 'B'], [10, 0], [20, 5], [11, 1], [21, 5], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'A'], [10, -1], [20, 0], [11, 1], [21, 0],
+    [0, 'INSERT'], [8, 'A'], [2, 'K'], [10, 0], [20, 0],
+    [0, 'LINE'], [8, 'B'], [10, -1], [20, -5], [11, 1], [21, -5],
+    // (one viewport freezing A, by its handle 8D; one beside it freezing nothing)
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [341, '8D'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 150], [20, 40], [40, 60], [41, 40], [69, 3], [12, 0], [22, 0], [45, 40],
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  const drawn = d.layouts[0].paths.filter((p) => !p.frame);
+  const inFirst = drawn.filter((p) => p.pts[0] < 100), inSecond = drawn.filter((p) => p.pts[0] >= 100);
+  assert.deepEqual(inFirst.map((p) => p.layer).sort(), ['B'], 'the first viewport: only the line on B not under A');
+  assert.deepEqual(inSecond.map((p) => p.layer).sort(), ['A', 'B', 'B'], 'the second: all three');
+});
+test('a viewport whose clip boundary is a polygon (90 0x10000, 340) cuts what it shows to it, and draws no rectangle of its own (r98 Q3)', () => {
+  // (must fire: clipped to its rectangle, a line came back x 20..80 where the triangle keeps 35..65,
+  // and a frame AutoCAD does not draw was added)
+  const d = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'M'], [10, -200], [20, 0], [11, 200], [21, 0],
+    [0, 'CIRCLE'], [8, 'M'], [10, 0], [20, -5], [40, 2],
+    [0, 'LWPOLYLINE'], [5, 'C1'], [8, 'B'], [67, 1], [90, 3], [70, 1], [10, 20], [20, 20], [10, 80], [20, 20], [10, 50], [20, 60],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'C1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  const line = d.paths.filter((p) => p.layer === 'M' && !p.closed);
+  assert.equal(line.length, 1, JSON.stringify(d.paths.map((p) => [p.layer, p.closed, p.frame])));
+  const xs = [line[0].pts[0], line[0].pts[2]].sort((a, b) => a - b).map((x) => +x.toFixed(6));
+  assert.deepEqual(xs, [35, 65]);
+  assert.equal(d.paths.filter((p) => p.frame).length, 0, 'a rectangle drawn');
+  // (a circle inside the triangle: whole, closed, a circle)
+  const circ = d.paths.filter((p) => p.layer === 'M' && p.closed);
+  assert.ok(circ.length === 1 && circ[0].circle, JSON.stringify(circ.map((p) => [p.closed, !!p.circle])));
+});
 test('a circle seen whole through a viewport stays a closed circle; one the frame cuts is open runs, no circle (r97 Q1)', () => {
   // (must fire: cut into runs, the whole one came back open, with no centre and no Ø in 2D Measure)
   const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
@@ -326,6 +378,12 @@ test('a circle seen whole through a viewport stays a closed circle; one the fram
   assert.equal(whole.length, 1, JSON.stringify(ps.map((p) => [p.closed, !!p.circle, p.pts.length])));
   assert.ok(whole[0].circle, 'the whole one not a circle');
   assert.ok(ps.filter((p) => !p.closed).length >= 1 && ps.filter((p) => !p.closed).every((p) => !p.circle), 'a cut run marked a circle');
+  // (and a filled circle -- a solid hatch's -- the frame cuts is no circle; one inside is: r98 Q4)
+  const disc = (cx) => [[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, cx], [20, 0], [40, 5], [50, 0], [51, 360], [73, 1], [97, 0]];
+  const fl = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...disc(0), ...disc(28),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => !p.frame && p.fill);
+  assert.deepEqual(fl.map((p) => !!p.circle), [true, false], JSON.stringify(fl.map((p) => [!!p.circle, p.pts.length])));
 });
 
 test('caret notation: "^C" is U+0003, "^ " a caret, and caret() writes them back', () => {
@@ -437,12 +495,19 @@ test('a TEXT and an MTEXT in one tilted plane are one size, as the view sees tha
   const h = (x) => +x.h.toFixed(3);
   assert.deepEqual(t.map(h), [7.071, 7.071], JSON.stringify(t.map((x) => [x.text, x.h, x.widthFactor])));
   // (a baseline seen end-on, written two ways -- a TEXT at 50=90 and an MTEXT along world z, both
-  // extruded along +X -- is one text: height 2, no width; they read 0 and 2 -- r97 Q5)
+  // extruded along +X -- is one text, in a plane seen edge-on: neither drawn, nor one at 89.9° in it.
+  // They read heights 0 and 2 -- r97 Q5 --, and as width 0 the view drew them whole -- r98 Q1; at
+  // 89.9° it was not drawn and at 90° drawn whole)
   const eo = parseDXF(ents(
     [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 2], [50, 90], [1, 'T'], [210, 1], [220, 0], [230, 0]],
     [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 2], [11, 0], [21, 0], [31, 1], [1, 'M'], [210, 1], [220, 0], [230, 0]],
+    [[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 2], [50, 89.9], [1, 'T'], [210, 1], [220, 0], [230, 0]],
   )).texts;
-  assert.deepEqual(eo.map((x) => [+x.h.toFixed(9), x.widthFactor]), [[2, 0], [2, 0]]);
+  assert.deepEqual(eo, []);
+  // (a control: the same text at 90° in a plane tilted 45°, not edge-on, is drawn)
+  const tilted = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 2], [50, 90], [1, 'T'], [210, Math.SQRT1_2], [220, 0], [230, Math.SQRT1_2]])).texts;
+  assert.equal(tilted.length, 1);
+  assert.ok(tilted[0].h > 0 && tilted[0].widthFactor !== 0, JSON.stringify(tilted[0]));
   // (a control: flat, both 10)
   const f = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 10], [1, 'T']], [[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 10], [11, 1], [21, 0], [1, 'M']])).texts;
   assert.deepEqual(f.map(h), [10, 10]);
