@@ -129,20 +129,23 @@ export async function checkOutput(path, inputs) {
 // 0 (r95 A1) -- else path itself (written through, as an in-place write always was)
 async function writeTarget(path) {
   const { lstatSync, readlinkSync, realpathSync, statSync } = await import('node:fs');
-  const { dirname, resolve } = await import('node:path');
-  // (a link's target read from its real directory, as the system reads it: through a linked
-  // directory, "x -> ../target.txt" taken from the path as written replaced another ./target.txt and
-  // left the linked file unchanged, exit 0 -- r96 Q2)
-  const realDir = (p) => { try { return realpathSync(dirname(p)); } catch { return dirname(p); } };
+  const { basename, dirname, isAbsolute, resolve } = await import('node:path');
+  // (a path's directory read as the system reads it, ".." after a link included, then its last
+  // name: taken from the path as written, "outdir/../c.rgb" through a linked outdir wrote the
+  // colours input ./c.rgb -- r97 A1 -- and a link's "../target" replaced another ./target -- r96 Q2.
+  // A directory not there: as written, "no such directory" said by checkOutput)
+  // (realpathSync.native, the system's own: node's JS realpathSync drops "dir/.." by string first)
+  const real = (raw) => { let d; try { d = realpathSync.native(dirname(raw)); } catch { d = resolve(dirname(raw)); } return resolve(d, basename(raw)); };
   // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
   // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself
   try { if (!statSync(path).isFile()) return resolve(path); } catch { /* not there yet: followed below */ }
-  let p = resolve(path);
+  let p = real(path);
   for (let k = 0; k < 40; k++) {
     let s = null;
     try { s = lstatSync(p); } catch { return p; }
     if (!s.isSymbolicLink()) return p;
-    p = resolve(realDir(p), readlinkSync(p));
+    const to = readlinkSync(p);
+    p = real(isAbsolute(to) ? to : `${dirname(p)}/${to}`);
   }
   throw new Error(`could not write ${path}: too many links`);
 }

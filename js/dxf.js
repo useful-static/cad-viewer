@@ -513,9 +513,19 @@ function clipPath(p, M, s, rect, out) {
     if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) out.push({ ...base, pts: Float64Array.of(x, y, x, y) });
     return;
   }
+  // (one seen whole: as it is, closed if it was -- cut into runs, a circle inside a viewport came
+  // back open, with no centre and no Ø in 2D Measure: 6,052 circles in 28 of the dozens' 140 DXFs,
+  // r97 Q1)
+  if (P.every(([x, y]) => x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])) {
+    out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed });
+    return;
+  }
+  // (a run of a cut path is no whole circle: not marked one)
+  const cut = { ...base };
+  delete cut.circle;
   const segs = p.closed ? n : n - 1;
   let run = null;
-  const flush = () => { if (run && run.length >= 4) out.push({ ...base, pts: Float64Array.from(run), closed: false }); run = null; };
+  const flush = () => { if (run && run.length >= 4) out.push({ ...cut, pts: Float64Array.from(run), closed: false }); run = null; };
   for (let i = 0; i < segs; i++) {
     const a = P[i], b = P[(i + 1) % n];
     // Liang-Barsky
@@ -741,11 +751,37 @@ function emit(recs, M, byBlock, depth, ctx) {
     if (lt === 'BYLAYER') lt = L.ltype || 'CONTINUOUS';
     else if (lt === 'BYBLOCK') lt = (byBlock && byBlock.ltype) || 'CONTINUOUS';
     const pat = ctx.ltypes.get(lt);
-    const k = ctx.ltscale * num(r, 48, 1) * Math.hypot(M[0], M[1]);
+    // (the pattern in the entity's own units; each shape's in drawing units by how much it is
+    // stretched as drawn -- its drawn length over its own: by the transform's x axis alone, a dashed
+    // line along y in a 1 x 4 insert was drawn 40 long with 1-unit dashes, and in a tilted one
+    // shortened but its dashes full -- r97 A2. Exact for a line, the mean along a curve)
+    const own = pat ? pat.map((x) => x * ctx.ltscale * num(r, 48, 1)) : null;
+    const lenOf = (pts, dim, closed) => {
+      let s = 0;
+      const n = pts.length / dim;
+      for (let i = 1; i < n + (closed ? 1 : 0); i++) {
+        const a = (i - 1) * dim, b = (i % n) * dim;
+        s += Math.hypot(pts[b] - pts[a], pts[b + 1] - pts[a + 1], dim === 3 ? pts[b + 2] - pts[a + 2] : 0);
+      }
+      return s;
+    };
+    // (under a turn and a uniform scale -- with no z column -- the transform's own scale, one number
+    // for every path: measured per path, rounding split shapes that shared one stroke into many,
+    // 278 strokes a frame to 6,115 -- r97 Q2; a stretched or tilted one by the ratio, to 9 digits)
+    const dashFor = (ownLen, drawn, closed, T = M) => {
+      if (!own) return null;
+      let k;
+      if (conformalOf(T) && !T[6] && !T[7]) k = Math.hypot(T[0], T[1]);
+      else {
+        const d = lenOf(drawn, 2, closed);
+        k = ownLen > 0 ? Number((d / ownLen).toPrecision(9)) : Math.hypot(T[0], T[1]);
+      }
+      return own.map((x) => x * k);
+    };
     let lw = num(r, 370, -1);
     if (lw === -1) lw = L.weight ?? -3;
     else if (lw === -2) lw = byBlock && byBlock.weight !== undefined ? byBlock.weight : -3;
-    const sty = { dash: pat ? pat.map((x) => x * k) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
+    const sty = { dash: own ? own.map((x) => x * Math.hypot(M[0], M[1])) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
     const O = compose(M, ocs(r));
     // (width: a polyline's width in its own units, scaled by the transform into drawing units)
     // (extra: outline -- a wide polyline's filled outline, not a shape of its own: not counted as
@@ -754,7 +790,7 @@ function emit(recs, M, byBlock, depth, ctx) {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
       const w = width > 0 ? width * Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) : 0;
-      ctx.add({ layer, colour, ...sty, pts: f, closed, fill, ...(w > 0 ? { width: w } : {}), ...extra });
+      ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 2, closed), f, closed, O), pts: f, closed, fill, ...(w > 0 ? { width: w } : {}), ...extra });
     };
     // a polyline with its widths (widthsOf): one width, stroked at it; else its line (1 px: what a
     // click and a snap find) and each wide segment's outline, filled
@@ -777,8 +813,10 @@ function emit(recs, M, byBlock, depth, ctx) {
       case 'LINE': {
         // LINE's points are in world coordinates, not its OCS
         // (with their z: inside a tilted insert it reaches the view -- r96 A1)
-        const a = ap(M, num(r, 10), num(r, 20), num(r, 30, 0) || 0), b = ap(M, num(r, 11), num(r, 21), num(r, 31, 0) || 0);
-        ctx.add({ layer, colour, ...sty,pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
+        const p3 = [num(r, 10), num(r, 20), num(r, 30, 0) || 0, num(r, 11), num(r, 21), num(r, 31, 0) || 0];
+        const a = ap(M, p3[0], p3[1], p3[2]), b = ap(M, p3[3], p3[4], p3[5]);
+        const f = Float64Array.of(a[0], a[1], b[0], b[1]);
+        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(p3, 3, false), f, false), pts: f, closed: false, fill: false });
         break;
       }
       case 'POINT': {
@@ -810,12 +848,14 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (t1 - t0 > 2 * Math.PI) t1 = t0 + 2 * Math.PI; // (at most one turn)
         const minor = cross3(extrusionOf(r), [mx, my, mz]).map((v) => v * ratio);
         const n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
-        const pts = [];
+        const pts = [], own3 = [];
         for (let k = 0; k <= n; k++) {
           const t = t0 + ((t1 - t0) * k) / n;
           const c = Math.cos(t), s = Math.sin(t);
-          const [x, y] = ap(M, cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s, cz + mz * c + minor[2] * s);
+          const q = [cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s, cz + mz * c + minor[2] * s];
+          const [x, y] = ap(M, q[0], q[1], q[2]);
           pts.push(x, y);
+          own3.push(...q);
         }
         const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
         // (one of ratio 1, a full turn, is a circle, some exporters' way to write one: marked as a
@@ -825,7 +865,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // tilted 1e-4 rad that a CIRCLE kept -- r96 A2; one seen tilted is not round in the view)
         const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
         const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
-        ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
+        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -873,7 +913,10 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.count(r, k); break; }
         const closed = (flags & 1) === 1;
         // (a 3D polyline's vertices are world coordinates, their z with them: r96 A1)
-        if (flags & 8) { ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(M, x, ys[k], zs[k]))), closed, fill: false }); }
+        if (flags & 8) {
+          const f = Float64Array.from(xs.flatMap((x, k) => ap(M, x, ys[k], zs[k])));
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(xs.flatMap((x, k) => [x, ys[k], zs[k]]), 3, closed), f, closed), pts: f, closed, fill: false });
+        }
         else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
         break;
       }
@@ -882,7 +925,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (pts.length >= 6) {
           const f = new Float64Array((pts.length / 3) * 2);
           for (let k = 0, o = 0; k < pts.length; k += 3, o += 2) { const [x, y] = ap(M, pts[k], pts[k + 1], pts[k + 2]); f[o] = x; f[o + 1] = y; }
-          ctx.add({ layer, colour, ...sty,pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
+          const closed = (num(r, 70) & 1) === 1;
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 3, closed), f, closed), pts: f, closed, fill: false });
         }
         break;
       }
@@ -910,16 +954,18 @@ function emit(recs, M, byBlock, depth, ctx) {
         // world corners (the fourth repeats the third for a triangle); 70's bits 1, 2, 4, 8 hide
         // the first .. fourth edge
         const z = (c, d) => num(r, c, d === undefined ? 0 : num(r, d, 0)) || 0;
-        const c = [[num(r, 10), num(r, 20), z(30)], [num(r, 11), num(r, 21), z(31)], [num(r, 12), num(r, 22), z(32)], [num(r, 13, num(r, 12)), num(r, 23, num(r, 22)), z(33, 32)]].map(([x, y, zz]) => ap(M, x, y, zz));
+        const own4 = [[num(r, 10), num(r, 20), z(30)], [num(r, 11), num(r, 21), z(31)], [num(r, 12), num(r, 22), z(32)], [num(r, 13, num(r, 12)), num(r, 23, num(r, 22)), z(33, 32)]];
+        const c = own4.map(([x, y, zz]) => ap(M, x, y, zz));
         const hide = num(r, 70);
         if (!(hide & 15)) {
-          ctx.add({ layer, colour, ...sty, pts: Float64Array.from(c.flat()), closed: true, fill: false });
+          const f = Float64Array.from(c.flat());
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own4.flat(), 3, true), f, true), pts: f, closed: true, fill: false });
           break;
         }
         for (let e = 0; e < 4; e++) {
           if (hide & (1 << e)) continue;
-          const a = c[e], b = c[(e + 1) % 4];
-          ctx.add({ layer, colour, ...sty, pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
+          const a = c[e], b = c[(e + 1) % 4], f = Float64Array.of(a[0], a[1], b[0], b[1]);
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf([...own4[e], ...own4[(e + 1) % 4]], 3, false), f, false), pts: f, closed: false, fill: false });
         }
         break;
       }
@@ -971,7 +1017,17 @@ function emit(recs, M, byBlock, depth, ctx) {
           item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
           // 41, its reference width: its lines wrap at it (they ran on in one line)
           rw = num(e, 41, 0);
-          if (get(e, 11, null) !== null) { F = M; dv = [num(e, 11), num(e, 21)]; } else { const a = (num(e, 50) * Math.PI) / 180; dv = [Math.cos(a), Math.sin(a)]; }
+          // (its direction 11/21/31 a world vector: its sizes taken in its own plane -- x along it, y
+          // N x it -- as the view projects that plane, as a TEXT's are in its OCS: taken in world XY,
+          // an MTEXT tilted 45° kept its full height where the TEXT beside it read 7.071 -- r97 A3)
+          if (get(e, 11, null) !== null) {
+            const N = extrusionOf(e), d3 = [num(e, 11), num(e, 21), num(e, 31, 0) || 0];
+            const l = Math.hypot(...d3);
+            const X = l > 0 ? d3.map((v) => v / l) : [1, 0, 0];
+            const y = cross3(N, X), ly = Math.hypot(...y);
+            F = ly > 1e-12 ? compose(M, { X, Y: y.map((v) => v / ly), Z: N, T: [0, 0, 0] }) : M;
+            dv = ly > 1e-12 ? [1, 0] : [num(e, 11), num(e, 21)];
+          } else { const a = (num(e, 50) * Math.PI) / 180; dv = [Math.cos(a), Math.sin(a)]; }
           item.dir = dirThrough(F, dv[0], dv[1]);
         } else {
           // TEXT / ATTRIB: 72 the horizontal alignment (0 left, 1 centre, 2 right, 3 aligned, 4
@@ -1020,13 +1076,18 @@ function emit(recs, M, byBlock, depth, ctx) {
           const det = O[0] * O[3] - O[1] * O[2];
           const dl = Math.hypot(dv[0], dv[1]) || 1;
           const sx = Math.hypot(F[0] * dv[0] + F[2] * dv[1], F[1] * dv[0] + F[3] * dv[1]) / dl;
-          const sy = sx > 0 ? Math.abs(F[0] * F[3] - F[1] * F[2]) / sx : Math.hypot(F[2], F[3]);
+          // (its baseline seen end-on: its height along its own up, the baseline turned 90° -- the
+          // frame's y axis gave 50=90 and 11=(0,0,1) of one text heights 0 and 2: r97 Q5)
+          // (end-on to a rounding of the frame's own size: a baseline along world z left 6e-17 of sx)
+          const endOn = sx <= 1e-12 * (Math.hypot(F[0], F[1], F[2], F[3]) || 1);
+          const sy = !endOn ? Math.abs(F[0] * F[3] - F[1] * F[2]) / sx : Math.hypot(-F[0] * dv[1] + F[2] * dv[0], -F[1] * dv[1] + F[3] * dv[0]) / dl;
           item.h *= sy;
-          if (Number.isFinite(rw) && rw > 0) item.wrap = rw * sx;
+          const sw = endOn ? 0 : sx; // (no width, end-on: the two spellings one text)
+          if (Number.isFinite(rw) && rw > 0) item.wrap = rw * sw;
           if (det < 0) { item.rot = item.dir - Math.PI; item.mirrorX = !item.mirrorX; } else item.rot = item.dir;
           if (!item.mirrorX) delete item.mirrorX;
           delete item.dir;
-          if (!item.fit && sy > 0 && Math.abs(sx / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sx / sy);
+          if (!item.fit && sy > 0 && Math.abs(sw / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sw / sy);
         }
         if (r.type === 'ATTRIB' && attHold) item.hold = attHold;
         ctx.addText(item);
@@ -1083,7 +1144,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (xs.length >= 2) {
           const pts = [];
           for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0, zs[k] || 0));
-          if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: false, fill: false });
+          if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(xs.flatMap((x, k) => [x, ys[k] ?? 0, zs[k] || 0]), 3, false), pts, false), pts: Float64Array.from(pts), closed: false, fill: false });
         } else ctx.count(r, 'LEADER'); // (one without its vertices: a DWG's, whose are not decoded)
         break;
       }

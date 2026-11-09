@@ -249,6 +249,13 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   assert.equal(readFileSync(join(sub, 'target.cadmesh'), 'utf8'), 'decoy', 'the decoy beside the linked directory written');
   assert.ok(!readFileSync(join(sub, 'real', 'target.cadmesh')).equals(box), 'the link\'s real target unchanged');
   assert.ok(lstatSync(join(sub, 'real', 'inner', 'x.cadmesh')).isSymbolicLink(), 'the link replaced');
+  // (".." after the linked directory, as the shell reads it: outdir/../c.rgb is real/c.rgb -- taken
+  // from the path as written, it overwrote the colours input ./c.rgb, exit 0: r97 A1)
+  const rgbBefore = readFileSync(join(sub, 'c.rgb'));
+  const dd = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'real.cadmesh', 'c.rgb', '-o', 'outdir/../c.rgb', '--by', 't', '--again'] /* (a string: path.join collapses the ..) */, { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(dd.status, 0, dd.stderr);
+  assert.ok(readFileSync(join(sub, 'c.rgb')).equals(rgbBefore), 'the colours input overwritten');
+  assert.ok(existsSync(join(sub, 'real', 'c.rgb')), 'real/c.rgb not written');
   // (a pipe written as it is, not replaced by a file; /dev/null written, not "permission denied":
   // r95 A2)
   if (spawnSync('mkfifo', [join(sub, 'pipe.cadmesh')]).status === 0) {
