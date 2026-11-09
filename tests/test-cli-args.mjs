@@ -7,15 +7,15 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CliError, parseCli, positive } from '../js/cli-args.js';
+import { CliError, parseCli, positive, writeOutput } from '../js/cli-args.js';
 import { encodeCadmesh } from '../js/cadmesh.js';
 
-import { test, done } from './harness.mjs';
+import { test, skip, done } from './harness.mjs';
 
 const HERE = fileURLToPath(new URL('..', import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'cv-cli-'));
@@ -48,6 +48,8 @@ test('parseCli: values, flags, --k=v, each once, a value never an option, help o
 test('every tool refuses a bad command line with a usage error (exit 2, on stderr); a non-CAD input is exit 1', () => {
   writeFileSync(join(dir, 'x.constructor'), 'not a CAD file\n');
   writeFileSync(join(dir, 'x3.stp'), 'ISO-10303-21;\n');
+  writeFileSync(join(dir, 'huge.cadmesh'), '');
+  truncateSync(join(dir, 'huge.cadmesh'), 2 * 2 ** 30 + 1);
   const cases = [
     ['stp2mesh.mjs', ['x.stp', '-o', '--raw'], 2, /-o needs a value/],
     ['stp2mesh.mjs', ['x.stp', '-o', 'a.cadmesh', '-o', 'b.cadmesh'], 2, /given twice/],
@@ -75,6 +77,11 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
     ['cadmesh-export.mjs', ['missing.cadmesh'], 1, /no such file/],
     ['dwg-check.mjs', ['missing.dwg'], 1, /no such file/],
     ['stp2mesh.mjs', ['missing.stp'], 1, /no such file/],
+    // (--raw to a name ending .gz: refused -- it wrote uncompressed bytes gunzip refused: r95 A4)
+    ['stp2mesh.mjs', ['x3.stp', '--raw', '-o', 'x3.cadmesh.GZ'], 2, /--raw writes the uncompressed layout: not to a name ending \.gz/],
+    // (an input past the viewer's 2 GB, in the page's words, naming the file: node's own message
+    // named none -- r95 A3; a sparse file, no disk)
+    ['cadmesh-export.mjs', ['huge.cadmesh'], 1, /huge\.cadmesh: over 2 GB, more than this viewer opens/],
     // (the converter not installed: exit 3, as its usage says -- no arm held it: r94 Q1)
     ['stp2mesh.mjs', ['x3.stp', '-o', 'x3.cadmesh', '--occt', join(dir, 'no-occt')], 3, /^stp2mesh: occt-import-js not found at .*no-occt/],
   ];
@@ -88,6 +95,7 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
   }
   assert.deepEqual(bad, []);
   assert.ok(!existsSync(join(dir, 'x3.cadmesh')), 'stp2mesh with no converter wrote an output');
+  rmSync(join(dir, 'huge.cadmesh')); // (the sparse 2 GB file gone at once: a copy of the dir would fill a disk)
   // an input refused is said in the one shape the tools share, "<tool>: ..." (they said it four ways)
   for (const [tool, args] of [['stp2mesh.mjs', [notCad]], ['stp2mesh.mjs', ['missing.stp']], ['cadmesh-export.mjs', ['missing.cadmesh']]]) {
     const r = run(tool, args);
@@ -110,6 +118,7 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
   writeFileSync(join(dir, 'box.cadmesh'), new Uint8Array(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)));
   writeFileSync(join(dir, 'box.rgb'), new Uint8Array(8 * 3).fill(128));
   writeFileSync(join(dir, 'x.stp'), 'ISO-10303-21;\n');
+  symlinkSync('nodir/t.cadmesh', join(dir, 'tonodir.cadmesh'));
   // (a .cadmesh by another name: exported to its own name -- r93 A1)
   writeFileSync(join(dir, 'm.stl'), readFileSync(join(dir, 'box.cadmesh')));
   const gone = join(dir, 'no-such-dir');
@@ -124,6 +133,8 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     ['split-board.mjs', ['box.cadmesh', '-o', join(gone, 'x.cadmesh')], /no such directory/],
     ['split-board.mjs', ['box.cadmesh', '-o', dir], /it is a directory/],
     ['dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')], /no such directory/],
+    // (a link into a directory not there: that directory named, not the link's own -- r95 Q6)
+    ['stp2mesh.mjs', ['x.stp', '-o', 'tonodir.cadmesh'], /no such directory .*\/nodir$/],
     // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
     ['stp2mesh.mjs', ['x.stp', '-o', join(dir, '.', 'x.stp')], /it is the input x\.stp$/],
     ['dwg-check.mjs', [notCad, '--dxf', notCad], /it is the input /],
@@ -143,7 +154,9 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
   if (readFileSync(join(dir, 'box.rgb')).length !== 24) bad.push('set-colours: box.rgb overwritten');
   // a directory it may not write: refused before the work, in the same words (r27 Q6: two tools
   // split and coloured, then printed node's "EACCES"); not as root, which may write anywhere
-  if (process.getuid?.() !== 0) {
+  // (as root counted as skipped, not passed with no assertion: r95 Q7)
+  if (process.getuid?.() === 0) skip('a directory it may not write, refused before the work', 'root may write anywhere');
+  else {
     const ro = join(dir, 'ro');
     mkdirSync(ro, { mode: 0o555 });
     for (const [tool, args] of [['split-board.mjs', ['box.cadmesh', '-o', join(ro, 'x.cadmesh')]], ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', join(ro, 'x.cadmesh'), '--by', 't']],
@@ -191,7 +204,7 @@ test('a write in place that fails leaves the input as it was, said in the one wo
   assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
 });
 
-test('a write in place as one was: through a link, the mode kept, gzipped as it came; a read-only directory refused before the work (r94 A1-A3)', () => {
+await test('a write in place as one was: through a link, the mode kept, gzipped as it came; a read-only directory refused before the work (r94 A1-A3)', async () => {
   const sub = join(dir, 'inplace');
   mkdirSync(sub);
   const box = readFileSync(join(dir, 'box.cadmesh'));
@@ -216,6 +229,42 @@ test('a write in place as one was: through a link, the mode kept, gzipped as it 
   assert.ok(!readFileSync(join(sub, 'h1.cadmesh')).equals(box), 'h1 unchanged');
   assert.ok(readFileSync(join(sub, 'h2.cadmesh')).equals(readFileSync(join(sub, 'h1.cadmesh'))), 'the other name kept the old bytes');
   assert.deepEqual(readdirSync(sub).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
+  // (a link to a file not there yet: that file made, the link kept -- the rename replaced the link
+  // and never made its file, exit 0: r95 A1)
+  symlinkSync('made.cadmesh', join(sub, 'dangling.cadmesh'));
+  const dl = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'real.cadmesh', 'c.rgb', '-o', 'dangling.cadmesh', '--by', 't', '--again'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(dl.status, 0, dl.stderr);
+  assert.ok(lstatSync(join(sub, 'dangling.cadmesh')).isSymbolicLink(), 'the dangling link replaced by a file');
+  assert.ok(existsSync(join(sub, 'made.cadmesh')), 'the file the link names not made');
+  // (a pipe written as it is, not replaced by a file; /dev/null written, not "permission denied":
+  // r95 A2)
+  if (spawnSync('mkfifo', [join(sub, 'pipe.cadmesh')]).status === 0) {
+    const reader = spawnSync('bash', ['-c', `cat pipe.cadmesh > /dev/null & "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" real.cadmesh c.rgb -o pipe.cadmesh --by t --again; rc=$?; wait; exit $rc`], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+    assert.equal(reader.status, 0, reader.stderr);
+    assert.ok(lstatSync(join(sub, 'pipe.cadmesh')).isFIFO(), 'the pipe replaced by a file');
+  }
+  const nul = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'real.cadmesh', 'c.rgb', '-o', '/dev/null', '--by', 't', '--again'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(nul.status, 0, nul.stderr);
+  // (and a pipe reached by a link to "pipe:[…]": /dev/stdout written, not "permission denied" -- r95 Q3)
+  // (through a shell's pipe, a FIFO, as a visitor's `| gzip` is: node's own child stdout is a socket)
+  const so = spawnSync('bash', ['-c', `set -o pipefail; "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" real.cadmesh c.rgb -o /dev/stdout --by t --again | wc -c`], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(so.status, 0, so.stderr);
+  assert.ok(Number(so.stdout.trim()) > box.length, `${so.stdout.trim()} bytes through the pipe`);
+  // (a file with other names whose copy in place fails: said, and where the whole output is -- a
+  // mutant dropping those words passed: r95 Q8); not as root, which may write a read-only file
+  if (process.getuid?.() === 0) skip('a failed copy in place says where the whole output is', 'root may write anywhere');
+  else {
+    writeFileSync(join(sub, 'ro1.cadmesh'), box);
+    linkSync(join(sub, 'ro1.cadmesh'), join(sub, 'ro2.cadmesh'));
+    chmodSync(join(sub, 'ro1.cadmesh'), 0o444);
+    let said = '';
+    try { await writeOutput(join(sub, 'ro1.cadmesh'), Buffer.from('new bytes')); } catch (e) { said = e.message; }
+    const m = /^could not write .*ro1\.cadmesh: .* \(the whole output is in (.+\.tmp)\)$/.exec(said);
+    assert.ok(m, said);
+    assert.equal(readFileSync(m[1], 'utf8'), 'new bytes', 'the whole output not where it says');
+    assert.ok(readFileSync(join(sub, 'ro2.cadmesh')).equals(box), 'the file changed');
+    rmSync(m[1]);
+  }
   // (gzipped as it came, whatever the name: stp2mesh's own .cadmesh, recoloured in place, came back
   // 526% of its size)
   writeFileSync(join(sub, 'gz.cadmesh'), gzipSync(box));
@@ -225,7 +274,8 @@ test('a write in place as one was: through a link, the mode kept, gzipped as it 
   assert.ok(out[0] === 0x1f && out[1] === 0x8b, 'written uncompressed');
   // (a writable file in a directory it may not write: refused before the work, in the one wording --
   // stp2mesh converted it all, then failed on a ".tmp" never named); not as root
-  if (process.getuid?.() !== 0) {
+  if (process.getuid?.() === 0) skip('a writable file in a read-only directory, refused before the work', 'root may write anywhere');
+  else {
     const ro = join(dir, 'ro-dir');
     mkdirSync(ro);
     writeFileSync(join(ro, 'x.cadmesh'), box);

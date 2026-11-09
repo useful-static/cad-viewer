@@ -368,6 +368,31 @@ test('MTEXT\'s point and direction are WORLD coordinates (extrusion 0,0,-1 drew 
   assert.deepEqual([tx.x, tx.y], [-50, 0]);
   assert.deepEqual([tx.mirrorX, Math.round(Math.cos(tx.rot))], [mt.mirrorX, Math.round(Math.cos(mt.rot))], 'the MTEXT and the TEXT alike');
 });
+test('a tilted extrusion: the elevation along it, and an ELLIPSE\'s minor axis by it, as seen from +Z (r95 Q1)', () => {
+  // (each drawn as if it lay flat: a CIRCLE extruded along +X at elevation 5 at x 0, an ellipse seen
+  // edge-on drawn whole -- must fire)
+  const box = (e) => {
+    const p = parseDXF(ents(e)).paths[0].pts;
+    const xs = [], ys = [];
+    for (let k = 0; k < p.length; k += 2) { xs.push(p[k]); ys.push(p[k + 1]); }
+    return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)].map((v) => +v.toFixed(3) + 0);
+  };
+  const X = [[210, 1], [220, 0], [230, 0]];
+  // a CIRCLE, centre OCS (2, 3, 5), r 1, along +X: world centre (5, 2, 3), from +Z the segment x 5
+  assert.deepEqual(box([[0, 'CIRCLE'], [8, '0'], [10, 2], [20, 3], [30, 5], [40, 1], ...X]), [5, 5, 1, 3]);
+  // one along (1, 0, 1), centre OCS (0, 0, 10): world (7.071, 0, 7.071)
+  const d = box([[0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [30, 10], [40, 1], [210, 1], [220, 0], [230, 1]]);
+  assert.ok(Math.abs((d[0] + d[1]) / 2 - 7.071) < 1e-3 && Math.abs((d[2] + d[3]) / 2) < 1e-3, JSON.stringify(d));
+  // a LWPOLYLINE at elevation 5 along +X: at x 5
+  assert.deepEqual(box([[0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [38, 5], [10, 0], [20, 0], [10, 1], [20, 1], ...X]), [5, 5, 0, 1]);
+  // an ELLIPSE, centre (3, 0, 0), major (0, 10, 0), ratio 0.5, along +X: the segment x 3, y -10..10
+  assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 3], [20, 0], [30, 0], [11, 0], [21, 10], [31, 0], [40, 0.5], ...X]), [3, 3, -10, 10]);
+  // one with major (0, 0, 10) along +X: the segment y -5..5
+  assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 0], [21, 0], [31, 10], [40, 0.5], ...X]), [0, 0, -5, 5]);
+  // (controls: flat, and seen from -Z, as before)
+  assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0], [40, 0.5]]), [-10, 10, -5, 5]);
+  assert.deepEqual(box([[0, 'CIRCLE'], [8, '0'], [10, 2], [20, 3], [30, 5], [40, 1], [210, 0], [220, 0], [230, -1]]), [-3, -1, 2, 4]);
+});
 test('an INSERT\'s ATTRIBs are drawn as text (a title block\'s values), an invisible one is not; 3DFACE draws its visible edges', () => {
   const d = parseDXF(ents(
     [[0, 'INSERT'], [8, '0'], [2, 'NOBLOCK'], [66, 1], [10, 0], [20, 0]],

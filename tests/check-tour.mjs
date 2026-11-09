@@ -12,7 +12,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { readdirSync, statSync } from 'node:fs';
-import { MAX_FILE_BYTES, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
+import { MAX_FILE_BYTES, OVERSIZE_WORDS, decodeCadmesh, gunzip, isGzip } from '../js/cadmesh.js';
 import { fileNameOfUrl, formatOfName, isCompanion, meshReaderOf, openedName, opensAsZip, sniffFormat, zipCompanions, zipModel } from '../js/formats.js';
 import { meshFormatOf, unzip } from '../js/mesh-formats.js';
 import { companionsOverText, readCompanions } from '../js/companions.js';
@@ -74,7 +74,9 @@ if (!model) { console.log(`FAIL ${tourPath}: give the model file it plays over`)
 let header;
 try {
   let buf = await read(model);
-  if (buf.byteLength > MAX_FILE_BYTES) throw new Error(`over ${MAX_FILE_BYTES / 2 ** 30} GB`);
+  // (a URL's, past the limit, in the page's words; a local file is refused so before it is read, by
+  // readInput -- it said the limit a third way: r95 A3)
+  if (buf.byteLength > MAX_FILE_BYTES) throw new Error(OVERSIZE_WORDS);
   if (isGzip(buf.buffer)) buf = new Uint8Array(await gunzip(buf.buffer));
   let raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   // (its name as the page names a URL's file -- a query value naming a model, the query dropped:

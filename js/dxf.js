@@ -567,19 +567,30 @@ const ap = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
 // the angle of a direction (dx, dy) through a transform's linear part
 const dirThrough = (m, dx, dy) => Math.atan2(m[1] * dx + m[3] * dy, m[0] * dx + m[2] * dy);
 
-// The arbitrary-axis rule: an entity's OCS x and y axes from its extrusion
-// N, projected onto the world XY plane (a 2D view from +Z)
-function ocs(r) {
+// An entity's extrusion N, of unit length
+function extrusionOf(r) {
   const nx = num(r, 210, 0), ny = num(r, 220, 0), nz = num(r, 230, 1);
-  if (nx === 0 && ny === 0 && nz === 1) return IDENT;
   const l = Math.hypot(nx, ny, nz) || 1;
-  const N = [nx / l, ny / l, nz / l];
+  return [nx / l, ny / l, nz / l];
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+// An entity's elevation: its OCS z, which lies along N -- a LWPOLYLINE's 38, the others' point's 30.
+// None for MTEXT and the dimensions, whose points are world coordinates or their block's.
+const NO_ELEVATION = new Set(['MTEXT', 'DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', 'LINE', 'POINT', 'ELLIPSE', 'SPLINE', 'LEADER']);
+const elevationOf = (r) => (NO_ELEVATION.has(r.type) ? 0 : num(r, r.type === 'LWPOLYLINE' ? 38 : 30, 0) || 0);
+// The arbitrary-axis rule: an entity's OCS x and y axes from its extrusion
+// N, projected onto the world XY plane (a 2D view from +Z), and its OCS origin at its elevation along
+// N, projected too (a translation of N.x z, N.y z: dropped, a circle extruded along +X at elevation 5
+// was drawn at x 0, not x 5 -- r95 Q1)
+function ocs(r) {
+  const N = extrusionOf(r);
+  if (N[0] === 0 && N[1] === 0 && N[2] === 1) return IDENT;
   const W = Math.abs(N[0]) < 1 / 64 && Math.abs(N[1]) < 1 / 64 ? [0, 1, 0] : [0, 0, 1];
-  const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
   const nrm = (v) => { const k = Math.hypot(...v) || 1; return v.map((x) => x / k); };
-  const Ax = nrm(cr(W, N));
-  const Ay = nrm(cr(N, Ax));
-  return [Ax[0], Ax[1], Ay[0], Ay[1], 0, 0];
+  const Ax = nrm(cross3(W, N));
+  const Ay = nrm(cross3(N, Ax));
+  const z = elevationOf(r);
+  return [Ax[0], Ax[1], Ay[0], Ay[1], N[0] * z, N[1] * z];
 }
 
 // the colour of a record: its own (420 true, 62 ACI), BYBLOCK (0) the
@@ -772,26 +783,29 @@ function emit(recs, M, byBlock, depth, ctx) {
         break;
       }
       case 'ELLIPSE': {
-        // world coordinates: centre, the major axis end, the minor ratio
-        const cx = num(r, 10), cy = num(r, 20), mx = num(r, 11), my = num(r, 21), ratio = num(r, 40, 1);
+        // world coordinates: centre, the major axis end (3D), the minor ratio; the minor axis is
+        // ratio * (N x major), projected onto XY with the major -- an ellipse seen from -Z runs the
+        // other way by it, and one tilted is drawn as it is seen (its minor taken in XY as the
+        // major's perpendicular, an ellipse seen edge-on was drawn whole -- r95 Q1)
+        const cx = num(r, 10), cy = num(r, 20), mx = num(r, 11), my = num(r, 21), mz = num(r, 31, 0) || 0, ratio = num(r, 40, 1);
         let t0 = num(r, 41, 0), t1 = num(r, 42, 2 * Math.PI);
         if (!Number.isFinite(t0) || !Number.isFinite(t1)) break;
         if (t1 <= t0) t1 += 2 * Math.PI;
         if (t1 - t0 > 2 * Math.PI) t1 = t0 + 2 * Math.PI; // (at most one turn)
-        // an ellipse seen from -Z runs the other way
-        const flip = num(r, 230, 1) < 0 ? -1 : 1;
+        const minor = cross3(extrusionOf(r), [mx, my, mz]).map((v) => v * ratio);
         const n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
         const pts = [];
         for (let k = 0; k <= n; k++) {
           const t = t0 + ((t1 - t0) * k) / n;
-          const c = Math.cos(t), s = Math.sin(t) * flip;
-          const [x, y] = ap(M, cx + mx * c - my * ratio * s, cy + my * c + mx * ratio * s);
+          const c = Math.cos(t), s = Math.sin(t);
+          const [x, y] = ap(M, cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s);
           pts.push(x, y);
         }
         const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
         // (one of ratio 1, a full turn, is a circle, some exporters' way to write one: marked as a
         // CIRCLE is -- 677 at hand had no centre since r70 -- r71 A7, Q2)
-        const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && conformalOf(M) && (mx || my);
+        // (and only one seen face on, its extrusion along Z: one tilted is drawn an ellipse -- r95 Q1)
+        const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && conformalOf(M) && (mx || my) && Math.abs(extrusionOf(r)[2]) > 1 - 1e-9 && !mz;
         ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
         break;
       }

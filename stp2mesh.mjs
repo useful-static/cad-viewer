@@ -53,6 +53,9 @@ function parseArgs(argv) {
   // while the mode stayed absolute
   if ('--deflection' in o && '--absolute' in o) throw new CliError('give only one of --deflection / --absolute');
   if (a.occt && a.threads) throw new CliError('give only one of --occt / --threads');
+  // (a name ending .gz is gzipped, the one rule -- js/cli-args.js gzipsOutput: --raw wrote the bytes
+  // under it uncompressed, and gunzip refused them -- r95 A4)
+  if (a.raw && a.out && /\.gz$/i.test(a.out)) throw new CliError('--raw writes the uncompressed layout: not to a name ending .gz');
   if ('--absolute' in o) { a.params.linearDeflectionType = 'absolute_value'; a.params.linearDeflection = positive(o, '--absolute'); }
   if ('--deflection' in o) a.params.linearDeflection = positive(o, '--deflection');
   a.params.angularDeflection = positive(o, '--angular', a.params.angularDeflection);

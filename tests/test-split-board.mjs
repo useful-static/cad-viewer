@@ -8,6 +8,12 @@
 // triangle kept. No GPU, no network:  node tests/test-split-board.mjs
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, notMmWords } from '../js/cadmesh.js';
 import { splitBoard } from '../split-board.mjs';
 
@@ -55,7 +61,7 @@ function fusedBoard() {
       indices: Uint32Array.from(b.idx), faces: Uint32Array.from(b.faces) }],
   };
   const buf = encodeCadmesh(model, { edges: false });
-  return { d: decodeCadmesh(buf), nTri };
+  return { d: decodeCadmesh(buf), nTri, buf };
 }
 
 test('cuts the board from its parts; a sliver joins a part on its own face only', () => {
@@ -131,6 +137,25 @@ test('refuses a board in another unit than mm, its reaches being mm (r85 A3)', (
   assert.equal(notMmWords({ units: 'INCH' }, 'an export is'), 'this model\'s lengths are in in, not converted: an export is not made here');
   assert.equal(notMmWords({ units: 'furlong' }, 'an export is'), 'this model\'s lengths are in furlong, not converted: an export is not made here');
   assert.equal(splitBoard({ ...d, header: { ...d.header, units: 'mm' } }).parts, 2);
+});
+
+test('the tool gzips its output as its input came, and always for a name ending .gz in any case (r95 Q4)', () => {
+  // (must fire: a mutant gzipping by the name alone, and one never gzipping, passed every test)
+  const { buf } = fusedBoard();
+  const dir = mkdtempSync(join(tmpdir(), 'cv-sb-'));
+  const raw = Buffer.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+  writeFileSync(join(dir, 'raw.cadmesh'), raw);
+  writeFileSync(join(dir, 'gz.cadmesh'), gzipSync(raw));
+  const tool = fileURLToPath(new URL('../split-board.mjs', import.meta.url));
+  const gz = (f) => { const b = readFileSync(join(dir, f)); return b[0] === 0x1f && b[1] === 0x8b; };
+  const got = [];
+  for (const [inp, out] of [['raw.cadmesh', 'a.cadmesh'], ['gz.cadmesh', 'b.cadmesh'], ['raw.cadmesh', 'c.cadmesh.GZ'], ['gz.cadmesh', 'gz.cadmesh']]) {
+    const r = spawnSync(process.execPath, [tool, inp, '-o', out], { cwd: dir, encoding: 'utf8', timeout: 60000 });
+    assert.equal(r.status, 0, r.stderr);
+    got.push(`${out} ${gz(out) ? 'gzipped' : 'raw'}`);
+  }
+  assert.deepEqual(got, ['a.cadmesh raw', 'b.cadmesh gzipped', 'c.cadmesh.GZ gzipped', 'gz.cadmesh gzipped']);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 done();

@@ -26,8 +26,10 @@
 //
 //   await writeOutput(path, bytes), gzipsOutput(path, inputGzipped)
 //     the one writer of all five tools: whole or not at all (a file beside it, renamed over it),
-//     through a link, the file's mode kept; and whether a .cadmesh from a .cadmesh is gzipped
-//     (r93 Q1, r94 A1, A3, A4)
+//     through a link (to a file not there yet too), the file's mode, owner and group kept where
+//     the user may keep them; a file with other names written in place from the whole file
+//     beside it; a pipe or a device written as it is; and whether a .cadmesh from a .cadmesh is
+//     gzipped -- a name ending .gz always (r93 Q1, r94 A1, A3, A4, Q3, r95 A1, A2, A4, A5)
 //
 // Pure ES module; only runCli touches the process (stderr, exit), when it runs; readInput and
 // checkOutput load node:fs when called (the page never calls them).
@@ -79,6 +81,12 @@ export async function readInput(path) {
     const reason = st ? 'not a file' : 'no such file';
     throw Object.assign(new Error(`${path}: ${reason}`), { reason });
   }
+  // (past the viewer's limit, in the page's words: node's own message named no file -- r95 A3)
+  const { MAX_FILE_BYTES, OVERSIZE_WORDS } = await import('./cadmesh.js');
+  if (st.size > MAX_FILE_BYTES) {
+    const reason = OVERSIZE_WORDS;
+    throw Object.assign(new Error(`${path}: ${reason}`), { reason });
+  }
   return readFileSync(path);
 }
 // An output a tool will write, checked before the work: its directory there, the path no
@@ -92,13 +100,15 @@ export async function readInput(path) {
 export async function checkOutput(path, inputs) {
   if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
   const { accessSync, constants, statSync } = await import('node:fs');
-  const { dirname } = await import('node:path');
+  const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
   const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
   // (the file the write lands on, as writeOutput finds it: a link's own file, beside which it writes)
   const real = await writeTarget(path);
   const d = dirname(real), dir = st(d), file = st(path);
-  if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${dirname(path)}`);
+  // (the directory the write lands in, named: a link into a missing one named its own, which is
+  // there -- r95 Q6; the path as given where it is not a link)
+  if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${d === dirname(resolve(path)) ? dirname(path) : d}`);
   if (file?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
   for (const i of inputs) {
     const s = file && st(i);
@@ -107,15 +117,30 @@ export async function checkOutput(path, inputs) {
   // (a directory or file it may not write: refused before the work too -- two tools ran it, then
   // printed node's "EACCES: ..."; and by what writeOutput needs -- the directory, where its file
   // beside goes, and the file there when there is one: a writable file in a read-only directory
-  // passed, and stp2mesh converted it all to fail on a ".tmp" never named -- r94 A2)
-  if (!writable(d) || (file && !writable(real))) throw new Error(`could not write ${path}: permission denied`);
+  // passed, and stp2mesh converted it all to fail on a ".tmp" never named -- r94 A2. A file that is
+  // no regular file -- a pipe, a device -- is written as it is, so only it need be writable:
+  // -o /dev/null was refused -- r95 A2)
+  const needs = file && !file.isFile() ? !writable(real) : !writable(d) || (file && !writable(real));
+  if (needs) throw new Error(`could not write ${path}: permission denied`);
 }
 
-// The file a write to path lands on: a link's own file (written through, as an in-place write
-// always was), else path itself
+// The file a write to path lands on: a link's own file, followed link by link -- a link to a file not
+// there yet too, which the rename replaced with a file of its own, the file it named never made, exit
+// 0 (r95 A1) -- else path itself (written through, as an in-place write always was)
 async function writeTarget(path) {
-  const { realpathSync } = await import('node:fs');
-  try { return realpathSync(path); } catch { return path; }
+  const { lstatSync, readlinkSync, statSync } = await import('node:fs');
+  const { dirname, resolve } = await import('node:path');
+  // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
+  // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself
+  try { if (!statSync(path).isFile()) return resolve(path); } catch { /* not there yet: followed below */ }
+  let p = resolve(path);
+  for (let k = 0; k < 40; k++) {
+    let s = null;
+    try { s = lstatSync(p); } catch { return p; }
+    if (!s.isSymbolicLink()) return p;
+    p = resolve(dirname(p), readlinkSync(p));
+  }
+  throw new Error(`could not write ${path}: too many links`);
 }
 
 // An output written whole or not at all: to a file beside it, then renamed over it, so a write that
@@ -131,12 +156,22 @@ async function writeTarget(path) {
 export async function writeOutput(path, bytes) {
   const { chmodSync, chownSync, copyFileSync, renameSync, rmSync, statSync, writeFileSync } = await import('node:fs');
   const { basename, dirname, join } = await import('node:path');
-  const real = await writeTarget(path);
-  const tmp = join(dirname(real), `.${basename(real)}.${process.pid}.tmp`);
+  let real;
+  try { real = await writeTarget(path); } catch (e) { throw new Error(e.message.startsWith('could not write') ? e.message : `could not write ${path}: ${e.message}`); }
   let was = null;
   try { was = statSync(real); } catch { /* a new file: the default mode and owner */ }
+  // (a pipe or a device written as it is: a rename put a regular file in a FIFO's place -- r95 A2)
+  if (was && !was.isFile()) {
+    try { writeFileSync(real, bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
+    return;
+  }
+  // (a name no one can know before, made new or not at all -- `wx`: a link planted at the pid's name
+  // sent the output into another file, and on the shared tree two hosts' runs of one pid shared it
+  // -- r95 Q2)
+  const { randomBytes } = await import('node:crypto');
+  const tmp = join(dirname(real), `.${basename(real)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   try {
-    writeFileSync(tmp, bytes);
+    writeFileSync(tmp, bytes, { flag: 'wx' });
     if (was) {
       chmodSync(tmp, was.mode & 0o7777);
       try { chownSync(tmp, was.uid, was.gid); } catch { /* not ours to give: the user's own */ }
