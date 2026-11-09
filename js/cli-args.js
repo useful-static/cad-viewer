@@ -24,6 +24,11 @@
 //     inputs: the files it reads in another format than the output's, which it must not be
 //     ("it is the input ...": r92 Q3, r93 A1, A5)
 //
+//   await writeOutput(path, bytes), gzipsOutput(path, inputGzipped)
+//     the one writer of all five tools: whole or not at all (a file beside it, renamed over it),
+//     through a link, the file's mode kept; and whether a .cadmesh from a .cadmesh is gzipped
+//     (r93 Q1, r94 A1, A3, A4)
+//
 // Pure ES module; only runCli touches the process (stderr, exit), when it runs; readInput and
 // checkOutput load node:fs when called (the page never calls them).
 
@@ -87,10 +92,12 @@ export async function readInput(path) {
 export async function checkOutput(path, inputs) {
   if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
   const { accessSync, constants, statSync } = await import('node:fs');
-  const { dirname, resolve } = await import('node:path');
+  const { dirname } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
   const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
-  const d = dirname(resolve(path)), dir = st(d), file = st(path);
+  // (the file the write lands on, as writeOutput finds it: a link's own file, beside which it writes)
+  const real = await writeTarget(path);
+  const d = dirname(real), dir = st(d), file = st(path);
   if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${dirname(path)}`);
   if (file?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
   for (const i of inputs) {
@@ -98,26 +105,62 @@ export async function checkOutput(path, inputs) {
     if (s && s.dev === file.dev && s.ino === file.ino) throw new Error(`could not write ${path}: it is the input ${i}`);
   }
   // (a directory or file it may not write: refused before the work too -- two tools ran it, then
-  // printed node's "EACCES: ...")
-  if (file ? !writable(path) : !writable(d)) throw new Error(`could not write ${path}: permission denied`);
+  // printed node's "EACCES: ..."; and by what writeOutput needs -- the directory, where its file
+  // beside goes, and the file there when there is one: a writable file in a read-only directory
+  // passed, and stp2mesh converted it all to fail on a ".tmp" never named -- r94 A2)
+  if (!writable(d) || (file && !writable(real))) throw new Error(`could not write ${path}: permission denied`);
+}
+
+// The file a write to path lands on: a link's own file (written through, as an in-place write
+// always was), else path itself
+async function writeTarget(path) {
+  const { realpathSync } = await import('node:fs');
+  try { return realpathSync(path); } catch { return path; }
 }
 
 // An output written whole or not at all: to a file beside it, then renamed over it, so a write that
 // fails (a full disk, a size limit) leaves the file as it was -- set-colours and split-board, which
 // may write in place, left their input cut short, and printed node's "EFBIG: ..." (r93 Q1). A
-// failure is said in the five tools' one wording, "could not write <path>: ...".
+// failure is said in the five tools' one wording, "could not write <path>: ...". As a write in
+// place was: through a link to its file, and the file's own mode kept (the rename turned a link
+// into a file of its own and left the file it named unchanged, exit 0; 0640 came back 0644 -- r94 A1)
+// A file with other names (hard links) is written in place, from the whole file beside it, so every
+// name sees the new bytes (the rename gave the path a new file and left the other names the old one
+// -- r94 Q3); that last copy can fail part way, so a failure there says where the whole output is.
+// Owner and group are kept where the user may keep them.
 export async function writeOutput(path, bytes) {
-  const { renameSync, rmSync, writeFileSync } = await import('node:fs');
+  const { chmodSync, chownSync, copyFileSync, renameSync, rmSync, statSync, writeFileSync } = await import('node:fs');
   const { basename, dirname, join } = await import('node:path');
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  const real = await writeTarget(path);
+  const tmp = join(dirname(real), `.${basename(real)}.${process.pid}.tmp`);
+  let was = null;
+  try { was = statSync(real); } catch { /* a new file: the default mode and owner */ }
   try {
     writeFileSync(tmp, bytes);
-    renameSync(tmp, path);
+    if (was) {
+      chmodSync(tmp, was.mode & 0o7777);
+      try { chownSync(tmp, was.uid, was.gid); } catch { /* not ours to give: the user's own */ }
+    }
   } catch (e) {
     rmSync(tmp, { force: true });
     throw new Error(`could not write ${path}: ${e.message}`);
   }
+  if (was && was.nlink > 1) {
+    try { copyFileSync(tmp, real); } catch (e) { throw new Error(`could not write ${path}: ${e.message} (the whole output is in ${tmp})`); }
+    rmSync(tmp, { force: true });
+    return;
+  }
+  try { renameSync(tmp, real); } catch (e) {
+    rmSync(tmp, { force: true });
+    throw new Error(`could not write ${path}: ${e.message}`);
+  }
 }
+
+// Whether a tool that reads a .cadmesh and writes one (set-colours, split-board) gzips it: as its
+// input came, and always for a name ending ".gz" in any case. The viewer reads either by its
+// bytes, and stp2mesh writes gzipped by default whatever the name: by the name alone, recolouring
+// stp2mesh's output in place wrote it uncompressed, 6,211 bytes to 32,680 (r94 A3)
+export const gzipsOutput = (path, inputGzipped) => inputGzipped || /\.gz$/i.test(path);
 
 // -h / --help asked: thrown by a tool's main, the usage printed on stdout, exit 0
 export class CliHelp extends Error {}

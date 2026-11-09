@@ -7,7 +7,8 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,7 @@ test('parseCli: values, flags, --k=v, each once, a value never an option, help o
 
 test('every tool refuses a bad command line with a usage error (exit 2, on stderr); a non-CAD input is exit 1', () => {
   writeFileSync(join(dir, 'x.constructor'), 'not a CAD file\n');
+  writeFileSync(join(dir, 'x3.stp'), 'ISO-10303-21;\n');
   const cases = [
     ['stp2mesh.mjs', ['x.stp', '-o', '--raw'], 2, /-o needs a value/],
     ['stp2mesh.mjs', ['x.stp', '-o', 'a.cadmesh', '-o', 'b.cadmesh'], 2, /given twice/],
@@ -73,6 +75,8 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
     ['cadmesh-export.mjs', ['missing.cadmesh'], 1, /no such file/],
     ['dwg-check.mjs', ['missing.dwg'], 1, /no such file/],
     ['stp2mesh.mjs', ['missing.stp'], 1, /no such file/],
+    // (the converter not installed: exit 3, as its usage says -- no arm held it: r94 Q1)
+    ['stp2mesh.mjs', ['x3.stp', '-o', 'x3.cadmesh', '--occt', join(dir, 'no-occt')], 3, /^stp2mesh: occt-import-js not found at .*no-occt/],
   ];
   const bad = [];
   for (const [tool, args, rc, msg] of cases) {
@@ -83,6 +87,7 @@ test('every tool refuses a bad command line with a usage error (exit 2, on stder
     if (r.rc !== rc || !msg.test(said) || /\n\s+at /.test(r.err) || (r.out && said === r.err)) bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 160))}, stdout ${JSON.stringify(r.out.slice(0, 80))}`);
   }
   assert.deepEqual(bad, []);
+  assert.ok(!existsSync(join(dir, 'x3.cadmesh')), 'stp2mesh with no converter wrote an output');
   // an input refused is said in the one shape the tools share, "<tool>: ..." (they said it four ways)
   for (const [tool, args] of [['stp2mesh.mjs', [notCad]], ['stp2mesh.mjs', ['missing.stp']], ['cadmesh-export.mjs', ['missing.cadmesh']]]) {
     const r = run(tool, args);
@@ -184,6 +189,52 @@ test('a write in place that fails leaves the input as it was, said in the one wo
   assert.match(r.stderr, /^set-colours: could not write big\.cadmesh: /);
   assert.ok(Buffer.from(readFileSync(join(dir, 'big.cadmesh'))).equals(Buffer.from(bytes)), 'the input changed');
   assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
+});
+
+test('a write in place as one was: through a link, the mode kept, gzipped as it came; a read-only directory refused before the work (r94 A1-A3)', () => {
+  const sub = join(dir, 'inplace');
+  mkdirSync(sub);
+  const box = readFileSync(join(dir, 'box.cadmesh'));
+  const rgb = readFileSync(join(dir, 'box.rgb'));
+  // (a link: the file it names is written, the link stays a link -- the rename made it a file of its
+  // own and left the real one unchanged, exit 0)
+  writeFileSync(join(sub, 'real.cadmesh'), box);
+  writeFileSync(join(sub, 'c.rgb'), rgb);
+  symlinkSync('real.cadmesh', join(sub, 'link.cadmesh'));
+  // (0604: no umask makes it, so a new file's mode cannot pass for it -- 0640 did under umask 027: r94 Q2)
+  chmodSync(join(sub, 'real.cadmesh'), 0o604);
+  const r = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'link.cadmesh', 'c.rgb', '-o', 'link.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(lstatSync(join(sub, 'link.cadmesh')).isSymbolicLink(), 'the link replaced by a file');
+  assert.ok(!readFileSync(join(sub, 'real.cadmesh')).equals(box), 'the file the link names unchanged');
+  assert.equal(statSync(join(sub, 'real.cadmesh')).mode & 0o777, 0o604, 'its mode not kept');
+  // (a file with another name: both names see the new bytes -- the rename left the other the old: r94 Q3)
+  writeFileSync(join(sub, 'h1.cadmesh'), box);
+  linkSync(join(sub, 'h1.cadmesh'), join(sub, 'h2.cadmesh'));
+  const h = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'h1.cadmesh', 'c.rgb', '-o', 'h1.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(h.status, 0, h.stderr);
+  assert.ok(!readFileSync(join(sub, 'h1.cadmesh')).equals(box), 'h1 unchanged');
+  assert.ok(readFileSync(join(sub, 'h2.cadmesh')).equals(readFileSync(join(sub, 'h1.cadmesh'))), 'the other name kept the old bytes');
+  assert.deepEqual(readdirSync(sub).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
+  // (gzipped as it came, whatever the name: stp2mesh's own .cadmesh, recoloured in place, came back
+  // 526% of its size)
+  writeFileSync(join(sub, 'gz.cadmesh'), gzipSync(box));
+  const g = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'gz.cadmesh', 'c.rgb', '-o', 'gz.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(g.status, 0, g.stderr);
+  const out = readFileSync(join(sub, 'gz.cadmesh'));
+  assert.ok(out[0] === 0x1f && out[1] === 0x8b, 'written uncompressed');
+  // (a writable file in a directory it may not write: refused before the work, in the one wording --
+  // stp2mesh converted it all, then failed on a ".tmp" never named); not as root
+  if (process.getuid?.() !== 0) {
+    const ro = join(dir, 'ro-dir');
+    mkdirSync(ro);
+    writeFileSync(join(ro, 'x.cadmesh'), box);
+    chmodSync(ro, 0o555);
+    const s = run('stp2mesh.mjs', ['x.stp', '-o', join(ro, 'x.cadmesh')]);
+    chmodSync(ro, 0o755);
+    assert.equal(s.rc, 1, s.err);
+    assert.equal(s.err, `stp2mesh: could not write ${join(ro, 'x.cadmesh')}: permission denied\n`);
+  }
 });
 
 done();

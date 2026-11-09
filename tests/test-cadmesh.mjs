@@ -397,8 +397,13 @@ test('the declared unit and the angular deflection reach the header; absent stay
   // (by its one name, as units: another writer's "inch" gave no Auto unit and a scene of "in" and
   // "inch" was "mixed"; a blank one is none, it printed an empty units row -- r93 Q2, Q3)
   const said = (w) => decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)], sourceUnits: w })).header.sourceUnits;
-  assert.deepEqual(['inch', 'INCH', 'inches', 'foot', 'meter', 'MM', ' in ', 'mixed', 'furlong', '  ', ''].map(said),
-    ['in', 'in', 'in', 'ft', 'm', 'mm', 'in', 'mixed', 'furlong', undefined, undefined]);
+  assert.deepEqual(['inch', 'INCH', 'inches', 'foot', 'meter', 'MM', ' in ', 'mixed', 'Mixed', 'MIXED', 'furlong', '  ', ''].map(said),
+    ['in', 'in', 'in', 'ft', 'm', 'mm', 'in', 'mixed', 'mixed', 'mixed', 'furlong', undefined, undefined]);
+  // (units a string or nothing: a number, a boolean, an object, an array refused -- r94 Q5)
+  // (each the length of "mm" with its quotes: patchHeader keeps the header's length)
+  const withUnits = (v) => patchHeader(encodeCadmesh({ meshes: [quad('a', 0)], units: 'mm' }), '"units":"mm"', `"units":${v}`);
+  for (const v of ['25.4', 'true', '{}  ', '[1] ']) assert.throws(() => decodeCadmesh(withUnits(v)), /units is not a string/, v);
+  assert.equal(decodeCadmesh(withUnits('"in"')).header.units, 'in');
 });
 
 test('encode builds the edge sections and facts; decode validates them', () => {

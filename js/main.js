@@ -26,7 +26,7 @@ import { aboveBelow, pastWords, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
-import { mergeModels, sceneUnitsRefusal, modelRanges, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
+import { mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -4731,7 +4731,7 @@ async function runClearance() {
   if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
   if (app.explode.on) setExplode(false); // the gap is measured where the parts are
   const ranges = modelRanges(app.scene);
-  const modelOf = (id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
+  const modelOf = (id) => modelOfBody(ranges, id);
   const sel = [...app.selected];
   const inOne = sel.length && sel.every((id) => modelOf(id) === modelOf(sel[0]));
   const mA = inOne ? modelOf(sel[0]) : 0;
@@ -4792,13 +4792,12 @@ function forgetClearance() {
 // The clearance line of a run's result, in the unit shown now: by the run, and again when the unit
 // picker changes (it kept "1.00 mm" beside Measure's "0.039 in" of the same distance -- r92 A2)
 function sayClearance(lc) {
-  // a part, and the model it is in (a board's parts are often just "SOLID"; runClearance's modelOf
-  // is its own: a ReferenceError here stopped every run at "checking …"), named as the tree, the
+  // a part, and the model it is in (a board's parts are often just "SOLID"; by scene.js
+  // modelOfBody, runClearance's rule too -- r92, r94 A5), named as the tree, the
   // hover and the info panel name it -- meshLabel, "owner › body" by the list's labels (the raw
   // body name read "mesh 2" for the tree's "PRT0001 › mesh 2" -- r93 A2)
   const ranges = modelRanges(app.scene);
-  const modelOf = (id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
-  const nm = (id) => `${meshLabel(id) || `body ${id}`} (${modelOf(id) + 1})`; // (unnamed: the tree's "body N")
+  const nm = (id) => `${meshLabel(id) || `body ${id}`} (${modelOfBody(ranges, id) + 1})`; // (unnamed: the tree's "body N")
   const text = lc.distance === 0
     ? `0: ${nm(lc.a)} touches or overlaps ${nm(lc.b)}`
     : `${lenNum(lc.distance, 'measure')} ${lenUnit()} from ${nm(lc.a)} to ${nm(lc.b)}${lc.noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;

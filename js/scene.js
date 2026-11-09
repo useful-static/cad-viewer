@@ -217,4 +217,7 @@ export function modelRanges(models) {
   }
   return out;
 }
+// The index of the model a body id (1-based) is in, by modelRanges' ranges, or -1 (one rule: the
+// clearance run and its line each had a copy -- r94 A5)
+export const modelOfBody = (ranges, id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
 
