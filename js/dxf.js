@@ -4,7 +4,7 @@
 // canvas strokes:
 //   { units, insunits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, dash, weight, ltype, width?,
-//               point?, outline?, evenodd?, frame?, circle?, hold?, via? }],
+//               point?, outline?, evenodd?, frame?, circle?, hold?, via?, clip?, clipPoly? }],
 //     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?,
 //               widthFactor?, oblique?, wrap?, clip?, clipPoly?, hold?, via? }],
 //   (circle: drawn as a whole circle, for 2D Measure's centre and Ø; hold: the frozen layers of the
@@ -19,8 +19,11 @@
 //   viewport's frame. mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text,
 //   or one in a mirroring block; widthFactor: its width x that, its 41 and its block's stretch
 //   along it; oblique: its slant in radians; wrap: an MTEXT's reference width; clip: a layout
-//   viewport's frame [x0, y0, x1, y1] it is cut to, or its clip outline's box, the outline itself in
-//   clipPoly (xy, flat). h, fit and wrap are lengths: TEXT_LENGTHS)
+//   viewport's frame [x0, y0, x1, y1] a text is clipped to, or the box of the clip outline a text or
+//   path is seen through, the outline itself in clipPoly (xy, flat): the view clips them to it,
+//   even-odd, and 2D Measure and the hover take a point of them only where inOutline says the
+//   outline shows it. A path or text seen through a viewport is whole, kept where the outline shows
+//   some of it; a frame is an outline of four points. h, fit and wrap are lengths: TEXT_LENGTHS)
 //   (align left / center / right; valign baseline / bottom / middle / top for a TEXT, top / middle /
 //   bottom for an MTEXT, which hangs its lines from the point; fit: an aligned / fit text's
 //   baseline length, fitMode 'aligned' (both ways) or 'fit' (width): js/dxf-view.js draws them so,
@@ -383,7 +386,8 @@ export function parseDXF(s, opts = {}) {
   // point m lands at C + R(twist) (h / viewHeight) (m - viewCentre),
   // clipped to the viewport's frame, which is drawn too (frame: true), leaving out the layers frozen
   // in that viewport (341) and what references on them draw; one whose clip boundary is no rectangle
-  // (90 bit 0x10000, its entity 340) is cut to that outline instead, its frame not drawn; one turned
+  // (90 bit 0x10000, its entity 340) shows what it holds whole, the view clipping it to that outline
+// (seenThrough), its frame not drawn; one turned
   // off (90 bit 0x20000) draws its frame alone. A DWG's, from R2000, as a DXF's (js/dwg.js VIEWPORT
   // writes its 90, 340 and 341 -- r99 Q1)
   // Each sheet's name and place among the tabs, from its LAYOUT (OBJECTS), whose block-record
@@ -452,10 +456,6 @@ export function parseDXF(s, opts = {}) {
       // (what a viewport draws of model space counts against the drawing's budget too: many
       // viewports multiply it)
       const p0 = lo.paths.length;
-      // a path whose box lies outside what the viewport shows of model space is passed over
-      // with one box test; each one clipped is walked (many viewports onto a big model
-      // multiply it)
-      const seen = viewInModel(M, rect);
       // (a clip boundary that is no rectangle -- 90 bit 0x10000, its entity named by 340 on this
       // sheet: what it shows is cut to that outline, and no rectangle is drawn, the outline being an
       // entity of the sheet's own. Clipped to its rectangle, three of a house plan's viewports drew
@@ -479,17 +479,13 @@ export function parseDXF(s, opts = {}) {
           const outline = tmp.paths.find((p) => p.closed && !p.outline && p.pts.length >= 6);
           if (outline) {
             poly = [];
-            // (a point the same as the one before it, dropped, the first against the last too: a
-            // closed path's first point repeated at its end blocked the ears of the triangles, and a
-            // fill half inside an L drew nothing -- r100 A1; an inner corner written twice hid its
-            // turn, the L read as convex and a fill over it kept 600 of 1800 -- r101 Q1)
-            for (let k = 0; k < outline.pts.length; k += 2) {
-              const x = outline.pts[k], y = outline.pts[k + 1], q = poly[poly.length - 1];
-              if (!q || q[0] !== x || q[1] !== y) poly.push([x, y]);
-            }
-            while (poly.length > 3 && poly[0][0] === poly[poly.length - 1][0] && poly[0][1] === poly[poly.length - 1][1]) poly.pop();
+            for (let k = 0; k < outline.pts.length; k += 2) poly.push([outline.pts[k], outline.pts[k + 1]]);
           }
         }
+        // (a boundary that gives no outline here -- a REGION, which VPCLIP takes, or a handle that
+        // names nothing: drawn nothing through, counted, as AutoCAD would draw only what it clips;
+        // read as no boundary, it drew the whole rectangle and a frame AutoCAD does not -- r103 Q4)
+        if (!poly) { countOnce(v, 'VIEWPORT (its clip boundary not read)'); continue; }
       }
       // (the layers frozen in this viewport alone, 341 by handle: drawn through it, a kitchen's
       // equipment tags its author froze on the electrical sheet showed there, 123 paths -- r98 Q2. A
@@ -499,19 +495,28 @@ export function parseDXF(s, opts = {}) {
       // those were drawn -- 060's "SECTIONS AND DETAILS" differed from its own DWG on 8 layers: r100 Q2)
       const vpFrozen = new Set(v.g.filter(([c]) => c === 341 || c === 331).map(([, h]) => layerByHandle.get(String(h).trim().toUpperCase())).filter((n) => n !== undefined).map((n) => nameKey(layerName(n))));
       const frozenHere = (it) => vpFrozen.size > 0 && (vpFrozen.has(nameKey(it.layer)) || (it.via || []).some((l) => vpFrozen.has(nameKey(l))));
+      // (what clips it: its outline, or its frame as one of four points -- one mechanism, the view
+      // clipping, and one snap rule, for both: a frame's lines were cut here and an outline's not,
+      // and a wall's snaps differed by which clipped it, r103 A1. Its points, one array every item
+      // seen through it shares, and its box)
+      const ring = poly || [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]];
+      const clip = { poly: Float64Array.from(ring.flat()), box: [Math.min(...ring.map((q) => q[0])), Math.min(...ring.map((q) => q[1])), Math.max(...ring.map((q) => q[0])), Math.max(...ring.map((q) => q[1]))] };
+      // a path whose box lies outside what the viewport shows of model space is passed over with one
+      // box test -- the box the texts are culled by too, the outline's (the frame's, culling paths
+      // alone, dropped a line its text beside it kept: r103 A2)
+      const seen = viewInModel(M, clip.box);
       cull(budget, out.paths.length + out.texts.length);
       for (let k = 0; k < out.paths.length; k++) {
         const bb = pathBoxes[k];
         if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
         if (frozenHere(out.paths[k])) continue;
-        // (a clip costs the path's points, drawn or not: charged by them, so viewports x points
-        // is bounded -- a path whose box overlaps the view while every segment misses the frame
-        // drew nothing and cost its points per viewport)
-        // (a polygon's clip costs the points times its vertices: charged so -- by the points alone,
-        // 8,000 x 8,000 took 3.3 s, four times as long per doubling: r99 A4)
-        clipped(budget, (out.paths[k].pts.length / 2) * (poly ? poly.length : 1));
-        if (poly) clipPathPoly(out.paths[k], M, s, poly, rect, lo.paths, budget);
-        else clipPath(out.paths[k], M, s, rect, lo.paths);
+        // (a path costs its points times the outline's, drawn or not: what the keep test and the
+        // view's inside test cost -- by the points alone, 8,000 x 8,000 took 3.3 s, four times as
+        // long per doubling: r99 A4)
+        // (a frame's four points charged as one, as before r103: charged as four, two drawings of
+        // the corpus, fish_processing_plant and 051-drawing, were refused)
+        clipped(budget, (out.paths[k].pts.length / 2) * (poly ? ring.length : 1));
+        seenThrough(out.paths[k], M, s, clip, lo.paths);
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
       // not cancel with the sheet's hatches or another viewport's view of it)
@@ -536,22 +541,17 @@ export function parseDXF(s, opts = {}) {
         // dropped whole by its point, a text ran past the frame, or vanished though half inside)
         const c = textCorners(seen);
         const bx = [Math.min(...c.map((q) => q[0])), Math.max(...c.map((q) => q[0]))], by = [Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[1]))];
-        if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
-        // (always clipped: whether it crosses the frame is the font's to say, not the estimate's --
+        // (kept when the outline shows some of its box -- a corner of it inside, an edge of the
+        // outline across it, or the outline inside it, the r100 A2 rule -- and clipped to the outline
+        // by the view, always: whether it crosses is the font's to say, not the estimate's --
         // "WWWWWWWW" boxed inside by 0.6 a character ran 30 units past the frame in the font)
-        // (by a polygon boundary: its box, for the extents and the hover's first test, and the outline
-        // itself, which the view clips by -- by the box alone, a TEXT in an L's notch was drawn: r99 Q2)
-        seen.clip = poly ? [Math.min(...poly.map((q) => q[0])), Math.min(...poly.map((q) => q[1])), Math.max(...poly.map((q) => q[0])), Math.max(...poly.map((q) => q[1]))] : rect.slice();
-        if (poly) {
-          seen.clipPoly = Float64Array.from(poly.flat());
-          // (wholly outside the outline -- its four corners and its centre, with no edge of the outline
-          // crossing its box -- it is not drawn at all)
-          const cs = [...c, [(bx[0] + bx[1]) / 2, (by[0] + by[1]) / 2]];
-          // (an edge of the outline through its box, not a vertex in it: a strip's edge across a text
-          // with no vertex inside dropped the text the line beside it kept -- r100 A2)
-          const crosses = poly.some((a, i) => segMeetsBox(a, poly[(i + 1) % poly.length], bx[0], by[0], bx[1], by[1]));
-          if (!crosses && !cs.some(([x, y]) => insidePoly(poly, x, y))) continue;
-        }
+        const box = [bx[0], by[0], bx[1], by[1]];
+        // (charged the outline's points: the keep test, and the view's clip, cost them -- r103 Q2)
+        if (poly) clipped(budget, ring.length);
+        if (!boxMeetsOutline(box, c, clip.poly)) continue;
+        // (its outline's box, for the extents and the hover's first test, and the outline itself)
+        seen.clip = clip.box.slice();
+        seen.clipPoly = clip.poly;
         addItem(budget, lo.texts, seen, 2);
       }
       if (!poly) frame(v, rect);
@@ -573,93 +573,8 @@ export function parseDXF(s, opts = {}) {
 // change of scale -- a layout viewport -- multiplies
 const TEXT_LENGTHS = ['h', 'fit', 'wrap'];
 
-// One model path seen through a viewport (transform M, scale s) onto paper,
-// clipped to rect [x0, y0, x1, y1]: a filled one by Sutherland-Hodgman, a
-// line by Liang-Barsky segment by segment, its kept runs as open paths
-function clipPath(p, M, s, rect, out) {
-  const n = p.pts.length / 2;
-  const P = [];
-  for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
-  // (its lengths scaled as the drawing is: the dash pattern and a polyline's width)
-  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
-  if (p.fill) {
-    // (a fill seen whole as it is; one the frame cuts is no circle: a half-disc kept its mark and 2D
-    // Measure offered its centre and Ø -- r98 Q4)
-    if (P.every(([x, y]) => x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])) {
-      out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true });
-      return;
-    }
-    delete base.circle;
-    let poly = P;
-    const edges = [[0, rect[0], 1], [0, rect[2], -1], [1, rect[1], 1], [1, rect[3], -1]];
-    for (const [k, lim, sg] of edges) {
-      const inside = (q) => sg * (q[k] - lim) >= 0;
-      const next = [];
-      for (let i = 0; i < poly.length; i++) {
-        const a = poly[i], b = poly[(i + 1) % poly.length];
-        if (inside(a)) next.push(a);
-        if (inside(a) !== inside(b)) {
-          const t = (lim - a[k]) / (b[k] - a[k]);
-          next.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-        }
-      }
-      poly = next;
-      if (!poly.length) return;
-    }
-    out.push({ ...base, pts: Float64Array.from(poly.flat()), closed: true });
-    return;
-  }
-  if (n === 1 || p.point) {
-    const [x, y] = P[0];
-    if (x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]) out.push({ ...base, pts: Float64Array.of(x, y, x, y) });
-    return;
-  }
-  // (one seen whole: as it is, closed if it was -- cut into runs, a circle inside a viewport came
-  // back open, with no centre and no Ø in 2D Measure: 6,052 circles in 28 of the dozens' 140 DXFs,
-  // r97 Q1)
-  if (P.every(([x, y]) => x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3])) {
-    out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed });
-    return;
-  }
-  // (a run of a cut path is no whole circle: not marked one)
-  const cut = { ...base };
-  delete cut.circle;
-  const segs = p.closed ? n : n - 1;
-  let run = null;
-  const flush = () => { if (run && run.length >= 4) out.push({ ...cut, pts: Float64Array.from(run), closed: false }); run = null; };
-  for (let i = 0; i < segs; i++) {
-    const a = P[i], b = P[(i + 1) % n];
-    // Liang-Barsky
-    let t0 = 0, t1 = 1;
-    const dx = b[0] - a[0], dy = b[1] - a[1];
-    let keep = true;
-    for (const [pp, q] of [[-dx, a[0] - rect[0]], [dx, rect[2] - a[0]], [-dy, a[1] - rect[1]], [dy, rect[3] - a[1]]]) {
-      if (pp === 0) { if (q < 0) { keep = false; break; } continue; }
-      const r = q / pp;
-      if (pp < 0) { if (r > t1) { keep = false; break; } if (r > t0) t0 = r; } else { if (r < t0) { keep = false; break; } if (r < t1) t1 = r; }
-    }
-    if (!keep) { flush(); continue; }
-    const s0 = [a[0] + dx * t0, a[1] + dy * t0], s1 = [a[0] + dx * t1, a[1] + dy * t1];
-    if (!run || t0 > 0) { flush(); run = [s0[0], s0[1]]; }
-    run.push(s1[0], s1[1]);
-    if (t1 < 1) flush();
-  }
-  flush();
-}
 
-// Whether the segment a-b meets the box [x0, x1] x [y0, y1] (Liang-Barsky)
-function segMeetsBox(a, b, x0, y0, x1, y1) {
-  let t0 = 0, t1 = 1;
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
-    if (p === 0) { if (q < 0) return false; continue; }
-    const r = q / p;
-    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
-  }
-  return true;
-}
-// A point inside a polygon given flat, xy... (even-odd): the one test, for the clip here and the
-// view's clip and hover (js/dxf-view.js) -- written in both, two copies: r100 A5
+// A point inside a polygon given flat, xy... (even-odd) -- written in two places once: r100 A5
 export function insideFlat(p, x, y) {
   let ins = false;
   for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
@@ -668,227 +583,69 @@ export function insideFlat(p, x, y) {
   }
   return ins;
 }
-// the same of a polygon [[x, y], ...] (its flat form made once per outline: the clip asks it of every
-// piece)
-const FLAT = new WeakMap();
-const insidePoly = (poly, x, y) => { let f = FLAT.get(poly); if (!f) { f = poly.flat(); FLAT.set(poly, f); } return insideFlat(f, x, y); };
-// Whether a polygon is convex: every turn one way, and none back along the edge it came by (a slit
-// read as convex, and two opposite half-planes cut its fill to nothing, 0 of 1200 -- r102 A2)
-function convexPoly(poly) {
-  let sign = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
-    const z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-    if (Math.abs(z) < 1e-12) {
-      if ((b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0) return false;
-      continue;
-    }
-    if (sign === 0) sign = Math.sign(z); else if (Math.sign(z) !== sign) return false;
-  }
-  return true;
+// Whether a viewport's clip outline (flat, xy...) shows a point: the one geometric question the
+// page asks of it -- 2D Measure's snaps and the hover. Inside it by the even-odd rule the view
+// clips by (ctx.clip(outline, 'evenodd')), or on one of its edges, as a frame shows the lines on it
+// (r102 Q1). What is drawn the canvas clips; nothing here cuts geometry (r103, the parent's
+// direction: rounds 99 to 102 each found a case the hand-written cut got wrong)
+export function inOutline(p, x, y) {
+  return insideFlat(p, x, y) || onOutlineEdge(p, x, y);
 }
-// A point an outline keeps: inside it (even-odd) or on one of its edges -- by the inside alone, a
-// wall on a clip outline's top or right edge was dropped and one on its bottom or left kept, where a
-// viewport's frame keeps all four (r102 Q1)
-function keptBy(poly, x, y) {
-  if (insidePoly(poly, x, y)) return true;
-  for (let e = 0; e < poly.length; e++) {
-    const c = poly[e], d = poly[(e + 1) % poly.length];
-    const dx = d[0] - c[0], dy = d[1] - c[1], L2 = dx * dx + dy * dy;
+// whether a point lies on one of an outline's edges
+export function onOutlineEdge(p, x, y) {
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+    const cx = p[j], cy = p[j + 1], dx = p[i] - cx, dy = p[i + 1] - cy, L2 = dx * dx + dy * dy;
     if (!L2) continue;
-    const w = (x - c[0]) * dx + (y - c[1]) * dy;
+    const w = (x - cx) * dx + (y - cy) * dy;
     if (w < 0 || w > L2) continue;
     const tol = 1e-9 * Math.max(1, Math.abs(x), Math.abs(y), Math.sqrt(L2));
-    if (Math.abs(dx * (y - c[1]) - dy * (x - c[0])) <= tol * Math.sqrt(L2)) return true;
+    if (Math.abs(dx * (y - cy) - dy * (x - cx)) <= tol * Math.sqrt(L2)) return true;
   }
   return false;
 }
-// The edges of a polygon that cross, as the heights they cross at (none: it is simple). Each pair
-// whose heights overlap is tested and charged to the budget (edges sorted by their lowest point)
-function crossingHeights(poly, budget) {
-  const n = poly.length, ys = [];
-  const lo = (i) => Math.min(poly[i][1], poly[(i + 1) % n][1]), hi = (i) => Math.max(poly[i][1], poly[(i + 1) % n][1]);
-  const order = Array.from({ length: n }, (_, i) => i).sort((p, q) => lo(p) - lo(q));
-  for (let oi = 0; oi < n; oi++) {
-    const i0 = order[oi], top = hi(i0);
-    let tested = 0;
-    for (let oj = oi + 1; oj < n && lo(order[oj]) <= top; oj++) {
-      tested++;
-      const i = Math.min(i0, order[oj]), j = Math.max(i0, order[oj]);
-      if (j - i < 2 || (i === 0 && j === n - 1)) continue;
-      const a = poly[i], b = poly[(i + 1) % n];
-      const c = poly[j], d = poly[(j + 1) % n];
-      const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-      if (!den) continue;
-      const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
-      const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
-      if (t > 0 && t < 1 && u > 0 && u < 1) ys.push(a[1] + (b[1] - a[1]) * t);
-    }
-    clipped(budget, tested);
-  }
-  return ys;
+// Whether segments a-b and c-d meet (touching counts)
+function segsMeet(ax, ay, bx, by, cx, cy, dx, dy) {
+  const o = (px, py, qx, qy, rx, ry) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+  const d1 = o(cx, cy, dx, dy, ax, ay), d2 = o(cx, cy, dx, dy, bx, by), d3 = o(ax, ay, bx, by, cx, cy), d4 = o(ax, ay, bx, by, dx, dy);
+  if (d1 !== d2 && d3 !== d4) return true;
+  const on = (px, py, qx, qy, rx, ry) => Math.min(px, qx) <= rx && rx <= Math.max(px, qx) && Math.min(py, qy) <= ry && ry <= Math.max(py, qy);
+  return (d1 === 0 && on(cx, cy, dx, dy, ax, ay)) || (d2 === 0 && on(cx, cy, dx, dy, bx, by)) || (d3 === 0 && on(ax, ay, bx, by, cx, cy)) || (d4 === 0 && on(ax, ay, bx, by, dx, dy));
 }
-// A polygon's even-odd inside as convex pieces: in each band between the heights of its points and
-// crossings no two edges cross, so the 1st and 2nd, 3rd and 4th edges from the left bound what is
-// inside, as the points and lines are kept (insidePoly). A piece bounded by the same two edges as
-// the one below it is that piece made taller, not a new one -- one a band, a comb's 2,403 points
-// made 1,280,001 pieces, 1.25 GB (r102 Q2). The edges each band walks (those across it, kept in a
-// list as the bands rise) are charged to the budget
-function bandPieces(poly, cross, budget) {
-  const n = poly.length;
-  const ys = [...new Set([...poly.map((q) => q[1]), ...cross])].sort((a, b) => a - b);
-  const xAt = (i, y) => { const a = poly[i], b = poly[(i + 1) % n]; return a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]); };
-  const lo = (i) => Math.min(poly[i][1], poly[(i + 1) % n][1]), hi = (i) => Math.max(poly[i][1], poly[(i + 1) % n][1]);
-  const order = Array.from({ length: n }, (_, i) => i).filter((i) => lo(i) < hi(i)).sort((p, q) => lo(p) - lo(q));
-  // (where the two edges meet at a band's end, one point: the two, the right a hair left of the left,
-  // made an edge that ran backwards and cut the whole piece away -- a star lost a point's half)
-  const end = (l, r, y) => (r - l > 1e-9 * (1 + Math.abs(l)) ? [[l, y], [r, y]] : [[(l + r) / 2, y]]);
-  const out = [];
-  let open = new Map(), active = [], next = 0;
-  const close = (pc) => {
-    const part = [...end(xAt(pc.l, pc.y0), xAt(pc.r, pc.y0), pc.y0), ...end(xAt(pc.l, pc.y1), xAt(pc.r, pc.y1), pc.y1).reverse()];
-    if (part.length >= 3) out.push(part);
-  };
-  for (let k = 0; k + 1 < ys.length; k++) {
-    const y0 = ys[k], y1 = ys[k + 1], ym = (y0 + y1) / 2;
-    while (next < order.length && lo(order[next]) < ym) active.push(order[next++]);
-    active = active.filter((i) => hi(i) > ym);
-    clipped(budget, active.length);
-    const es = active.map((i) => [i, xAt(i, ym)]).sort((p, q) => p[1] - q[1]);
-    const now = new Map();
-    for (let e = 0; e + 1 < es.length; e += 2) {
-      const l = es[e][0], r = es[e + 1][0], key = `${l},${r}`;
-      const pc = open.get(key);
-      if (pc && pc.y1 === y0) { pc.y1 = y1; open.delete(key); now.set(key, pc); } else now.set(key, { l, r, y0, y1 });
-    }
-    for (const pc of open.values()) close(pc);
-    open = now;
-  }
-  for (const pc of open.values()) close(pc);
-  clipped(budget, out.length);
-  return out;
-}
-// The convex parts a fill is cut by, once per outline: itself if convex, else its bands (bandPieces),
-// the even-odd inside its lines are cut by -- a bowtie's triangles covered its whole box, and a fill
-// over it kept 1800 where its lines keep 900 (r101 Q2). Each with its box, so a fill is clipped by
-// the parts it meets alone
-const PARTS = new WeakMap();
-function convexParts(poly, budget) {
-  let parts = PARTS.get(poly);
-  if (!parts) {
-    // (crossings first: a star drawn in one stroke turns one way at every point and reads as convex.
-    // Every outline not convex is cut by bands: its triangles, made for a simple outline, spanned
-    // the gap where one touched itself at a corner -- 800 drawn of an even-odd 500: r102 A2)
-    const cross = crossingHeights(poly, budget);
-    const ps = !cross.length && convexPoly(poly) ? [poly] : bandPieces(poly, cross, budget);
-    parts = ps.map((q) => {
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      for (const [x, y] of q) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-      return { q, box: [x0, y0, x1, y1] };
-    });
-    PARTS.set(poly, parts);
-  }
-  return parts;
-}
-// One model path seen through a viewport whose clip boundary is a polygon (paper coordinates): a
-// line cut where it crosses the boundary, each piece kept by its middle; one seen whole as it is;
-// a fill by Sutherland-Hodgman against each of the boundary's convex parts (convexParts) (clipped to
-// its rectangle, its lines drew past a triangle's sides -- r98 Q3)
-function clipPathPoly(p, M, s, poly, box, out, budget) {
-  const n = p.pts.length / 2;
-  const P = [];
-  for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
-  const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
-  if (p.fill) {
-    // (seen whole as it is: whole by the line cut's own rule, its outline as a closed line -- its own
-    // test of crossings missed one through an outline vertex, and a triangle into a notch from vertex
-    // to vertex was drawn whole, 375 of its 690 in the notch: r101 A1; a hatch with its corners in a
-    // U's two arms drawn across the gap -- r100 Q1; cut, no circle -- r98 Q4)
-    const edge = cutByOutline(P, true, poly);
-    if (edge.whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
-    delete base.circle;
-    // (its snaps, the pieces' seams not among them: its own edge kept by the outline, as runs -- its
-    // corners inside and where it crosses the outline. Each piece's corners and middles were offered,
-    // "middle (35, 40)" inside an L's fill on a seam never drawn: r102 Q3)
-    let first = true;
-    const pb = boxOf({ pts: P.flat() });
-    // (a convex outline cuts it once; one that is not, by each of its convex parts it meets -- by its
-    // box, a hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
-    const parts = convexParts(poly, budget);
-    clipped(budget, parts.length);
-    for (const { q: part, box: qb } of parts) {
-      if (qb[2] < pb[0] || qb[0] > pb[2] || qb[3] < pb[1] || qb[1] > pb[3]) continue;
-      clipped(budget, n);
-      let sub = P;
-      const turn = Math.sign(part.reduce((a, q, i) => { const r = part[(i + 1) % part.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
-      for (let i = 0; i < part.length && sub.length; i++) {
-        const a = part[i], b = part[(i + 1) % part.length];
-        const side = (q) => turn * ((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) >= 0;
-        const next = [];
-        for (let k = 0; k < sub.length; k++) {
-          const c = sub[k], d = sub[(k + 1) % sub.length];
-          if (side(c)) next.push(c);
-          if (side(c) !== side(d)) {
-            const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-            const t = den ? ((b[0] - a[0]) * (a[1] - c[1]) - (b[1] - a[1]) * (a[0] - c[0])) / den : 0;
-            next.push([c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t]);
-          }
-        }
-        sub = next;
-      }
-      if (sub.length >= 3) {
-        out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true, snapRuns: first ? edge.runs.map((r) => Float64Array.from(r)) : [] });
-        first = false;
-      }
-    }
-    return;
-  }
-  if (n === 1 || p.point) {
-    if (keptBy(poly, P[0][0], P[0][1])) out.push({ ...base, pts: Float64Array.of(P[0][0], P[0][1], P[0][0], P[0][1]) });
-    return;
-  }
-  const cut = { ...base };
-  delete cut.circle;
-  const { runs, whole } = cutByOutline(P, !!p.closed, poly);
-  // (seen whole: as it is, closed if it was, a circle if it was)
-  if (whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed }); return; }
-  for (const r of runs) if (r.length >= 4) out.push({ ...cut, pts: Float64Array.from(r), closed: false });
-}
-// A line of points P (closed or not) cut by an outline: its runs inside, each piece kept by its
-// middle, and whether it is whole -- inside, in one run, not crossed. The one rule a line and a
-// fill's whole test both use (r101 A1)
-function cutByOutline(P, closed, poly) {
-  const n = P.length;
+// Whether an outline (flat) shows some of a path (flat points, closed or not; a fill's inside too):
+// a point of it the outline shows, an edge of the outline across it, or -- a fill -- the outline
+// inside it. A test, not a cut: what is drawn of it the view's clip decides
+function meetsOutline(pts, closed, fill, poly) {
+  const n = pts.length / 2, m = poly.length / 2;
+  for (let i = 0; i < n; i++) if (inOutline(poly, pts[2 * i], pts[2 * i + 1])) return true;
   const segs = closed ? n : n - 1;
-  const runs = [];
-  let run = null, whole = true;
   for (let i = 0; i < segs; i++) {
-    const a = P[i], b = P[(i + 1) % n];
-    const ts = [0, 1];
-    for (let e = 0; e < poly.length; e++) {
-      const c = poly[e], d = poly[(e + 1) % poly.length];
-      const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-      if (!den) continue;
-      const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
-      const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
-      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
-    }
-    ts.sort((x, y) => x - y);
-    for (let k = 0; k + 1 < ts.length; k++) {
-      const t0 = ts[k], t1 = ts[k + 1];
-      if (t1 - t0 < 1e-12) continue;
-      const tm = (t0 + t1) / 2;
-      const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      const [mx, my] = at(tm);
-      if (!keptBy(poly, mx, my)) { whole = false; if (run) { runs.push(run); run = null; } continue; }
-      const s0 = at(t0), s1 = at(t1);
-      if (!run || t0 > 0) { if (run) runs.push(run); run = [s0[0], s0[1]]; }
-      run.push(s1[0], s1[1]);
-      if (t1 < 1) { whole = false; runs.push(run); run = null; }
+    const j = (i + 1) % n;
+    for (let e = 0; e < m; e++) {
+      const f = (e + 1) % m;
+      if (segsMeet(pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1], poly[2 * e], poly[2 * e + 1], poly[2 * f], poly[2 * f + 1])) return true;
     }
   }
-  if (run) runs.push(run);
-  return { runs, whole: whole && runs.length === 1 };
+  return !!fill && n >= 3 && insideFlat(pts, poly[0], poly[1]);
+}
+// Whether an outline shows some of a text's box (box [x0, y0, x1, y1], its corners c): a corner
+// inside, an edge of the outline across it (r100 A2), or the outline inside it
+function boxMeetsOutline(box, c, poly) {
+  if (c.some(([x, y]) => inOutline(poly, x, y))) return true;
+  const ring = Float64Array.from(c.flat());
+  return meetsOutline(ring, true, true, poly) || (poly[0] >= box[0] && poly[0] <= box[2] && poly[1] >= box[1] && poly[1] <= box[3]);
+}
+// One model path seen through a viewport clipped to an outline (paper coordinates): whole, as it
+// is, with the outline it is seen through (clipPoly, and its box, clip) -- the view clips it there
+// (js/dxf-view.js: ctx.clip(outline, 'evenodd')), and 2D Measure and the hover ask inOutline of a
+// point. Cut here by hand, rounds 99 to 102 each found an outline the cut got wrong (r103)
+function seenThrough(p, M, s, clip, out) {
+  const n = p.pts.length / 2;
+  const pts = new Float64Array(2 * n);
+  for (let i = 0; i < n; i++) { const [x, y] = ap(M, p.pts[2 * i], p.pts[2 * i + 1]); pts[2 * i] = x; pts[2 * i + 1] = y; }
+  // (kept only where the outline shows some of it: kept whole whatever it showed, a line in an L's
+  // notch counted as drawn and listed its layer, which the sheet draws nothing of -- r103 A3)
+  if (!meetsOutline(pts, p.closed || p.fill, p.fill, clip.poly)) return;
+  out.push({ ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box });
 }
 
 // a path's box [x0, y0, x1, y1]
@@ -1928,11 +1685,17 @@ export function itemsBox(out) {
   for (const p of out.paths) {
     // (a wide polyline reaches half its width past its points: Fit cut it at the edge)
     const r = p.width > 0 ? p.width / 2 : 0;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let k = 0; k < p.pts.length; k += 2) {
       if (!Number.isFinite(p.pts[k]) || !Number.isFinite(p.pts[k + 1])) continue;
-      min[0] = Math.min(min[0], p.pts[k] - r); max[0] = Math.max(max[0], p.pts[k] + r);
-      min[1] = Math.min(min[1], p.pts[k + 1] - r); max[1] = Math.max(max[1], p.pts[k + 1] + r);
+      x0 = Math.min(x0, p.pts[k] - r); x1 = Math.max(x1, p.pts[k] + r);
+      y0 = Math.min(y0, p.pts[k + 1] - r); y1 = Math.max(y1, p.pts[k + 1] + r);
     }
+    // (one seen through a clip outline, whole: what the outline's box shows of it, as a text's)
+    if (p.clip) { x0 = Math.max(x0, p.clip[0]); y0 = Math.max(y0, p.clip[1]); x1 = Math.min(x1, p.clip[2]); y1 = Math.min(y1, p.clip[3]); }
+    if (!(x0 <= x1 && y0 <= y1)) continue;
+    min[0] = Math.min(min[0], x0); max[0] = Math.max(max[0], x1);
+    min[1] = Math.min(min[1], y0); max[1] = Math.max(max[1], y1);
   }
   for (const t of out.texts) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

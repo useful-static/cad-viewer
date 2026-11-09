@@ -75,7 +75,9 @@ const BY_EXT = new Map(FORMATS.flatMap((f) => f.ext.map((e) => [e, f])));
 export const COMPANION_EXT = ['mtl', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'ktx2'];
 // (by its own last extension: no reader unpacks a companion, so photo.png.gz is no picture -- by
 // extOf, which reads past a .gz, it was taken, and a bzip2 one refused the zip: r80 A2)
-export const isCompanion = (name) => { const m = /\.([a-z0-9]+)$/i.exec(String(name || '').split(/[?#]/)[0]); return !!m && COMPANION_EXT.includes(m[1].toLowerCase()); };
+// (a file name, as extOf's: cut at "#" or "?", a buffer "scene#1.bin" was no companion and its
+// .gltf refused, where extOf read the same name whole -- r103 Q1)
+export const isCompanion = (name) => { const m = /\.([a-z0-9]+)$/i.exec(String(name || '')); return !!m && COMPANION_EXT.includes(m[1].toLowerCase()); };
 // A companion file's key: its name without a directory (cut at / or \) and without case. A map's
 // own keys are read by it too, so a map keyed by bare name (a drop: main.js keys by File.name) and
 // one keyed by path both match.

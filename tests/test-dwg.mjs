@@ -629,7 +629,9 @@ t('a drop in a block the drawing walks is counted not drawn, the block by any ca
       const k = drawDWG(readDWG(new Uint8Array(readFileSync(kitchen))));
       const tags = Object.fromEntries(k.layouts.map((l) => [l.name, l.paths.filter((p) => p.layer === 'K-EQPM-TAG').length]));
       assert.equal(tags['K-102 ELECTRICAL'], 0, JSON.stringify(tags));
-      assert.equal(tags['K-101 EQUIPMENT'], 135, JSON.stringify(tags));
+      // (132 tags, whole: 3 of them cross the viewport's edge, which the view clips -- cut here until
+      // r103, each was 2 runs, and 135 pieces)
+      assert.equal(tags['K-101 EQUIPMENT'], 132, JSON.stringify(tags));
     });
   }
 }

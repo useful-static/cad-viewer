@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { insideFlat, itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
+import { inOutline, onOutlineEdge, itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
@@ -154,7 +154,8 @@ export function segmentIndex(paths, o, span) {
   }
   return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)), segs, pathOf, paths, o, span };
 }
-// -> the path index of the nearest segment within r that accept(pathIndex) takes, or -1
+// -> the path index of the nearest segment within r that accept(pathIndex, [x, y] its point nearest
+// (x, y)) takes, or -1
 export function nearestSegment(index, x, y, r, accept = () => true) {
   const { segs, pathOf } = index;
   const dist = (s) => {
@@ -162,7 +163,12 @@ export function nearestSegment(index, x, y, r, accept = () => true) {
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
     return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
   };
-  const s = nearestItem([index.longTree, index.tree], [x, y], r, dist, (k) => accept(pathOf[k]));
+  const hit = (s) => {
+    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
+    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+    return [ax + t * vx, ay + t * vy];
+  };
+  const s = nearestItem([index.longTree, index.tree], [x, y], r, dist, (k) => accept(pathOf[k], hit(k)));
   return s < 0 ? -1 : pathOf[s];
 }
 
@@ -215,21 +221,14 @@ export function snapPoints(paths, o) {
   const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
   paths.forEach((p, pi) => {
     if (p.outline) return; // (a wide polyline's outline: its corners are not its ends)
-    // (a fill cut by a clip outline into pieces: its own edge's runs, not the pieces' seams -- js/dxf.js
-    // clipPathPoly; each piece's corners and middles were offered inside the fill: r102 Q3)
-    if (p.snapRuns) {
-      for (const r of p.snapRuns) {
-        for (let i = 0; i < r.length; i += 2) {
-          put(r[i], r[i + 1], 0, pi);
-          if (i + 2 < r.length) put((r[i] + r[i + 2]) / 2, (r[i + 1] + r[i + 3]) / 2, 1, pi);
-        }
-      }
-      return;
-    }
     const n2 = p.pts.length / 2, q = p.pts;
-    const mid = (i, j) => put((q[i * 2] + q[j * 2]) / 2, (q[i * 2 + 1] + q[j * 2 + 1]) / 2, 1, pi);
+    // (seen through a clip outline, whole: its points the outline shows, no other -- js/dxf.js
+    // inOutline, the one question the page asks of an outline; the canvas clips what is drawn: r103)
+    const shown = p.clipPoly ? (x, y) => inOutline(p.clipPoly, x, y) : () => true;
+    const at = (x, y, k) => { if (shown(x, y)) put(x, y, k, pi); };
+    const mid = (i, j) => at((q[i * 2] + q[j * 2]) / 2, (q[i * 2 + 1] + q[j * 2 + 1]) / 2, 1);
     for (let i = 0; i < n2; i++) {
-      put(q[i * 2], q[i * 2 + 1], 0, pi);
+      at(q[i * 2], q[i * 2 + 1], 0);
       if (i + 1 < n2) mid(i, i + 1);
     }
     const m = n2 > 1 && same(q[0], q[(n2 - 1) * 2]) && same(q[1], q[(n2 - 1) * 2 + 1]) ? n2 - 1 : n2;
@@ -241,9 +240,13 @@ export function snapPoints(paths, o) {
     // (its centre the circle through its points, not their mean: drawn as arcs of different sweeps,
     // a 1° + 359° circle was sampled unevenly and its mean put the centre 0.24 off, Ø 19.991 for 20 --
     // r72 A3. A least-squares fit, about their mean for the numbers' sake, is the circle itself)
-    if (p.closed && p.circle && m >= 3) {
+    // (through a clip outline, only a circle it shows every point of, and its centre: one it cuts is
+    // no whole circle, as one a frame cuts is not -- r98 Q4)
+    let whole = !p.clipPoly;
+    if (!whole) { whole = true; for (let i = 0; i < n2 && whole; i++) whole = shown(q[i * 2], q[i * 2 + 1]); }
+    if (p.closed && p.circle && m >= 3 && whole) {
       const c = circleThrough(q, m);
-      if (c && c.r > 0) put(c.x, c.y, 2, pi, c.r);
+      if (c && c.r > 0 && shown(c.x, c.y)) put(c.x, c.y, 2, pi, c.r);
     }
   });
   // (the same array for the same snap, so a hover that stays on it is no change: those made kept,
@@ -271,14 +274,29 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // an item not shown: its layer off, or a frozen layer of a block reference it is drawn under
   // (js/dxf.js layersOf / hold: a reference on a frozen layer draws none of its block -- r64 Q1)
   const hid = (it) => layersOf(it).some((n) => st.off.has(n));
+  // a clip outline (flat, xy...) as a closed Path2D relative to o, and a number to group by: once each
+  const outlines = new Map();
+  const outlineOf = (f) => {
+    let r = outlines.get(f);
+    if (!r) {
+      const path = new Path2D();
+      for (let k = 0; k < f.length; k += 2) (k ? path.lineTo : path.moveTo).call(path, f[k] - o[0], f[k + 1] - o[1]);
+      path.closePath();
+      r = { id: outlines.size + 1, path };
+      outlines.set(f, r);
+    }
+    return r;
+  };
+  const outlineId = (f) => outlineOf(f).id;
   // the paths, grouped, relative to o
   const groups = new Map();
   for (const p of drawing.paths) {
-    const key = `${p.layer}\u0000${p.hold ? p.hold.join('\u0001') : ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}`;
+    // (and by the clip outline it is seen through, if any: the group is drawn clipped to it, r103)
+    const key = `${p.layer}\u0000${p.hold ? p.hold.join('\u0001') : ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}\u0000${p.clipPoly ? outlineId(p.clipPoly) : ''}`;
     let g = groups.get(key);
     // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
     // drawing units (it scales with the zoom, as on paper)
-    if (!g) { g = { layer: p.layer, hold: p.hold, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, path: new Path2D(), points: [] }; groups.set(key, g); }
+    if (!g) { g = { layer: p.layer, hold: p.hold, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, clipPoly: p.clipPoly || null, clipId: p.clipPoly ? outlineId(p.clipPoly) : 0, path: new Path2D(), points: [] }; groups.set(key, g); }
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
     // (a fill not a hatch's even-odd loops is added counter-clockwise: the group's fills are one
     // non-zero path, and two overlapping SOLIDs wound opposite ways left their overlap empty)
@@ -288,7 +306,21 @@ export function createDxfView(canvas, drawing, cb = {}) {
     g.path.moveTo(p.pts[2 * at(0)] - o[0], p.pts[2 * at(0) + 1] - o[1]);
     for (let i = 1; i < n; i++) g.path.lineTo(p.pts[2 * at(i)] - o[0], p.pts[2 * at(i) + 1] - o[1]);
     if (p.closed) g.path.closePath();
+    // (its segments lying along its outline's edges -- both ends and three points between on one --
+    // stroked again unclipped, the clip having cut their outer half: r103 Q3)
+    if (p.clipPoly && !p.fill) {
+      const segs = p.closed ? n : n - 1;
+      for (let i = 0; i < segs; i++) {
+        const j = (i + 1) % n, ax = p.pts[2 * i], ay = p.pts[2 * i + 1], bx = p.pts[2 * j], by = p.pts[2 * j + 1];
+        if (![0, 0.25, 0.5, 0.75, 1].every((t) => onOutlineEdge(p.clipPoly, ax + (bx - ax) * t, ay + (by - ay) * t))) continue;
+        if (!g.edge) g.edge = new Path2D();
+        g.edge.moveTo(ax - o[0], ay - o[1]);
+        g.edge.lineTo(bx - o[0], by - o[1]);
+      }
+    }
   }
+  // the texts, those seen through one outline together (stable: in the drawing's order otherwise)
+  const textOrder = drawing.texts.map((t, i) => [t.clipPoly ? outlineId(t.clipPoly) : 0, i, t]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
   const css = () => [canvas.clientWidth || 1, canvas.clientHeight || 1];
 
   // a text's lines as drawn: an MTEXT with a reference width wrapped at it by the font's measure
@@ -369,11 +401,24 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // -- the layer list's rule, js/dxf.js layersOf; the selection lit only an item's own, and a frozen
     // layer's 461 items were drawn faded when it was selected: r66 A1, Q2)
     const isOf = (it, n) => n != null && layersOf(it).includes(n);
-    const order = [...groups.values()].sort((a, b) => isOf(a, sel) - isOf(b, sel)); // the selected layer last, on top
+    // (the selected layer last, on top; and those seen through one outline together)
+    const order = [...groups.values()].sort((a, b) => isOf(a, sel) - isOf(b, sel) || a.clipId - b.clipId);
+    // (seen through a viewport's clip outline: the canvas clips it there, even-odd -- the rule
+    // inOutline keeps for the snaps and the hover; cut here by hand, rounds 99 to 102 each found an
+    // outline the cut got wrong: r103. Clipped once for all its groups and texts in a draw: once
+    // each, 280 groups through a 16,000-point outline took 9.2 s a draw -- r103 Q2)
+    let cur = null;
+    const clipTo = (f) => {
+      if (f === cur) return;
+      if (cur) ctx.restore();
+      cur = f;
+      if (f) { ctx.save(); ctx.clip(outlineOf(f).path, 'evenodd'); }
+    };
     for (const g of order) {
       if (hid(g)) continue;
       const hot = isOf(g, sel) || isOf(g, st.hover);
       const col = isOf(g, sel) ? SELECTED : sel && !isOf(g, st.hover) ? FADED : g.colour;
+      clipTo(g.clipPoly);
       if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col;
       ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
@@ -393,22 +438,30 @@ export function createDxfView(canvas, drawing, cb = {}) {
         for (let i = 0; i < g.points.length; i += 2) ctx.fillRect(g.points[i] - r, g.points[i + 1] - r, 2 * r, 2 * r);
       }
     }
+    // (a line lying on its outline's edge, stroked again unclipped: the clip cut the outer half of
+    // its stroke, and a wall on a frame drew 640 px of its 1,288 -- r103 Q3)
+    clipTo(null);
+    for (const g of order) {
+      if (!g.edge || hid(g)) continue;
+      const hot = isOf(g, sel) || isOf(g, st.hover);
+      ctx.strokeStyle = isOf(g, sel) ? SELECTED : sel && !isOf(g, st.hover) ? FADED : g.colour;
+      ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
+      ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
+      ctx.stroke(g.edge);
+      ctx.setLineDash([]);
+    }
     // text: native, upright in its own frame
-    for (const t of drawing.texts) {
+    for (const t of textOrder) {
       if (hid(t)) continue;
       const px = t.h * st.s;
       if (px < MIN_TEXT_PX) continue; // too small to read: left out
+      // (a text seen through a layout viewport, clipped to its outline -- a frame's four points, or
+      // the outline of a viewport clipped to one: by its box alone, a text in an L's notch was drawn,
+      // r99 Q2 -- even-odd, by the one Path2D its paths are clipped by: by canvas's nonzero default,
+      // a text was painted in a star's middle, where they had none, r102 A1; once for all its texts)
+      clipTo(t.clipPoly || null);
       ctx.save();
-      // (a text seen through a layout viewport, clipped to its frame: js/dxf.js)
-      // (or to the outline of a viewport clipped to one, clipPoly: by its box alone, a text in an L's
-      // notch was drawn -- r99 Q2)
-      if (t.clipPoly) {
-        ctx.beginPath();
-        for (let k = 0; k < t.clipPoly.length; k += 2) (k ? ctx.lineTo : ctx.moveTo).call(ctx, t.clipPoly[k] - o[0], t.clipPoly[k + 1] - o[1]);
-        // (even-odd, the rule its lines, fills and hover keep (js/dxf.js insideFlat): by canvas's
-        // nonzero default, a text was painted in a star's middle, where they had none -- r102 A1)
-        ctx.closePath(); ctx.clip('evenodd');
-      } else if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
+      if (!t.clipPoly && t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
       // (in the font's own px from here, scaled to the text's height: FONT_PX)
@@ -449,6 +502,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       }
       ctx.restore();
     }
+    clipTo(null);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     drawMeasure(dpr);
     if (cb.onDraw) cb.onDraw();
@@ -546,7 +600,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the layer of the line nearest css px (x, y), within HIT_PX
   function layerAt(px, py) {
     const [ux, uy] = toUnits(px, py);
-    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i) => !hid(drawing.paths[i]));
+    // (a path seen through a clip outline is hit only at a point the outline shows -- the point hit,
+    // not the cursor: a line the canvas clipped away was found from inside the outline, r103 A4)
+    const shows = (p, [hx, hy]) => !p.clipPoly || inOutline(p.clipPoly, hx + o[0], hy + o[1]);
+    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i, h) => !hid(drawing.paths[i]) && shows(drawing.paths[i], h));
     if (pi >= 0) return drawing.paths[pi].layer;
     // else a text under the point (inside its box, as the extents take it): a layer only texts
     // use could not be picked
@@ -556,7 +613,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       const t = drawing.texts[i];
       if (hid(t) || t.h * st.s < MIN_TEXT_PX) return false;
       if (t.clip && !(ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3])) return false;
-      return !t.clipPoly || insideFlat(t.clipPoly, ux + o[0], uy + o[1]); // (js/dxf.js's one test: r100 A5)
+      return !t.clipPoly || inOutline(t.clipPoly, ux + o[0], uy + o[1]); // (js/dxf.js's one test: r100 A5, r103)
     });
     return ti >= 0 ? drawing.texts[ti].layer : null;
   }

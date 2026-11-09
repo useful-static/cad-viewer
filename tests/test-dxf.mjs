@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { UNITS, blockKey, parseDXF,layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
+import { UNITS, blockKey, parseDXF, inOutline, insideFlat, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, sizeRow, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -325,9 +325,15 @@ test('a viewport clips what it shows to its frame', () => {
     [0, 'ENDSEC'], [0, 'EOF']];
   const L = parseDXF(dxf(ents)).layouts[0];
   const line = L.paths.find((p) => !p.frame);
+  // scale 1 about (0, 0) -> paper x -150..250, whole, the frame as its clip outline: the view clips
+  // it to the frame's 20..80, and the frame shows x 20..80 of it (since r103 a frame is an outline of
+  // four points, clipped by the canvas as an outline is)
   const xs = [line.pts[0], line.pts[2]].sort((a, b) => a - b);
-  // scale 1 about (0, 0) -> paper x -150..250, clipped to the frame's 20..80
-  assert.ok(Math.abs(xs[0] - 20) < 1e-9 && Math.abs(xs[1] - 80) < 1e-9, `x ${xs}`);
+  assert.ok(Math.abs(xs[0] + 150) < 1e-9 && Math.abs(xs[1] - 250) < 1e-9, `x ${xs}`);
+  assert.deepEqual(Array.from(line.clipPoly), [20, 20, 80, 20, 80, 60, 20, 60]);
+  const shown = [];
+  for (let x = -150; x <= 250; x += 0.5) if (inOutline(line.clipPoly, x, 40)) shown.push(x);
+  assert.deepEqual([shown[0], shown[shown.length - 1]], [20, 80]);
 });
 test('a layer frozen in one viewport (341, by its handle) is not drawn through it, nor a reference on it; another viewport draws them (r98 Q2)', () => {
   // (must fire: every model layer was drawn through every viewport -- a kitchen's equipment tags
@@ -384,24 +390,78 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 6], [70, 1], ...L.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'L1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
-  const inNotch = (x, y) => x > 50 + 1e-6 && y > 40 + 1e-6;
+  // (since r103 a path seen through an outline is whole, with the outline, and the canvas clips it
+  // there even-odd: every case of r99 to r102 is judged on what is shown -- what of a fill is inside
+  // both it and the outline (a 0.05 grid), how much of a line the outline shows (inOutline, the
+  // view's own test, as its snaps and hover ask it), what of a text's box is inside)
+  const H = 0.05;
+  const area = (ps) => {
+    let n = 0;
+    for (const p of ps) {
+      const b = [Infinity, Infinity, -Infinity, -Infinity];
+      for (let k = 0; k < p.pts.length; k += 2) { b[0] = Math.min(b[0], p.pts[k]); b[2] = Math.max(b[2], p.pts[k]); b[1] = Math.min(b[1], p.pts[k + 1]); b[3] = Math.max(b[3], p.pts[k + 1]); }
+      if (p.clip) { b[0] = Math.max(b[0], p.clip[0]); b[1] = Math.max(b[1], p.clip[1]); b[2] = Math.min(b[2], p.clip[2]); b[3] = Math.min(b[3], p.clip[3]); }
+      for (let x = Math.floor(b[0] / H) * H + H / 2; x < b[2]; x += H) for (let y = Math.floor(b[1] / H) * H + H / 2; y < b[3]; y += H) {
+        if (insideFlat(p.pts, x, y) && (!p.clipPoly || insideFlat(p.clipPoly, x, y))) n++;
+      }
+    }
+    return n * H * H;
+  };
+  const near = (got, want) => Math.abs(got - want) <= 0.01 * want + 1;
+  const shownLength = (ps) => ps.reduce((s, p) => {
+    for (let k = 2; k < p.pts.length; k += 2) {
+      const ax = p.pts[k - 2], ay = p.pts[k - 1], bx = p.pts[k], by = p.pts[k + 1], L = Math.hypot(bx - ax, by - ay), m = 1000;
+      let shown = 0;
+      for (let i = 0; i < m; i++) { const t = (i + 0.5) / m; if (!p.clipPoly || inOutline(p.clipPoly, ax + (bx - ax) * t, ay + (by - ay) * t)) shown++; }
+      s += (L * shown) / m;
+    }
+    return s;
+  }, 0);
+  const textShown = (t) => {
+    const c = textCorners(t);
+    const x0 = Math.min(...c.map((q) => q[0])), x1 = Math.max(...c.map((q) => q[0])), y0 = Math.min(...c.map((q) => q[1])), y1 = Math.max(...c.map((q) => q[1]));
+    for (let i = 0; i <= 40; i++) for (let j = 0; j <= 10; j++) { const x = x0 + ((x1 - x0) * i) / 40, y = y0 + ((y1 - y0) * j) / 10; if (!t.clipPoly || insideFlat(t.clipPoly, x, y)) return true; }
+    return false;
+  };
   const fills = d.paths.filter((p) => p.fill);
-  assert.ok(!fills.some((p) => p.layer === 'M'), 'the disc in the notch drawn');
+  assert.ok(near(area(fills.filter((p) => p.layer === 'M')), 0), `the disc in the notch shown: ${area(fills.filter((p) => p.layer === 'M'))}`);
   const sq = fills.filter((p) => p.layer === 'S');
-  assert.ok(sq.length >= 1, 'the square across the bend drew nothing');
-  for (const p of sq) for (let k = 0; k < p.pts.length; k += 2) assert.ok(!inNotch(p.pts[k], p.pts[k + 1]), `a piece of the square in the notch at ${p.pts[k]}, ${p.pts[k + 1]}`);
-  assert.ok(!d.paths.some((p) => p.layer === 'M' && !p.fill), 'the line in the notch drawn');
+  // (the square shows what of it the L holds, 400 -- written with its first point repeated at its end
+  // too, r100 A1)
+  assert.ok(near(area(sq), 400), `the square shows ${area(sq)}`);
+  assert.ok(shownLength(d.paths.filter((p) => p.layer === 'M' && !p.fill)) < 1e-9, 'the line in the notch shown');
+  // (r103 A3: and not kept at all -- what the outline shows nothing of is not drawn, counted or listed;
+  // kept whole, the notch's line and disc counted as drawn and listed their layer)
+  assert.deepEqual(d.paths.filter((p) => p.layer === 'M').length, 0, 'the notch\'s line and disc kept');
   assert.deepEqual(d.texts.map((t) => t.text), ['IN-L']);
-  // (the square's pieces fill what of it the L holds, 400 -- written with its first point repeated
-  // at its end too: the repeat blocked the ears, and the pieces were part of it or none -- r100 A1)
-  const area = (ps) => ps.reduce((s, p) => { let a = 0; for (let k = 0; k < p.pts.length; k += 2) { const j = (k + 2) % p.pts.length; a += p.pts[k] * p.pts[j + 1] - p.pts[j] * p.pts[k + 1]; } return s + Math.abs(a) / 2; }, 0);
-  assert.ok(Math.abs(area(sq) - 400) < 1e-6, `the square's pieces cover ${area(sq)}`);
+  // (r103 A2: one box culls paths and texts, the outline's -- a viewport rectangle inside the L's box
+  // culled the paths by itself, and a line beside its text was dropped)
+  const small = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'W'], [10, -25], [20, 12], [11, -15], [21, 12],
+    [0, 'TEXT'], [8, 'W'], [10, -25], [20, 13], [40, 1], [1, 'ROOM'],
+    [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 6], [70, 1], ...L.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 20], [41, 20], [69, 2], [12, 0], [22, 0], [45, 20], [90, 65536], [340, 'L1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.deepEqual([small.paths.some((p) => p.layer === 'W'), small.texts.some((t) => t.text === 'ROOM')], [true, true], 'the line and its text through a viewport smaller than its outline');
+  // (r103 A1: a wall's snaps are the same through a frame and through an outline of the frame's own
+  // four points -- one mechanism: a frame's lines were cut, and offered the cut's end)
+  const wallVia = (clipped) => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LINE'], [8, 'W'], [10, -20], [20, 10], [11, 20], [21, 10],
+    ...(clipped ? [[0, 'LWPOLYLINE'], [5, 'F1'], [8, 'B'], [67, 1], [90, 4], [70, 1], [10, 20], [20, 20], [10, 50], [20, 20], [10, 50], [20, 60], [10, 20], [20, 60]] : []),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 35], [20, 40], [40, 30], [41, 40], [69, 2], [12, -15], [22, 0], [45, 40], ...(clipped ? [[90, 65536], [340, 'F1']] : []),
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.layer === 'W');
+  const snapsOf = (ps) => { const sp = snapPoints(ps, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${sp.kind[i]} ${sp.xy[2 * i].toFixed(6)}, ${sp.xy[2 * i + 1].toFixed(6)}`); return s.sort(); };
+  assert.deepEqual(snapsOf(wallVia(false)), snapsOf(wallVia(true)), 'the wall\'s snaps through the frame and through the same outline');
+  assert.deepEqual(d.texts.filter(textShown).map((t) => t.text), ['IN-L']);
+  // (and the view clips each by the outline: every one seen through it carries it)
+  const seenVia = d.paths.filter((p) => !p.frame && p.layer !== 'B');
+  assert.ok(seenVia.length && seenVia.every((p) => p.clipPoly && p.clipPoly === seenVia[0].clipPoly && p.clipPoly.length >= 2 * L.length), 'a path through the L without its outline');
   const Lr = [...L, L[0]];
   const d2 = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...square,
     [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 7], [70, 1], ...Lr.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'L1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
-  assert.ok(Math.abs(area(d2.paths.filter((p) => p.fill)) - 400) < 1e-6, `with its first point repeated: ${area(d2.paths.filter((p) => p.fill))}`);
+  assert.ok(near(area(d2.paths.filter((p) => p.fill)), 400), `with its first point repeated: ${area(d2.paths.filter((p) => p.fill))}`);
   // (a text an outline's edge crosses with no vertex in its box is drawn, cut by the outline -- by
   // its vertices alone, it was dropped where the line beside it was kept: r100 A2; model (x, y) is
   // paper (x + 50, y + 40), and a thin strip runs through the text's box above its centre, missing
@@ -412,7 +472,7 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'LWPOLYLINE'], [5, 'S1'], [8, 'B'], [67, 1], [90, 4], [70, 1], ...strip.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'S1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
-  assert.deepEqual(d3.texts.map((t) => t.text), ['CROSSED']);
+  assert.deepEqual(d3.texts.filter(textShown).map((t) => t.text), ['CROSSED']);
   // (a fill with its corners in a U's two arms is cut by the U, 200 of its 500: kept whole by its
   // corners, it was drawn across the gap -- r100 Q1)
   const U = [[20, 20], [80, 20], [80, 60], [65, 60], [65, 35], [35, 35], [35, 60], [20, 60]];
@@ -423,7 +483,7 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'LWPOLYLINE'], [5, 'U1'], [8, 'B'], [67, 1], [90, 8], [70, 1], ...U.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'U1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
-  assert.ok(Math.abs(area(d4.paths.filter((p) => p.fill)) - 200) < 1e-6, `the bar across the U covers ${area(d4.paths.filter((p) => p.fill))}`);
+  assert.ok(near(area(d4.paths.filter((p) => p.fill)), 200), `the bar across the U covers ${area(d4.paths.filter((p) => p.fill))}`);
   // (a fill entering an upside-down U's notch through one outline vertex and leaving by another is cut
   // by the line cut's own rule, 315 of its 690: the fill's own crossing test, strict at an edge's
   // ends, saw no crossing and drew it whole, 375 of it in the notch -- r101 A1)
@@ -435,7 +495,7 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'LWPOLYLINE'], [5, 'U2'], [8, 'B'], [67, 1], [90, 8], [70, 1], ...Ud.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'U2'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
-  assert.ok(Math.abs(area(d5.paths.filter((p) => p.fill)) - 315) < 1e-6, `the triangle into the notch covers ${area(d5.paths.filter((p) => p.fill))}`);
+  assert.ok(near(area(d5.paths.filter((p) => p.fill)), 315), `the triangle into the notch covers ${area(d5.paths.filter((p) => p.fill))}`);
   // (a fill over the whole frame, through outlines that are not simple: an L with its inner corner
   // written twice keeps 1800 -- the doubled corner hid its turn and the L read as convex, 600: r101
   // Q1; a bowtie keeps 900 by the even-odd rule its lines are cut by -- its triangles covered its
@@ -448,9 +508,9 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill));
   const L2 = [[20, 20], [80, 20], [80, 40], [50, 40], [50, 40], [50, 60], [20, 60]];
-  assert.ok(Math.abs(through(L2) - 1800) < 1e-6, `the L, its inner corner twice: ${through(L2)}`);
+  assert.ok(near(through(L2), 1800), `the L, its inner corner twice: ${through(L2)}`);
   const bow = [[25, 22], [75, 58], [75, 22], [25, 58]];
-  assert.ok(Math.abs(through(bow) - 900) < 1e-6, `the bowtie: ${through(bow)}`);
+  assert.ok(near(through(bow), 900), `the bowtie: ${through(bow)}`);
   const star = [0, 2, 4, 1, 3].map((k) => [50 + 18 * Math.sin((2 * Math.PI * k) / 5), 40 + 18 * Math.cos((2 * Math.PI * k) / 5)]);
   const pent = [0, 1, 2, 3, 4].map((k) => [50 + 18 * Math.sin((2 * Math.PI * k) / 5), 40 + 18 * Math.cos((2 * Math.PI * k) / 5)]);
   // (its five points: the star, ten triangles from the middle, less the pentagon inside -- 251.32, a
@@ -459,38 +519,33 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
   const inner = 18 * Math.cos((2 * Math.PI) / 5) / Math.cos(Math.PI / 5);
   const pentArea = (r) => 2.5 * r * r * Math.sin((2 * Math.PI) / 5);
   const want = 5 * 18 * inner * Math.sin(Math.PI / 5) - pentArea(inner);
-  assert.ok(Math.abs(through(star) - want) < 1e-6, `the star: ${through(star)}, want ${want}`);
-  assert.ok(Math.abs(through(pent) - pentArea(18)) < 1e-6, `the pentagon: ${through(pent)}`);
+  assert.ok(near(through(star), want), `the star: ${through(star)}, want ${want}`);
+  assert.ok(near(through(pent), pentArea(18)), `the pentagon: ${through(pent)}`);
   // (outlines not simple with no crossing: two rectangles meeting at a corner, drawn through it twice,
   // keep 500 -- triangles spanned the gap, 800; a square with a slit walked out and back keeps 1200
   // -- it read as convex and its fill was cut to nothing: r102 A2)
   const touch = [[30, 30], [50, 30], [50, 40], [70, 40], [70, 55], [50, 55], [50, 40], [30, 40]];
-  assert.ok(Math.abs(through(touch) - 500) < 1e-6, `two rectangles at a corner: ${through(touch)}`);
+  assert.ok(near(through(touch), 500), `two rectangles at a corner: ${through(touch)}`);
   const slit = [[30, 25], [70, 25], [70, 55], [50, 55], [50, 40], [50, 55], [30, 55]];
-  assert.ok(Math.abs(through(slit) - 1200) < 1e-6, `a square with a slit: ${through(slit)}`);
-  // (r102 Q2: a comb whose every point is at its own height, 2,403 points, cut into one piece a
-  // tooth side, not one a band -- 1,280,001 pieces, 1.25 GB; must fire: the bands unmerged)
+  assert.ok(near(through(slit), 1200), `a square with a slit: ${through(slit)}`);
+  // (r102 Q2: an outline of 2,403 points costs no pieces at all now -- the fill is one path; its
+  // inside test is charged, points x the outline's points, r99 A4)
   const comb2 = (teeth) => { const top = []; for (let i = 0; i < teeth; i++) { const x = 20 + (60 * i) / teeth, w = 60 / teeth; top.push([x, 25 + i * 1e-4], [x + w / 4, 58 - i * 1e-4], [x + w / 2, 25.5 + i * 1e-4]); } return [[20, 22], [80, 22], [80, 25], ...top.reverse()]; };
-  const combFills = (outline) => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
+  const viaOutline = (outline) => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
     [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, outline.length], [70, 1], ...outline.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill);
-  const cf = combFills(comb2(800));
-  assert.ok(cf.length <= 4 * 800, `the comb's fill in ${cf.length} pieces`);
-  // (r102 Q3: a cut fill's snaps are its own edge's, kept by the outline -- each piece's corners and
-  // middles were offered, "middle (35, 40)" inside the L's fill on a seam never drawn)
-  const Lf = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
-    [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, L2.length], [70, 1], ...L2.flatMap(([x, y]) => [[10, x], [20, y]]),
-    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
-    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill);
-  assert.ok(Lf.length >= 2, `the L's fill in ${Lf.length} pieces`);
+  assert.equal(viaOutline(comb2(800)).length, 1, 'the comb\'s fill cut into pieces');
+  // (r102 Q3: a fill's snaps are its own points the outline shows -- the cut's pieces offered their
+  // corners and middles, "middle (35, 40)" inside the L's fill on a seam never drawn; now there are
+  // no seams, and a point the outline hides is not offered)
+  const Lf = viaOutline(L2);
   const sp = snapPoints(Lf, [0, 0]);
-  // (the hatch is the frame, 20..80 x 20..60: its edge is on the L's outer edges, and no snap may be
-  // anywhere else -- the seam at the L's inner corner gave "middle (35, 40)")
-  const stray = [];
-  for (let i = 0; i < sp.n; i++) { const x = sp.xy[2 * i], y = sp.xy[2 * i + 1]; if (![20, 80].includes(x) && ![20, 60].includes(y)) stray.push(`${x}, ${y}`); }
-  assert.ok(sp.n > 0, 'the fill offers no snap');
-  assert.deepEqual(stray, [], 'a snap on a seam between pieces');
+  const snaps = [];
+  for (let i = 0; i < sp.n; i++) snaps.push(`${sp.xy[2 * i]}, ${sp.xy[2 * i + 1]}`);
+  // (the hatch is the frame, 20..80 x 20..60: its corners and middles but (80, 60), in the L's
+  // notch -- (80, 40) and (50, 60) lie on the L's edges, which show them)
+  assert.deepEqual([...new Set(snaps)].sort(), ['20, 20', '20, 40', '20, 60', '50, 20', '50, 60', '80, 20', '80, 40'].sort(), 'the snaps the L shows');
   // (r102 Q1: walls drawn on a clip outline's four edges, all kept, as a viewport's frame keeps them --
   // even-odd alone dropped the top and the right, BOTTOM 40, RIGHT 0, TOP 0, LEFT 30)
   const box = [[30, 25], [70, 25], [70, 55], [30, 55]];
@@ -499,8 +554,14 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, 4], [70, 1], ...box.flatMap(([x, y]) => [[10, x], [20, y]]),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.layer === 'W');
-  const len = (p) => { let s = 0; for (let k = 2; k < p.pts.length; k += 2) s += Math.hypot(p.pts[k] - p.pts[k - 2], p.pts[k + 1] - p.pts[k - 1]); return s; };
-  assert.equal(walls.reduce((s, p) => s + len(p), 0), 140, `the walls on the outline: ${walls.map(len).join(', ')}`);
+  assert.ok(Math.abs(shownLength(walls) - 140) < 1e-9, `the walls on the outline show ${shownLength(walls)}`);
+  // (r103 Q4: a boundary that gives no outline -- a REGION, which VPCLIP takes: nothing through it, no
+  // frame, counted -- read as none, it drew the whole rectangle and a frame AutoCAD does not)
+  const reg = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
+    [0, 'REGION'], [5, 'G1'], [8, 'B'], [67, 1], [70, 1], [1, 'ACIS'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'G1'],
+    [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.deepEqual([reg.layouts[0].paths.filter((p) => p.layer !== 'B').length, reg.notDrawn['VIEWPORT (its clip boundary not read)']], [0, 1]);
   // (Q3: turned off, 90 bit 0x20000: its frame, nothing through it -- it drew model space)
   const off = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 0x20000],
@@ -541,8 +602,12 @@ test('a viewport whose clip boundary is a polygon (90 0x10000, 340) cuts what it
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
   const line = d.paths.filter((p) => p.layer === 'M' && !p.closed);
   assert.equal(line.length, 1, JSON.stringify(d.paths.map((p) => [p.layer, p.closed, p.frame])));
-  const xs = [line[0].pts[0], line[0].pts[2]].sort((a, b) => a - b).map((x) => +x.toFixed(6));
-  assert.deepEqual(xs, [35, 65]);
+  // (whole, with the triangle, which the view clips it to and asks the snaps of: the triangle shows
+  // x 35..65 of it -- r103: shown by the outline, not cut)
+  assert.ok(line[0].clipPoly, 'the line seen through the triangle without it');
+  const xs = [];
+  for (let x = -200; x <= 300; x += 0.5) if (inOutline(line[0].clipPoly, x, 40)) xs.push(x);
+  assert.deepEqual([xs[0], xs[xs.length - 1]], [35, 65]);
   assert.equal(d.paths.filter((p) => p.frame).length, 0, 'a rectangle drawn');
   // (a circle inside the triangle: whole, closed, a circle)
   const circ = d.paths.filter((p) => p.layer === 'M' && p.closed);
@@ -555,17 +620,19 @@ test('a circle seen whole through a viewport stays a closed circle; one the fram
     [0, 'CIRCLE'], [8, '0'], [10, 25], [20, 0], [40, 10],
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40],
     [0, 'ENDSEC'], [0, 'EOF']];
+  // (since r103 judged by 2D Measure's snaps: both whole and closed, the frame clipping the second in
+  // the view; the one it shows whole offers its centre and Ø, the one it cuts none)
+  const centres = (ps) => { const sp = snapPoints(ps, [0, 0]); const c = []; for (let i = 0; i < sp.n; i++) if (sp.kind[i] === 2) c.push(sp.path[i]); return c; };
   const ps = parseDXF(dxf(ents)).layouts[0].paths.filter((p) => !p.frame);
-  const whole = ps.filter((p) => p.closed);
-  assert.equal(whole.length, 1, JSON.stringify(ps.map((p) => [p.closed, !!p.circle, p.pts.length])));
-  assert.ok(whole[0].circle, 'the whole one not a circle');
-  assert.ok(ps.filter((p) => !p.closed).length >= 1 && ps.filter((p) => !p.closed).every((p) => !p.circle), 'a cut run marked a circle');
-  // (and a filled circle -- a solid hatch's -- the frame cuts is no circle; one inside is: r98 Q4)
+  assert.ok(ps.length === 2 && ps.every((p) => p.closed && p.circle), JSON.stringify(ps.map((p) => [p.closed, !!p.circle, p.pts.length])));
+  assert.deepEqual(centres(ps), [0], 'the centres offered');
+  // (and a filled circle -- a solid hatch's -- the frame cuts offers none; one inside does: r98 Q4)
   const disc = (cx) => [[0, 'HATCH'], [8, '0'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, cx], [20, 0], [40, 5], [50, 0], [51, 360], [73, 1], [97, 0]];
   const fl = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...disc(0), ...disc(28),
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => !p.frame && p.fill);
-  assert.deepEqual(fl.map((p) => !!p.circle), [true, false], JSON.stringify(fl.map((p) => [!!p.circle, p.pts.length])));
+  assert.equal(fl.length, 2);
+  assert.deepEqual(centres(fl), [0], JSON.stringify(fl.map((p) => [!!p.circle, p.pts.length])));
 });
 
 test('caret notation: "^C" is U+0003, "^ " a caret, and caret() writes them back', () => {
@@ -1629,18 +1696,62 @@ test('a block reference on a frozen layer: every item it draws is held to that l
   });
   // (r102 A1: a text through a clip outline is clipped by the even-odd rule the outline's lines,
   // fills and hover keep -- canvas's nonzero default painted it in a star's middle)
-  await test('a text seen through a clip outline is clipped even-odd, the rule the outline\'s lines and fills keep (r102 A1)', async () => {
-    const clips = [];
-    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'clip' ? (...a) => clips.push(a) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+  // (r103: and the paths seen through it -- drawn whole, the canvas clipping them by the outline, as
+  // a Path2D of its points, even-odd, each group inside a save and its restore)
+  await test('what is seen through a clip outline is clipped by the canvas: its paths and its text, by the outline as a Path2D, even-odd (r102 A1, r103)', async () => {
+    const clips = [], strokes = [];
+    let saves = 0, restores = 0;
+    // (a clip holds until the restore of the save before it: the stack of saves, each marked clipped)
+    const stack = [];
+    const clipped = () => stack.some(Boolean);
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'clip' ? (...a) => { clips.push(a); if (stack.length) stack[stack.length - 1] = true; } : k === 'stroke' ? (p) => strokes.push({ p, clipped: clipped() }) : k === 'save' ? () => { saves++; stack.push(false); } : k === 'restore' ? () => { restores++; stack.pop(); } : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const P2 = globalThis.Path2D;
+    globalThis.Path2D = class { constructor() { this.pts = []; } moveTo(x, y) { this.pts.push(x, y); } lineTo(x, y) { this.pts.push(x, y); } closePath() {} rect() {} arc() {} };
     const cv = { ...canvas, getContext: () => rec };
     const d = drawingOf(lines(2));
-    d.texts = [{ text: 'STAR', x: 0.5, y: 0.5, h: 0.2, rot: 0, align: 'left', layer: '0', colour: { r: 0, g: 0, b: 0, aci: 7 }, clipPoly: [0, 0, 1, 1, 1, 0, 0, 1] }];
+    const outline = Float64Array.of(0, 0, 1, 1, 1, 0, 0, 1);
+    // (five groups -- five colours -- and five texts through the one outline: clipped once for the
+    // groups and once for the texts a draw, not once each -- r103 Q2)
+    for (let c = 0; c < 5; c++) d.paths.push({ pts: Float64Array.of(-1, 0.5, 2, 0.5), layer: '0', colour: { r: c, g: 0, b: 0, aci: 7 }, clipPoly: outline, clip: [0, 0, 1, 1] });
+    // (and a line on the outline's edge x = 1: stroked again unclipped -- r103 Q3)
+    d.paths.push({ pts: Float64Array.of(1, 0, 1, 1), layer: '0', colour: { r: 9, g: 0, b: 0, aci: 7 }, clipPoly: outline, clip: [0, 0, 1, 1] });
+    d.texts = [0, 1, 2, 3, 4].map((i) => ({ text: `STAR${i}`, x: 0.5, y: 0.5, h: 0.2, rot: 0, align: 'left', layer: '0', colour: { r: 0, g: 0, b: 0, aci: 7 }, clipPoly: outline }));
     let drawn = 0;
     const v = createDxfView(cv, d, { onDraw: () => { drawn++; } });
     for (let i = 0; i < 20 && !drawn; i++) await later();
+    globalThis.Path2D = P2;
     assert.ok(drawn > 0, 'the view never drew');
-    assert.ok(clips.length > 0, 'the text not clipped');
-    for (const a of clips) assert.deepEqual(a, ['evenodd']);
+    assert.equal(clips.length, 2 * drawn, `clips ${clips.length} in ${drawn} draws: once for the groups, once for the texts`);
+    assert.ok(strokes.some(({ p, clipped: c }) => !c && p.pts && p.pts.join(',') === '0,-0.5,0,0.5'), 'the line on the outline\'s edge not stroked again unclipped');
+    assert.ok(!strokes.some(({ p, clipped: c }) => !c && p.pts && p.pts.join(',') === '-2,0,1,0'), 'a line through the outline stroked unclipped');
+    for (const a of clips) {
+      assert.equal(a[1], 'evenodd');
+      // (the outline's own points, relative to the drawing's middle o = (1, 0.5))
+      assert.deepEqual(a[0].pts, [-1, -0.5, 0, 0.5, 0, -0.5, -1, 0.5]);
+    }
+    assert.equal(saves, restores, 'a save with no restore');
+    v.destroy();
+  });
+  // (r103 A4: the hover takes a path through an outline only at a point the outline shows -- the
+  // point hit, not the cursor: from inside the L's arm, a line 0.3 outside it, clipped away, was found)
+  await test('a path seen through a clip outline is hovered only where the outline shows the point hit, not the cursor (r103 A4)', () => {
+    const L = [[20, 20], [80, 20], [80, 40], [50, 40], [50, 60], [20, 60]];
+    const full = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'], [0, 'LAYER'], [2, 'B'], [70, 0], [62, -7], [0, 'ENDTAB'], [0, 'ENDSEC'],
+      [0, 'SECTION'], [2, 'ENTITIES'],
+      [0, 'LINE'], [8, 'NEXTROOM'], [10, 0.3], [20, -5], [11, 0.3], [21, 18],
+      [0, 'LINE'], [8, 'WALL'], [10, -25], [20, -15], [11, -25], [21, -5],
+      [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 6], [70, 1], ...L.flatMap(([x, y]) => [[10, x], [20, y]]),
+      [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'L1'],
+      [0, 'ENDSEC'], [0, 'EOF']]));
+    const sh = full.layouts[0];
+    // (kept: its foot, paper y 35..40, is in the L's lower bar; the rest runs up the notch beside the arm)
+    assert.ok(sh.paths.some((p) => p.layer === 'NEXTROOM'), 'the line the outline shows a foot of dropped');
+    const v = createDxfView(canvas, { ...full, paths: sh.paths, texts: sh.texts, extents: sh.extents }, {});
+    v.fit();
+    // (the cursor 0.5 inside the arm, the line 0.3 outside it -- nearer than HIT_PX at this zoom)
+    assert.equal(v.layerAt(...v.toPx(49.8, 47)), null, 'a line the outline hides was hovered');
+    // (and one the outline shows is found: WALL, inside the arm)
+    assert.equal(v.layerAt(...v.toPx(25.2, 30)), 'WALL');
     v.destroy();
   });
   Object.assign(globalThis, saved);

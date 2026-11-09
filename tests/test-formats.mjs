@@ -95,6 +95,9 @@ await test('a download URL names its model in the query', () => {
 await test('companions are not models', () => {
   for (const n of ['cube.mtl', 'scene.bin', 'tex.JPG']) assert.ok(isCompanion(n), n);
   assert.ok(!isCompanion('cube.obj'));
+  // (a file's name with "#" or "?" in it, as extOf reads one: cut there, "scene#1.bin" was no
+  // companion and its .gltf was refused -- r103 Q1)
+  for (const n of ['scene#1.bin', 'wood#2.png', 'what?.mtl']) assert.ok(isCompanion(n), n);
 });
 
 await test('manifest file handlers offer exactly the formats the viewer opens', () => {
