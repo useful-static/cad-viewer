@@ -139,10 +139,11 @@ async function openOutput(path) {
   const words = (e) => {
     switch (e.code) {
       case 'ENOENT': {
-        // (the directory not there, named: a link's own target's, where the path is a link)
-        let d = dirname(path);
-        try { if (lstatSync(path).isSymbolicLink()) d = dirname(resolve(dirname(path), readlinkSync(path))); } catch { /* the path's */ }
-        return `no such directory ${d}`;
+        // (the directory not there, named: the last link's target's, where the path is a chain of
+        // links -- the first link's alone named a directory that was there: r102 Q4)
+        let p = path;
+        try { for (let k = 0; k < 40 && lstatSync(p).isSymbolicLink(); k++) p = resolve(dirname(p), readlinkSync(p)); } catch { /* the last there */ }
+        return `no such directory ${dirname(p)}`;
       }
       case 'ENOTDIR': return 'a name in it is not a directory';
       case 'EISDIR': return 'it is a directory';

@@ -461,6 +461,46 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
   const want = 5 * 18 * inner * Math.sin(Math.PI / 5) - pentArea(inner);
   assert.ok(Math.abs(through(star) - want) < 1e-6, `the star: ${through(star)}, want ${want}`);
   assert.ok(Math.abs(through(pent) - pentArea(18)) < 1e-6, `the pentagon: ${through(pent)}`);
+  // (outlines not simple with no crossing: two rectangles meeting at a corner, drawn through it twice,
+  // keep 500 -- triangles spanned the gap, 800; a square with a slit walked out and back keeps 1200
+  // -- it read as convex and its fill was cut to nothing: r102 A2)
+  const touch = [[30, 30], [50, 30], [50, 40], [70, 40], [70, 55], [50, 55], [50, 40], [30, 40]];
+  assert.ok(Math.abs(through(touch) - 500) < 1e-6, `two rectangles at a corner: ${through(touch)}`);
+  const slit = [[30, 25], [70, 25], [70, 55], [50, 55], [50, 40], [50, 55], [30, 55]];
+  assert.ok(Math.abs(through(slit) - 1200) < 1e-6, `a square with a slit: ${through(slit)}`);
+  // (r102 Q2: a comb whose every point is at its own height, 2,403 points, cut into one piece a
+  // tooth side, not one a band -- 1,280,001 pieces, 1.25 GB; must fire: the bands unmerged)
+  const comb2 = (teeth) => { const top = []; for (let i = 0; i < teeth; i++) { const x = 20 + (60 * i) / teeth, w = 60 / teeth; top.push([x, 25 + i * 1e-4], [x + w / 4, 58 - i * 1e-4], [x + w / 2, 25.5 + i * 1e-4]); } return [[20, 22], [80, 22], [80, 25], ...top.reverse()]; };
+  const combFills = (outline) => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
+    [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, outline.length], [70, 1], ...outline.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill);
+  const cf = combFills(comb2(800));
+  assert.ok(cf.length <= 4 * 800, `the comb's fill in ${cf.length} pieces`);
+  // (r102 Q3: a cut fill's snaps are its own edge's, kept by the outline -- each piece's corners and
+  // middles were offered, "middle (35, 40)" inside the L's fill on a seam never drawn)
+  const Lf = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
+    [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, L2.length], [70, 1], ...L2.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill);
+  assert.ok(Lf.length >= 2, `the L's fill in ${Lf.length} pieces`);
+  const sp = snapPoints(Lf, [0, 0]);
+  // (the hatch is the frame, 20..80 x 20..60: its edge is on the L's outer edges, and no snap may be
+  // anywhere else -- the seam at the L's inner corner gave "middle (35, 40)")
+  const stray = [];
+  for (let i = 0; i < sp.n; i++) { const x = sp.xy[2 * i], y = sp.xy[2 * i + 1]; if (![20, 80].includes(x) && ![20, 60].includes(y)) stray.push(`${x}, ${y}`); }
+  assert.ok(sp.n > 0, 'the fill offers no snap');
+  assert.deepEqual(stray, [], 'a snap on a seam between pieces');
+  // (r102 Q1: walls drawn on a clip outline's four edges, all kept, as a viewport's frame keeps them --
+  // even-odd alone dropped the top and the right, BOTTOM 40, RIGHT 0, TOP 0, LEFT 30)
+  const box = [[30, 25], [70, 25], [70, 55], [30, 55]];
+  const wall = (x1, y1, x2, y2) => [[0, 'LINE'], [8, 'W'], [10, x1 - 50], [20, y1 - 40], [11, x2 - 50], [21, y2 - 40]];
+  const walls = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...wall(30, 25, 70, 25), ...wall(70, 25, 70, 55), ...wall(70, 55, 30, 55), ...wall(30, 55, 30, 25),
+    [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, 4], [70, 1], ...box.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.layer === 'W');
+  const len = (p) => { let s = 0; for (let k = 2; k < p.pts.length; k += 2) s += Math.hypot(p.pts[k] - p.pts[k - 2], p.pts[k + 1] - p.pts[k - 1]); return s; };
+  assert.equal(walls.reduce((s, p) => s + len(p), 0), 140, `the walls on the outline: ${walls.map(len).join(', ')}`);
   // (Q3: turned off, 90 bit 0x20000: its frame, nothing through it -- it drew model space)
   const off = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 0x20000],
@@ -1586,6 +1626,22 @@ test('a block reference on a frozen layer: every item it draws is held to that l
       assert.deepEqual(hovers, ['end', 'centre (Ø 4.00 mm)'], `$INSUNITS ${ins}`);
       v.destroy();
     }
+  });
+  // (r102 A1: a text through a clip outline is clipped by the even-odd rule the outline's lines,
+  // fills and hover keep -- canvas's nonzero default painted it in a star's middle)
+  await test('a text seen through a clip outline is clipped even-odd, the rule the outline\'s lines and fills keep (r102 A1)', async () => {
+    const clips = [];
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'clip' ? (...a) => clips.push(a) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const cv = { ...canvas, getContext: () => rec };
+    const d = drawingOf(lines(2));
+    d.texts = [{ text: 'STAR', x: 0.5, y: 0.5, h: 0.2, rot: 0, align: 'left', layer: '0', colour: { r: 0, g: 0, b: 0, aci: 7 }, clipPoly: [0, 0, 1, 1, 1, 0, 0, 1] }];
+    let drawn = 0;
+    const v = createDxfView(cv, d, { onDraw: () => { drawn++; } });
+    for (let i = 0; i < 20 && !drawn; i++) await later();
+    assert.ok(drawn > 0, 'the view never drew');
+    assert.ok(clips.length > 0, 'the text not clipped');
+    for (const a of clips) assert.deepEqual(a, ['evenodd']);
+    v.destroy();
   });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];

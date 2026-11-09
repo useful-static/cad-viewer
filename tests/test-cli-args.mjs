@@ -123,6 +123,10 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
   writeFileSync(join(dir, 'box.rgb'), new Uint8Array(8 * 3).fill(128));
   writeFileSync(join(dir, 'x.stp'), 'ISO-10303-21;\n');
   symlinkSync('nodir/t.cadmesh', join(dir, 'tonodir.cadmesh'));
+  // (a chain of two links, the last into a directory not there -- r102 Q4)
+  mkdirSync(join(dir, 'hop'));
+  symlinkSync(join('..', 'nodir2', 'x.cadmesh'), join(dir, 'hop', 'l2.cadmesh'));
+  symlinkSync(join('hop', 'l2.cadmesh'), join(dir, 'l1.cadmesh'));
   // (a .cadmesh by another name: exported to its own name -- r93 A1)
   writeFileSync(join(dir, 'm.stl'), readFileSync(join(dir, 'box.cadmesh')));
   const gone = join(dir, 'no-such-dir');
@@ -145,6 +149,8 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     ['stp2mesh.mjs', ['x.stp', '-o', 'nothere/.'], NOT_DIR],
     // (a link into a directory not there: that directory named, not the link's own -- r95 Q6)
     ['stp2mesh.mjs', ['x.stp', '-o', 'tonodir.cadmesh'], /no such directory .*\/nodir$/],
+    // (through a chain of links, the last one's: the first's named hop/, which is there -- r102 Q4)
+    ['stp2mesh.mjs', ['x.stp', '-o', 'l1.cadmesh'], /no such directory .*\/nodir2$/],
     // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
     ['stp2mesh.mjs', ['x.stp', '-o', join(dir, '.', 'x.stp')], /it is the input x\.stp$/],
     ['dwg-check.mjs', [notCad, '--dxf', notCad], /it is the input /],
@@ -296,14 +302,14 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
     assert.equal(pr.status, 0, pr.stderr);
     assert.ok(readFileSync(join(sub, 'pp.cadmesh')).equals(box), 'the regular file beside the link replaced');
     assert.ok(readFileSync(join(sub, 'real', 'pp.out')).length > 0, 'nothing through the pipe');
-  }
+  } else skip('a pipe after "outdir/.." written through', 'mkfifo failed here'); // (counted, not a silent pass: r102 Q5)
   // (a pipe written as it is, not replaced by a file; /dev/null written, not "permission denied":
   // r95 A2)
   if (spawnSync('mkfifo', [join(sub, 'pipe.cadmesh')]).status === 0) {
     const reader = spawnSync('bash', ['-c', `cat pipe.cadmesh > /dev/null & "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" real.cadmesh c.rgb -o pipe.cadmesh --by t --again; rc=$?; wait; exit $rc`], { cwd: sub, encoding: 'utf8', timeout: 60000 });
     assert.equal(reader.status, 0, reader.stderr);
     assert.ok(lstatSync(join(sub, 'pipe.cadmesh')).isFIFO(), 'the pipe replaced by a file');
-  }
+  } else skip('a pipe written as it is', 'mkfifo failed here');
   const nul = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'real.cadmesh', 'c.rgb', '-o', '/dev/null', '--by', 't', '--again'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
   assert.equal(nul.status, 0, nul.stderr);
   // (and a pipe reached by a link to "pipe:[…]": /dev/stdout written, not "permission denied" -- r95 Q3)

@@ -215,6 +215,17 @@ export function snapPoints(paths, o) {
   const same = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a));
   paths.forEach((p, pi) => {
     if (p.outline) return; // (a wide polyline's outline: its corners are not its ends)
+    // (a fill cut by a clip outline into pieces: its own edge's runs, not the pieces' seams -- js/dxf.js
+    // clipPathPoly; each piece's corners and middles were offered inside the fill: r102 Q3)
+    if (p.snapRuns) {
+      for (const r of p.snapRuns) {
+        for (let i = 0; i < r.length; i += 2) {
+          put(r[i], r[i + 1], 0, pi);
+          if (i + 2 < r.length) put((r[i] + r[i + 2]) / 2, (r[i + 1] + r[i + 3]) / 2, 1, pi);
+        }
+      }
+      return;
+    }
     const n2 = p.pts.length / 2, q = p.pts;
     const mid = (i, j) => put((q[i * 2] + q[j * 2]) / 2, (q[i * 2 + 1] + q[j * 2 + 1]) / 2, 1, pi);
     for (let i = 0; i < n2; i++) {
@@ -394,7 +405,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (t.clipPoly) {
         ctx.beginPath();
         for (let k = 0; k < t.clipPoly.length; k += 2) (k ? ctx.lineTo : ctx.moveTo).call(ctx, t.clipPoly[k] - o[0], t.clipPoly[k + 1] - o[1]);
-        ctx.closePath(); ctx.clip();
+        // (even-odd, the rule its lines, fills and hover keep (js/dxf.js insideFlat): by canvas's
+        // nonzero default, a text was painted in a star's middle, where they had none -- r102 A1)
+        ctx.closePath(); ctx.clip('evenodd');
       } else if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);

@@ -510,7 +510,7 @@ export function parseDXF(s, opts = {}) {
         // (a polygon's clip costs the points times its vertices: charged so -- by the points alone,
         // 8,000 x 8,000 took 3.3 s, four times as long per doubling: r99 A4)
         clipped(budget, (out.paths[k].pts.length / 2) * (poly ? poly.length : 1));
-        if (poly) clipPathPoly(out.paths[k], M, s, poly, rect, lo.paths);
+        if (poly) clipPathPoly(out.paths[k], M, s, poly, rect, lo.paths, budget);
         else clipPath(out.paths[k], M, s, rect, lo.paths);
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
@@ -672,63 +672,51 @@ export function insideFlat(p, x, y) {
 // piece)
 const FLAT = new WeakMap();
 const insidePoly = (poly, x, y) => { let f = FLAT.get(poly); if (!f) { f = poly.flat(); FLAT.set(poly, f); } return insideFlat(f, x, y); };
-// Whether a polygon is convex (every turn one way)
+// Whether a polygon is convex: every turn one way, and none back along the edge it came by (a slit
+// read as convex, and two opposite half-planes cut its fill to nothing, 0 of 1200 -- r102 A2)
 function convexPoly(poly) {
   let sign = 0;
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i], b = poly[(i + 1) % poly.length], c = poly[(i + 2) % poly.length];
     const z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-    if (Math.abs(z) < 1e-12) continue;
+    if (Math.abs(z) < 1e-12) {
+      if ((b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0) return false;
+      continue;
+    }
     if (sign === 0) sign = Math.sign(z); else if (Math.sign(z) !== sign) return false;
   }
   return true;
 }
-// A simple polygon cut into triangles (ear clipping), for a fill clipped by a boundary that is not
-// convex: each triangle is, so the convex clip cuts the fill by each, and the pieces, not
-// overlapping, fill what the outline does
-function earTriangles(poly) {
-  const n = poly.length;
-  if (n < 3) return [];
-  const area = poly.reduce((a, q, i) => { const r = poly[(i + 1) % n]; return a + q[0] * r[1] - r[0] * q[1]; }, 0);
-  const idx = Array.from({ length: n }, (_, i) => i);
-  if (area < 0) idx.reverse();
-  const out = [];
-  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-  const inTri = (p, a, b, c) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
-  let guard = 0;
-  while (idx.length > 3 && guard++ < n * n) {
-    let cut = false;
-    for (let i = 0; i < idx.length; i++) {
-      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
-      const a = poly[ia], b = poly[ib], c = poly[ic];
-      if (cross(a, b, c) <= 0) continue;
-      let ear = true;
-      // (by index, and a point at a corner's own place no blocker: by identity, a repeated point
-      // blocked every ear it sat on -- r100 A1)
-      for (const j of idx) {
-        if (j === ia || j === ib || j === ic) continue;
-        const p = poly[j];
-        if ((p[0] === a[0] && p[1] === a[1]) || (p[0] === b[0] && p[1] === b[1]) || (p[0] === c[0] && p[1] === c[1])) continue;
-        if (inTri(p, a, b, c)) { ear = false; break; }
-      }
-      if (!ear) continue;
-      out.push([a, b, c]);
-      idx.splice(i, 1);
-      cut = true;
-      break;
-    }
-    if (!cut) break;
+// A point an outline keeps: inside it (even-odd) or on one of its edges -- by the inside alone, a
+// wall on a clip outline's top or right edge was dropped and one on its bottom or left kept, where a
+// viewport's frame keeps all four (r102 Q1)
+function keptBy(poly, x, y) {
+  if (insidePoly(poly, x, y)) return true;
+  for (let e = 0; e < poly.length; e++) {
+    const c = poly[e], d = poly[(e + 1) % poly.length];
+    const dx = d[0] - c[0], dy = d[1] - c[1], L2 = dx * dx + dy * dy;
+    if (!L2) continue;
+    const w = (x - c[0]) * dx + (y - c[1]) * dy;
+    if (w < 0 || w > L2) continue;
+    const tol = 1e-9 * Math.max(1, Math.abs(x), Math.abs(y), Math.sqrt(L2));
+    if (Math.abs(dx * (y - c[1]) - dy * (x - c[0])) <= tol * Math.sqrt(L2)) return true;
   }
-  if (idx.length === 3) out.push(idx.map((j) => poly[j]));
-  return out;
+  return false;
 }
-// The edges of a polygon that cross, as the heights they cross at (none: it is simple)
-function crossingHeights(poly) {
+// The edges of a polygon that cross, as the heights they cross at (none: it is simple). Each pair
+// whose heights overlap is tested and charged to the budget (edges sorted by their lowest point)
+function crossingHeights(poly, budget) {
   const n = poly.length, ys = [];
-  for (let i = 0; i < n; i++) {
-    const a = poly[i], b = poly[(i + 1) % n];
-    for (let j = i + 2; j < n; j++) {
-      if (i === 0 && j === n - 1) continue;
+  const lo = (i) => Math.min(poly[i][1], poly[(i + 1) % n][1]), hi = (i) => Math.max(poly[i][1], poly[(i + 1) % n][1]);
+  const order = Array.from({ length: n }, (_, i) => i).sort((p, q) => lo(p) - lo(q));
+  for (let oi = 0; oi < n; oi++) {
+    const i0 = order[oi], top = hi(i0);
+    let tested = 0;
+    for (let oj = oi + 1; oj < n && lo(order[oj]) <= top; oj++) {
+      tested++;
+      const i = Math.min(i0, order[oj]), j = Math.max(i0, order[oj]);
+      if (j - i < 2 || (i === 0 && j === n - 1)) continue;
+      const a = poly[i], b = poly[(i + 1) % n];
       const c = poly[j], d = poly[(j + 1) % n];
       const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
       if (!den) continue;
@@ -736,45 +724,68 @@ function crossingHeights(poly) {
       const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
       if (t > 0 && t < 1 && u > 0 && u < 1) ys.push(a[1] + (b[1] - a[1]) * t);
     }
+    clipped(budget, tested);
   }
   return ys;
 }
-// A polygon's even-odd inside as convex pieces, one per pair of edges in each band between the
-// heights of its points and crossings: within a band no two edges cross, so the 1st and 2nd, 3rd and
-// 4th edges from the left bound what is inside, as the points and lines are kept (insidePoly)
-function bandPieces(poly, cross) {
+// A polygon's even-odd inside as convex pieces: in each band between the heights of its points and
+// crossings no two edges cross, so the 1st and 2nd, 3rd and 4th edges from the left bound what is
+// inside, as the points and lines are kept (insidePoly). A piece bounded by the same two edges as
+// the one below it is that piece made taller, not a new one -- one a band, a comb's 2,403 points
+// made 1,280,001 pieces, 1.25 GB (r102 Q2). The edges each band walks (those across it, kept in a
+// list as the bands rise) are charged to the budget
+function bandPieces(poly, cross, budget) {
   const n = poly.length;
   const ys = [...new Set([...poly.map((q) => q[1]), ...cross])].sort((a, b) => a - b);
-  const xAt = (a, b, y) => a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]);
+  const xAt = (i, y) => { const a = poly[i], b = poly[(i + 1) % n]; return a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]); };
+  const lo = (i) => Math.min(poly[i][1], poly[(i + 1) % n][1]), hi = (i) => Math.max(poly[i][1], poly[(i + 1) % n][1]);
+  const order = Array.from({ length: n }, (_, i) => i).filter((i) => lo(i) < hi(i)).sort((p, q) => lo(p) - lo(q));
+  // (where the two edges meet at a band's end, one point: the two, the right a hair left of the left,
+  // made an edge that ran backwards and cut the whole piece away -- a star lost a point's half)
+  const end = (l, r, y) => (r - l > 1e-9 * (1 + Math.abs(l)) ? [[l, y], [r, y]] : [[(l + r) / 2, y]]);
   const out = [];
+  let open = new Map(), active = [], next = 0;
+  const close = (pc) => {
+    const part = [...end(xAt(pc.l, pc.y0), xAt(pc.r, pc.y0), pc.y0), ...end(xAt(pc.l, pc.y1), xAt(pc.r, pc.y1), pc.y1).reverse()];
+    if (part.length >= 3) out.push(part);
+  };
   for (let k = 0; k + 1 < ys.length; k++) {
     const y0 = ys[k], y1 = ys[k + 1], ym = (y0 + y1) / 2;
-    const es = [];
-    for (let i = 0; i < n; i++) {
-      const a = poly[i], b = poly[(i + 1) % n];
-      if ((a[1] > ym) !== (b[1] > ym)) es.push([xAt(a, b, y0), xAt(a, b, ym), xAt(a, b, y1)]);
-    }
-    es.sort((p, q) => p[1] - q[1]);
-    // (where the two edges meet at a band's end, one point: the two, the right a hair left of the left,
-    // made an edge that ran backwards and cut the whole piece away -- a star lost a point's half)
-    const end = (l, r, y) => (r - l > 1e-9 * (1 + Math.abs(l)) ? [[l, y], [r, y]] : [[(l + r) / 2, y]]);
+    while (next < order.length && lo(order[next]) < ym) active.push(order[next++]);
+    active = active.filter((i) => hi(i) > ym);
+    clipped(budget, active.length);
+    const es = active.map((i) => [i, xAt(i, ym)]).sort((p, q) => p[1] - q[1]);
+    const now = new Map();
     for (let e = 0; e + 1 < es.length; e += 2) {
-      const part = [...end(es[e][0], es[e + 1][0], y0), ...end(es[e][2], es[e + 1][2], y1).reverse()];
-      if (part.length >= 3) out.push(part);
+      const l = es[e][0], r = es[e + 1][0], key = `${l},${r}`;
+      const pc = open.get(key);
+      if (pc && pc.y1 === y0) { pc.y1 = y1; open.delete(key); now.set(key, pc); } else now.set(key, { l, r, y0, y1 });
     }
+    for (const pc of open.values()) close(pc);
+    open = now;
   }
+  for (const pc of open.values()) close(pc);
+  clipped(budget, out.length);
   return out;
 }
-// The convex parts a fill is cut by, once per outline: itself if convex, its triangles if simple, its
-// bands if it crosses itself -- a bowtie's triangles covered its whole box, and a fill over it kept
-// 1800 where the even-odd rule its lines are cut by keeps 900 (r101 Q2)
+// The convex parts a fill is cut by, once per outline: itself if convex, else its bands (bandPieces),
+// the even-odd inside its lines are cut by -- a bowtie's triangles covered its whole box, and a fill
+// over it kept 1800 where its lines keep 900 (r101 Q2). Each with its box, so a fill is clipped by
+// the parts it meets alone
 const PARTS = new WeakMap();
-function convexParts(poly) {
+function convexParts(poly, budget) {
   let parts = PARTS.get(poly);
   if (!parts) {
-    // (crossings first: a star drawn in one stroke turns one way at every point and reads as convex)
-    const cross = crossingHeights(poly);
-    parts = cross.length ? bandPieces(poly, cross) : convexPoly(poly) ? [poly] : earTriangles(poly);
+    // (crossings first: a star drawn in one stroke turns one way at every point and reads as convex.
+    // Every outline not convex is cut by bands: its triangles, made for a simple outline, spanned
+    // the gap where one touched itself at a corner -- 800 drawn of an even-odd 500: r102 A2)
+    const cross = crossingHeights(poly, budget);
+    const ps = !cross.length && convexPoly(poly) ? [poly] : bandPieces(poly, cross, budget);
+    parts = ps.map((q) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const [x, y] of q) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      return { q, box: [x0, y0, x1, y1] };
+    });
     PARTS.set(poly, parts);
   }
   return parts;
@@ -783,7 +794,7 @@ function convexParts(poly) {
 // line cut where it crosses the boundary, each piece kept by its middle; one seen whole as it is;
 // a fill by Sutherland-Hodgman against each of the boundary's convex parts (convexParts) (clipped to
 // its rectangle, its lines drew past a triangle's sides -- r98 Q3)
-function clipPathPoly(p, M, s, poly, box, out) {
+function clipPathPoly(p, M, s, poly, box, out, budget) {
   const n = p.pts.length / 2;
   const P = [];
   for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
@@ -793,11 +804,21 @@ function clipPathPoly(p, M, s, poly, box, out) {
     // test of crossings missed one through an outline vertex, and a triangle into a notch from vertex
     // to vertex was drawn whole, 375 of its 690 in the notch: r101 A1; a hatch with its corners in a
     // U's two arms drawn across the gap -- r100 Q1; cut, no circle -- r98 Q4)
-    if (cutByOutline(P, true, poly).whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
+    const edge = cutByOutline(P, true, poly);
+    if (edge.whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
     delete base.circle;
-    // (a convex outline cuts it once; one that is not, by each of its convex parts -- by its box, a
-    // hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
-    for (const part of convexParts(poly)) {
+    // (its snaps, the pieces' seams not among them: its own edge kept by the outline, as runs -- its
+    // corners inside and where it crosses the outline. Each piece's corners and middles were offered,
+    // "middle (35, 40)" inside an L's fill on a seam never drawn: r102 Q3)
+    let first = true;
+    const pb = boxOf({ pts: P.flat() });
+    // (a convex outline cuts it once; one that is not, by each of its convex parts it meets -- by its
+    // box, a hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
+    const parts = convexParts(poly, budget);
+    clipped(budget, parts.length);
+    for (const { q: part, box: qb } of parts) {
+      if (qb[2] < pb[0] || qb[0] > pb[2] || qb[3] < pb[1] || qb[1] > pb[3]) continue;
+      clipped(budget, n);
       let sub = P;
       const turn = Math.sign(part.reduce((a, q, i) => { const r = part[(i + 1) % part.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
       for (let i = 0; i < part.length && sub.length; i++) {
@@ -815,12 +836,15 @@ function clipPathPoly(p, M, s, poly, box, out) {
         }
         sub = next;
       }
-      if (sub.length >= 3) out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true });
+      if (sub.length >= 3) {
+        out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true, snapRuns: first ? edge.runs.map((r) => Float64Array.from(r)) : [] });
+        first = false;
+      }
     }
     return;
   }
   if (n === 1 || p.point) {
-    if (insidePoly(poly, P[0][0], P[0][1])) out.push({ ...base, pts: Float64Array.of(P[0][0], P[0][1], P[0][0], P[0][1]) });
+    if (keptBy(poly, P[0][0], P[0][1])) out.push({ ...base, pts: Float64Array.of(P[0][0], P[0][1], P[0][0], P[0][1]) });
     return;
   }
   const cut = { ...base };
@@ -856,7 +880,7 @@ function cutByOutline(P, closed, poly) {
       const tm = (t0 + t1) / 2;
       const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
       const [mx, my] = at(tm);
-      if (!insidePoly(poly, mx, my)) { whole = false; if (run) { runs.push(run); run = null; } continue; }
+      if (!keptBy(poly, mx, my)) { whole = false; if (run) { runs.push(run); run = null; } continue; }
       const s0 = at(t0), s1 = at(t1);
       if (!run || t0 > 0) { if (run) runs.push(run); run = [s0[0], s0[1]]; }
       run.push(s1[0], s1[1]);

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMATS, formatOfName, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
+import { FORMATS, formatOfName, fileNameOfUrl, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,11 +47,17 @@ await test('the DWG row\'s range is the releases js/dwg.js reads, first to last 
   const tags = Object.keys(VERSION_NAMES), spans = readme.match(/AC10\d\d\s*(?:\.\.|to|through|–|—|-)\s*AC10\d\d/g) || [];
   assert.deepEqual(spans.filter((s) => s.replace(/\s*(?:\.\.|to|through|–|—|-)\s*/, ' .. ') !== `${tags[0]} .. ${tags[tags.length - 1]}`), [], 'a README tag range not VERSION_NAMES\'');
 });
-await test('a name says its format, through .gz and a query', () => {
+await test('a name says its format, through .gz; a URL\'s query by its file name (fileNameOfUrl)', () => {
   assert.equal(formatOfName('part.STP').label, 'STEP');
   assert.equal(formatOfName('board.cadmesh.gz').label, 'cadmesh');
-  assert.equal(formatOfName('x.step?v=2').label, 'STEP');
-  assert.equal(formatOfName('plan.dwg#view').label, 'DWG');
+  assert.equal(formatOfName(fileNameOfUrl('x.step?v=2')).label, 'STEP');
+  assert.equal(formatOfName(fileNameOfUrl('plan.dwg#view')).label, 'DWG');
+  // (a file's name with "#" or "?" in it says its format: cut there as a URL's, "bracket#2.stl" said
+  // none and was refused, "part#3.step" saved as "part#3.step.step" -- r102 A3)
+  assert.equal(formatOfName('bracket#2.stl').label, 'STL');
+  assert.equal(formatOfName('part#3.step').label, 'STEP');
+  assert.equal(formatOfName('what?.obj').label, 'OBJ');
+  assert.equal(formatOfName(fileNameOfUrl('/m/bracket%232.stl')).label, 'STL');
   assert.equal(formatOfName('box.brp').cad, 'brep');
   assert.equal(formatOfName('a.gltf').label, 'glTF');
   // must fire: an unknown or missing extension is no format

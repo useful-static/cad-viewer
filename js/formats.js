@@ -196,9 +196,11 @@ export function readerOf(name, start) {
     || (start && start.length ? sniffFormat(start.subarray(0, SNIFF_BYTES)) : null);
 }
 
-// a name's extension, lower case, after any query and a .gz ("part.STP.gz?v=2" -> "stp")
+// a file name's extension, lower case, after a .gz ("part.STP.gz" -> "stp"). A name, not a URL: a
+// caller holding a URL passes fileNameOfUrl's -- cut at "#" or "?", a file "bracket#2.stl" said no
+// format and was refused, and "part#3.step" was saved as "part#3.step.step" (r102 A3)
 export function extOf(name) {
-  const base = String(name || '').split(/[?#]/)[0].replace(/\.gz$/i, '');
+  const base = String(name || '').replace(/\.gz$/i, '');
   const m = /\.([a-z0-9]+)$/i.exec(base);
   return m ? m[1].toLowerCase() : '';
 }
