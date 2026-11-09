@@ -236,6 +236,19 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   assert.equal(dl.status, 0, dl.stderr);
   assert.ok(lstatSync(join(sub, 'dangling.cadmesh')).isSymbolicLink(), 'the dangling link replaced by a file');
   assert.ok(existsSync(join(sub, 'made.cadmesh')), 'the file the link names not made');
+  // (a link in a linked directory: its target read from the link's real directory -- read from the
+  // path as written, "x -> ../target.cadmesh" replaced a decoy beside the linked directory and left
+  // the real target unchanged, exit 0: r96 Q2)
+  mkdirSync(join(sub, 'real', 'inner'), { recursive: true });
+  writeFileSync(join(sub, 'real', 'target.cadmesh'), box);
+  writeFileSync(join(sub, 'target.cadmesh'), 'decoy');
+  symlinkSync('../target.cadmesh', join(sub, 'real', 'inner', 'x.cadmesh'));
+  symlinkSync(join('real', 'inner'), join(sub, 'outdir'));
+  const ld = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'real.cadmesh', 'c.rgb', '-o', join('outdir', 'x.cadmesh'), '--by', 't', '--again'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
+  assert.equal(ld.status, 0, ld.stderr);
+  assert.equal(readFileSync(join(sub, 'target.cadmesh'), 'utf8'), 'decoy', 'the decoy beside the linked directory written');
+  assert.ok(!readFileSync(join(sub, 'real', 'target.cadmesh')).equals(box), 'the link\'s real target unchanged');
+  assert.ok(lstatSync(join(sub, 'real', 'inner', 'x.cadmesh')).isSymbolicLink(), 'the link replaced');
   // (a pipe written as it is, not replaced by a file; /dev/null written, not "permission denied":
   // r95 A2)
   if (spawnSync('mkfifo', [join(sub, 'pipe.cadmesh')]).status === 0) {

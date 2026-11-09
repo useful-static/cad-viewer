@@ -316,7 +316,7 @@ export function parseDXF(s, opts = {}) {
     for (const r of records(ps, ...sec.BLOCKS)) {
       // (by upper-case name, as an INSERT finds it: one naming "door" for BLOCK "DOOR" drew nothing
       // and said nothing -- r87 Q4)
-      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20)], recs: [] }; blocks.set(blockKey(get(r, 2, '')), cur); } else if (r.type === 'ENDBLK') cur = null;
+      if (r.type === 'BLOCK') { cur = { base: [num(r, 10), num(r, 20), num(r, 30, 0) || 0], recs: [] }; blocks.set(blockKey(get(r, 2, '')), cur); } else if (r.type === 'ENDBLK') cur = null;
       else if (cur) cur.recs.push(r);
     }
   }
@@ -559,38 +559,53 @@ function viewInModel(M, rect) {
   return [Math.min(...c.map((p) => p[0])), Math.min(...c.map((p) => p[1])), Math.max(...c.map((p) => p[0])), Math.max(...c.map((p) => p[1]))];
 }
 
-// 2D affine [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f
-const IDENT = [1, 0, 0, 1, 0, 0];
-const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
-  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
-const ap = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+// The view's transform, a projection of a 3D point onto the sheet [a, b, c, d, e, f, g, h]:
+// x' = a x + c y + g z + e, y' = b x + d y + h z + f. Its first six are the 2D affine every 2D
+// reading takes (the axes, the widths, the angles); g, h carry z, which a 2D affine dropped: inside a
+// block inserted with a tilted extrusion, every z of its contents was lost -- a CIRCLE at elevation 5
+// in one along +X drawn at x 0 (r96 A1). At the top level, seen from +Z, g = h = 0.
+const IDENT = [1, 0, 0, 1, 0, 0, 0, 0];
+const ap = (m, x, y, z = 0) => [m[0] * x + m[2] * y + (m[6] || 0) * z + m[4], m[1] * x + m[3] * y + (m[7] || 0) * z + m[5]];
+// a direction (3D) through the projection's linear part
+const lin = (m, v) => [m[0] * v[0] + m[2] * v[1] + (m[6] || 0) * v[2], m[1] * v[0] + m[3] * v[1] + (m[7] || 0) * v[2]];
+// A projection m after a 3D affine A -- its axes' images X, Y, Z (3D) and its origin's T: m∘A
+const compose = (m, { X, Y, Z, T }) => {
+  const [ax, ay] = lin(m, X), [bx, by] = lin(m, Y), [cx, cy] = lin(m, Z), [tx, ty] = ap(m, T[0], T[1], T[2]);
+  return [ax, ay, bx, by, tx, ty, cx, cy];
+};
 // the angle of a direction (dx, dy) through a transform's linear part
 const dirThrough = (m, dx, dy) => Math.atan2(m[1] * dx + m[3] * dy, m[0] * dx + m[2] * dy);
 
 // An entity's extrusion N, of unit length
+// (one of no length, or not a number -- a damaged file's --, is +Z: it collapsed every point to
+// (0, 0) without a word, a circle so drawn read Ø 0 -- r96 Q4)
 function extrusionOf(r) {
   const nx = num(r, 210, 0), ny = num(r, 220, 0), nz = num(r, 230, 1);
-  const l = Math.hypot(nx, ny, nz) || 1;
+  const l = Math.hypot(nx, ny, nz);
+  if (!(l > 1e-12) || !Number.isFinite(l)) return [0, 0, 1];
   return [nx / l, ny / l, nz / l];
 }
 const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 // An entity's elevation: its OCS z, which lies along N -- a LWPOLYLINE's 38, the others' point's 30.
-// None for MTEXT and the dimensions, whose points are world coordinates or their block's.
-const NO_ELEVATION = new Set(['MTEXT', 'DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE', 'LINE', 'POINT', 'ELLIPSE', 'SPLINE', 'LEADER']);
+// It is read only through ocs(), which only entities drawn in their OCS use (O); those in world
+// coordinates (LINE, POINT, ELLIPSE, SPLINE, LEADER, 3DFACE, MTEXT, a 3D POLYLINE) take their own z
+// through M and never read it. The table and the dimensions draw their block, whose point 30 is no
+// elevation: none (the list named nine kinds it changed nothing for -- r96 A3)
+const NO_ELEVATION = new Set(['DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION', 'ACAD_TABLE']);
 const elevationOf = (r) => (NO_ELEVATION.has(r.type) ? 0 : num(r, r.type === 'LWPOLYLINE' ? 38 : 30, 0) || 0);
-// The arbitrary-axis rule: an entity's OCS x and y axes from its extrusion
-// N, projected onto the world XY plane (a 2D view from +Z), and its OCS origin at its elevation along
-// N, projected too (a translation of N.x z, N.y z: dropped, a circle extruded along +X at elevation 5
-// was drawn at x 0, not x 5 -- r95 Q1)
+// The arbitrary-axis rule: an entity's OCS as a 3D affine -- its x and y axes from its extrusion N,
+// N its z, and its origin at its elevation along N (dropped, a circle extruded along +X at elevation
+// 5 was drawn at x 0, not x 5 -- r95 Q1). Its 2D points are at OCS z 0 (the elevation is in T); a
+// block it inserts takes its z through Z.
 function ocs(r) {
   const N = extrusionOf(r);
-  if (N[0] === 0 && N[1] === 0 && N[2] === 1) return IDENT;
+  const z = elevationOf(r);
+  if (N[0] === 0 && N[1] === 0 && N[2] === 1) return { X: [1, 0, 0], Y: [0, 1, 0], Z: [0, 0, 1], T: [0, 0, z] };
   const W = Math.abs(N[0]) < 1 / 64 && Math.abs(N[1]) < 1 / 64 ? [0, 1, 0] : [0, 0, 1];
   const nrm = (v) => { const k = Math.hypot(...v) || 1; return v.map((x) => x / k); };
   const Ax = nrm(cross3(W, N));
   const Ay = nrm(cross3(N, Ax));
-  const z = elevationOf(r);
-  return [Ax[0], Ax[1], Ay[0], Ay[1], N[0] * z, N[1] * z];
+  return { X: Ax, Y: Ay, Z: N, T: [N[0] * z, N[1] * z, N[2] * z] };
 }
 
 // the colour of a record: its own (420 true, 62 ACI), BYBLOCK (0) the
@@ -731,7 +746,7 @@ function emit(recs, M, byBlock, depth, ctx) {
     if (lw === -1) lw = L.weight ?? -3;
     else if (lw === -2) lw = byBlock && byBlock.weight !== undefined ? byBlock.weight : -3;
     const sty = { dash: pat ? pat.map((x) => x * k) : null, weight: lw >= 0 ? lw / 100 : null, ltype: lt };
-    const O = mul(M, ocs(r));
+    const O = compose(M, ocs(r));
     // (width: a polyline's width in its own units, scaled by the transform into drawing units)
     // (extra: outline -- a wide polyline's filled outline, not a shape of its own: not counted as
     // one, not snapped to; evenodd -- one hatch's loops, filled together even-odd)
@@ -761,12 +776,13 @@ function emit(recs, M, byBlock, depth, ctx) {
     switch (r.type) {
       case 'LINE': {
         // LINE's points are in world coordinates, not its OCS
-        const a = ap(M, num(r, 10), num(r, 20)), b = ap(M, num(r, 11), num(r, 21));
+        // (with their z: inside a tilted insert it reaches the view -- r96 A1)
+        const a = ap(M, num(r, 10), num(r, 20), num(r, 30, 0) || 0), b = ap(M, num(r, 11), num(r, 21), num(r, 31, 0) || 0);
         ctx.add({ layer, colour, ...sty,pts: Float64Array.of(a[0], a[1], b[0], b[1]), closed: false, fill: false });
         break;
       }
       case 'POINT': {
-        const [x, y] = ap(M, num(r, 10), num(r, 20));
+        const [x, y] = ap(M, num(r, 10), num(r, 20), num(r, 30, 0) || 0);
         ctx.add({ layer, colour, ...sty,pts: Float64Array.of(x, y, x, y), closed: false, fill: false, point: true });
         break;
       }
@@ -787,7 +803,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // ratio * (N x major), projected onto XY with the major -- an ellipse seen from -Z runs the
         // other way by it, and one tilted is drawn as it is seen (its minor taken in XY as the
         // major's perpendicular, an ellipse seen edge-on was drawn whole -- r95 Q1)
-        const cx = num(r, 10), cy = num(r, 20), mx = num(r, 11), my = num(r, 21), mz = num(r, 31, 0) || 0, ratio = num(r, 40, 1);
+        const cx = num(r, 10), cy = num(r, 20), cz = num(r, 30, 0) || 0, mx = num(r, 11), my = num(r, 21), mz = num(r, 31, 0) || 0, ratio = num(r, 40, 1);
         let t0 = num(r, 41, 0), t1 = num(r, 42, 2 * Math.PI);
         if (!Number.isFinite(t0) || !Number.isFinite(t1)) break;
         if (t1 <= t0) t1 += 2 * Math.PI;
@@ -798,14 +814,17 @@ function emit(recs, M, byBlock, depth, ctx) {
         for (let k = 0; k <= n; k++) {
           const t = t0 + ((t1 - t0) * k) / n;
           const c = Math.cos(t), s = Math.sin(t);
-          const [x, y] = ap(M, cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s);
+          const [x, y] = ap(M, cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s, cz + mz * c + minor[2] * s);
           pts.push(x, y);
         }
         const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
         // (one of ratio 1, a full turn, is a circle, some exporters' way to write one: marked as a
         // CIRCLE is -- 677 at hand had no centre since r70 -- r71 A7, Q2)
-        // (and only one seen face on, its extrusion along Z: one tilted is drawn an ellipse -- r95 Q1)
-        const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && conformalOf(M) && (mx || my) && Math.abs(extrusionOf(r)[2]) > 1 - 1e-9 && !mz;
+        // (by the one rule a CIRCLE is marked by, conformalOf, on its own plane as the view projects
+        // it -- its major and minor axes' images: an exact |N.z| test beside it lost a circle's centre
+        // tilted 1e-4 rad that a CIRCLE kept -- r96 A2; one seen tilted is not round in the view)
+        const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
+        const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
         ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
         break;
       }
@@ -836,7 +855,7 @@ function emit(recs, M, byBlock, depth, ctx) {
       case 'POLYLINE': {
         // its VERTEX records follow it to SEQEND
         // (a 2D polyline's widths: each vertex's start / end (40 / 41), else the polyline's)
-        const xs = [], ys = [], bul = [], w0 = [], w1 = [];
+        const xs = [], ys = [], zs = [], bul = [], w0 = [], w1 = [];
         const d0 = num(r, 40, 0) || 0, d1 = num(r, 41, 0) || 0;
         let j = i + 1;
         // (its vertices are the VERTEX records right after it, to its SEQEND -- walked to the next
@@ -844,7 +863,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // later one's SEQEND with it, undrawn and uncounted)
         for (; j < recs.length && recs[j].type === 'VERTEX'; j++) {
           if (num(recs[j], 70) & 16) continue; // a spline frame control point
-          xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); bul.push(num(recs[j], 42));
+          xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); zs.push(num(recs[j], 30, 0) || 0); bul.push(num(recs[j], 42));
           w0.push(num(recs[j], 40, d0) || 0); w1.push(num(recs[j], 41, d1) || 0);
         }
         i = j < recs.length && recs[j].type === 'SEQEND' ? j : j - 1;
@@ -853,16 +872,16 @@ function emit(recs, M, byBlock, depth, ctx) {
         // a word, while a 3D solid was counted)
         if (flags & (16 | 64)) { const k = flags & 64 ? 'POLYLINE (polyface)' : 'POLYLINE (3D mesh)'; ctx.count(r, k); break; }
         const closed = (flags & 1) === 1;
-        if (flags & 8) { const W = mul(M, IDENT); ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(W, x, ys[k]))), closed, fill: false }); }
+        // (a 3D polyline's vertices are world coordinates, their z with them: r96 A1)
+        if (flags & 8) { ctx.add({ layer, colour, ...sty,pts: Float64Array.from(xs.flatMap((x, k) => ap(M, x, ys[k], zs[k]))), closed, fill: false }); }
         else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
         break;
       }
       case 'SPLINE': {
-        const pts = splinePts(r);
-        if (pts.length >= 4) {
-          const W = M; // splines are in world coordinates
-          const f = new Float64Array(pts.length);
-          for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(W, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
+        const pts = splinePts(r); // (x, y, z in threes, world coordinates)
+        if (pts.length >= 6) {
+          const f = new Float64Array((pts.length / 3) * 2);
+          for (let k = 0, o = 0; k < pts.length; k += 3, o += 2) { const [x, y] = ap(M, pts[k], pts[k + 1], pts[k + 2]); f[o] = x; f[o + 1] = y; }
           ctx.add({ layer, colour, ...sty,pts: f, closed: (num(r, 70) & 1) === 1, fill: false });
         }
         break;
@@ -890,7 +909,8 @@ function emit(recs, M, byBlock, depth, ctx) {
       case '3DFACE': {
         // world corners (the fourth repeats the third for a triangle); 70's bits 1, 2, 4, 8 hide
         // the first .. fourth edge
-        const c = [[num(r, 10), num(r, 20)], [num(r, 11), num(r, 21)], [num(r, 12), num(r, 22)], [num(r, 13, num(r, 12)), num(r, 23, num(r, 22))]].map(([x, y]) => ap(M, x, y));
+        const z = (c, d) => num(r, c, d === undefined ? 0 : num(r, d, 0)) || 0;
+        const c = [[num(r, 10), num(r, 20), z(30)], [num(r, 11), num(r, 21), z(31)], [num(r, 12), num(r, 22), z(32)], [num(r, 13, num(r, 12)), num(r, 23, num(r, 22)), z(33, 32)]].map(([x, y, zz]) => ap(M, x, y, zz));
         const hide = num(r, 70);
         if (!(hide & 15)) {
           ctx.add({ layer, colour, ...sty, pts: Float64Array.from(c.flat()), closed: true, fill: false });
@@ -946,7 +966,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (mt) {
           // attachment 1..9: top / middle / bottom rows of left / centre / right
           const a = Math.min(9, Math.max(1, num(e, 71, 1) | 0));
-          [item.x, item.y] = ap(P, num(e, 10), num(e, 20));
+          [item.x, item.y] = ap(P, num(e, 10), num(e, 20), num(e, 30, 0) || 0); // (its z: r96 A1)
           item.align = mtextAlign(a);
           item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
           // 41, its reference width: its lines wrap at it (they ran on in one line)
@@ -1023,7 +1043,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // and they drew at open -- r66 A7)
         if (!b) { attHold = L.frozen ? holdUnder(ctx.hold, layer) : null; ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
-        const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1);
+        const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1), sz = isDim ? 1 : num(q, 43, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
         const cols = isDim ? 1 : Math.max(1, num(q, 70, 1)), rows = isDim ? 1 : Math.max(1, num(q, 71, 1));
         // an array of more cells than a drawing can draw is refused before it is walked (an
@@ -1046,20 +1066,23 @@ function emit(recs, M, byBlock, depth, ctx) {
         try {
           for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
             const c = Math.cos(rot), s = Math.sin(rot);
-            // insertion point, then rotation and scale, the array cell, the block base
-            const T = [c * sx, s * sx, -s * sy, c * sy, ix + c * ci * dc - s * ri * dr, iy + s * ci * dc + c * ri * dr];
-            const B = [1, 0, 0, 1, -b.base[0], -b.base[1]];
-            emit(b.recs, mul(isDim ? M : O, mul(T, B)), inner, depth + 1, ctx);
+            // insertion point (its z in the OCS's T), then rotation and scale -- z by 43 --, the array
+            // cell, the block base (its z too): one 3D affine, so the contents' z reaches the view
+            // through a tilted insert (r96 A1)
+            const X = [c * sx, s * sx, 0], Y = [-s * sy, c * sy, 0], Z = [0, 0, sz];
+            const bx = b.base[0], by = b.base[1], bz = b.base[2] || 0;
+            const T = [ix + c * ci * dc - s * ri * dr - (X[0] * bx + Y[0] * by), iy + s * ci * dc + c * ri * dr - (X[1] * bx + Y[1] * by), -sz * bz];
+            emit(b.recs, compose(isDim ? M : O, { X, Y, Z, T }), inner, depth + 1, ctx);
           }
         } finally { ctx.hold = held; }
         break;
       }
       case 'LEADER': {
         // its vertices (10 / 20, world coordinates), as a polyline (the arrowhead is not drawn)
-        const xs = all(r, 10), ys = all(r, 20);
+        const xs = all(r, 10), ys = all(r, 20), zs = all(r, 30);
         if (xs.length >= 2) {
           const pts = [];
-          for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0));
+          for (let k = 0; k < xs.length; k++) pts.push(...ap(M, xs[k], ys[k] ?? 0, zs[k] || 0));
           if (pts.every(Number.isFinite)) ctx.add({ layer, colour, ...sty, pts: Float64Array.from(pts), closed: false, fill: false });
         } else ctx.count(r, 'LEADER'); // (one without its vertices: a DWG's, whose are not decoded)
         break;
@@ -1196,20 +1219,23 @@ function splinePts(r) {
   if (!r.splinePts) r.splinePts = evalSpline(r);
   return r.splinePts;
 }
+// (its points x, y, z, in threes: a spline is in world coordinates, and inside a tilted insert its z
+// reaches the view -- r96 A1)
 function evalSpline(r) {
   const deg = num(r, 71, 3);
   const knots = all(r, 40);
-  const cx = all(r, 10), cy = all(r, 20);
+  const cx = all(r, 10), cy = all(r, 20), czr = all(r, 30);
+  const cz = cx.map((_, k) => czr[k] || 0);
   const w = all(r, 41);
   if (cx.length < 2) {
-    const fx = all(r, 11), fy = all(r, 21);
-    return fx.flatMap((x, k) => [x, fy[k]]);
+    const fx = all(r, 11), fy = all(r, 21), fz = all(r, 31);
+    return fx.flatMap((x, k) => [x, fy[k], fz[k] || 0]);
   }
   const n = cx.length;
   // a degree that is not a whole number from 1 to n - 1 (de Boor would read slots that do not
   // exist), or over MAX_SPLINE_DEGREE (evaluation costs points x degree^2: a 300-point spline of
   // degree 299 took 12 s), or knots that do not fit it: the control polygon
-  if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k]]);
+  if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k], cz[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);
   const t0 = knots[deg], t1 = knots[n];
   const steps = Math.max(16, n * 8);
@@ -1220,17 +1246,17 @@ function evalSpline(r) {
     while (k < n - 1 && t >= knots[k + 1]) k++;
     // homogeneous de Boor
     const d = [];
-    for (let j = 0; j <= deg; j++) { const i = k - deg + j; d.push([cx[i] * W[i], cy[i] * W[i], W[i]]); }
+    for (let j = 0; j <= deg; j++) { const i = k - deg + j; d.push([cx[i] * W[i], cy[i] * W[i], cz[i] * W[i], W[i]]); }
     for (let rr = 1; rr <= deg; rr++) {
       for (let j = deg; j >= rr; j--) {
         const i = k - deg + j;
         const den = knots[i + deg - rr + 1] - knots[i];
         const a = den ? (t - knots[i]) / den : 0;
-        d[j] = [0, 1, 2].map((c) => (1 - a) * d[j - 1][c] + a * d[j][c]);
+        d[j] = [0, 1, 2, 3].map((c) => (1 - a) * d[j - 1][c] + a * d[j][c]);
       }
     }
     const p = d[deg];
-    out.push(p[0] / p[2], p[1] / p[2]);
+    out.push(p[0] / p[3], p[1] / p[3], p[2] / p[3]);
   }
   return out;
 }

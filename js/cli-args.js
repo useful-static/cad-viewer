@@ -128,8 +128,12 @@ export async function checkOutput(path, inputs) {
 // there yet too, which the rename replaced with a file of its own, the file it named never made, exit
 // 0 (r95 A1) -- else path itself (written through, as an in-place write always was)
 async function writeTarget(path) {
-  const { lstatSync, readlinkSync, statSync } = await import('node:fs');
+  const { lstatSync, readlinkSync, realpathSync, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
+  // (a link's target read from its real directory, as the system reads it: through a linked
+  // directory, "x -> ../target.txt" taken from the path as written replaced another ./target.txt and
+  // left the linked file unchanged, exit 0 -- r96 Q2)
+  const realDir = (p) => { try { return realpathSync(dirname(p)); } catch { return dirname(p); } };
   // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
   // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself
   try { if (!statSync(path).isFile()) return resolve(path); } catch { /* not there yet: followed below */ }
@@ -138,7 +142,7 @@ async function writeTarget(path) {
     let s = null;
     try { s = lstatSync(p); } catch { return p; }
     if (!s.isSymbolicLink()) return p;
-    p = resolve(dirname(p), readlinkSync(p));
+    p = resolve(realDir(p), readlinkSync(p));
   }
   throw new Error(`could not write ${path}: too many links`);
 }

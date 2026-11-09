@@ -614,4 +614,28 @@ t('a drop in a block the drawing walks is counted not drawn, the block by any ca
     assert.deepEqual(drawDWG({ failures: [] }, pairs(b, ins)).notDrawn, { 'ATTRIB (multi-line)': 1 }, `${b} / ${ins}`);
   }
 });
+// (dwg-check's --dxf to a name ending .gz is gzipped, the tools' one rule; a plain name is text: it
+// wrote plain text under .gz, which gunzip refused -- r96 A4. On a file of the corpus: set DWG_CORPUS)
+{
+  const p = `${root}/example_2000.dwg`;
+  if (!existsSync(p)) skip('dwg-check --dxf to a .gz name: gzipped', 'example_2000.dwg absent (set DWG_CORPUS)');
+  else {
+    await t('dwg-check --dxf to a .gz name: gzipped; to a plain name: the DXF text (r96 A4)', async () => {
+      const { spawnSync } = await import('node:child_process');
+      const { mkdtempSync, rmSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'cv-dwg-'));
+      const tool = new URL('../dwg-check.mjs', import.meta.url).pathname;
+      for (const name of ['x.dxf.GZ', 'x.dxf']) {
+        const r = spawnSync(process.execPath, [tool, p, '--dxf', join(dir, name)], { encoding: 'utf8', timeout: 120000 });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+      }
+      const gz = readFileSync(join(dir, 'x.dxf.GZ')), plain = readFileSync(join(dir, 'x.dxf'));
+      assert.ok(gz[0] === 0x1f && gz[1] === 0x8b, 'written as plain text');
+      assert.ok(plain.subarray(0, 64).toString().includes('SECTION'), 'the plain name not DXF text');
+      rmSync(dir, { recursive: true, force: true });
+    });
+  }
+}
 done();

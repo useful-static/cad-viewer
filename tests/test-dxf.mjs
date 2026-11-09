@@ -368,6 +368,31 @@ test('MTEXT\'s point and direction are WORLD coordinates (extrusion 0,0,-1 drew 
   assert.deepEqual([tx.x, tx.y], [-50, 0]);
   assert.deepEqual([tx.mirrorX, Math.round(Math.cos(tx.rot))], [mt.mirrorX, Math.round(Math.cos(mt.rot))], 'the MTEXT and the TEXT alike');
 });
+test('a block inserted with a tilted extrusion: its contents\' z, its base\'s z and its z scale reach the view (r96 A1, Q1)', () => {
+  // (must fire: the transform passed down was 2D, so every z inside was dropped -- a CIRCLE at
+  // elevation 5 in a block inserted along +X drawn at x 0, not x 5)
+  // (along +X the arbitrary-axis rule gives the insert's x axis world +Y, its y world +Z, its z +X:
+  // from +Z a block's z is seen as world x)
+  const boxes = (contents, insert = [], base = [0, 0, 0]) => {
+    const d = parseDXF(dxf([...blocks([[0, 'BLOCK'], [2, 'B'], [10, base[0]], [20, base[1]], [30, base[2]], ...contents, [0, 'ENDBLK']]),
+      [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [30, 0], [210, 1], [220, 0], [230, 0], ...insert, [0, 'ENDSEC'], [0, 'EOF']]));
+    return d.paths.map((p) => {
+      const xs = [], ys = [];
+      for (let k = 0; k < p.pts.length; k += 2) { xs.push(p.pts[k]); ys.push(p.pts[k + 1]); }
+      return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)].map((v) => +v.toFixed(3) + 0);
+    });
+  };
+  const items = [
+    [0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [30, 5], [40, 1],
+    [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [30, 7], [11, 1], [21, 0], [31, 7],
+    [0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 0], [38, 4], [10, 0], [20, 0], [10, 1], [20, 1],
+    // (an ELLIPSE at z 2, its major (4, 0, 0): seen at x 2, its major along world y)
+    [0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [30, 2], [11, 4], [21, 0], [31, 0], [40, 0.5],
+  ];
+  assert.deepEqual(boxes(items), [[5, 5, -1, 1], [7, 7, 0, 1], [4, 4, 0, 1], [2, 2, -4, 4]]);
+  // (its z scale, 43, and its base's z: z 5 scaled 2 from a base at z 1 is seen at x 8)
+  assert.deepEqual(boxes([[0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [30, 5], [40, 1]], [[43, 2]], [0, 0, 1]), [[8, 8, -1, 1]]);
+});
 test('a tilted extrusion: the elevation along it, and an ELLIPSE\'s minor axis by it, as seen from +Z (r95 Q1)', () => {
   // (each drawn as if it lay flat: a CIRCLE extruded along +X at elevation 5 at x 0, an ellipse seen
   // edge-on drawn whole -- must fire)
@@ -389,6 +414,13 @@ test('a tilted extrusion: the elevation along it, and an ELLIPSE\'s minor axis b
   assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 3], [20, 0], [30, 0], [11, 0], [21, 10], [31, 0], [40, 0.5], ...X]), [3, 3, -10, 10]);
   // one with major (0, 0, 10) along +X: the segment y -5..5
   assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 0], [21, 0], [31, 10], [40, 0.5], ...X]), [0, 0, -5, 5]);
+  // (one rule for "drawn as a circle": a CIRCLE and an ELLIPSE of ratio 1 tilted 1e-4 rad alike --
+  // the ellipse lost its centre the circle kept: r96 A2)
+  const centres = (e) => parseDXF(ents(e)).paths.map((p) => !!p.circle);
+  const tilt = [[210, 1e-4], [220, 0], [230, 1]];
+  assert.deepEqual([...centres([[0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 5], ...tilt]), ...centres([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 0], [40, 1], ...tilt])], [true, true]);
+  // (a zero-length extrusion is +Z: it collapsed every point to (0, 0), a circle read Ø 0 -- r96 Q4)
+  assert.deepEqual(box([[0, 'CIRCLE'], [8, '0'], [10, 2], [20, 3], [40, 1], [210, 0], [220, 0], [230, 0]]), [1, 3, 2, 4]);
   // (controls: flat, and seen from -Z, as before)
   assert.deepEqual(box([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0], [40, 0.5]]), [-10, 10, -5, 5]);
   assert.deepEqual(box([[0, 'CIRCLE'], [8, '0'], [10, 2], [20, 3], [30, 5], [40, 1], [210, 0], [220, 0], [230, -1]]), [-3, -1, 2, 4]);

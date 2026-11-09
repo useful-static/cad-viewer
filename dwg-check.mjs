@@ -6,7 +6,8 @@
 import { gunzip, isGzip } from './js/cadmesh.js';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, openCounts, sheetsOf } from './js/dxf.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, gzipsOutput, parseCli, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
+import { gzipSync } from 'node:zlib';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 // (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
@@ -83,7 +84,10 @@ async function main() {
     if (failed) bad++;
     reports.push(rep);
     if (dxfOut && P) {
-      await writeOutput(dxfOut, pairsToDXF(P));
+      // (a name ending .gz gzipped, the tools' one rule -- gzipsOutput: it wrote plain text there,
+      // which gunzip refused -- r96 A4)
+      const text = pairsToDXF(P);
+      await writeOutput(dxfOut, gzipsOutput(dxfOut, false) ? gzipSync(Buffer.from(text)) : text);
     }
     if (!json) {
       console.log(`${f}: ${rep.release || '?'} ${rep.error ? `ERROR ${why}` : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${rep.drawn.hidden ? ` (and ${rep.drawn.hidden} on layers off or frozen)` : ''}${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);
