@@ -614,6 +614,25 @@ t('a drop in a block the drawing walks is counted not drawn, the block by any ca
     assert.deepEqual(drawDWG({ failures: [] }, pairs(b, ins)).notDrawn, { 'ATTRIB (multi-line)': 1 }, `${b} / ${ins}`);
   }
 });
+// (a DWG layout's viewports by their frozen layers and clip boundary, as the same drawing's DXF:
+// the decoder stopped after the view centre, and the DWG drew 3 frames of 053-house_plan's clipped
+// viewports and 028-kitchen's 123 tags frozen on its electrical sheet -- r99 Q1. On the dozens: set
+// DWG_DOZENS)
+{
+  const dz = process.env.DWG_DOZENS || '';
+  const house = `${dz}/2007/053-house_plan.dwg`, kitchen = `${dz}/old-2000/028-kitchen-equipment-r2000.dwg`;
+  if (!dz || !existsSync(house) || !existsSync(kitchen)) skip('a DWG viewport\'s frozen layers and clip boundary', 'the dozens absent (set DWG_DOZENS)');
+  else {
+    t('a DWG viewport\'s frozen layers and clip boundary, as its DXF (r99 Q1)', () => {
+      const h = drawDWG(readDWG(new Uint8Array(readFileSync(house))));
+      assert.deepEqual(h.layouts.map((l) => l.paths.filter((p) => p.frame).length), [0], 'the house plan\'s clipped viewports drew frames');
+      const k = drawDWG(readDWG(new Uint8Array(readFileSync(kitchen))));
+      const tags = Object.fromEntries(k.layouts.map((l) => [l.name, l.paths.filter((p) => p.layer === 'K-EQPM-TAG').length]));
+      assert.equal(tags['K-102 ELECTRICAL'], 0, JSON.stringify(tags));
+      assert.equal(tags['K-101 EQUIPMENT'], 135, JSON.stringify(tags));
+    });
+  }
+}
 // (dwg-check's --dxf to a name ending .gz is gzipped, the tools' one rule; a plain name is text: it
 // wrote plain text under .gz, which gunzip refused -- r96 A4. On a file of the corpus: set DWG_CORPUS)
 {

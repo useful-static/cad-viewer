@@ -99,6 +99,9 @@ export async function readInput(path) {
 // passed none still did (r93 A1)
 export async function checkOutput(path, inputs) {
   if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
+  // (a name ending in "/" names a directory, as the shell reads it: the slash dropped, "-o f.stp/"
+  // overwrote f.stp, exit 0 -- r99 Q5)
+  if (/[\\/]$/.test(path)) throw new Error(`could not write ${path}: a name ending in / is a directory`);
   const { accessSync, constants, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
@@ -140,11 +143,16 @@ async function writeTarget(path) {
   // (a directory the system cannot read -- not there -- is read the same way one level up, never by
   // string: the fallback resolve() dropped "L/.." and "-o L/../sub/a.stp" replaced the input
   // ./sub/a.stp, exit 0 -- r98 A1)
+  // (and a ".." after a directory not there is no path at all, as the system says -- ENOENT: by
+  // string, "missing/../sub/out" was ./sub/out, overwritten, exit 0 -- r99 A2)
   const real = (raw) => {
-    const dir = dirname(raw);
+    const dir = dirname(raw), name = basename(raw);
     let d;
-    try { d = realpathSync.native(dir); } catch { d = dir === raw || dir === '.' || dir === '/' ? resolve(dir) : real(dir); }
-    return resolve(d, basename(raw));
+    try { d = realpathSync.native(dir); } catch {
+      d = dir === raw || dir === '.' || dir === '/' ? resolve(dir) : real(dir);
+      if (name === '..') throw Object.assign(new Error(`could not write ${path}: no such directory ${dir}`), { noDir: true });
+    }
+    return resolve(d, name);
   };
   // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
   // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself,

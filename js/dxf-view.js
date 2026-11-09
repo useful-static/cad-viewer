@@ -38,6 +38,15 @@ const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 // from its points), shown as 0 -- one number, written once (r92 A5)
 const NOISE_2D = 1e-9;
 const measureNum = (v, unit, span) => unconvertedNum(v, 'measure', unit, span, span * NOISE_2D);
+// A point inside a text's clip outline (xy flat, even-odd): the hover's test, as the view clips by it
+export function inClipPoly(p, x, y) {
+  let ins = false;
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+    const xi = p[i], yi = p[i + 1], xj = p[j], yj = p[j + 1];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ins = !ins;
+  }
+  return ins;
+}
 export function measureText(d, dx, dy, unit, span) {
   const fmt = (v) => measureNum(v, unit, span);
   return `${lengthText(d, unit, span)} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}`;
@@ -389,7 +398,13 @@ export function createDxfView(canvas, drawing, cb = {}) {
       if (px < MIN_TEXT_PX) continue; // too small to read: left out
       ctx.save();
       // (a text seen through a layout viewport, clipped to its frame: js/dxf.js)
-      if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
+      // (or to the outline of a viewport clipped to one, clipPoly: by its box alone, a text in an L's
+      // notch was drawn -- r99 Q2)
+      if (t.clipPoly) {
+        ctx.beginPath();
+        for (let k = 0; k < t.clipPoly.length; k += 2) (k ? ctx.lineTo : ctx.moveTo).call(ctx, t.clipPoly[k] - o[0], t.clipPoly[k + 1] - o[1]);
+        ctx.closePath(); ctx.clip();
+      } else if (t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
       // (in the font's own px from here, scaled to the text's height: FONT_PX)
@@ -536,7 +551,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const ti = textAt(textsIndexed(), ux, uy, (i) => {
       const t = drawing.texts[i];
       if (hid(t) || t.h * st.s < MIN_TEXT_PX) return false;
-      return !t.clip || (ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3]);
+      if (t.clip && !(ux + o[0] >= t.clip[0] && ux + o[0] <= t.clip[2] && uy + o[1] >= t.clip[1] && uy + o[1] <= t.clip[3])) return false;
+      return !t.clipPoly || inClipPoly(t.clipPoly, ux + o[0], uy + o[1]);
     });
     return ti >= 0 ? drawing.texts[ti].layer : null;
   }

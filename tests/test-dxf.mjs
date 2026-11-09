@@ -347,6 +347,71 @@ test('a layer frozen in one viewport (341, by its handle) is not drawn through i
   const inFirst = drawn.filter((p) => p.pts[0] < 100), inSecond = drawn.filter((p) => p.pts[0] >= 100);
   assert.deepEqual(inFirst.map((p) => p.layer).sort(), ['B'], 'the first viewport: only the line on B not under A');
   assert.deepEqual(inSecond.map((p) => p.layer).sort(), ['A', 'B', 'B'], 'the second: all three');
+  // (and the ATTRIB values after a reference on A, though on B: hidden with it -- its line was, its
+  // value still drawn: r99 A1)
+  const at = parseDXF(dxf([[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'LAYER'],
+    [0, 'LAYER'], [5, '8D'], [2, 'A'], [70, 0], [62, 1], [0, 'LAYER'], [5, '8E'], [2, 'B'], [70, 0], [62, 2], [0, 'ENDTAB'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'K'], [10, 0], [20, 0], [0, 'LINE'], [8, 'B'], [10, 0], [20, 5], [11, 1], [21, 5], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'INSERT'], [8, 'A'], [66, 1], [2, 'K'], [10, 0], [20, 0],
+    [0, 'ATTRIB'], [8, 'B'], [10, 0], [20, 2], [40, 1], [1, 'TAG-VALUE'], [2, 'TAG'], [70, 0], [0, 'SEQEND'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [341, '8D'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 150], [20, 40], [40, 60], [41, 40], [69, 3], [12, 0], [22, 0], [45, 40],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].texts;
+  assert.deepEqual(at.map((t) => [t.text, t.x < 100 ? 'first' : 'second']), [['TAG-VALUE', 'second']]);
+});
+test('a clip boundary that is not convex cuts fills and texts to itself, not its box (r99 Q2); a viewport turned off draws its frame alone (r99 Q3)', () => {
+  // (must fire, Q2: by the L's box, a hatch and a TEXT in its notch were drawn where a line beside
+  // them was not; model (x, y) is paper (x + 50, y + 40))
+  const disc = (cx, cy, r) => [[0, 'HATCH'], [8, 'M'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, cx], [20, cy], [40, r], [50, 0], [51, 360], [73, 1], [97, 0]];
+  const square = [[0, 'HATCH'], [8, 'S'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 4],
+    [72, 1], [10, -10], [20, -10], [11, 20], [21, -10], [72, 1], [10, 20], [20, -10], [11, 20], [21, 10],
+    [72, 1], [10, 20], [20, 10], [11, -10], [21, 10], [72, 1], [10, -10], [20, 10], [11, -10], [21, -10], [97, 0]];
+  const L = [[20, 20], [80, 20], [80, 40], [50, 40], [50, 60], [20, 60]];
+  const d = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    ...disc(15, 10, 3), ...square,
+    [0, 'LINE'], [8, 'M'], [10, 5], [20, 10], [11, 25], [21, 10],
+    [0, 'TEXT'], [8, 'M'], [10, 10], [20, 10], [40, 2], [1, 'IN-NOTCH'],
+    [0, 'TEXT'], [8, 'M'], [10, -20], [20, -10], [40, 2], [1, 'IN-L'],
+    [0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, 6], [70, 1], ...L.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'L1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  const inNotch = (x, y) => x > 50 + 1e-6 && y > 40 + 1e-6;
+  const fills = d.paths.filter((p) => p.fill);
+  assert.ok(!fills.some((p) => p.layer === 'M'), 'the disc in the notch drawn');
+  const sq = fills.filter((p) => p.layer === 'S');
+  assert.ok(sq.length >= 1, 'the square across the bend drew nothing');
+  for (const p of sq) for (let k = 0; k < p.pts.length; k += 2) assert.ok(!inNotch(p.pts[k], p.pts[k + 1]), `a piece of the square in the notch at ${p.pts[k]}, ${p.pts[k + 1]}`);
+  assert.ok(!d.paths.some((p) => p.layer === 'M' && !p.fill), 'the line in the notch drawn');
+  assert.deepEqual(d.texts.map((t) => t.text), ['IN-L']);
+  // (Q3: turned off, 90 bit 0x20000: its frame, nothing through it -- it drew model space)
+  const off = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 0x20000],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths;
+  assert.deepEqual(off.map((p) => !!p.frame), [true]);
+});
+test('a viewport\'s clip boundary found by handle, not by a scan of every record (r99 A3); a polygon clip charged points x vertices (r99 A4)', () => {
+  // (must fire, A3: 16,000 viewports each scanning the sheet ran quadratic -- 20.5 s here, against
+  // 0.6 s by the handle index; the bound leaves the index ten times its time)
+  const vps = [];
+  const n = 16000;
+  for (let i = 0; i < n; i++) {
+    vps.push([0, 'LWPOLYLINE'], [5, `B${i.toString(16)}`], [8, '0'], [67, 1], [90, 3], [70, 1], [10, i], [20, 0], [10, i + 1], [20, 0], [10, i + 0.5], [20, 1],
+      [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, i + 0.5], [20, 0.5], [40, 1], [41, 1], [69, i + 2], [12, 0], [22, 0], [45, 1], [90, 65536], [340, `B${i.toString(16)}`]);
+  }
+  const t0 = performance.now();
+  parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 0], ...vps, [0, 'ENDSEC'], [0, 'EOF']]));
+  const ms = performance.now() - t0;
+  assert.ok(ms < 6000, `${n} clipped viewports took ${ms.toFixed(0)} ms`);
+  // (A4: a path of 5,000 points through a boundary of 4,000 vertices is 20 million clips, over
+  // MAX_CLIPPED's 10 million though its points alone are not -- refused, not run)
+  const big = Array.from({ length: 5000 }, (_, i) => [[10, Math.cos(i) * 0.4], [20, Math.sin(i) * 0.4]]).flat();
+  const ring = Array.from({ length: 4000 }, (_, i) => [[10, 50 + 30 * Math.cos((2 * Math.PI * i) / 4000)], [20, 40 + 20 * Math.sin((2 * Math.PI * i) / 4000)]]).flat();
+  assert.throws(() => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'LWPOLYLINE'], [8, 'M'], [90, 5000], [70, 0], ...big,
+    [0, 'LWPOLYLINE'], [5, 'R1'], [8, 'B'], [67, 1], [90, 4000], [70, 1], ...ring,
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'R1'],
+    [0, 'ENDSEC'], [0, 'EOF']])), /too large to draw here \(its viewports clip over 10 million points\)/);
 });
 test('a viewport whose clip boundary is a polygon (90 0x10000, 340) cuts what it shows to it, and draws no rectangle of its own (r98 Q3)', () => {
   // (must fire: clipped to its rectangle, a line came back x 20..80 where the triangle keeps 35..65,

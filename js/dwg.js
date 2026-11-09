@@ -1097,14 +1097,40 @@ const DECODE = {
   // 20.4.38: a layout's viewport -- its centre and size on paper, and from R2000 the view it shows
   // (twist, view height, view centre); what follows (snap, grid, UCS, lights) is not read. R13-R14
   // keep the view in the viewport entity header, not read: there the frame alone is known
+  // (and from R2000 the rest, to its frozen layers and clip boundary, by LibreDWG's dwg.spec: the
+  // snap, grid and UCS fields read past, the frozen-layer count and the status flags kept, then in
+  // the handle stream the frozen layers' handles and the clip boundary's -- not read, a DWG drew
+  // the layers frozen in a viewport and, through a viewport clipped to an outline, its rectangle:
+  // 053-house_plan's three frames, r99 Q1. A misread past the view keeps the view alone.)
   VIEWPORT(o, r, v) {
     const d = (o.d = { c: r.BD3(), w: r.BD(), h: r.BD() });
+    let n = 0, more = false;
     if (v >= 15) {
       d.target = r.BD3(); d.dir = r.BD3(); d.twist = r.BD(); d.vh = r.BD();
       r.BD(); r.BD(); r.BD(); r.BD(); // lens length, front and back clip, snap angle
       d.vc = [r.RD(), r.RD()];
+      try {
+        r.RD2(); r.RD2(); r.RD2(); r.BS(); // snap base, snap spacing, grid spacing, circle zoom
+        if (v >= 21) r.BS(); // grid major
+        n = r.BL();
+        d.status = r.BL();
+        r.TV(); r.RC(); // style sheet, render mode
+        r.B(); r.B(); r.BD3(); r.BD3(); r.BD3(); r.BD(); r.BS(); // UCS: at origin, per viewport, origin, x, y, elevation, ortho view
+        if (v >= 18) r.BS(); // shade plot mode
+        if (v >= 21) { r.B(); r.RC(); r.BD(); r.BD(); r.CMC(); } // default lights, lighting type, brightness, contrast, ambient colour
+        more = Number.isInteger(n) && n >= 0 && n <= 1e5;
+      } catch { more = false; }
     }
     this.entityHandles(o);
+    if (more) {
+      try {
+        const frozen = [];
+        for (let k = 0; k < n; k++) frozen.push(o.h.Ha(o.handle));
+        const clip = o.h.Ha(o.handle);
+        d.frozen = frozen.filter((h) => Number.isFinite(h) && h > 0);
+        if (Number.isFinite(clip) && clip > 0) d.clip = clip;
+      } catch { delete d.frozen; delete d.clip; }
+    } else delete d.status;
   },
   SOLID(o, r) { const thick = r.BT(), z = r.BD(); o.d = { thick, z, c: [r.RD2(), r.RD2(), r.RD2(), r.RD2()], ext: r.BE() }; this.entityHandles(o); },
   TRACE(o, r) { DECODE.SOLID.call(this, o, r); },
@@ -1623,6 +1649,10 @@ export function dwgToPairs(dwg) {
         vpIds.set(key, id);
         common('VIEWPORT'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(40, d.w); put(41, d.h); put(69, id);
         if (d.vh !== undefined) { put(12, d.vc[0]); put(22, d.vc[1]); put(16, d.dir[0]); put(26, d.dir[1]); put(36, d.dir[2]); put(17, d.target[0]); put(27, d.target[1]); put(37, d.target[2]); put(45, d.vh); if (d.twist) put(51, deg(d.twist)); }
+        // (its status flags, frozen layers and clip boundary, as a DXF's: r99 Q1)
+        if (d.status !== undefined) put(90, d.status);
+        if (d.clip) put(340, hex(d.clip));
+        for (const h of d.frozen || []) put(341, hex(h));
         break;
       }
       case 'ELLIPSE': common('ELLIPSE'); put(10, d.c[0]); put(20, d.c[1]); put(30, d.c[2]); put(11, d.major[0]); put(21, d.major[1]); put(31, d.major[2]); ext(d.ext); put(40, d.ratio); put(41, d.t0); put(42, d.t1); break;

@@ -4,9 +4,12 @@
 // canvas strokes:
 //   { units, insunits, layers: [{ name, colour, on }], extents, paperSpace,
 //     paths: [{ layer, colour, pts: Float64Array xy..., closed, fill, dash, weight, ltype, width?,
-//               point?, outline?, evenodd?, frame? }],
+//               point?, outline?, evenodd?, frame?, circle?, hold?, via? }],
 //     texts: [{ layer, colour, x, y, h, rot, text, align, valign, mtext, fit?, fitMode?, mirrorX?, mirrorY?,
-//               widthFactor?, oblique?, wrap?, clip? }],
+//               widthFactor?, oblique?, wrap?, clip?, clipPoly?, hold?, via? }],
+//   (circle: drawn as a whole circle, for 2D Measure's centre and Ø; hold: the frozen layers of the
+//   references it is drawn under, which hide it; via: the layers of every reference it is drawn
+//   under, which a viewport freezing one of them hides it by -- r99 A5)
 //     layouts: [{ name, paths, texts, extents }], notDrawn: { KIND: count } }
 //   (a DWG's, through js/dwg.js drawDWG, adds checkFailures: the format checks it failed)
 //   (a path's dash: its line type's pattern in drawing units, or null; weight: its line weight in
@@ -16,7 +19,8 @@
 //   viewport's frame. mirrorX / mirrorY: drawn mirrored about the point -- a backward / upside-down text,
 //   or one in a mirroring block; widthFactor: its width x that, its 41 and its block's stretch
 //   along it; oblique: its slant in radians; wrap: an MTEXT's reference width; clip: a layout
-//   viewport's frame [x0, y0, x1, y1] it is cut to. h, fit and wrap are lengths: TEXT_LENGTHS)
+//   viewport's frame [x0, y0, x1, y1] it is cut to, or its clip outline's box, the outline itself in
+//   clipPoly (xy, flat). h, fit and wrap are lengths: TEXT_LENGTHS)
 //   (align left / center / right; valign baseline / bottom / middle / top for a TEXT, top / middle /
 //   bottom for an MTEXT, which hangs its lines from the point; fit: an aligned / fit text's
 //   baseline length, fitMode 'aligned' (both ways) or 'fit' (width): js/dxf-view.js draws them so,
@@ -351,7 +355,7 @@ export function parseDXF(s, opts = {}) {
     const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, hold: null, via: null };
     c.add = (p) => { if (p.pts.every(Number.isFinite)) { if (c.hold !== null) p.hold = c.hold; if (c.via !== null) p.via = c.via; addItem(budget, o.paths, p, p.pts.length); } };
     // (an INSERT's ATTRIB comes held already, by its insert's frozen layer: r65 A2)
-    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; if (c.via !== null) t.via = c.via; addItem(budget, o.texts, t, 2); } };
+    c.addText = (t) => { if (Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.h)) { if (t.hold === undefined && c.hold !== null) t.hold = c.hold; if (t.via === undefined && c.via !== null) t.via = c.via; addItem(budget, o.texts, t, 2); } };
     return c;
   };
   emit(ents, IDENT, null, 0, ctxOf(out));
@@ -359,7 +363,10 @@ export function parseDXF(s, opts = {}) {
   // others are the *Paper_Space<n> blocks. Each draws its own entities and,
   // through each VIEWPORT (but the sheet's own, id 1), model space: a model
   // point m lands at C + R(twist) (h / viewHeight) (m - viewCentre),
-  // clipped to the viewport's frame, which is drawn too (frame: true)
+  // clipped to the viewport's frame, which is drawn too (frame: true), leaving out the layers frozen
+  // in that viewport (341) and what references on them draw; one whose clip boundary is no rectangle
+  // (90 bit 0x10000, its entity 340) is cut to that outline instead, its frame not drawn. A DWG's
+  // viewport frozen layers and clip boundary are not read (js/dwg.js VIEWPORT stops before them)
   // Each sheet's name and place among the tabs, from its LAYOUT (OBJECTS), whose block-record
   // handle (the 330 of its AcDbLayout part; the first 330 is its owner) names the paper space block
   // through the BLOCK_RECORD table. A drawing without them keeps the file's order, "Layout N"
@@ -403,6 +410,7 @@ export function parseDXF(s, opts = {}) {
       lo.paths.push({ layer, colour: (layers.get(layer) || {}).colour || aciColour(7), dash: null, weight: null, ltype: 'CONTINUOUS',
         pts: Float64Array.of(rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]), closed: true, fill: false, frame: true });
     };
+    let byHandle = null;
     for (const v of recs) {
       if (v.type !== 'VIEWPORT' || num(v, 69, 0) === 1) continue;
       const cx = num(v, 10), cy = num(v, 20), w = num(v, 40), h = num(v, 41), vh = num(v, 45);
@@ -414,6 +422,9 @@ export function parseDXF(s, opts = {}) {
       const vd = [num(v, 16, 0), num(v, 26, 0), num(v, 36, 1)];
       const plan = Math.hypot(vd[0], vd[1]) <= 1e-9 * Math.abs(vd[2]) && vd[2] > 0;
       if (!(vh > 0) || !plan) { frame(v, rect); countOnce(v, !(vh > 0) ? 'VIEWPORT (its view not read)' : 'VIEWPORT (not a plan view)'); continue; }
+      // (one turned off -- 90 bit 0x20000 -- shows nothing through it, its frame alone, as AutoCAD
+      // draws it: it drew model space -- r99 Q3)
+      if (num(v, 90, 0) & 0x20000) { frame(v, rect); continue; }
       const s = h / vh, tw = (num(v, 51) * Math.PI) / 180;
       // (its view centre, 12 / 22, is relative to its view target, 17 / 27: taken as a model point,
       // 12 viewports of the dozens showed empty or the wrong part of the model)
@@ -434,7 +445,10 @@ export function parseDXF(s, opts = {}) {
       const clipH = num(v, 90, 0) & 0x10000 ? get(v, 340, null) : null;
       if (clipH !== null) {
         const key = String(clipH).trim().toUpperCase();
-        const at = recs.findIndex((r) => String(get(r, 5, '')).trim().toUpperCase() === key);
+        // (by the sheet's handles, indexed once: each viewport scanned every record, and 16,000 of
+        // them took 18 s, four times as long each time their number doubled -- r99 A3)
+        if (!byHandle) { byHandle = new Map(); recs.forEach((r, i) => { const h = get(r, 5, null); if (h !== null) byHandle.set(String(h).trim().toUpperCase(), i); }); }
+        const at = byHandle.has(key) ? byHandle.get(key) : -1;
         if (at >= 0) {
           let end = at + 1;
           if (recs[at].type === 'POLYLINE') {
@@ -461,7 +475,9 @@ export function parseDXF(s, opts = {}) {
         // (a clip costs the path's points, drawn or not: charged by them, so viewports x points
         // is bounded -- a path whose box overlaps the view while every segment misses the frame
         // drew nothing and cost its points per viewport)
-        clipped(budget, out.paths[k].pts.length / 2);
+        // (a polygon's clip costs the points times its vertices: charged so -- by the points alone,
+        // 8,000 x 8,000 took 3.3 s, four times as long per doubling: r99 A4)
+        clipped(budget, (out.paths[k].pts.length / 2) * (poly ? poly.length : 1));
         if (poly) clipPathPoly(out.paths[k], M, s, poly, rect, lo.paths);
         else clipPath(out.paths[k], M, s, rect, lo.paths);
       }
@@ -491,8 +507,17 @@ export function parseDXF(s, opts = {}) {
         if (bx[1] < rect[0] || bx[0] > rect[2] || by[1] < rect[1] || by[0] > rect[3]) continue;
         // (always clipped: whether it crosses the frame is the font's to say, not the estimate's --
         // "WWWWWWWW" boxed inside by 0.6 a character ran 30 units past the frame in the font)
-        // (a text is clipped to a rectangle: by a polygon boundary, to that boundary's box)
+        // (by a polygon boundary: its box, for the extents and the hover's first test, and the outline
+        // itself, which the view clips by -- by the box alone, a TEXT in an L's notch was drawn: r99 Q2)
         seen.clip = poly ? [Math.min(...poly.map((q) => q[0])), Math.min(...poly.map((q) => q[1])), Math.max(...poly.map((q) => q[0])), Math.max(...poly.map((q) => q[1]))] : rect.slice();
+        if (poly) {
+          seen.clipPoly = Float64Array.from(poly.flat());
+          // (wholly outside the outline -- its four corners and its centre, with no edge of the outline
+          // crossing its box -- it is not drawn at all)
+          const cs = [...c, [(bx[0] + bx[1]) / 2, (by[0] + by[1]) / 2]];
+          const crosses = poly.some(([x, y]) => x >= bx[0] && x <= bx[1] && y >= by[0] && y <= by[1]);
+          if (!crosses && !cs.some(([x, y]) => insidePoly(poly, x, y))) continue;
+        }
         addItem(budget, lo.texts, seen, 2);
       }
       if (!poly) frame(v, rect);
@@ -608,6 +633,37 @@ function convexPoly(poly) {
   }
   return true;
 }
+// A simple polygon cut into triangles (ear clipping), for a fill clipped by a boundary that is not
+// convex: each triangle is, so the convex clip cuts the fill by each, and the pieces, not
+// overlapping, fill what the outline does
+function earTriangles(poly) {
+  const n = poly.length;
+  if (n < 3) return [];
+  const area = poly.reduce((a, q, i) => { const r = poly[(i + 1) % n]; return a + q[0] * r[1] - r[0] * q[1]; }, 0);
+  const idx = Array.from({ length: n }, (_, i) => i);
+  if (area < 0) idx.reverse();
+  const out = [];
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const inTri = (p, a, b, c) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
+  let guard = 0;
+  while (idx.length > 3 && guard++ < n * n) {
+    let cut = false;
+    for (let i = 0; i < idx.length; i++) {
+      const a = poly[idx[(i + idx.length - 1) % idx.length]], b = poly[idx[i]], c = poly[idx[(i + 1) % idx.length]];
+      if (cross(a, b, c) <= 0) continue;
+      let ear = true;
+      for (const j of idx) { const p = poly[j]; if (p !== a && p !== b && p !== c && inTri(p, a, b, c)) { ear = false; break; } }
+      if (!ear) continue;
+      out.push([a, b, c]);
+      idx.splice(i, 1);
+      cut = true;
+      break;
+    }
+    if (!cut) break;
+  }
+  if (idx.length === 3) out.push(idx.map((j) => poly[j]));
+  return out;
+}
 // One model path seen through a viewport whose clip boundary is a polygon (paper coordinates): a
 // line cut where it crosses the boundary, each piece kept by its middle; one seen whole as it is;
 // a fill by Sutherland-Hodgman against a convex boundary, against its box otherwise (clipped to its
@@ -618,28 +674,31 @@ function clipPathPoly(p, M, s, poly, box, out) {
   for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
   const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
   if (p.fill) {
-    if (!convexPoly(poly)) { clipPath(p, M, s, box, out); return; }
     // (seen whole as it is; cut, no circle -- r98 Q4)
     if (P.every(([x, y]) => insidePoly(poly, x, y))) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
     delete base.circle;
-    let sub = P;
-    const turn = Math.sign(poly.reduce((a, q, i) => { const r = poly[(i + 1) % poly.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
-    for (let i = 0; i < poly.length && sub.length; i++) {
-      const a = poly[i], b = poly[(i + 1) % poly.length];
-      const side = (q) => turn * ((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) >= 0;
-      const next = [];
-      for (let k = 0; k < sub.length; k++) {
-        const c = sub[k], d = sub[(k + 1) % sub.length];
-        if (side(c)) next.push(c);
-        if (side(c) !== side(d)) {
-          const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-          const t = den ? ((b[0] - a[0]) * (a[1] - c[1]) - (b[1] - a[1]) * (a[0] - c[0])) / den : 0;
-          next.push([c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t]);
+    // (a convex outline cuts it once; one that is not, by each of its triangles -- by its box, a
+    // hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
+    for (const part of convexPoly(poly) ? [poly] : earTriangles(poly)) {
+      let sub = P;
+      const turn = Math.sign(part.reduce((a, q, i) => { const r = part[(i + 1) % part.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
+      for (let i = 0; i < part.length && sub.length; i++) {
+        const a = part[i], b = part[(i + 1) % part.length];
+        const side = (q) => turn * ((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) >= 0;
+        const next = [];
+        for (let k = 0; k < sub.length; k++) {
+          const c = sub[k], d = sub[(k + 1) % sub.length];
+          if (side(c)) next.push(c);
+          if (side(c) !== side(d)) {
+            const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+            const t = den ? ((b[0] - a[0]) * (a[1] - c[1]) - (b[1] - a[1]) * (a[0] - c[0])) / den : 0;
+            next.push([c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t]);
+          }
         }
+        sub = next;
       }
-      sub = next;
+      if (sub.length >= 3) out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true });
     }
-    if (sub.length) out.push({ ...base, pts: Float64Array.from(sub.flat()), closed: true });
     return;
   }
   if (n === 1 || p.point) {
@@ -860,9 +919,12 @@ function emit(recs, M, byBlock, depth, ctx) {
   walk(ctx.budget, recs.length);
   // (the hold of the INSERT just walked, for the ATTRIBs after it: r65 A2)
   let attHold = null;
+  // (and the layers of the reference they belong to, for a viewport freezing it: a block's line was
+  // hidden there and its ATTRIB value still drawn -- r99 A1)
+  let attVia = null;
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if (r.type !== 'ATTRIB' && r.type !== 'SEQEND') attHold = null;
+    if (r.type !== 'ATTRIB' && r.type !== 'SEQEND') { attHold = null; attVia = null; }
     // an entity marked invisible (60 = 1; a DWG's "invisibility") is not drawn: AutoCAD's dynamic
     // blocks mark every visibility state but the shown one so, and all of them were drawn on top
     // of each other (the records that belong to it -- a POLYLINE's VERTEXes, an INSERT's
@@ -1240,6 +1302,7 @@ function emit(recs, M, byBlock, depth, ctx) {
           if (!item.fit && sy > 0 && Math.abs(sw / sy - 1) > 1e-9) item.widthFactor = (item.widthFactor || 1) * (sw / sy);
         }
         if (r.type === 'ATTRIB' && attHold) item.hold = attHold;
+        if (r.type === 'ATTRIB' && attVia) item.via = attVia;
         ctx.addText(item);
         break;
       }
@@ -1252,7 +1315,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)
-        if (!b) { attHold = L.frozen ? holdUnder(ctx.hold, layer) : null; ctx.count(r, r.type); break; }
+        if (!b) { attHold = L.frozen ? holdUnder(ctx.hold, layer) : null; attVia = holdUnder(ctx.via, layer); ctx.count(r, r.type); break; }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1), sz = isDim ? 1 : num(q, 43, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -1277,6 +1340,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         ctx.via = holdUnder(via, layer);
         // (and the ATTRIBs that follow it, to its SEQEND: they are the reference's -- r65 A2)
         attHold = L.frozen ? ctx.hold : null;
+        attVia = ctx.via;
         try {
           for (let ci = 0; ci < cols; ci++) for (let ri = 0; ri < rows; ri++) {
             const c = Math.cos(rot), s = Math.sin(rot);
