@@ -479,19 +479,24 @@ export function parseDXF(s, opts = {}) {
           const outline = tmp.paths.find((p) => p.closed && !p.outline && p.pts.length >= 6);
           if (outline) {
             poly = [];
-            for (let k = 0; k < outline.pts.length; k += 2) poly.push([outline.pts[k], outline.pts[k + 1]]);
-            // (a closed path's first point repeated at its end, dropped: it blocked the ears of the
-            // triangles, and a fill half inside an L drew nothing -- r100 A1)
+            // (a point the same as the one before it, dropped, the first against the last too: a
+            // closed path's first point repeated at its end blocked the ears of the triangles, and a
+            // fill half inside an L drew nothing -- r100 A1; an inner corner written twice hid its
+            // turn, the L read as convex and a fill over it kept 600 of 1800 -- r101 Q1)
+            for (let k = 0; k < outline.pts.length; k += 2) {
+              const x = outline.pts[k], y = outline.pts[k + 1], q = poly[poly.length - 1];
+              if (!q || q[0] !== x || q[1] !== y) poly.push([x, y]);
+            }
             while (poly.length > 3 && poly[0][0] === poly[poly.length - 1][0] && poly[0][1] === poly[poly.length - 1][1]) poly.pop();
           }
         }
       }
       // (the layers frozen in this viewport alone, 341 by handle: drawn through it, a kitchen's
       // equipment tags its author froze on the electrical sheet showed there, 123 paths -- r98 Q2. A
-      // path held under a layer -- inside a reference on it -- goes with it. A DWG's are not read:
-      // its decoder stops before them)
-      // (by 341 or 331: ODA and LibreDWG write an R2007+ drawing's as 331, a soft pointer, and those
-      // were drawn -- 060's "SECTIONS AND DETAILS" differed from its own DWG on 8 layers: r100 Q2)
+      // path held under a layer -- inside a reference on it -- goes with it. A DWG's are read by
+      // js/dwg.js and written here as 341)
+      // (by 341 or 331: ODA and LibreDWG write a drawing's as 331, a soft pointer, from R2004 on, and
+      // those were drawn -- 060's "SECTIONS AND DETAILS" differed from its own DWG on 8 layers: r100 Q2)
       const vpFrozen = new Set(v.g.filter(([c]) => c === 341 || c === 331).map(([, h]) => layerByHandle.get(String(h).trim().toUpperCase())).filter((n) => n !== undefined).map((n) => nameKey(layerName(n))));
       const frozenHere = (it) => vpFrozen.size > 0 && (vpFrozen.has(nameKey(it.layer)) || (it.via || []).some((l) => vpFrozen.has(nameKey(l))));
       cull(budget, out.paths.length + out.texts.length);
@@ -717,38 +722,82 @@ function earTriangles(poly) {
   if (idx.length === 3) out.push(idx.map((j) => poly[j]));
   return out;
 }
+// The edges of a polygon that cross, as the heights they cross at (none: it is simple)
+function crossingHeights(poly) {
+  const n = poly.length, ys = [];
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const c = poly[j], d = poly[(j + 1) % n];
+      const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
+      if (!den) continue;
+      const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
+      const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
+      if (t > 0 && t < 1 && u > 0 && u < 1) ys.push(a[1] + (b[1] - a[1]) * t);
+    }
+  }
+  return ys;
+}
+// A polygon's even-odd inside as convex pieces, one per pair of edges in each band between the
+// heights of its points and crossings: within a band no two edges cross, so the 1st and 2nd, 3rd and
+// 4th edges from the left bound what is inside, as the points and lines are kept (insidePoly)
+function bandPieces(poly, cross) {
+  const n = poly.length;
+  const ys = [...new Set([...poly.map((q) => q[1]), ...cross])].sort((a, b) => a - b);
+  const xAt = (a, b, y) => a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]);
+  const out = [];
+  for (let k = 0; k + 1 < ys.length; k++) {
+    const y0 = ys[k], y1 = ys[k + 1], ym = (y0 + y1) / 2;
+    const es = [];
+    for (let i = 0; i < n; i++) {
+      const a = poly[i], b = poly[(i + 1) % n];
+      if ((a[1] > ym) !== (b[1] > ym)) es.push([xAt(a, b, y0), xAt(a, b, ym), xAt(a, b, y1)]);
+    }
+    es.sort((p, q) => p[1] - q[1]);
+    // (where the two edges meet at a band's end, one point: the two, the right a hair left of the left,
+    // made an edge that ran backwards and cut the whole piece away -- a star lost a point's half)
+    const end = (l, r, y) => (r - l > 1e-9 * (1 + Math.abs(l)) ? [[l, y], [r, y]] : [[(l + r) / 2, y]]);
+    for (let e = 0; e + 1 < es.length; e += 2) {
+      const part = [...end(es[e][0], es[e + 1][0], y0), ...end(es[e][2], es[e + 1][2], y1).reverse()];
+      if (part.length >= 3) out.push(part);
+    }
+  }
+  return out;
+}
+// The convex parts a fill is cut by, once per outline: itself if convex, its triangles if simple, its
+// bands if it crosses itself -- a bowtie's triangles covered its whole box, and a fill over it kept
+// 1800 where the even-odd rule its lines are cut by keeps 900 (r101 Q2)
+const PARTS = new WeakMap();
+function convexParts(poly) {
+  let parts = PARTS.get(poly);
+  if (!parts) {
+    // (crossings first: a star drawn in one stroke turns one way at every point and reads as convex)
+    const cross = crossingHeights(poly);
+    parts = cross.length ? bandPieces(poly, cross) : convexPoly(poly) ? [poly] : earTriangles(poly);
+    PARTS.set(poly, parts);
+  }
+  return parts;
+}
 // One model path seen through a viewport whose clip boundary is a polygon (paper coordinates): a
 // line cut where it crosses the boundary, each piece kept by its middle; one seen whole as it is;
-// a fill by Sutherland-Hodgman against a convex boundary, against its box otherwise (clipped to its
-// rectangle, its lines drew past a triangle's sides -- r98 Q3)
+// a fill by Sutherland-Hodgman against each of the boundary's convex parts (convexParts) (clipped to
+// its rectangle, its lines drew past a triangle's sides -- r98 Q3)
 function clipPathPoly(p, M, s, poly, box, out) {
   const n = p.pts.length / 2;
   const P = [];
   for (let i = 0; i < n; i++) P.push(ap(M, p.pts[2 * i], p.pts[2 * i + 1]));
   const base = { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}) };
   if (p.fill) {
-    // (seen whole as it is -- every point inside and, the outline not convex, no edge of it crossing
-    // the fill's: a hatch with its corners in a U's two arms was drawn whole across the gap between
-    // them, where a line at its height was cut -- r100 Q1; cut, no circle -- r98 Q4)
-    const crossed = () => {
-      for (let i = 0; i < P.length; i++) {
-        const a = P[i], b = P[(i + 1) % P.length];
-        for (let e = 0; e < poly.length; e++) {
-          const c = poly[e], d = poly[(e + 1) % poly.length];
-          const den = (b[0] - a[0]) * (d[1] - c[1]) - (b[1] - a[1]) * (d[0] - c[0]);
-          if (!den) continue;
-          const t = ((c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0])) / den;
-          const u = ((c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])) / den;
-          if (t > 0 && t < 1 && u > 0 && u < 1) return true;
-        }
-      }
-      return false;
-    };
-    if (P.every(([x, y]) => insidePoly(poly, x, y)) && (convexPoly(poly) || !crossed())) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
+    // (seen whole as it is: whole by the line cut's own rule, its outline as a closed line -- its own
+    // test of crossings missed one through an outline vertex, and a triangle into a notch from vertex
+    // to vertex was drawn whole, 375 of its 690 in the notch: r101 A1; a hatch with its corners in a
+    // U's two arms drawn across the gap -- r100 Q1; cut, no circle -- r98 Q4)
+    if (cutByOutline(P, true, poly).whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: true }); return; }
     delete base.circle;
-    // (a convex outline cuts it once; one that is not, by each of its triangles -- by its box, a
+    // (a convex outline cuts it once; one that is not, by each of its convex parts -- by its box, a
     // hatch in an L's notch was drawn where a line beside it was not: r99 Q2)
-    for (const part of convexPoly(poly) ? [poly] : earTriangles(poly)) {
+    for (const part of convexParts(poly)) {
       let sub = P;
       const turn = Math.sign(part.reduce((a, q, i) => { const r = part[(i + 1) % part.length]; return a + q[0] * r[1] - r[0] * q[1]; }, 0)) || 1;
       for (let i = 0; i < part.length && sub.length; i++) {
@@ -774,9 +823,19 @@ function clipPathPoly(p, M, s, poly, box, out) {
     if (insidePoly(poly, P[0][0], P[0][1])) out.push({ ...base, pts: Float64Array.of(P[0][0], P[0][1], P[0][0], P[0][1]) });
     return;
   }
-  const segs = p.closed ? n : n - 1;
   const cut = { ...base };
   delete cut.circle;
+  const { runs, whole } = cutByOutline(P, !!p.closed, poly);
+  // (seen whole: as it is, closed if it was, a circle if it was)
+  if (whole) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed }); return; }
+  for (const r of runs) if (r.length >= 4) out.push({ ...cut, pts: Float64Array.from(r), closed: false });
+}
+// A line of points P (closed or not) cut by an outline: its runs inside, each piece kept by its
+// middle, and whether it is whole -- inside, in one run, not crossed. The one rule a line and a
+// fill's whole test both use (r101 A1)
+function cutByOutline(P, closed, poly) {
+  const n = P.length;
+  const segs = closed ? n : n - 1;
   const runs = [];
   let run = null, whole = true;
   for (let i = 0; i < segs; i++) {
@@ -805,9 +864,7 @@ function clipPathPoly(p, M, s, poly, box, out) {
     }
   }
   if (run) runs.push(run);
-  // (seen whole: as it is, closed if it was, a circle if it was)
-  if (whole && runs.length === 1) { out.push({ ...base, pts: Float64Array.from(P.flat()), closed: !!p.closed }); return; }
-  for (const r of runs) if (r.length >= 4) out.push({ ...cut, pts: Float64Array.from(r), closed: false });
+  return { runs, whole: whole && runs.length === 1 };
 }
 
 // a path's box [x0, y0, x1, y1]

@@ -21,6 +21,10 @@ const HERE = fileURLToPath(new URL('..', import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'cv-cli-'));
 const notCad = join(dir, 'notcad.txt');
 writeFileSync(notCad, 'not a CAD file\n');
+// (an output path naming no file to write, in the system's own words: the path is opened as given
+// since r101, so a directory's name, a file used as a directory, and a directory not there are each
+// the system's error)
+const NOT_DIR = /(a name in it is not a directory|it is a directory|no such directory)/;
 const run = (tool, args) => {
   const r = spawnSync(process.execPath, [join(HERE, tool), ...args], { cwd: dir, encoding: 'utf8', timeout: 60000 });
   return { rc: r.status, out: r.stdout, err: r.stderr };
@@ -134,10 +138,11 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     ['split-board.mjs', ['box.cadmesh', '-o', dir], /it is a directory/],
     ['dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')], /no such directory/],
     // (a name ending in "/": a directory's, refused -- the slash dropped, -o f.stp/ overwrote f.stp: r99 Q5)
-    ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/'], /a name ending in \/ is a directory/],
+    // (refused in the system's own words since r101, the path opened as given: no code of its own)
+    ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/'], NOT_DIR],
     // (and "." or ".." last: a directory's -- "m.stl/." overwrote m.stl, "nothere/." made a file: r100 Q3)
-    ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/.'], /a name ending in \/ is a directory/],
-    ['stp2mesh.mjs', ['x.stp', '-o', 'nothere/.'], /a name ending in \/ is a directory/],
+    ['stp2mesh.mjs', ['x.stp', '-o', 'm.stl/.'], NOT_DIR],
+    ['stp2mesh.mjs', ['x.stp', '-o', 'nothere/.'], NOT_DIR],
     // (a link into a directory not there: that directory named, not the link's own -- r95 Q6)
     ['stp2mesh.mjs', ['x.stp', '-o', 'tonodir.cadmesh'], /no such directory .*\/nodir$/],
     // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
@@ -155,6 +160,7 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     }
   }
   if (readFileSync(join(dir, 'x.stp'), 'utf8') !== 'ISO-10303-21;\n') bad.push('stp2mesh: x.stp overwritten');
+  if (existsSync(join(dir, 'nothere'))) bad.push('stp2mesh: nothere/. made a file nothere');
   if (!readFileSync(join(dir, 'm.stl')).equals(readFileSync(join(dir, 'box.cadmesh')))) bad.push('cadmesh-export: m.stl overwritten');
   if (readFileSync(join(dir, 'box.rgb')).length !== 24) bad.push('set-colours: box.rgb overwritten');
   // a directory it may not write: refused before the work, in the same words (r27 Q6: two tools
@@ -178,7 +184,7 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     const r = run(tool, args);
     if (r.rc !== 1 || r.err !== `${tool.replace('.mjs', '')}: ${args[0]}: no such file\n`) bad.push(`${tool} ${args[0]}: rc ${r.rc}, stderr ${JSON.stringify(r.err)}`);
   }
-  assert.deepEqual(bad, []);
+  assert.deepEqual(bad, [], bad.join('\n'));
   // dwg-check: a drawing it cannot read is its row, in the reader's words, not "Error: ..."
   const r = run('dwg-check.mjs', [notCad]);
   assert.equal(r.rc, 1);
@@ -268,19 +274,19 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   writeFileSync(join(sub, 'zz', 'in.cadmesh'), box);
   const nz = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'zz/in.cadmesh', 'c.rgb', '-o', 'outdir/../zz/in.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
   assert.equal(nz.status, 1, nz.stderr);
-  assert.match(nz.stderr, /no such directory/);
+  assert.match(nz.stderr, NOT_DIR);
   assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced');
   // (and ".." after a first name not there: no path, as the system says -- by string, it was
   // ./zz/in.cadmesh, overwritten, exit 0: r99 A2)
   const nm = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'zz/in.cadmesh', 'c.rgb', '-o', 'nothere/../zz/in.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
   assert.equal(nm.status, 1, nm.stderr);
-  assert.match(nm.stderr, /no such directory/);
+  assert.match(nm.stderr, NOT_DIR);
   assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced through a missing name');
   // (nor ".." after a name that is a file -- ENOTDIR: "c.rgb/../zz/in.cadmesh" was ./zz/in.cadmesh,
   // overwritten, exit 0: r100 A3)
   const nf = spawnSync(process.execPath, [join(HERE, 'set-colours.mjs'), 'zz/in.cadmesh', 'c.rgb', '-o', 'c.rgb/../zz/in.cadmesh', '--by', 't'], { cwd: sub, encoding: 'utf8', timeout: 60000 });
   assert.equal(nf.status, 1, nf.stderr);
-  assert.match(nf.stderr, /no such directory/);
+  assert.match(nf.stderr, NOT_DIR);
   assert.ok(readFileSync(join(sub, 'zz', 'in.cadmesh')).equals(box), 'the input replaced through a file');
   // (a pipe after "outdir/..": the pipe the system names written, not the regular file ./pp.cadmesh
   // beside the link -- r98 A2)
@@ -305,20 +311,20 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   const so = spawnSync('bash', ['-c', `set -o pipefail; "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" real.cadmesh c.rgb -o /dev/stdout --by t --again | wc -c`], { cwd: sub, encoding: 'utf8', timeout: 60000 });
   assert.equal(so.status, 0, so.stderr);
   assert.ok(Number(so.stdout.trim()) > box.length, `${so.stdout.trim()} bytes through the pipe`);
-  // (a file with other names whose copy in place fails: said, and where the whole output is -- a
-  // mutant dropping those words passed: r95 Q8); not as root, which may write a read-only file
-  if (process.getuid?.() === 0) skip('a failed copy in place says where the whole output is', 'root may write anywhere');
+  // (a read-only file with other names: refused before anything is written, as the system opens it,
+  // the file and its other name as they were and nothing left beside them -- r95 Q8's copy in place
+  // failed here, said where the whole output was; since r101 the open refuses it first); not as root,
+  // which may write a read-only file
+  if (process.getuid?.() === 0) skip('a read-only file with other names refused before the write', 'root may write anywhere');
   else {
     writeFileSync(join(sub, 'ro1.cadmesh'), box);
     linkSync(join(sub, 'ro1.cadmesh'), join(sub, 'ro2.cadmesh'));
     chmodSync(join(sub, 'ro1.cadmesh'), 0o444);
     let said = '';
     try { await writeOutput(join(sub, 'ro1.cadmesh'), Buffer.from('new bytes')); } catch (e) { said = e.message; }
-    const m = /^could not write .*ro1\.cadmesh: .* \(the whole output is in (.+\.tmp)\)$/.exec(said);
-    assert.ok(m, said);
-    assert.equal(readFileSync(m[1], 'utf8'), 'new bytes', 'the whole output not where it says');
-    assert.ok(readFileSync(join(sub, 'ro2.cadmesh')).equals(box), 'the file changed');
-    rmSync(m[1]);
+    assert.match(said, /^could not write .*ro1\.cadmesh: permission denied$/);
+    assert.ok(readFileSync(join(sub, 'ro1.cadmesh')).equals(box) && readFileSync(join(sub, 'ro2.cadmesh')).equals(box), 'the file changed');
+    assert.deepEqual(readdirSync(sub).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
   }
   // (gzipped as it came, whatever the name: stp2mesh's own .cadmesh, recoloured in place, came back
   // 526% of its size)
@@ -339,6 +345,19 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
     chmodSync(ro, 0o755);
     assert.equal(s.rc, 1, s.err);
     assert.equal(s.err, `stp2mesh: could not write ${join(ro, 'x.cadmesh')}: permission denied\n`);
+    // (a link in that read-only directory to a file in one it may write: written, the file beside its
+    // real path made there -- beside the path as written, it could not be: r101)
+    const rw = join(dir, 'rw-dir');
+    mkdirSync(rw);
+    writeFileSync(join(rw, 'y.cadmesh'), box);
+    symlinkSync(join(rw, 'y.cadmesh'), join(ro, 'y.cadmesh'));
+    chmodSync(ro, 0o555);
+    let said = '';
+    try { await writeOutput(join(ro, 'y.cadmesh'), Buffer.from('new bytes')); } catch (e) { said = e.message; }
+    chmodSync(ro, 0o755);
+    assert.equal(said, '', said);
+    assert.equal(readFileSync(join(rw, 'y.cadmesh'), 'utf8'), 'new bytes');
+    assert.ok(lstatSync(join(ro, 'y.cadmesh')).isSymbolicLink(), 'the link replaced');
   }
 });
 

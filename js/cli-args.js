@@ -99,84 +99,75 @@ export async function readInput(path) {
 // passed none still did (r93 A1)
 export async function checkOutput(path, inputs) {
   if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
-  // (a name ending in "/" names a directory, as the shell reads it: the slash dropped, "-o f.stp/"
-  // overwrote f.stp, exit 0 -- r99 Q5)
-  // (and one whose last name is "." or "..", a directory's too: "-o victim.txt/." overwrote victim.txt,
-  // and "-o nothere/." made a file nothere, exit 0 -- r100 Q3)
-  if (/[\\/]$/.test(path) || /(^|[\\/])\.\.?$/.test(path)) throw new Error(`could not write ${path}: a name ending in / is a directory`);
-  const { accessSync, constants, statSync } = await import('node:fs');
-  const { dirname, resolve } = await import('node:path');
+  const { accessSync, closeSync, constants, statSync, unlinkSync } = await import('node:fs');
+  const { dirname } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
   const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
-  // (the file the write lands on, as writeOutput finds it: a link's own file, beside which it writes)
-  const real = await writeTarget(path);
-  // (the inputs compared with the file the write lands on, not with path as the system alone reads
-  // it: the two disagreed and the check passed a write that replaced an input -- r98 A1, A2)
-  const d = dirname(real), dir = st(d), file = st(real);
-  // (the directory the write lands in, named: a link into a missing one named its own, which is
-  // there -- r95 Q6; the path as given where it is not a link)
-  if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${d === dirname(resolve(path)) ? dirname(path) : d}`);
-  if (file?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
-  for (const i of inputs) {
-    const s = file && st(i);
-    if (s && s.dev === file.dev && s.ino === file.ino) throw new Error(`could not write ${path}: it is the input ${i}`);
+  const sameAs = (s) => { for (const i of inputs) { const t = st(i); if (t && t.dev === s.dev && t.ino === s.ino) throw new Error(`could not write ${path}: it is the input ${i}`); } };
+  // (a pipe or a device, by the path as given: written as it is -- a FIFO opened here would send its
+  // reader an end before the bytes)
+  const s0 = st(path);
+  if (s0 && s0.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
+  if (s0 && !s0.isFile()) {
+    sameAs(s0);
+    if (!writable(path)) throw new Error(`could not write ${path}: permission denied`);
+    return;
   }
-  // (a directory or file it may not write: refused before the work too -- two tools ran it, then
-  // printed node's "EACCES: ..."; and by what writeOutput needs -- the directory, where its file
-  // beside goes, and the file there when there is one: a writable file in a read-only directory
-  // passed, and stp2mesh converted it all to fail on a ".tmp" never named -- r94 A2. A file that is
-  // no regular file -- a pipe, a device -- is written as it is, so only it need be writable:
-  // -o /dev/null was refused -- r95 A2)
-  const needs = file && !file.isFile() ? !writable(real) : !writable(d) || (file && !writable(real));
-  if (needs) throw new Error(`could not write ${path}: permission denied`);
+  // (the rest opened as the system opens it, and the file it lands on asked of the open file: r101)
+  const o = await openOutput(path);
+  try {
+    sameAs(o.st);
+    // (a writable file in a directory it may not write: refused before the work, since the write
+    // goes beside it -- stp2mesh converted it all to fail on a ".tmp" never named: r94 A2)
+    if (!writable(dirname(o.real))) throw new Error(`could not write ${path}: permission denied`);
+  } finally {
+    closeSync(o.fd);
+    // (one the check made is taken back: the work may fail, and nothing is left where nothing was)
+    if (o.created) { try { unlinkSync(o.real); } catch { /* gone already */ } }
+  }
 }
 
-// The file a write to path lands on: a link's own file, followed link by link -- a link to a file not
-// there yet too, which the rename replaced with a file of its own, the file it named never made, exit
-// 0 (r95 A1) -- else path itself (written through, as an in-place write always was)
-async function writeTarget(path) {
-  const { lstatSync, readlinkSync, realpathSync, statSync } = await import('node:fs');
-  const { basename, dirname, isAbsolute, resolve } = await import('node:path');
-  // (a path's directory read as the system reads it, ".." after a link included, then its last
-  // name: taken from the path as written, "outdir/../c.rgb" through a linked outdir wrote the
-  // colours input ./c.rgb -- r97 A1 -- and a link's "../target" replaced another ./target -- r96 Q2.
-  // A directory not there: as written, "no such directory" said by checkOutput)
-  // (realpathSync.native, the system's own: node's JS realpathSync drops "dir/.." by string first)
-  // (a directory the system cannot read -- not there -- is read the same way one level up, never by
-  // string: the fallback resolve() dropped "L/.." and "-o L/../sub/a.stp" replaced the input
-  // ./sub/a.stp, exit 0 -- r98 A1)
-  // (and a ".." after a directory not there is no path at all, as the system says -- ENOENT: by
-  // string, "missing/../sub/out" was ./sub/out, overwritten, exit 0 -- r99 A2)
-  const real = (raw) => {
-    const dir = dirname(raw), name = basename(raw);
-    let d;
-    try { d = realpathSync.native(dir); } catch {
-      d = dir === raw || dir === '.' || dir === '/' ? resolve(dir) : real(dir);
-      if (name === '..') throw Object.assign(new Error(`could not write ${path}: no such directory ${dir}`), { noDir: true });
+// An output opened as the system opens it -- the path as given, no reading of it here: made new
+// (O_EXCL), else the file there (no truncation), else through a link to a file not there yet. The
+// file it lands on is asked of the open file: its stat (fstat) and its real path (the fd's link in
+// /proc; without /proc, the system's realpath of the path, now there). Rounds 95 to 100 each found
+// one more way a reading of the path made here, by hand, disagreed with the system's and wrote over
+// a file, exit 0; the system's own errors now refuse each (r101, the parent's direction).
+async function openOutput(path) {
+  const { constants: C, fstatSync, openSync, readlinkSync, realpathSync, lstatSync } = await import('node:fs');
+  const { dirname, resolve } = await import('node:path');
+  const words = (e) => {
+    switch (e.code) {
+      case 'ENOENT': {
+        // (the directory not there, named: a link's own target's, where the path is a link)
+        let d = dirname(path);
+        try { if (lstatSync(path).isSymbolicLink()) d = dirname(resolve(dirname(path), readlinkSync(path))); } catch { /* the path's */ }
+        return `no such directory ${d}`;
+      }
+      case 'ENOTDIR': return 'a name in it is not a directory';
+      case 'EISDIR': return 'it is a directory';
+      case 'EACCES': case 'EPERM': case 'EROFS': return 'permission denied';
+      case 'ELOOP': return 'too many links';
+      default: return e.message;
     }
-    // (nor after a name that is a file -- ENOTDIR: "f.txt/../out.bin" was ./out.bin, overwritten,
-    // exit 0 -- r100 A3)
-    if (name === '..') {
-      let isDir = false;
-      try { isDir = statSync(d).isDirectory(); } catch { /* not there: refused below */ }
-      if (!isDir) throw Object.assign(new Error(`could not write ${path}: no such directory ${dir}`), { noDir: true });
-    }
-    return resolve(d, name);
   };
-  // (a pipe or a device, however it is reached -- /dev/stdout and /dev/fd/N name one through a
-  // link to "pipe:[…]", no path: followed, it was "permission denied" -- r95 Q3): the path itself,
-  // its directory read as the system reads it (by string, "-o L/../x" replaced the regular input ./x
-  // and left the FIFO the system named -- r98 A2)
-  try { if (!statSync(path).isFile()) return real(path); } catch { /* not there yet: followed below */ }
-  let p = real(path);
-  for (let k = 0; k < 40; k++) {
-    let s = null;
-    try { s = lstatSync(p); } catch { return p; }
-    if (!s.isSymbolicLink()) return p;
-    const to = readlinkSync(p);
-    p = real(isAbsolute(to) ? to : `${dirname(p)}/${to}`);
+  let fd, created = false;
+  try {
+    fd = openSync(path, C.O_WRONLY | C.O_CREAT | C.O_EXCL, 0o666);
+    created = true;
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw new Error(`could not write ${path}: ${words(e)}`);
+    try { fd = openSync(path, C.O_WRONLY); } catch (e2) {
+      // (a link to a file not there yet: made through it, as the shell's > makes it)
+      if (e2.code !== 'ENOENT') throw new Error(`could not write ${path}: ${words(e2)}`);
+      try { fd = openSync(path, C.O_WRONLY | C.O_CREAT, 0o666); created = true; } catch (e3) { throw new Error(`could not write ${path}: ${words(e3)}`); }
+    }
   }
-  throw new Error(`could not write ${path}: too many links`);
+  const st = fstatSync(fd);
+  let real = null;
+  try { real = readlinkSync(`/proc/self/fd/${fd}`); } catch { /* no /proc: below */ }
+  if (!real || !real.startsWith('/')) real = realpathSync.native(path);
+  return { fd, created, st, real };
 }
 
 // An output written whole or not at all: to a file beside it, then renamed over it, so a write that
@@ -190,17 +181,23 @@ async function writeTarget(path) {
 // -- r94 Q3); that last copy can fail part way, so a failure there says where the whole output is.
 // Owner and group are kept where the user may keep them.
 export async function writeOutput(path, bytes) {
-  const { chmodSync, chownSync, copyFileSync, renameSync, rmSync, statSync, writeFileSync } = await import('node:fs');
+  const { chmodSync, chownSync, closeSync, copyFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } = await import('node:fs');
   const { basename, dirname, join } = await import('node:path');
-  let real;
-  try { real = await writeTarget(path); } catch (e) { throw new Error(e.message.startsWith('could not write') ? e.message : `could not write ${path}: ${e.message}`); }
-  let was = null;
-  try { was = statSync(real); } catch { /* a new file: the default mode and owner */ }
-  // (a pipe or a device written as it is: a rename put a regular file in a FIFO's place -- r95 A2)
-  if (was && !was.isFile()) {
-    try { writeFileSync(real, bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
+  // (a pipe or a device written as it is, by the path as given: a rename put a regular file in a
+  // FIFO's place -- r95 A2)
+  let s0 = null;
+  try { s0 = statSync(path); } catch { /* not there yet */ }
+  if (s0 && !s0.isFile() && !s0.isDirectory()) {
+    try { writeFileSync(path, bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
     return;
   }
+  // (the file it lands on, as the system opens it: openOutput)
+  const o = await openOutput(path);
+  closeSync(o.fd);
+  const real = o.real;
+  const was = o.created ? null : o.st;
+  // (one made by this open and then not written: taken back)
+  const unmake = () => { if (o.created) { try { unlinkSync(real); } catch { /* gone */ } } };
   // (a name no one can know before, made new or not at all -- `wx`: a link planted at the pid's name
   // sent the output into another file, and on the shared tree two hosts' runs of one pid shared it
   // -- r95 Q2)
@@ -214,6 +211,7 @@ export async function writeOutput(path, bytes) {
     }
   } catch (e) {
     rmSync(tmp, { force: true });
+    unmake();
     throw new Error(`could not write ${path}: ${e.message}`);
   }
   if (was && was.nlink > 1) {
@@ -223,6 +221,7 @@ export async function writeOutput(path, bytes) {
   }
   try { renameSync(tmp, real); } catch (e) {
     rmSync(tmp, { force: true });
+    unmake();
     throw new Error(`could not write ${path}: ${e.message}`);
   }
 }

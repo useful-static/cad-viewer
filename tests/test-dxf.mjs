@@ -424,6 +424,43 @@ test('a clip boundary that is not convex cuts fills and texts to itself, not its
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'U1'],
     [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
   assert.ok(Math.abs(area(d4.paths.filter((p) => p.fill)) - 200) < 1e-6, `the bar across the U covers ${area(d4.paths.filter((p) => p.fill))}`);
+  // (a fill entering an upside-down U's notch through one outline vertex and leaving by another is cut
+  // by the line cut's own rule, 315 of its 690: the fill's own crossing test, strict at an edge's
+  // ends, saw no crossing and drew it whole, 375 of it in the notch -- r101 A1)
+  const Ud = [[20, 60], [80, 60], [80, 20], [65, 20], [65, 45], [35, 45], [35, 20], [20, 20]];
+  const tri = [[29, 50], [65, 20], [75, 50]].map(([x, y]) => [x - 50, y - 40]);
+  const triH = [[0, 'HATCH'], [8, 'S'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 3],
+    ...tri.flatMap((p, i) => { const q = tri[(i + 1) % 3]; return [[72, 1], [10, p[0]], [20, p[1]], [11, q[0]], [21, q[1]]]; }), [97, 0]];
+  const d5 = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...triH,
+    [0, 'LWPOLYLINE'], [5, 'U2'], [8, 'B'], [67, 1], [90, 8], [70, 1], ...Ud.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'U2'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  assert.ok(Math.abs(area(d5.paths.filter((p) => p.fill)) - 315) < 1e-6, `the triangle into the notch covers ${area(d5.paths.filter((p) => p.fill))}`);
+  // (a fill over the whole frame, through outlines that are not simple: an L with its inner corner
+  // written twice keeps 1800 -- the doubled corner hid its turn and the L read as convex, 600: r101
+  // Q1; a bowtie keeps 900 by the even-odd rule its lines are cut by -- its triangles covered its
+  // box, 1800: r101 Q2; a star drawn in one stroke keeps its five points and not its middle)
+  const cover = [[0, 'HATCH'], [8, 'S'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 4],
+    [72, 1], [10, -30], [20, -20], [11, 30], [21, -20], [72, 1], [10, 30], [20, -20], [11, 30], [21, 20],
+    [72, 1], [10, 30], [20, 20], [11, -30], [21, 20], [72, 1], [10, -30], [20, 20], [11, -30], [21, -20], [97, 0]];
+  const through = (outline) => area(parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...cover,
+    [0, 'LWPOLYLINE'], [5, 'O1'], [8, 'B'], [67, 1], [90, outline.length], [70, 1], ...outline.flatMap(([x, y]) => [[10, x], [20, y]]),
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 65536], [340, 'O1'],
+    [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].paths.filter((p) => p.fill));
+  const L2 = [[20, 20], [80, 20], [80, 40], [50, 40], [50, 40], [50, 60], [20, 60]];
+  assert.ok(Math.abs(through(L2) - 1800) < 1e-6, `the L, its inner corner twice: ${through(L2)}`);
+  const bow = [[25, 22], [75, 58], [75, 22], [25, 58]];
+  assert.ok(Math.abs(through(bow) - 900) < 1e-6, `the bowtie: ${through(bow)}`);
+  const star = [0, 2, 4, 1, 3].map((k) => [50 + 18 * Math.sin((2 * Math.PI * k) / 5), 40 + 18 * Math.cos((2 * Math.PI * k) / 5)]);
+  const pent = [0, 1, 2, 3, 4].map((k) => [50 + 18 * Math.sin((2 * Math.PI * k) / 5), 40 + 18 * Math.cos((2 * Math.PI * k) / 5)]);
+  // (its five points: the star, ten triangles from the middle, less the pentagon inside -- 251.32, a
+  // grid count by insideFlat at 0.01 read 251.28; a piece's two edges meeting a hair crossed at a
+  // band's end cut a point's half away, 232.12)
+  const inner = 18 * Math.cos((2 * Math.PI) / 5) / Math.cos(Math.PI / 5);
+  const pentArea = (r) => 2.5 * r * r * Math.sin((2 * Math.PI) / 5);
+  const want = 5 * 18 * inner * Math.sin(Math.PI / 5) - pentArea(inner);
+  assert.ok(Math.abs(through(star) - want) < 1e-6, `the star: ${through(star)}, want ${want}`);
+  assert.ok(Math.abs(through(pent) - pentArea(18)) < 1e-6, `the pentagon: ${through(pent)}`);
   // (Q3: turned off, 90 bit 0x20000: its frame, nothing through it -- it drew model space)
   const off = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, 'M'], [10, -5], [20, 0], [11, 5], [21, 0],
     [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, 0x20000],
