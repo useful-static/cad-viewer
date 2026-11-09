@@ -73,7 +73,8 @@ export const MM = 'millimeter';
 // writers took an inch file's numbers as mm). No header, or no units, is millimetres.
 // (by the unit's one name, js/units.js lengthUnitOf -- the scene's rule too: "millimetre" and "MM"
 // were millimetres to the scene and another unit to the display and the exports, r87 A1)
-export const geomIsMm = (header) => !header || header.units == null || lengthUnitOf(header.units) === 'mm';
+// (a blank unit is no unit: "" read "lengths are in , not converted" -- r92 A3)
+export const geomIsMm = (header) => !header || header.units == null || (typeof header.units === 'string' && !header.units.trim()) || lengthUnitOf(header.units) === 'mm';
 // What a consumer that writes or weighs millimetres says of a header in another unit, or null:
 // the page's own words for a length it does not convert (main.js unitsrc "(not converted)")
 // (the unit as the page writes it, js/units.js headerUnitWord: "INCH" printed raw -- r90 A4)

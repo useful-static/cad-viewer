@@ -112,7 +112,7 @@ async function main() {
   // a dotted directory kept its directory)
   const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
   // an output it cannot write (no such directory, or a directory) refused before the conversion
-  await checkOutput(out);
+  await checkOutput(out, [args.input]); // (never the input: r92 Q3)
   // (an angle no circle test passes: said once the input and output are known good, before the
   // conversion, which it does not depend on -- a run then refused printed it too)
   if (circleMinPoints(args.params.angularDeflection) === Infinity) {

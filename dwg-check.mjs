@@ -76,7 +76,7 @@ async function check(f) {
 // five tools' one shape, "dwg-check: ...", one line, exit 1.
 async function main() {
   const { json, dxfOut, files } = parseArgs(process.argv.slice(2));
-  if (dxfOut) await checkOutput(dxfOut);
+  if (dxfOut) await checkOutput(dxfOut, files); // (never one of the drawings read: r92 Q3)
   let bad = 0;
   const reports = [];
   for (const f of files) {

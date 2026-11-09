@@ -19,7 +19,7 @@ import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbit
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedUnit, unitSaid, unitWord } from './units.js';
+import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedWord, unitSaid, unitWord } from './units.js';
 import { bodyTable, edgeInstances, silhouetteInstances, FACTS_RULE, SILHOUETTE_CAP, overSilhouetteCap, flagsSaid, factsCurrent, momentaryFailure } from './edges.js';
 import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera, roundFraction, roundNotePoint } from './view-link.js';
 import { aboveBelow, pastWords, rangesFrom } from './datum.js';
@@ -4245,6 +4245,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   syncUnitParam(); // (another model's ?unit= is not this one's)
   $('clearval').textContent = '';
+  app.lastClearance = null; // (with its line: the unit picker would write it again -- r92 A2)
   forgetAddressModel();
   app.lastStepBuffer = stepBuf;
   app.unmeshedFaces = unmeshedFaces;
@@ -4778,15 +4779,25 @@ async function runClearance() {
     return k + 1;
   };
   const a = bodyOf(r.triA), b = bodyOf(r.triB);
-  // a part, and the model it is in (a board's parts are often just "SOLID")
-  const nm = (id) => `${app.header.meshes[id - 1].name || `part ${id}`} (${modelOf(id) + 1})`;
-  const text = r.distance === 0
-    ? `0: ${nm(a)} touches or overlaps ${nm(b)}`
-    : `${lenNum(r.distance, 'measure')} ${lenUnit()} from ${nm(a)} to ${nm(b)}${noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;
-  say(`clearance ${text}`, `${what} against the other models' shown parts: ${fmtInt(r.pairs)} triangle pairs compared in ${ms} ms`);
+  app.lastClearance = { distance: r.distance, a, b, ms, pairs: r.pairs, pa: r.pa, pb: r.pb, what, noFacts }; // (and for tests)
+  const text = sayClearance(app.lastClearance);
   if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
-  app.lastClearance = { distance: r.distance, a, b, ms, pairs: r.pairs, pa: r.pa, pb: r.pb }; // (for tests)
   announce(`clearance ${text}`);
+}
+// The clearance line of a run's result, in the unit shown now: by the run, and again when the unit
+// picker changes (it kept "1.00 mm" beside Measure's "0.039 in" of the same distance -- r92 A2)
+function sayClearance(lc) {
+  // a part, and the model it is in (a board's parts are often just "SOLID"; runClearance's modelOf
+  // is its own: a ReferenceError here stopped every run at "checking …")
+  const ranges = modelRanges(app.scene);
+  const modelOf = (id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
+  const nm = (id) => `${app.header.meshes[id - 1].name || `part ${id}`} (${modelOf(id) + 1})`;
+  const text = lc.distance === 0
+    ? `0: ${nm(lc.a)} touches or overlaps ${nm(lc.b)}`
+    : `${lenNum(lc.distance, 'measure')} ${lenUnit()} from ${nm(lc.a)} to ${nm(lc.b)}${lc.noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;
+  $('clearval').textContent = `clearance ${text}`;
+  $('clearval').title = `${lc.what} against the other models' shown parts: ${fmtInt(lc.pairs)} triangle pairs compared in ${lc.ms} ms`;
+  return text;
 }
 
 // Past this many silhouette candidates a coarse-pointer device (a phone,
@@ -6338,12 +6349,23 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 // (geometry not converted: in Auto's display unit where the header's unit is a display row, as a
 // converted model is -- in m, a 0.4 mm part read "0.000": r89 Q1 -- else in the header's unit as
 // written, r88 A8; modelSizeMm is then in the model's own units)
-const shownUnconverted = () => unconvertedUnit(app.header.units, modelSizeMm());
-const lenUnit = () => (geomMm() ? curUnit() : shownUnconverted() || headerUnitWord(app.header.units));
-// (and a noise floor at float32's resolution of the model's size, a ten-millionth: "-1e-9" read as an
-// overhang -- r90 A5; at a billionth a face-to-face gap of a 10 ft model read "-0.000000762939" -- r91 Q5)
+// (the word by units.js unconvertedWord, the 2D view's one rule: a copy of it here read "size ()" for
+// a blank unit -- r92 A3)
+const lenUnit = () => (geomMm() ? curUnit() : unconvertedWord(app.header.units, modelSizeMm()) || 'units');
+// (and a noise floor at float32's resolution, a ten-millionth of how far the model reaches from the
+// origin -- its size, or its farthest corner: "-1e-9" read as an overhang -- r90 A5; at a billionth a
+// face-to-face gap of a 10 ft model read "-0.000000762939" -- r91 Q5; converted too, a model 1 km
+// out read "-0.1" -- r92 A4)
 const LEN_NOISE = 1e-7;
-const lenNum = (v, kind) => (geomMm() ? fmtNum(v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm(), modelSizeMm() * LEN_NOISE)); // (r87 Q3, r88 A3)
+const lenNoise = () => {
+  const b = app.header && app.header.bbox;
+  const reach = b ? Math.max(modelSizeMm(), ...b.min.map(Math.abs), ...b.max.map(Math.abs)) : 0;
+  return Number.isFinite(reach) ? reach * LEN_NOISE : 0;
+};
+const lenNum = (v, kind) => {
+  const noise = lenNoise();
+  return geomMm() ? fmtNum(Math.abs(v) < noise ? 0 : v, kind, curUnit()) : unconvertedNum(v, kind, app.header.units, modelSizeMm(), noise); // (r87 Q3, r88 A3)
+};
 // a length typed in lenUnit, back in model units (the section field)
 const lenBack = (v) => (geomMm() ? v * MM_PER[curUnit()] : unconvertedBack(v, app.header.units, modelSizeMm()));
 
@@ -6395,6 +6417,9 @@ function setUnitChoice(u) {
   showInfo();
   updateButtons(); // the section readout
   app.measure?.relabel(); // (and Measure's results: r91 Q1)
+  // (and the clearance line and the 3D view's spoken size: r92 A2)
+  if (app.lastClearance) sayClearance(app.lastClearance);
+  showModelName();
 }
 
 function showInfo() {

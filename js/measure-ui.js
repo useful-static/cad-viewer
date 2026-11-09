@@ -799,6 +799,21 @@ export function createMeasure(deps) {
   };
   $('measchip').onclick = () => setList(!st.listOpen);
 
+  // every length result written again in the unit now shown (the unit picker changed, or results
+  // given back after a tour): a result kept the unit it was taken in, "25.40 mm" beside "size (in)
+  // 3.94" (r91 Q1, r92 A1)
+  function relabel() {
+    for (const r of st.results) {
+      if (r.mode === 'distance') {
+        const n = pointResult('distance', r.pts);
+        r.main = n.main;
+        if (!r.fixed) r.sub = n.sub; // (a clearance's sub is its name)
+      } else if (r.mode === 'face' && typeof r.value === 'number') r.main = deps.lenText(r.value);
+    }
+    syncRow();
+    deps.queueFrame();
+  }
+
   return {
     get on() { return st.on; }, get mode() { return st.mode; }, get results() { return st.results; }, get pending() { return st.pending; },
     get snap() { return st.snap; },
@@ -817,25 +832,13 @@ export function createMeasure(deps) {
       deps.queueFrame();
       return kept;
     },
+    // (in the unit shown now: the unit picked during a tour gave them back "25.40 mm" -- r92 A1)
     putBack(kept) {
       if (!kept || !kept.length) return;
       st.results.push(...kept);
-      syncRow();
-      deps.queueFrame();
+      relabel();
     },
-    // every length result written again in the unit now shown (the unit picker changed): a
-    // result kept the unit it was taken in, "25.40 mm" beside "size (in) 3.94" (r91 Q1)
-    relabel() {
-      for (const r of st.results) {
-        if (r.mode === 'distance') {
-          const n = pointResult('distance', r.pts);
-          r.main = n.main;
-          if (!r.fixed) r.sub = n.sub; // (a clearance's sub is its name)
-        } else if (r.mode === 'face' && typeof r.value === 'number') r.main = deps.lenText(r.value);
-      }
-      syncRow();
-      deps.queueFrame();
-    },
+    relabel,
     // a distance found elsewhere (the clearance check): drawn and listed as
     // Measure's own, replacing an earlier one of the same `sub`
     addDistance(pa, pb, sub) {

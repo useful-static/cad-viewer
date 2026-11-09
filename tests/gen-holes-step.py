@@ -6,7 +6,9 @@ wires, the shape whose conversion cost grows with the number of wire PAIRS.
 
 The plate is 10 mm per hole column, holes 4 mm across on a 10 mm grid. By
 default it is a single face (an open shell). --solid adds the bottom face,
-the four sides and each hole's cylindrical wall, which makes a closed solid.
+the four sides and each hole's cylindrical wall: a solid in its STEP words
+(a CLOSED_SHELL), but not sewn -- each side has its own vertical edges -- so
+the converter reads it as one OPEN body, which the UI checks rely on.
 Used to calibrate the conversion-time estimate (tests/estimate-calibrate.mjs)
 and to check that the cost stays near linear in the holes.
 """
@@ -73,7 +75,9 @@ def plate(n, solid):
                 bot = (vs, es, holes)
     if solid:
         (tv, te, th), (bv, be, bh) = top, bot
-        # four sides
+        # four sides, each with its own two vertical edges: every corner's edge is written twice, so
+        # the shell is not sewn and the converter reads the plate as OPEN -- on purpose: ui-checks'
+        # facts, measure-face and holes arms read the open-body path on it (r92 Q4)
         for i in range(4):
             j = (i + 1) % 4
             up_i = line_edge(bv[i], tv[i], (*corners[i], 0.0), (*corners[i], thick))

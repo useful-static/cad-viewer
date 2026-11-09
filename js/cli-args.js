@@ -75,8 +75,11 @@ export async function readInput(path) {
   return readFileSync(path);
 }
 // An output a tool will write, checked before the work: its directory there, the path no
-// directory (stp2mesh converted, split-board split, before a failed write said so)
-export async function checkOutput(path) {
+// directory (stp2mesh converted, split-board split, before a failed write said so). inputs: the
+// files a tool reads where it writes another format -- an output that is one of them is refused (by
+// its device and inode: a link or another spelling is the same file): `stp2mesh a.stp -o a.stp`
+// replaced the STEP with a mesh and said OK (r92 Q3)
+export async function checkOutput(path, inputs = []) {
   const { accessSync, constants, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
@@ -84,6 +87,10 @@ export async function checkOutput(path) {
   const d = dirname(resolve(path)), dir = st(d), file = st(path);
   if (!dir || !dir.isDirectory()) throw new Error(`could not write ${path}: no such directory ${dirname(path)}`);
   if (file?.isDirectory()) throw new Error(`could not write ${path}: it is a directory`);
+  for (const i of inputs) {
+    const s = file && st(i);
+    if (s && s.dev === file.dev && s.ino === file.ino) throw new Error(`could not write ${path}: it is the input ${i}`);
+  }
   // (a directory or file it may not write: refused before the work too -- two tools ran it, then
   // printed node's "EACCES: ...")
   if (file ? !writable(path) : !writable(d)) throw new Error(`could not write ${path}: permission denied`);

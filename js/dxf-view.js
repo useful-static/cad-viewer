@@ -30,25 +30,23 @@ const FONT_PX = 100, FONT = `${FONT_PX}px sans-serif`;
 // their own beside the lines' box tree; the texts had none: every one tested on a hover over
 // empty sheet, 360 ms a move on a million.)
 
-// The snaps: the nearest point within r that accept(point) takes. pts: snapPoints' typed set
-// ({ n, xy, at(i) -> the point as an array }), the points held by the tree as they are
-// (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
-// (the points a tree holds: the finite ones -- one rule for the page's build and the worker's)
 // 2D Measure's readout of a distance d (and its dx, dy) in a drawing of this unit (its id, or null)
 // and size (span, drawing units): by js/units.js unconvertedNum, as the 3D panel's lengths -- in
 // Auto's unit for the drawing's, by its size (a drawing in metres 0.1 m across read a 0.04 mm gap
 // "0.0000 m": r90 A2), that unit's decimals where it is a display unit, else 6 significant figures
 // (r89 A5, Q3); a value a billionth of the drawing's size is float noise (a circle centre averaged
-// from its points), shown as 0
+// from its points), shown as 0 -- one number, written once (r92 A5)
+const NOISE_2D = 1e-9;
+const measureNum = (v, unit, span) => unconvertedNum(v, 'measure', unit, span, span * NOISE_2D);
 export function measureText(d, dx, dy, unit, span) {
-  const fmt = (v) => unconvertedNum(v, 'measure', unit, span, span * 1e-9);
+  const fmt = (v) => measureNum(v, unit, span);
   return `${lengthText(d, unit, span)} · ΔX ${fmt(Math.abs(dx))} · ΔY ${fmt(Math.abs(dy))}`;
 }
 // One length of 2D Measure with its unit's word, by measureText's rule: the readout and the hover's
 // Ø (the hover kept a deleted formatter and threw at every circle's centre -- r91 A1)
 export function lengthText(v, unit, span) {
   const word = unconvertedWord(unit, span);
-  return `${unconvertedNum(v, 'measure', unit, span, span * 1e-9)}${word ? ` ${word}` : ''}`;
+  return `${measureNum(v, unit, span)}${word ? ` ${word}` : ''}`;
 }
 // A drawing's size in its own units, from its extents: the one span 2D Measure and the 2D info read
 export const drawingSpan = (ext) => (ext ? Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) : 0) || 1;
@@ -60,6 +58,11 @@ export function sizeRow(ext, unit) {
   const n = (v) => unconvertedNum(v, 'size', unit, span);
   return [`size (${unconvertedWord(unit, span) || 'units'})`, `${n(ext.max[0] - ext.min[0])} × ${n(ext.max[1] - ext.min[1])}`];
 }
+
+// The snaps: the nearest point within r that accept(point) takes. pts: snapPoints' typed set
+// ({ n, xy, at(i) -> the point as an array }), the points held by the tree as they are
+// (a grid sized from the extents held 397,389 points in one cell of a clustered drawing, 46 ms a move)
+// (the points a tree holds: the finite ones -- one rule for the page's build and the worker's)
 export function finitePointIds(xy, n) {
   const ids = new Uint32Array(n);
   let m = 0;
@@ -499,14 +502,15 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // the lines, indexed once for the hover and a click's layer: built just after the drawing is
   // first shown (on the first hover, 1.4 s of a 5.2-million-segment drawing came with it)
   let segIndex = null;
-  const segments = () => segIndex || (segIndex = segmentIndex(drawing.paths, o, Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1])));
+  // (the drawing's one span, drawingSpan: 2D Measure's and the hover's -- r92 A5)
+  const span = drawingSpan(ext);
+  const segments = () => segIndex || (segIndex = segmentIndex(drawing.paths, o, span));
   // (cancelled by destroy: a drawing replaced at once built its index for a view that was gone)
   const segTimer = setTimeout(() => { if (!segIndex) segments(); }, 0);
   // the texts, indexed by their drawn quads (the measured lines, once a text) on the first hover
   // that finds no line
   let txtIndex = null;
   const textsIndexed = () => txtIndex || (txtIndex = textIndex(drawing.texts, (t) => textCorners(t, linesOf(t), widthOf(t)), o));
-  const span = drawingSpan(ext);
   function measureClick(px, py) {
     const s = snapAt(px, py);
     const p = s ? [s[0], s[1]] : toUnits(px, py);

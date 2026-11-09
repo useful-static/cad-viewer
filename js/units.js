@@ -7,7 +7,9 @@
 // across in mm, as converted -- r89 Q1), else in that unit itself to 6 significant
 // digits (ft, dm, km, yd, µm: r91 A3), and it is refused by
 // the exports, Save drawing and the mass (js/cadmesh.js geomIsMm). The DISPLAY unit is one of mm, cm, m, in:
-// the user's choice, or Auto, the unit the file declares (header.sourceUnits).
+// the user's choice, or Auto: the display unit nearest the one the file declares
+// (header.sourceUnits; in for ft, cm for dm), mm for a model in metres under a metre
+// across, mm when the file says nothing (autoUnit -- r92 A6).
 //
 // Lengths have fixed decimals per unit, so a readout does not jump in width as
 // it changes: for a measurement mm 0.01, cm 0.001, m 0.0001, in 0.001; a size
@@ -26,6 +28,10 @@ export const LENGTH_MM = {
   // (the US survey inch, yard and mile, $INSUNITS 22-24: the table stopped at 21 -- r88 Q3)
   'US in': 1000 / 39.37, 'US yd': 3600 / 3937 * 1000, 'US mi': 6336 / 3937 * 1e6,
 };
+// The imperial units of LENGTH_MM; the rest are metric. A unit added above that is imperial is
+// added here too, beside it, or Auto gives it a metric row (the list sat 60 lines away -- r92 A7)
+const IMPERIAL = new Set(['uin', 'mil', 'in', 'ft', 'US ft', 'yd', 'mi', 'US in', 'US yd', 'US mi']);
+for (const u of IMPERIAL) if (!Object.hasOwn(LENGTH_MM, u)) throw new Error(`units.js: IMPERIAL names ${u}, which LENGTH_MM has not`);
 
 // A geometry unit as a header may name it -- a short name above, OpenCascade's word ("inch",
 // "millimeter"), in any case -- as its LENGTH_MM name, or null for one with no length known here.
@@ -78,7 +84,6 @@ const imperial = (u) => DISPLAY.find((d) => d.id === u)?.system === 'imperial';
 // nearest display row of the same system otherwise (by the ratio of their sizes, the smaller on
 // a tie: dm is cm); mm when the file says nothing (null) or its shapes disagree ('mixed').
 // Derived from the two tables, so a new display row (ft) is Auto's answer for its own unit.
-const IMPERIAL = new Set(['uin', 'mil', 'in', 'ft', 'US ft', 'yd', 'mi', 'US in', 'US yd', 'US mi']);
 const AUTO = Object.fromEntries(Object.keys(LENGTH_MM).map((u) => {
   if (DISPLAY_UNITS.includes(u)) return [u, u];
   const system = IMPERIAL.has(u) ? 'imperial' : 'metric';

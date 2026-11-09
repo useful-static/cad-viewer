@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -113,6 +113,9 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     ['split-board.mjs', ['box.cadmesh', '-o', join(gone, 'x.cadmesh')], /no such directory/],
     ['split-board.mjs', ['box.cadmesh', '-o', dir], /it is a directory/],
     ['dwg-check.mjs', [notCad, '--dxf', join(gone, 'x.dxf')], /no such directory/],
+    // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
+    ['stp2mesh.mjs', ['x.stp', '-o', join(dir, '.', 'x.stp')], /it is the input x\.stp$/],
+    ['dwg-check.mjs', [notCad, '--dxf', notCad], /it is the input /],
   ]) {
     const r = run(tool, args);
     const lines = r.err.trim().split('\n');
@@ -120,6 +123,7 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
       bad.push(`${tool} ${args.join(' ')}: rc ${r.rc}, stderr ${JSON.stringify(r.err.slice(0, 300))}`);
     }
   }
+  if (readFileSync(join(dir, 'x.stp'), 'utf8') !== 'ISO-10303-21;\n') bad.push('stp2mesh: x.stp overwritten');
   // a directory it may not write: refused before the work, in the same words (r27 Q6: two tools
   // split and coloured, then printed node's "EACCES"); not as root, which may write anywhere
   if (process.getuid?.() !== 0) {

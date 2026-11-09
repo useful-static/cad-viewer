@@ -2156,11 +2156,15 @@ await test('the units row names the unit the lengths are shown in, for geometry 
     [{ units: 'INCH', bbox: { min: [0, 0, 0], max: [10, 5, 1] } }, 'auto'],
     [{ units: 'm', bbox: { min: [0, 0, 0], max: [0.123, 0.07, 0.01] } }, 'in'],
     [{ units: 'furlong', bbox: { min: [0, 0, 0], max: [3, 1, 1] } }, 'auto'],
+    // (a blank unit is mm, as no unit is: "size ()" -- r92 A3; a converted model 1 km out, its float32
+    // noise 0 -- "-0.1" -- r92 A4)
+    [{ units: '', bbox: { min: [0, 0, 0], max: [100, 50, 1] } }, 'auto'],
+    [{ units: 'MM', bbox: { min: [1e6, 0, 0], max: [1e6 + 100, 50, 1] } }, 'auto'],
   ]) {
     const els = {};
     const $ = (id) => (els[id] ||= { textContent: '', hidden: false, disabled: false, value: '', title: '', options: [{ text: '', value: 'auto' }] });
     const app = { header, unitChoice: choice, meshSource: null };
-    const r = new Function('U', 'geomIsMm', '$', 'app', `const { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtNum, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedUnit, unitWord } = U;
+    const r = new Function('U', 'geomIsMm', '$', 'app', `const { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtNum, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedWord, unitWord } = U;
       const rereading = () => false;
       ${code}
       syncUnitsRow();
@@ -2173,7 +2177,8 @@ await test('the units row names the unit the lengths are shown in, for geometry 
   // of the size, "-0.00000024" in a unit with no display row -- r91 Q5)
   assert.deepEqual(rows, ['m (not converted) | Auto (m) [auto] | m 0.000 0.000 12.3 0.0000', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123 0.00',
     'in (not converted) | Auto (in) [auto] | in 0.00 0.00 12.3 0.000', 'm (not converted) | Auto (mm) [auto] | mm 0.4 0.0 0.0123 0.00',
-    'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3 0']);
+    'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3 0',
+    'not recorded | Auto (mm) [auto] | mm 0.0 0.0 12.3 0.00', 'not recorded | Auto (mm) [auto] | mm 0.0 0.0 12.3 0.00']);
 });
 
 done();
