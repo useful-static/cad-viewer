@@ -394,6 +394,11 @@ test('the declared unit and the angular deflection reach the header; absent stay
   assert.equal('sourceUnits' in none, false, 'unknown is absent, never mm');
   assert.throws(() => decodeCadmesh(patchHeader(encodeCadmesh({ meshes: [quad('a', 0)], angularDeflection: 0.5 }),
     '"angularDeflection":0.5', '"angularDeflection":0e0')), /angularDeflection/);
+  // (by its one name, as units: another writer's "inch" gave no Auto unit and a scene of "in" and
+  // "inch" was "mixed"; a blank one is none, it printed an empty units row -- r93 Q2, Q3)
+  const said = (w) => decodeCadmesh(encodeCadmesh({ meshes: [quad('a', 0)], sourceUnits: w })).header.sourceUnits;
+  assert.deepEqual(['inch', 'INCH', 'inches', 'foot', 'meter', 'MM', ' in ', 'mixed', 'furlong', '  ', ''].map(said),
+    ['in', 'in', 'in', 'ft', 'm', 'mm', 'in', 'mixed', 'furlong', undefined, undefined]);
 });
 
 test('encode builds the edge sections and facts; decode validates them', () => {

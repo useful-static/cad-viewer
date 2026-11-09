@@ -19,10 +19,9 @@
 // Works on .cadmesh files with the faces section (stp2mesh.mjs writes it):
 // a vertex belongs to exactly one b-rep face, so the cut never splits one.
 
-import { writeFileSync } from 'node:fs';
 import { gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, encodeCadmesh, gunzip, isGzip, modelFactsOf, notMmWords, refuseWithoutEdges } from './js/cadmesh.js';
-import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
 
 const USAGE = `usage: split-board.mjs <in.cadmesh[.gz]> -o <out.cadmesh.gz> [--edges] [--report] [--sliver MM]
 
@@ -238,7 +237,7 @@ async function main() {
   if (!a.in || !a.out) throw new CliError(a.in ? 'no -o output' : 'no input file');
   // (the input read and the output checked in the five tools' one wording, before the split)
   let raw = await readInput(a.in);
-  await checkOutput(a.out);
+  await checkOutput(a.out, []); // (a .cadmesh from a .cadmesh: in place is allowed)
   // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
   if (isGzip(raw)) raw = Buffer.from(await gunzip(raw));
   const d = decodeCadmesh(toAB(raw));
@@ -251,7 +250,7 @@ async function main() {
     root: { name: h.root?.children?.[0]?.name || h.root?.name || 'model', meshes: s.meshes.map((_, i) => i), children: [] },
   };
   const enc = new Uint8Array(encodeCadmesh(model, { edges: !!a.edges, onEdgesError: refuseWithoutEdges(a.in) })); // (asked for and their build failing: refused)
-  writeFileSync(a.out, a.out.endsWith('.gz') ? gzipSync(enc, { level: zc.Z_BEST_COMPRESSION }) : enc);
+  await writeOutput(a.out, a.out.endsWith('.gz') ? gzipSync(enc, { level: zc.Z_BEST_COMPRESSION }) : enc);
   console.log(`${a.in}: board slab z ${s.slab[0].toFixed(2)}..${s.slab[1].toFixed(2)} mm, body ${s.board + 1} cut into the board and ${s.parts} parts; ${s.meshes.length} bodies -> ${a.out}`);
   if (a.report) {
     for (const m of s.meshes) {

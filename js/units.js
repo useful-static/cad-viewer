@@ -151,12 +151,15 @@ export function unconvertedUnit(word, size = Infinity) {
   return u && Object.hasOwn(MM_PER, u) ? autoUnit(u, size * MM_PER[u]) : null;
 }
 // The word for the unit such a length is shown in: unconvertedUnit's, else the header's unit as
-// written (headerUnitWord), null for no unit -- the one answer for the 3D panel's lengths, the 2D
-// info's size row, 2D Measure's readout and its hover's Ø (four spellings, and the hover's broke:
-// r91 A1, A2)
+// written (headerUnitWord), NO_UNIT_WORD for no unit -- the one answer for the 3D panel's lengths,
+// the 2D info's size row, 2D Measure's readout and its hover's Ø (four spellings, and the hover's
+// broke: r91 A1, A2)
+export const NO_UNIT_WORD = 'units';
 export function unconvertedWord(word, size = Infinity) {
   const shown = unconvertedUnit(word, size);
-  return shown ? unitWord(shown) : word ? headerUnitWord(word) : null;
+  // (and no unit: "units", the one word -- 2D Measure wrote none, the size row and the 3D panel
+  // each their own -- r93 A4)
+  return shown ? unitWord(shown) : word ? headerUnitWord(word) : NO_UNIT_WORD;
 }
 // A length typed in the unit unconvertedUnit shows, back in the model's own units
 export function unconvertedBack(v, word, size = Infinity) {

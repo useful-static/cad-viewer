@@ -14,10 +14,9 @@
 // recoloured is refused (its colours are no longer the converter's), unless
 // --again.
 
-import { writeFileSync } from 'node:fs';
 import { gzipSync, constants as zc } from 'node:zlib';
 import { decodeCadmesh, gunzip, isGzip, splitCadmesh, withHeader } from './js/cadmesh.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
 
 const USAGE = `usage: set-colours.mjs <in.cadmesh[.gz]> <colours> -o <out.cadmesh[.gz]> --by "<who>" [--again]
 
@@ -76,7 +75,9 @@ async function main() {
   if (!a.show && !(a.by && a.by.trim())) usage('say what wrote the colours (--by)');
   // (the inputs read and the output checked in the five tools' one wording)
   let raw = await readInput(a.in);
-  if (!a.show) await checkOutput(a.out);
+  // (never the colours file, another format: a .cadmesh replaced it -- r93 A1; the .cadmesh itself
+  // may be written in place)
+  if (!a.show) await checkOutput(a.out, [a.colours]);
   // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
   if (isGzip(raw)) raw = Buffer.from(await gunzip(raw));
   if (a.show) {
@@ -85,7 +86,7 @@ async function main() {
     return;
   }
   const out = setColours(new Uint8Array(raw), new Uint8Array(await readInput(a.colours)), a.by, { again: a.again });
-  writeFileSync(a.out, a.out.endsWith('.gz') ? gzipSync(out, { level: zc.Z_BEST_COMPRESSION }) : out);
+  await writeOutput(a.out, a.out.endsWith('.gz') ? gzipSync(out, { level: zc.Z_BEST_COMPRESSION }) : out);
   console.log(`${a.in}: colours of ${decodeCadmesh(out.buffer).header.vertexCount} vertices set (recolour: ${a.by.trim()}) -> ${a.out}`);
 }
 

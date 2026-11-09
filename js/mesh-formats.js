@@ -952,7 +952,10 @@ async function parse3MF(buf, base) {
         case 'model': if (!seenModel) {
           seenModel = true;
           const u = t.attrs.unit || 'millimeter';
-          k = LENGTH_MM[UNIT_NAME[u]] ?? 1;
+          // (a unit 3MF defines, by its own keys: "constructor" read as a function, and an unknown
+          // unit as mm without a word -- r93 A6)
+          if (!Object.hasOwn(UNIT_NAME, u)) throw new Error(`${base}.3mf's unit "${u}" is none the 3MF format defines (${Object.keys(UNIT_NAME).join(', ')})`);
+          k = LENGTH_MM[UNIT_NAME[u]];
           if (isRoot) unit = u;
         } break;
         case 'basematerials': hold('material groups'); matGroup = []; mats.set(key(t.attrs.id), matGroup); break;

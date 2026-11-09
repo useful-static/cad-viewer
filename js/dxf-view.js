@@ -45,8 +45,7 @@ export function measureText(d, dx, dy, unit, span) {
 // One length of 2D Measure with its unit's word, by measureText's rule: the readout and the hover's
 // Ø (the hover kept a deleted formatter and threw at every circle's centre -- r91 A1)
 export function lengthText(v, unit, span) {
-  const word = unconvertedWord(unit, span);
-  return `${measureNum(v, unit, span)}${word ? ` ${word}` : ''}`;
+  return `${measureNum(v, unit, span)} ${unconvertedWord(unit, span)}`;
 }
 // A drawing's size in its own units, from its extents: the one span 2D Measure and the 2D info read
 export const drawingSpan = (ext) => (ext ? Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) : 0) || 1;
@@ -56,7 +55,7 @@ export const drawingSpan = (ext) => (ext ? Math.max(ext.max[0] - ext.min[0], ext
 export function sizeRow(ext, unit) {
   const span = drawingSpan(ext);
   const n = (v) => unconvertedNum(v, 'size', unit, span);
-  return [`size (${unconvertedWord(unit, span) || 'units'})`, `${n(ext.max[0] - ext.min[0])} × ${n(ext.max[1] - ext.min[1])}`];
+  return [`size (${unconvertedWord(unit, span)})`, `${n(ext.max[0] - ext.min[0])} × ${n(ext.max[1] - ext.min[1])}`];
 }
 
 // The snaps: the nearest point within r that accept(point) takes. pts: snapPoints' typed set

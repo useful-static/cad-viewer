@@ -19,8 +19,10 @@
 //     line on stderr, exit 1 -- not node's stack trace; a usage error, "<tool>: <what>" and the
 //     usage, exit 2, in each tool
 //
-//   await readInput(path), await checkOutput(path)
-//     the input read, and the output checked before the work, in the five tools' one wording
+//   await readInput(path), await checkOutput(path, inputs)
+//     the input read, and the output checked before the work, in the five tools' one wording;
+//     inputs: the files it reads in another format than the output's, which it must not be
+//     ("it is the input ...": r92 Q3, r93 A1, A5)
 //
 // Pure ES module; only runCli touches the process (stderr, exit), when it runs; readInput and
 // checkOutput load node:fs when called (the page never calls them).
@@ -75,11 +77,15 @@ export async function readInput(path) {
   return readFileSync(path);
 }
 // An output a tool will write, checked before the work: its directory there, the path no
-// directory (stp2mesh converted, split-board split, before a failed write said so). inputs: the
-// files a tool reads where it writes another format -- an output that is one of them is refused (by
-// its device and inode: a link or another spelling is the same file): `stp2mesh a.stp -o a.stp`
-// replaced the STEP with a mesh and said OK (r92 Q3)
-export async function checkOutput(path, inputs = []) {
+// directory (stp2mesh converted, split-board split, before a failed write said so). inputs (asked
+// of every caller, so none can leave it out): the files the tool reads that this output must not be
+// -- every input in another format than the output's; an input it writes again in its own format
+// (split-board's, set-colours' .cadmesh) may be left out, to write in place. An output that is one
+// of them is refused, by its device and inode (a link or another spelling is the same file):
+// `stp2mesh a.stp -o a.stp` replaced the STEP with a mesh and said OK (r92 Q3), and two tools that
+// passed none still did (r93 A1)
+export async function checkOutput(path, inputs) {
+  if (!Array.isArray(inputs)) throw new TypeError('checkOutput(path, inputs): say which inputs the output must not be');
   const { accessSync, constants, statSync } = await import('node:fs');
   const { dirname, resolve } = await import('node:path');
   const st = (p) => { try { return statSync(p); } catch { return null; } };
@@ -94,6 +100,23 @@ export async function checkOutput(path, inputs = []) {
   // (a directory or file it may not write: refused before the work too -- two tools ran it, then
   // printed node's "EACCES: ...")
   if (file ? !writable(path) : !writable(d)) throw new Error(`could not write ${path}: permission denied`);
+}
+
+// An output written whole or not at all: to a file beside it, then renamed over it, so a write that
+// fails (a full disk, a size limit) leaves the file as it was -- set-colours and split-board, which
+// may write in place, left their input cut short, and printed node's "EFBIG: ..." (r93 Q1). A
+// failure is said in the five tools' one wording, "could not write <path>: ...".
+export async function writeOutput(path, bytes) {
+  const { renameSync, rmSync, writeFileSync } = await import('node:fs');
+  const { basename, dirname, join } = await import('node:path');
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, bytes);
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw new Error(`could not write ${path}: ${e.message}`);
+  }
 }
 
 // -h / --help asked: thrown by a tool's main, the usage printed on stdout, exit 0

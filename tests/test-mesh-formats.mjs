@@ -611,6 +611,17 @@ await test('shared glTF nodes: a node shared down 40 levels (2^40 paths) and a m
   assert.equal(model.meshes.length, 2);
   assert.equal(model.root.children[0].children.length, 2);
 });
+await test('a 3MF unit the format does not define is refused in words, by its own keys; the six it does are read (r93 A6)', async () => {
+  const tri = '<object id="1"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object></resources><build><item objectid="1"/></build></model>';
+  const m3 = (u) => zipStored([['3D/3dmodel.model', enc(`<model unit="${u}"><resources>${tri}`)]]);
+  // (must fire: "constructor" a function for the declared unit, "furlong" read as mm without a word)
+  for (const u of ['constructor', 'furlong', 'Millimeter']) {
+    await assert.rejects(() => parseMesh('3mf', m3(u), 'a.3mf'), new RegExp(`a\\.3mf's unit "${u}" is none the 3MF format defines`), u);
+  }
+  const got = [];
+  for (const u of ['micron', 'millimeter', 'centimeter', 'inch', 'foot', 'meter']) got.push((await parseMesh('3mf', m3(u), 'a.3mf')).sourceUnits);
+  assert.deepEqual(got, ['um', 'mm', 'cm', 'in', 'ft', 'm']);
+});
 await test('3MF components: shared 30 deep refused at once by count; a chain over 32 deep and a missing object refused in words, not dropped', async () => {
   const m3 = (x) => zipStored([['3D/3dmodel.model', enc(`<model unit="millimeter"><resources>${x}</build></model>`)]]);
   const tri = '<mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh>';

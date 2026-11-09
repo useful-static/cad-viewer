@@ -819,6 +819,14 @@ function validateHeader(h) {
   // (a failed build and facts both: no writer makes one, and which to believe is no question -- r44 A1)
   if (h.edgesFailed !== undefined && h.facts !== undefined) bad('edgesFailed beside facts');
   if (h.sourceUnits !== undefined && typeof h.sourceUnits !== 'string') bad('sourceUnits is not a string');
+  // (by its one name, as units is read: "inch" and "INCH" gave no Auto unit where "in" gave in, and
+  // a scene of "in" and "inch" was "mixed"; a blank one is none -- r93 Q2, Q3. A word no unit has
+  // stays as written)
+  if (typeof h.sourceUnits === 'string') {
+    const u = h.sourceUnits.trim() === 'mixed' ? 'mixed' : lengthUnitOf(h.sourceUnits);
+    if (u) h.sourceUnits = u;
+    else if (!h.sourceUnits.trim()) delete h.sourceUnits;
+  }
   if (h.recolour !== undefined && typeof h.recolour !== 'string') bad('recolour is not a string');
   if (h.angularDeflection !== undefined && !(Number.isFinite(h.angularDeflection) && h.angularDeflection > 0)) {
     bad('angularDeflection is not a positive number');

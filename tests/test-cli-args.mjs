@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,11 +45,15 @@ test('parseCli: values, flags, --k=v, each once, a value never an option, help o
 });
 
 test('every tool refuses a bad command line with a usage error (exit 2, on stderr); a non-CAD input is exit 1', () => {
+  writeFileSync(join(dir, 'x.constructor'), 'not a CAD file\n');
   const cases = [
     ['stp2mesh.mjs', ['x.stp', '-o', '--raw'], 2, /-o needs a value/],
     ['stp2mesh.mjs', ['x.stp', '-o', 'a.cadmesh', '-o', 'b.cadmesh'], 2, /given twice/],
     ['stp2mesh.mjs', ['x.stp', '--angular', '0.5', '--angular', '0.2'], 2, /given twice/],
     ['stp2mesh.mjs', [notCad], 1, /unsupported extension \.txt/],
+    // (an extension that is a name every object has: read as a format, the sniff skipped, "Cannot
+    // pass non-string to std::string" -- r93 A3)
+    ['stp2mesh.mjs', [join(dir, 'x.constructor')], 1, /unsupported extension \.constructor/],
     ['cadmesh-export.mjs', ['b.cadmesh', '--skip', '-h'], 2, /--skip needs a value/],
     ['cadmesh-export.mjs', ['b.cadmesh', '--to', 'stl,stl'], 2, /a format twice/],
     ['cadmesh-export.mjs', ['b.cadmesh', '--orient', '+z-y', '--model-up', 'y'], 2, /one of --orient/],
@@ -101,6 +105,8 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
   writeFileSync(join(dir, 'box.cadmesh'), new Uint8Array(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)));
   writeFileSync(join(dir, 'box.rgb'), new Uint8Array(8 * 3).fill(128));
   writeFileSync(join(dir, 'x.stp'), 'ISO-10303-21;\n');
+  // (a .cadmesh by another name: exported to its own name -- r93 A1)
+  writeFileSync(join(dir, 'm.stl'), readFileSync(join(dir, 'box.cadmesh')));
   const gone = join(dir, 'no-such-dir');
   const bad = [];
   // (each refused before its work: stp2mesh before it converts, split-board before it splits;
@@ -116,6 +122,10 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     // (an output that is the input, by another spelling too: the STEP replaced by a mesh, "OK" -- r92 Q3)
     ['stp2mesh.mjs', ['x.stp', '-o', join(dir, '.', 'x.stp')], /it is the input x\.stp$/],
     ['dwg-check.mjs', [notCad, '--dxf', notCad], /it is the input /],
+    // (and the two tools that passed no inputs: a .cadmesh replaced by a glTF, a colours file by a
+    // .cadmesh -- r93 A1)
+    ['cadmesh-export.mjs', ['m.stl', '--to', 'stl', '--out', 'm'], /it is the input m\.stl$/],
+    ['set-colours.mjs', ['box.cadmesh', 'box.rgb', '-o', 'box.rgb', '--by', 'test'], /it is the input box\.rgb$/],
   ]) {
     const r = run(tool, args);
     const lines = r.err.trim().split('\n');
@@ -124,6 +134,8 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     }
   }
   if (readFileSync(join(dir, 'x.stp'), 'utf8') !== 'ISO-10303-21;\n') bad.push('stp2mesh: x.stp overwritten');
+  if (!readFileSync(join(dir, 'm.stl')).equals(readFileSync(join(dir, 'box.cadmesh')))) bad.push('cadmesh-export: m.stl overwritten');
+  if (readFileSync(join(dir, 'box.rgb')).length !== 24) bad.push('set-colours: box.rgb overwritten');
   // a directory it may not write: refused before the work, in the same words (r27 Q6: two tools
   // split and coloured, then printed node's "EACCES"); not as root, which may write anywhere
   if (process.getuid?.() !== 0) {
@@ -154,6 +166,24 @@ test('a write that fails, in every tool that writes: one line "<tool>: ...", exi
     const u = run(tool, ['--bogus']);
     assert.ok(u.rc === 2 && u.err.startsWith(`${tool.replace('.mjs', '')}: `), `${tool}: rc ${u.rc}, ${JSON.stringify(u.err.slice(0, 80))}`);
   }
+});
+
+test('a write in place that fails leaves the input as it was, said in the one wording (r93 Q1)', () => {
+  // (must fire: under a file-size limit set-colours left its .cadmesh cut to 102,400 bytes, unreadable,
+  // and printed node's "EFBIG: ...")
+  const n = 20000;
+  const positions = new Float32Array(n * 3).map((_, i) => (i * 7919) % 1000);
+  const indices = new Uint32Array(Array.from({ length: n - 2 }, (_, i) => [i, i + 1, i + 2]).flat());
+  const raw = encodeCadmesh({ units: 'mm', meshes: [{ name: 'big', color: [0.5, 0.5, 0.5], positions, normals: null, colors: null, indices }], root: { name: 'b', meshes: [0], children: [] } });
+  const bytes = new Uint8Array(raw instanceof ArrayBuffer ? raw : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+  assert.ok(bytes.length > 200 * 1024, `${bytes.length} bytes`);
+  writeFileSync(join(dir, 'big.cadmesh'), bytes);
+  writeFileSync(join(dir, 'big.rgba'), new Uint8Array(n * 4));
+  const r = spawnSync('bash', ['-c', `ulimit -f 100; exec "${process.execPath}" "${join(HERE, 'set-colours.mjs')}" big.cadmesh big.rgba -o big.cadmesh --by test`], { cwd: dir, encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^set-colours: could not write big\.cadmesh: /);
+  assert.ok(Buffer.from(readFileSync(join(dir, 'big.cadmesh'))).equals(Buffer.from(bytes)), 'the input changed');
+  assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'a temporary file left');
 });
 
 done();

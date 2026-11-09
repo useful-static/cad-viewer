@@ -22,11 +22,10 @@
 // input refused (damaged, or nothing to export), or a format refused (a 3MF past the text the
 // viewer reads: the other formats written first, the refusal said after them); 2 = usage.
 // Test: tests/test-cadmesh-export.mjs.
-import { writeFileSync } from 'node:fs';
 import { bodyLabels, decodeCadmesh, inflateCadmesh, notMmWords } from './js/cadmesh.js';
 import { EXPORTS, ExportRefused, NOTHING_TO_EXPORT, exportBasis, exportable } from './js/export-mesh.js';
 import { DEFAULT_ORIENT, Z_UP_ORIENT, parseOrient } from './js/orient.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
 
 // --model-up's two names for orientations
 const MODEL_UP = { z: Z_UP_ORIENT, y: DEFAULT_ORIENT };
@@ -97,7 +96,7 @@ async function main() {
   const base = opt('--out') || inp.replace(/\.cadmesh(\.gz)?$/i, '');
   // (the input read and each output checked in the five tools' one wording, before the work)
   const bytes = await readInput(inp);
-  for (const k of to) await checkOutput(`${base}.${k}`);
+  for (const k of to) await checkOutput(`${base}.${k}`, [inp]); // (never the .cadmesh read: r93 A1)
   let files;
   try {
     files = await exportCadmesh(bytes, { to, orient, skip, base: base.split('/').pop() });
@@ -111,7 +110,7 @@ async function main() {
     const path = `${base}.${f.kind}`;
     if (f.error) { refused.push(`${path}: ${f.error}`); continue; }
     // (a write that fails is said in one line, exit 1: node's stack trace was all it printed)
-    try { writeFileSync(path, f.bytes); } catch (e) { throw new Error(`could not write ${path}: ${e.message}`); }
+    await writeOutput(path, f.bytes);
     console.log(`${path}: ${f.bodies} of ${f.of} bodies, ${f.bytes.length} bytes`);
   }
   // (the formats written said first, then each refusal: exit 1, as a refusal is)

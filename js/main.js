@@ -4244,8 +4244,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   syncUnitParam(); // (another model's ?unit= is not this one's)
-  $('clearval').textContent = '';
-  app.lastClearance = null; // (with its line: the unit picker would write it again -- r92 A2)
+  forgetClearance();
   forgetAddressModel();
   app.lastStepBuffer = stepBuf;
   app.unmeshedFaces = unmeshedFaces;
@@ -4409,9 +4408,7 @@ async function showScene(models, { newTree = false } = {}) {
   app.scene = models;
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
   // Add model kept "1.65 mm" for a scene whose new case touched)
-  $('clearval').textContent = '';
-  $('clearval').title = '';
-  app.lastClearance = null;
+  forgetClearance();
   // "this file is in" re-reads the first model alone, which would drop the others: a scene has
   // none (a mesh opened alone gets it again)
   if (models.length > 1) app.meshSource = null;
@@ -4784,14 +4781,24 @@ async function runClearance() {
   if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
   announce(`clearance ${text}`);
 }
+// A clearance read forgotten, its line, its tooltip and its result together, by a new model or a
+// scene change (a new model cleared the text alone, its tooltip kept "N triangle pairs compared" --
+// r93 A7; and the result kept, the unit picker wrote the line again -- r92 A2)
+function forgetClearance() {
+  $('clearval').textContent = '';
+  $('clearval').title = '';
+  app.lastClearance = null;
+}
 // The clearance line of a run's result, in the unit shown now: by the run, and again when the unit
 // picker changes (it kept "1.00 mm" beside Measure's "0.039 in" of the same distance -- r92 A2)
 function sayClearance(lc) {
   // a part, and the model it is in (a board's parts are often just "SOLID"; runClearance's modelOf
-  // is its own: a ReferenceError here stopped every run at "checking …")
+  // is its own: a ReferenceError here stopped every run at "checking …"), named as the tree, the
+  // hover and the info panel name it -- meshLabel, "owner › body" by the list's labels (the raw
+  // body name read "mesh 2" for the tree's "PRT0001 › mesh 2" -- r93 A2)
   const ranges = modelRanges(app.scene);
   const modelOf = (id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
-  const nm = (id) => `${app.header.meshes[id - 1].name || `part ${id}`} (${modelOf(id) + 1})`;
+  const nm = (id) => `${meshLabel(id) || `body ${id}`} (${modelOf(id) + 1})`; // (unnamed: the tree's "body N")
   const text = lc.distance === 0
     ? `0: ${nm(lc.a)} touches or overlaps ${nm(lc.b)}`
     : `${lenNum(lc.distance, 'measure')} ${lenUnit()} from ${nm(lc.a)} to ${nm(lc.b)}${lc.noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;
@@ -6351,7 +6358,7 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 // written, r88 A8; modelSizeMm is then in the model's own units)
 // (the word by units.js unconvertedWord, the 2D view's one rule: a copy of it here read "size ()" for
 // a blank unit -- r92 A3)
-const lenUnit = () => (geomMm() ? curUnit() : unconvertedWord(app.header.units, modelSizeMm()) || 'units');
+const lenUnit = () => (geomMm() ? curUnit() : unconvertedWord(app.header.units, modelSizeMm()));
 // (and a noise floor at float32's resolution, a ten-millionth of how far the model reaches from the
 // origin -- its size, or its farthest corner: "-1e-9" read as an overhang -- r90 A5; at a billionth a
 // face-to-face gap of a 10 ft model read "-0.000000762939" -- r91 Q5; converted too, a model 1 km

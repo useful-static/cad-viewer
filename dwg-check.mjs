@@ -3,11 +3,10 @@
 // every format check the file carries (passed / failed), the object types, and
 // how many objects of the drawn types decoded. --dxf FILE writes the drawing as
 // DXF (one file only); --json prints the report as JSON.
-import { writeFileSync } from 'node:fs';
 import { gunzip, isGzip } from './js/cadmesh.js';
 import { readDWG, dwgToPairs, pairsToDXF, drawDWG } from './js/dwg.js';
 import { drawsNothing, openCounts, sheetsOf } from './js/dxf.js';
-import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
 
 const USAGE = 'usage: dwg-check.mjs FILE.dwg [FILE.dwg ...] [--dxf OUT.dxf] [--json]';
 // (the tools' one argument rule, js/cli-args.js: an unknown option -- --jsn was taken for a file
@@ -84,7 +83,7 @@ async function main() {
     if (failed) bad++;
     reports.push(rep);
     if (dxfOut && P) {
-      try { writeFileSync(dxfOut, pairsToDXF(P)); } catch (e) { throw new Error(`could not write ${dxfOut}: ${e.message}`); }
+      await writeOutput(dxfOut, pairsToDXF(P));
     }
     if (!json) {
       console.log(`${f}: ${rep.release || '?'} ${rep.error ? `ERROR ${why}` : `${rep.objects} objects, ${rep.ms} ms, ${rep.failures.length ? 'FAILED ' + rep.failures.join('; ') : rep.drawError ? `NOT DRAWN: ${rep.drawError}` : `all checks pass, drawn: ${rep.drawn.paths} paths, ${rep.drawn.texts} texts${rep.drawn.hidden ? ` (and ${rep.drawn.hidden} on layers off or frozen)` : ''}${Object.keys(rep.drawn.notDrawn || {}).length ? `; not drawn: ${Object.entries(rep.drawn.notDrawn).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}`}`}`);

@@ -121,7 +121,8 @@ test('2D Measure\'s readout by the 3D panel\'s rule: its unit\'s decimals, Auto\
   assert.equal(measureText(0.00004, 0.00004, 1e-12, 'm', 0.1), '0.04 mm · ΔX 0.04 · ΔY 0.00');
   assert.equal(measureText(4, 4, 0, 'm', 5), '4.0000 m · ΔX 4.0000 · ΔY 0.0000');
   assert.equal(measureText(1.5, 1.5, 1e-12, 'US ft', 10), '1.5 US ft · ΔX 1.5 · ΔY 0');
-  assert.equal(measureText(1.5, 0, 1.5, null, 10), '1.5 · ΔX 0 · ΔY 1.5');
+  // (no unit: "units", as the size row and the 3D panel say -- it wrote no word: r93 A4)
+  assert.equal(measureText(1.5, 0, 1.5, null, 10), '1.5 units · ΔX 0 · ΔY 1.5');
 });
 test('the 2D info\'s size row by 2D Measure\'s unit and span: a drawing in metres 0.1 m across in mm, 5 m across in m (r91 Q3)', () => {
   // (must fire: "size (m) 0.100 × 0.050" beside 2D Measure's mm -- r90 A2's fault in the info panel)

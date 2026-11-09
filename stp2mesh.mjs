@@ -3,7 +3,7 @@
 // instantly. Same OpenCascade build (occt-import-js) and the same packing code
 // (js/cadmesh.js) as the in-browser import, so the two paths cannot disagree.
 
-import { closeSync, existsSync, openSync, readSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -13,7 +13,7 @@ import { BODY_KINDS, conversionModel, decodeCadmesh, encodeCadmesh, gunzip, hash
 import { sourceUnits } from './js/source-units.js';
 import { withoutBom } from './js/step-text.js';
 import { FORMATS as CAD_FORMATS, SNIFF_BYTES, sniffFormat } from './js/formats.js';
-import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain } from './js/cli-args.js';
+import { CliError, CliHelp, checkOutput, parseCli, positive, readInput, runCliIfMain, writeOutput } from './js/cli-args.js';
 import { circleMinPoints } from './js/measure-geom.js';
 import { flagsSaid } from './js/edges.js';
 
@@ -60,7 +60,8 @@ function parseArgs(argv) {
 }
 
 // the CAD formats (the converter's, in the viewer's own table: js/formats.js), extension -> reader
-const FORMATS = Object.fromEntries(CAD_FORMATS.filter((f) => f.kind === 'cad').flatMap((f) => f.ext.map((e) => [e, f.cad])));
+// (a Map, not an object's keys: "x.constructor" read as a format and skipped the sniff -- r93 A3)
+const FORMATS = new Map(CAD_FORMATS.filter((f) => f.kind === 'cad').flatMap((f) => f.ext.map((e) => [e, f.cad])));
 
 // The CAD format a file's first bytes say (gzipped or not), or undefined: the viewer's own
 // sniff (js/formats.js sniffFormat)
@@ -102,15 +103,15 @@ async function main() {
   // said by runCli: "stp2mesh: ..."; 2 is for the options)
   const read = await readInput(args.input);
   // a name that says nothing: told by the bytes, as the viewer does (r22)
-  const format = FORMATS[ext] || await sniffFile(args.input);
+  const format = FORMATS.get(ext) || await sniffFile(args.input);
   if (!format) {
     // (the input refused, as a missing one is: 2 is for the options)
     throw new Error(`${args.input}: ${ext ? `unsupported extension .${ext}` : 'no CAD extension, and its first bytes are not STEP, IGES or BREP'}`
-      + ` (want ${Object.keys(FORMATS).join(', ')})`);
+      + ` (want ${[...FORMATS.keys()].join(', ')})`);
   }
   // (the extension dropped only when the name had a CAD one: a bare name in
   // a dotted directory kept its directory)
-  const out = args.out || (FORMATS[ext] ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
+  const out = args.out || (FORMATS.has(ext) ? inner.replace(/\.[^./]+$/, '') : inner) + '.cadmesh';
   // an output it cannot write (no such directory, or a directory) refused before the conversion
   await checkOutput(out, [args.input]); // (never the input: r92 Q3)
   // (an angle no circle test passes: said once the input and output are known good, before the
@@ -189,7 +190,7 @@ async function main() {
     process.stderr.write(`stp2mesh: WARNING: ${model.unmeshedFaces} face(s) could not be meshed and are missing from ${out}\n`);
   }
   const file = args.raw ? Buffer.from(buf) : gzipSync(Buffer.from(buf), { level: 6 });
-  try { writeFileSync(out, file); } catch (e) { throw new Error(`could not write ${out}: ${e.message}`); }
+  await writeOutput(out, file);
   const meshes = result.meshes.length;
   const tris = result.meshes.reduce((s, m) => s + m.index.array.length / 3, 0);
   const mb = (n) => (n / 1e6).toFixed(1);
