@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMATS, formatOfName, fileNameOfUrl, sniffFormat, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
+import { FORMATS, formatOfName, fileNameOfUrl, sniffFormat, drawingReaderOf, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -113,6 +113,21 @@ await test('the pickers accept every format, gzipped, and the companions', () =>
   assert.ok(all.includes('.gz') && all.includes('.mtl'));
   const add = acceptList(['cad', 'cadmesh', 'mesh', 'zip']).split(',');
   assert.ok(!add.includes('.dxf') && !add.includes('.dwg'), 'Add model… offers no drawing');
+});
+test('an OBJ after many blank lines is sniffed at once: no line split every way (r108 D5)', () => {
+  const t0 = performance.now();
+  const obj = sniffFormat(new TextEncoder().encode(`${'\r\n'.repeat(30)}v 0 0 0\nv 1 0 0\n`));
+  const none = sniffFormat(new TextEncoder().encode(`${'\r\n'.repeat(30)}x`));
+  const ms = performance.now() - t0;
+  assert.equal(obj && obj.ext && obj.ext[0], 'obj');
+  assert.equal(none, null);
+  assert.ok(ms < 200, `${ms.toFixed(0)} ms (18 lines took 5.8 s)`);
+});
+test('a DXF named .dwg is read as the DXF it is, as a DWG named .dxf is read as a DWG (r108 D6)', () => {
+  const dxf = new TextEncoder().encode('  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nEOF\n');
+  assert.equal(drawingReaderOf('plan.dwg', dxf).label, 'DXF');
+  assert.equal(drawingReaderOf('plan.dwg', new TextEncoder().encode('AC1015')).label, 'DWG');
+  assert.equal(drawingReaderOf('plan.dxf', new TextEncoder().encode('AC1015')).label, 'DWG');
 });
 
 done();

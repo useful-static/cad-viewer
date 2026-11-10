@@ -94,6 +94,8 @@ async function main() {
   let skip = null;
   if (skipSrc) { try { skip = new RegExp(skipSrc); } catch (e) { usage(`--skip: ${e.message}`); } } // (an option's error, not the input's)
   const base = opt('--out') || inp.replace(/\.cadmesh(\.gz)?$/i, '');
+  // (a base ending in a separator names a directory: "--out sub/" wrote the hidden sub/.stl -- r108 L1)
+  if (/[/\\]$/.test(base)) usage(`--out is a file name without its extension, not a directory: "${base}"`);
   // (the input read and each output checked in the five tools' one wording, before the work)
   const bytes = await readInput(inp);
   for (const k of to) await checkOutput(`${base}.${k}`, [inp]); // (never the .cadmesh read: r93 A1)

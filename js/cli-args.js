@@ -55,7 +55,8 @@ export function parseCli(argv, { values = [], flags = [], max = Infinity } = {})
         // (the next word, unless it is one of the tool's own options: "-o --raw" left -o without
         // its value; but "--orient -z+y" and "--skip -old" are values that start with "-")
         v = argv[i + 1];
-        if (v === undefined || known(v)) throw new CliError(`${k} needs a value`);
+        // (nor "--", which ends the options: "--out --" wrote a file "--.stl" -- r108 L2)
+        if (v === undefined || v === '--' || known(v)) throw new CliError(`${k} needs a value`);
         i++;
       }
       if (v === '') throw new CliError(`${k} needs a value`);

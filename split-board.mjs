@@ -241,7 +241,9 @@ async function main() {
   // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
   const inGz = isGzip(raw); // (written back as it came: gzipsOutput)
   if (inGz) raw = Buffer.from(await gunzip(raw));
-  const d = decodeCadmesh(toAB(raw));
+  // (a bad input said with its name, as the other tools say it -- r108 L3)
+  let d;
+  try { d = decodeCadmesh(toAB(raw)); } catch (e) { throw new Error(`${a.in}: ${e.message}`); }
   const s = splitBoard(d, { sliver: a.sliver });
   const h = d.header;
   // the header's facts about the whole model carried over (js/cadmesh.js MODEL_FACTS: the

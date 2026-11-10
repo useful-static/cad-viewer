@@ -280,9 +280,12 @@ export function pickAt(index, x, y, r, { accept = () => true, rank = (pi) => pi,
     return d;
   };
   // (each distance once a query: the ties and the areas under the cursor ask again)
-  const once = (fn) => { const seen = new Map(); return (i) => { let d = seen.get(i); if (d === undefined) { d = fn(i); seen.set(i, d); } return d; }; };
-  // a line segment's nearest point the outline shows: [t along it, its squared distance]
-  const lineHit = once((s) => {
+  // (its map made when first asked: most hovers ask none of them)
+  const once = (fn) => { let seen = null; return (i) => { if (!seen) seen = new Map(); let d = seen.get(i); if (d === undefined) { d = fn(i); seen.set(i, d); } return d; }; };
+  // a line segment's nearest point the outline shows: [t along it, its squared distance] (worked
+  // out again when asked again, a few at most: kept, a map entry for every segment the search
+  // measured was 42 % of a hover's time -- r108)
+  const lineHit = (s) => {
     const ax = segs[4 * s], ay = segs[4 * s + 1], bx = segs[4 * s + 2], by = segs[4 * s + 3];
     const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
@@ -297,16 +300,22 @@ export function pickAt(index, x, y, r, { accept = () => true, rank = (pi) => pi,
       if (e < bd) { bd = e; bt = u; }
     }
     return [bt, bd];
-  });
-  const lineD2 = (s) => lineHit(s)[1];
+  };
+  // (its distance alone, with no array made for a line no outline clips)
+  const lineD2 = (s) => {
+    const p = paths[pathOf[s]];
+    if (p.clipPoly) return lineHit(s)[1];
+    return ptSegDist2(x, y, segs[4 * s], segs[4 * s + 1], segs[4 * s + 2], segs[4 * s + 3]);
+  };
   // a line's place in the draw at its hit: on a piece along its outline's edge, the edge pass's
-  const lineRank = once((s) => {
-    const p = paths[pathOf[s]], base = rank(pathOf[s]), f = clipOf(p);
-    if (!f) return base;
+  // (kept for a clipped line alone, whose edge test walks its outline; another's is its path's)
+  const clippedRank = once((s) => {
+    const base = rank(pathOf[s]), f = clipOf(paths[pathOf[s]]);
     const t = lineHit(s)[0], e = edgeOverlaps(f, segs[4 * s], segs[4 * s + 1], segs[4 * s + 2], segs[4 * s + 3]);
     for (let k = 0; k < e.length; k += 2) if (t >= e[k] && t <= e[k + 1]) return EDGE_RANK + base;
     return base;
   });
+  const lineRank = (s) => (paths[pathOf[s]].clipPoly ? clippedRank(s) : rank(pathOf[s]));
   // a polygon's nearest point to (x, y) and its squared distance: the cursor inside it, else on its edge
   const polyNear = (q) => {
     if (insideFlat(q, x, y)) return [0, x, y];
@@ -403,13 +412,17 @@ export function pickAt(index, x, y, r, { accept = () => true, rank = (pi) => pi,
   if (texts && texts.index.tree.m) itemsAt(texts.index.tree, q, (i) => { if (inQuad(texts.index, i, x, y) && texts.accept(i)) under(TEXT_RANK + (texts.rank ? texts.rank(i) : i), { text: i }); });
   // 4, 5: the nearest line within reach -- drawn over U, when there is one -- and without U the
   // nearest band and area too
-  const lineOK = (k) => accept(pathOf[k]) && lineRank(k) > uRank;
-  // (the least distance the searches met and how often: a nearest search visits every item at its
-  // best distance, so one there is no tie, and step 6's walk is passed over -- walked always, it was
-  // most of a hover's time)
-  let least = Infinity, times = 0;
-  const counted = (fn) => (i) => { const d = fn(i); if (d < least) { least = d; times = 1; } else if (d === least) times++; return d; };
-  const s = nearestItem(lineTrees, q, r, counted(lineD2), lineOK);
+  // (with nothing under the cursor every line is over it: no rank asked)
+  const lineOK = U === null ? (k) => accept(pathOf[k]) : (k) => accept(pathOf[k]) && lineRank(k) > uRank;
+  // (the least distance the searches met and how many paths met it: a nearest search visits every
+  // item at its best distance, so with one path there no tie can change the answer, and step 6's
+  // walk is passed over. Counted by items, two segments of one path at the vertex they share -- a
+  // polyline's nearest point, often -- walked it on 8,676 of 20,000 hovers, 46 % of their time: r108)
+  let least = Infinity, times = 0, leastPath = -1;
+  const met = (d, pi) => { if (d < least) { least = d; times = 1; leastPath = pi; } else if (d === least && pi !== leastPath) times++; };
+  // (one plain function a kind, not one made by a wrapper: the engine inlines these)
+  const lineCounted = (k) => { const d = lineD2(k); if (d <= least) met(d, pathOf[k]); return d; };
+  const s = nearestItem(lineTrees, q, r, lineCounted, lineOK);
   // 6. of everything at distance d (lines alone, over U), the one on top
   const topAt = (d, linesOnly) => {
     const e = Math.sqrt(d) * (1 + 1e-9) + 1e-12, lo = [x - e, y - e], hi = [x + e, y + e];
@@ -424,8 +437,8 @@ export function pickAt(index, x, y, r, { accept = () => true, rank = (pi) => pi,
   };
   const alone = (d) => least === d && times === 1;
   if (U) return s < 0 ? U : alone(lineD2(s)) ? { path: pathOf[s] } : topAt(lineD2(s), true);
-  const w1 = nearestItem(wideTrees, q, r, counted(wideD2), (t) => accept(wpath[t]));
-  const w2 = nearestItem(areaTrees, q, r, counted(fillD2), (i) => accept(bpath[i]));
+  const w1 = nearestItem(wideTrees, q, r, (t) => { const e = wideD2(t); if (e <= least) met(e, wpath[t]); return e; }, (t) => accept(wpath[t]));
+  const w2 = nearestItem(areaTrees, q, r, (i) => { const e = fillD2(i); if (e <= least) met(e, bpath[i]); return e; }, (i) => accept(bpath[i]));
   const ds = s < 0 ? Infinity : lineD2(s), d1 = w1 < 0 ? Infinity : wideD2(w1), d2 = w2 < 0 ? Infinity : fillD2(w2);
   const d = Math.min(ds, d1, d2);
   if (d === Infinity) return null;

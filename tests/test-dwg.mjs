@@ -9,7 +9,7 @@
 //   DWG_CORPUS=DIR node tests/test-dwg.mjs   -> "RESULT: N passed, 0 failed[, M skipped]"
 import { readFileSync, existsSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { readDWG, dwgToPairs, drawDWG, pairsToDXF, decompress18, decompress21, _internal, crc16, crc32 } from '../js/dwg.js';
+import { readDWG, dwgToPairs, drawDWG, pairsToDXF, decompress18, decompress21, _internal, crc16, crc32, DIM_TYPE } from '../js/dwg.js';
 import { parseDXF } from '../js/dxf.js';
 import { test as t, skip, done } from './harness.mjs';
 
@@ -323,7 +323,9 @@ t('an R2000 classes section running past the end of the file: a damaged DWG, sai
   rec(0, 0, 0x100, 0x40); rec(1, 1, 0x3e0, 0x40); rec(2, 2, 0x300, 0x10);
   dv.setUint32(0x3f0, 0x100, true);
   b[0x300] = 0; b[0x301] = 2;
-  assert.throws(() => readDWG(b), /^Error: a damaged DWG: its classes cannot be read/);
+  // (refused at its locator, before its classes are read: a section the file ends inside, as a file
+  // cut short shows it -- r108 D3)
+  assert.throws(() => readDWG(b), /^Error: not a complete DWG: its section 1 \(at 992, 64 bytes\) runs past the file's end \(1024 bytes\)/);
 });
 t('an object\'s count past its own end stops at the object, and a map naming it 20,000 times reads it once', () => {
   const t0 = Date.now();
@@ -544,6 +546,45 @@ t('round 18: drops counted only where the drawing reaches them; a missing block\
   });
 }
 
+// --- r108: a line weight's index, a dimension's type, a password-protected container ---
+t('a line weight\'s index 28 is BYLAYER, as 29 is; 30 BYBLOCK, 31 the default (r108 D1)', () => {
+  const lw = _internal.lineweight;
+  assert.deepEqual([28, 29, 30, 31, 7, 0].map(lw), [-1, -1, -2, -3, 25, 0]);
+});
+t('a DIMENSION object\'s type as DXF\'s 70: the angulars and the diameter too (r108 D4)', () => {
+  assert.deepEqual([20, 21, 22, 23, 24, 25, 26].map((k) => DIM_TYPE[k]), [6, 0, 1, 5, 2, 4, 3]);
+});
+t('a password-protected R2004 DWG is refused in those words, not as damaged (r108 D2)', () => {
+  // (a synthetic container whose section map marks AcDb:Header encrypted, enc = 1)
+  const lit = (data) => { const n = data.length, out = []; if (n <= 18) out.push(n - 3); else { out.push(0); let r = n - 3 - 0x0f; while (r > 255) { out.push(0); r -= 255; } out.push(r); } out.push(...data, 0x11); return out; };
+  const le32 = (a, o, v) => { a[o] = v & 255; a[o + 1] = (v >>> 8) & 255; a[o + 2] = (v >>> 16) & 255; a[o + 3] = (v >>> 24) & 255; };
+  const sysPage = (type, data) => { const c = lit(data), p = new Uint8Array(0x14 + c.length); le32(p, 0, type); le32(p, 4, data.length); le32(p, 8, c.length); p.set(c, 0x14); return p; };
+  const sm = new Uint8Array(0x14 + 0x60 + 16);
+  le32(sm, 0, 1);
+  let o = 0x14; le32(sm, o, 32); le32(sm, o + 8, 1); le32(sm, o + 0x0c, 0x7400); le32(sm, o + 0x14, 1); le32(sm, o + 0x1c, 1);
+  [...'AcDb:Header'].forEach((ch, k) => { sm[o + 0x20 + k] = ch.charCodeAt(0); });
+  o += 0x60; le32(sm, o, 2); le32(sm, o + 4, 0);
+  const smPage = sysPage(0x4163003b, [...sm]), S1 = smPage.length, S2 = 32;
+  const pmData = new Uint8Array(24);
+  le32(pmData, 0, 1); le32(pmData, 4, S1); le32(pmData, 8, 2); le32(pmData, 12, S2); le32(pmData, 16, 3); le32(pmData, 20, 0x100);
+  const pmPage = sysPage(0x41630e3b, [...pmData]);
+  const b = new Uint8Array(0x100 + S1 + S2 + pmPage.length);
+  [...'AC1018'].forEach((ch, k) => { b[k] = ch.charCodeAt(0); });
+  b[0x13] = 30;
+  const h = new Uint8Array(0x6c);
+  [...'AcFssFcAJMB'].forEach((ch, k) => { h[k] = ch.charCodeAt(0); });
+  le32(h, 0x54, S1 + S2); le32(h, 0x5c, 1);
+  const m = _internal.magic(0x6c);
+  for (let k = 0; k < 0x6c; k++) b[0x80 + k] = h[k] ^ m[k];
+  b.set(smPage, 0x100);
+  const dataAt = 0x100 + S1, dh = new Uint8Array(32);
+  le32(dh, 0, 0x4163043b);
+  const mask = (0x4164536b ^ dataAt) >>> 0;
+  for (let k = 0; k < 32; k += 4) { const v = ((dh[k] | (dh[k + 1] << 8) | (dh[k + 2] << 16) | (dh[k + 3] << 24)) ^ mask) >>> 0; le32(b, dataAt + k, v); }
+  b.set(pmPage, dataAt + S2);
+  assert.throws(() => readDWG(b), /^Error: an encrypted \(password\) DWG is not read$/);
+});
+
 // --- the checks, two-sided, on real files ---
 const root = process.env.DWG_CORPUS || '';
 const files = { R14: 'example_r14.dwg', R2000: 'example_2000.dwg', R2004: 'example_2004.dwg', R2007: 'example_2007.dwg', R2010: 'example_2010.dwg', R2013: 'example_2013.dwg', R2018: 'example_2018.dwg' };
@@ -551,6 +592,12 @@ for (const [rel, f] of Object.entries(files)) {
   const p = `${root}/${f}`;
   if (!existsSync(p)) { skip(`${rel}: the file arms`, `${f} absent (set DWG_CORPUS)`); continue; }
   const b = new Uint8Array(readFileSync(p));
+  // (an R13-R2000 file cut short: refused as incomplete -- it read as "nothing to draw", r108 D3)
+  if (rel === 'R14' || rel === 'R2000') {
+    t(`${rel}: cut to 90 %, refused as not a complete DWG`, () => {
+      assert.throws(() => readDWG(b.slice(0, Math.floor(b.length * 0.9))), /not a complete DWG: its section \d+ .* runs past the file's end/);
+    });
+  }
   t(`${rel}: every check passes and the drawing reaches parseDXF`, () => {
     const d = readDWG(b);
     assert.deepEqual(d.failures, [], d.failures.join('; '));

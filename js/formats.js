@@ -187,7 +187,11 @@ export function meshReaderOf(name, start) {
 export function drawingReaderOf(name, start) {
   const f = formatOfName(name);
   if (!f || f.kind !== '2d') return null;
-  return start && isDWGBytes(start) ? BY_EXT.get('dwg') : f;
+  if (start && isDWGBytes(start)) return BY_EXT.get('dwg');
+  // (and a DXF by its start whatever its name, as a DWG is: a DXF saved as .dwg was "not a DWG
+  // file" while a DWG saved as .dxf opened -- r108 D6)
+  if (start && start.length && f === BY_EXT.get('dwg')) { const s = sniffFormat(start.subarray(0, SNIFF_BYTES)); if (s && s === BY_EXT.get('dxf')) return s; }
+  return f;
 }
 // The reader the page meets for a file of this name and (unpacked) start: a mesh's or a drawing's by
 // the rules above, else the format its name says, else -- a name that says none -- its bytes'
@@ -417,7 +421,10 @@ export function sniffFormat(bytes) {
   if (/^\s*solid[\s\S]*facet/.test(text)) return f('stl');
   if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return f('gltf');
   if (/^\s*[CN]?OFF\s/.test(text)) return f('off');
-  if (/^(\s*(#.*)?\r?\n)*\s*(v|o|g|mtllib)\s/.test(text)) return f('obj');
+  // (a line's own space is spaces and tabs: by \s, which takes line ends too, the lines before its
+  // first word could be split every way there is -- 18 blank CRLF lines took 5.8 s, three times as
+  // long a line more: r108 D5)
+  if (/^(?:[ \t]*(?:#[^\r\n]*)?\r?\n)*[ \t]*(?:v|o|g|mtllib)\s/.test(text)) return f('obj');
   const line = text.split(/\r?\n/)[0];
   if (line.length >= 73 && line[72] === 'S') return f('igs');
   return null;

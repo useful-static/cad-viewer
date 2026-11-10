@@ -5292,11 +5292,12 @@ async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `reading ${name}`);
-  // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), or by
-  // its name (a .dwg that is not one is refused by the reader as "not a DWG file")
+  // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), a DXF
+  // by its start whatever its name (r108 D6: its first SNIFF_BYTES, the six of the DWG tag not enough to see one),
+  // else by its name
   // (its name by the formats table, the one rule: an extension added to the DWG row was read as a DXF -- r70 A5)
   // (by js/formats.js drawingReaderOf, the list check's rule too: r80 A4)
-  const format = drawingReaderOf(name, new Uint8Array(buf, 0, Math.min(6, buf.byteLength)))?.label || 'DXF';
+  const format = drawingReaderOf(name, new Uint8Array(buf, 0, Math.min(SNIFF_BYTES, buf.byteLength)))?.label || 'DXF';
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format}`);
   await nextPaint();
   if (stale(seq)) return;

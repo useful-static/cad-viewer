@@ -400,6 +400,11 @@ function container15(b, chk) {
   if (0x19 + 9 * n + 18 > b.length) throw new Error(`a damaged DWG: its file header lists ${n} sections, more than the file holds`);
   const rec = {};
   for (let k = 0; k < n; k++) { const o = 0x19 + 9 * k; rec[b[o]] = { at: u32(b, o + 1), size: u32(b, o + 5) }; }
+  // (a section the file ends inside: a file cut short -- unchecked, the handles read the missing
+  // bytes as a size of 0 and stopped, and the drawing had "nothing to draw": r108 D3)
+  for (const [k, s] of Object.entries(rec)) {
+    if (s.at + s.size > b.length) throw new Error(`not a complete DWG: its section ${k} (at ${s.at}, ${s.size} bytes) runs past the file's end (${b.length} bytes)`);
+  }
   const end = 0x19 + 9 * n;
   const xor = { 3: 0xa598, 4: 0x8101, 5: 0x3cc4, 6: 0x8461 }[n] || 0;
   chk.ok('file header CRC', (crc16(0, b, 0, end) ^ xor) === (b[end] | (b[end + 1] << 8)));
@@ -814,7 +819,14 @@ const FIXED = { 1: 'TEXT', 2: 'ATTRIB', 3: 'ATTDEF', 4: 'BLOCK', 5: 'ENDBLK', 6:
   56: 'LTYPE_CONTROL', 57: 'LTYPE', 60: 'VIEW_CONTROL', 61: 'VIEW', 62: 'UCS_CONTROL', 63: 'UCS', 64: 'VPORT_CONTROL', 65: 'VPORT', 66: 'APPID_CONTROL', 67: 'APPID', 68: 'DIMSTYLE_CONTROL', 69: 'DIMSTYLE',
   70: 'VPENTHDR_CONTROL', 71: 'VPENTHDR', 72: 'GROUP', 73: 'MLINESTYLE', 74: 'OLE2FRAME', 76: 'LONG_TRANSACTION', 77: 'LWPOLYLINE', 78: 'HATCH', 79: 'XRECORD', 80: 'ACDBPLACEHOLDER', 81: 'VBA_PROJECT', 82: 'LAYOUT', 498: 'ACAD_PROXY_ENTITY', 499: 'ACAD_PROXY_OBJECT' };
 const LW = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211];
-const lineweight = (i) => (i === 29 ? -1 : i === 30 ? -2 : i === 31 ? -3 : LW[i] ?? -3);
+// a DIMENSION object's type (20-26: ordinate, linear, aligned, 3-point angular, 2-line angular,
+// radius, diameter) as DXF's group 70 says it -- by type - 21, the angulars and the diameter were
+// written 2, 3 and 5 for 5, 2 and 3 (r108 D4)
+export const DIM_TYPE = { 20: 6, 21: 0, 22: 1, 23: 5, 24: 2, 25: 4, 26: 3 };
+// (28 is BYLAYER as 29 is: AutoCAD's own DXF and ODA's write -1 for it -- 062-B's 20, 025's 2,250,
+// 093's 12,549 entities; read as the default, 19,897 of the dozens' entities on layers with a weight
+// drew 1 px -- r108 D1. 24 to 27, seen nowhere, stay the default)
+const lineweight = (i) => (i === 28 || i === 29 ? -1 : i === 30 ? -2 : i === 31 ? -3 : LW[i] ?? -3);
 
 class ObjectReader {
   constructor(sec, v, classes, chk, dec) { Object.assign(this, { sec, v, classes, chk, dec }); }
@@ -1410,7 +1422,9 @@ export function readDWG(buf) {
   // (an error already in those words passes as it is; any other -- an engine TypeError, the
   // decompressors' "R2007 literal past the end" -- is said as a damaged file, naming it)
   try { cont = v <= 15 ? container15(b, chk) : v === 21 ? container21(b, chk) : container18(b, chk); } catch (e) {
-    if (/^(a damaged|not a complete DWG)/.test(e.message)) throw e;
+    // (and a refusal by kind -- a password -- as it is: wrapped, a password-protected DWG was "a
+    // damaged or truncated DWG" -- r108 D2)
+    if (/^(a damaged|not a complete DWG|an encrypted)/.test(e.message)) throw e;
     // (the reader's own words are kept -- "R2007 literal past the end" says where; an engine's
     // TypeError or RangeError is not repeated to the user)
     const own = !(e instanceof TypeError || e instanceof RangeError);
@@ -1691,7 +1705,7 @@ export function dwgToPairs(dwg) {
         break;
       }
       case 'LWPOLYLINE': {
-        common('LWPOLYLINE'); put(90, d.pts.length); put(70, (d.flags & 512 ? 1 : 0) | (d.flags & 128 ? 128 : 0));
+        common('LWPOLYLINE'); put(90, d.pts.length); put(70, (d.flags & 512 ? 1 : 0) | (d.flags & 256 ? 128 : 0)); // (plinegen is bit 256 in a DWG: by 128 it was never set -- r108 D7)
         if (d.elev) put(38, d.elev);
         if (d.cw) put(43, d.cw);
         d.pts.forEach((p, k) => {
@@ -1771,7 +1785,7 @@ export function dwgToPairs(dwg) {
       case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {
         const bn = bname(d.block);
         common('DIMENSION'); if (bn) put(2, bn);
-        put(10, d.p10[0]); put(20, d.p10[1]); put(30, d.p10[2]); put(11, d.mid[0]); put(21, d.mid[1]); put(70, o.type >= 20 && o.type <= 26 ? o.type - 21 < 0 ? 6 : o.type - 21 : 0);
+        put(10, d.p10[0]); put(20, d.p10[1]); put(30, d.p10[2]); put(11, d.mid[0]); put(21, d.mid[1]); put(70, DIM_TYPE[o.type] ?? 0);
         if (d.text) put(1, d.text);
         ext(d.ext); break;
       }
@@ -1870,7 +1884,7 @@ export function dwgToPairs(dwg) {
 }
 
 // for the tests: the pieces, so each layer can be checked on its own
-export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, classTail, readHeader, deRS, checksum04, checksum21, magic };
+export const _internal = { Bits, DECODE, ObjectReader, Checks, container15, container18, container21, readHandles, readClasses, classTail, readHeader, deRS, checksum04, checksum21, magic, lineweight };
 
 // The pairs as DXF text; a string's control characters and carets in DXF's caret notation (a
 // text may hold U+0003; written raw, a line feed would split the pair)

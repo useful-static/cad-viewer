@@ -23,6 +23,13 @@ test('a box from the top: its outline at 1:1 (the edges seen end on left out), t
   assert.match(d.svg, /width="20mm" height="30mm" viewBox="-5 -25 20 30"/);
   assert.match(d.svg, /<title>box<\/title>/);
 });
+test('a washer from the top: its circles size the page, Ø8 and the margins (r108 M3)', () => {
+  // (its outline is circles alone: taken out of the page's box, it was cropped to 11 x 11)
+  const g = bodyGeometry(model([{ name: 'w', faces: washer(1.6, 4, 2, 48) }]), 0);
+  const d = drawingSVG([{ name: 'w', geom: g }], ...TOP, { margin: 5 });
+  assert.ok(Math.abs(d.width - 18) < 1e-6 && Math.abs(d.height - 18) < 1e-6, `${d.width} x ${d.height}`);
+  assert.match(d.svg, /viewBox="-9 -9 18 18"/);
+});
 test('a washer from the top: its rims as true circles; from the front, none', () => {
   const g = bodyGeometry(model([{ name: 'w', faces: washer(1.6, 4, 2, 48) }]), 0);
   const top = drawingSVG([{ name: 'w', geom: g }], ...TOP);

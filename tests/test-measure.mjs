@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid, untoldAt } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
-import { KIND_NAME, MARK, SNAP_KINDS, holeDia, untoldText } from '../js/measure-ui.js';
+import { KIND_NAME, MARK, SNAP_KINDS, holeDia, nearestOnRay, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
 
 import { test, done } from './harness.mjs';
@@ -27,8 +27,64 @@ test('a circle needs ceil(2π/a) - 1 points: 12 at 0.5 rad; off at 2π/9 and coa
   assert.equal(circleOf(pts(4), 0.5), null, 'a square is not a circle');
   assert.equal(circleOf(pts(6), 0.5), null, 'nor a hexagon');
 });
+test('a D -- a circle cut by a flat, its points all on the circle -- is no circle; the coarsest circle taken still is (r108 M2)', () => {
+  // (arc points every 0.45 rad and one chord across a flat 15 % of the radius deep)
+  const r = 2.5, half = Math.acos(0.85), arc = [];
+  for (let t = half; t <= 2 * Math.PI - half + 1e-12; t += (2 * Math.PI - 2 * half) / Math.ceil((2 * Math.PI - 2 * half) / 0.45)) arc.push([r * Math.cos(t), r * Math.sin(t), 0]);
+  assert.ok(arc.length >= circleMinPoints(0.5), `${arc.length} points`);
+  assert.equal(circleOf(arc, 0.5), null, 'a D taken for a circle');
+  const n = circleMinPoints(0.5), ring = Array.from({ length: n }, (_, i) => [r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n), 0]);
+  assert.ok(circleOf(ring, 0.5), 'the coarsest circle refused');
+});
+test('a face of 140,000 loops: its outer loop found by a walk, not one argument a loop (r108 M4)', () => {
+  const tris = [];
+  for (let i = 0; i < 140000; i++) { const x = (i % 1000) * 2, y = Math.floor(i / 1000) * 2; tris.push([[x, y, 0], [x + 1, y, 0], [x, y + 1, 0]]); }
+  const g = bodyGeometry(model([{ name: 'sheet', faces: [tris] }]), 0);
+  assert.equal(g.edges.length, 140000);
+});
+test('3D Measure\'s edge snap: the edge\'s point nearest the pointer\'s ray, in perspective (r108 M1)', () => {
+  // (an eye at the origin; an edge from (5, 5, -40) to (5, 5, -400); the ray through (5, 5, -120)
+  // meets it there -- the screen parameter, linear, put it 3.6 to 7.1 mm off on a 100 mm edge)
+  const a = [5, 5, -40], b = [5, 5, -400], d = [5 / 120, 5 / 120, -1];
+  const p = nearestOnRay(a, b, { o: [0, 0, 0], d }, 0.5);
+  assert.ok(Math.hypot(p[0] - 5, p[1] - 5, p[2] + 120) < 1e-9, JSON.stringify(p));
+  // (an edge seen end on, along the ray: the screen parameter's point)
+  const q = nearestOnRay([0, 0, -10], [0, 0, -20], { o: [0, 0, 0], d: [0, 0, -1] }, 0.25);
+  assert.ok(Math.abs(q[2] + 12.5) < 1e-9, JSON.stringify(q));
+});
+await test('3D Measure\'s snapAt on a board\'s long edge, at the viewer\'s own camera in perspective: the point under the cursor (r108 M1)', async () => {
+  const { createMeasure } = await import('../js/measure-ui.js');
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const stub = () => new Proxy(function () {}, {
+    get(t, k) { if (k in t) return t[k]; if (k === 'querySelectorAll') return () => []; if (k === 'querySelector') return () => stub(); if (k === 'children') return []; if (k === Symbol.iterator) return undefined; return stub(); },
+    set(t, k, v) { t[k] = v; return true; }, apply() { return stub(); },
+  });
+  const els = new Map(), $ = (id) => { if (!els.has(id)) els.set(id, stub()); return els.get(id); };
+  const m = model([{ name: 'board', faces: box([0, 0, 0], [100, 70, 1.6]) }]);
+  // (the viewer's opening camera: yaw 0.7, pitch 0.45, fov 45 degrees, framed at 160)
+  const W = 1280, H = 800, fov = Math.PI / 4, centre = [50, 35, 0.8], dist = 160, yaw = 0.7, pitch = 0.45;
+  const eye = [centre[0] + dist * Math.cos(pitch) * Math.sin(yaw), centre[1] - dist * Math.cos(pitch) * Math.cos(yaw), centre[2] + dist * Math.sin(pitch)];
+  const view = lookAt(eye, centre, [0, 0, 1]), vp = multiply(perspective(fov, W / H, 1, 5000, false), view);
+  const dv = eye.map((x, k) => x - centre[k]), L = Math.hypot(...dv);
+  const v = { vp, eye, dir: dv.map((x) => x / L), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], ortho: false, tanV: Math.tan(fov / 2), w: W, h: H, target: centre, dist: L };
+  const meas = createMeasure({ $, view: () => ({ ...v }), sectionPlane: () => null, closed: () => true,
+    scene: { mesh: m, header: m.header, hidden: new Set(), sphere: { center: centre, radius: 61 } },
+    lenText: (x) => `${x.toFixed(2)} mm`, num: (x) => x.toFixed(2), unit: () => 'mm', announce() {}, tell() {}, queueFrame() {}, syncOptbar() {}, coarse: () => false, showsHidden: () => false });
+  const toScreen = (p) => {
+    const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+    return [((x / w + 1) * W) / 2, ((1 - y / w) * H) / 2];
+  };
+  for (const xq of [15, 25, 70]) {
+    const q = [xq, 70, 1.6], s = meas.snapAt(...toScreen(q));
+    // (to the float32 view matrices' rounding: it was 3.6 to 7.1 mm off)
+    const off = s && s.p ? Math.hypot(...s.p.map((x, k) => x - q[k])) : Infinity;
+    assert.ok(s && s.kind === 'edge' && off < 1e-3, `x ${xq}: ${s && s.kind}, ${off} mm off`);
+  }
+});
 test('uneven spacing does not pull the centre (a least-squares fit, not the mean)', () => {
-  const angles = [...Array.from({ length: 20 }, (_, i) => (i * Math.PI) / 40), ...Array.from({ length: 8 }, (_, i) => Math.PI / 2 + (i * 1.5 * Math.PI) / 8)];
+  // (the coarse part's sides 0.47 rad, under a = 0.5: what a mesh at that deflection can have --
+  // at 8 sides, 0.59 rad each, it is no mesh's, and r108 M2 refuses a side past it)
+  const angles = [...Array.from({ length: 20 }, (_, i) => (i * Math.PI) / 40), ...Array.from({ length: 10 }, (_, i) => Math.PI / 2 + (i * 1.5 * Math.PI) / 10)];
   const c = circleOf(angles.map((t) => [5 * Math.cos(t), 5 * Math.sin(t), 0]), 0.5);
   assert.ok(c && Math.hypot(...c.centre) < 1e-9 && Math.abs(c.radius - 5) < 1e-9, JSON.stringify(c));
 });

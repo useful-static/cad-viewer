@@ -125,6 +125,17 @@ export function circleOf(pts, angularDeflection) {
   // circle; past it by less, it may be one as stored: untold. Their rows went without a word: r69,
   // the position test)
   if (dev > Math.max(RADIUS_TOL * r, stored) + stored) return null;
+  // (and no side sweeping more of it than the coarsest loop taken does, 2 pi / circleMinPoints(a):
+  // a D -- arc points and one chord across the flat, every point on the circle -- was a whole
+  // circle, a hole table's "Ø5 through" and Save drawing's full circle across the flat: r108 M2)
+  // (not asked of a loop the stored positions cannot tell: rounded, its points move along it, and it
+  // is counted untold below, not lost)
+  const most = ((2 * Math.PI) / circleMinPoints(angularDeflection)) * 1.01;
+  for (let i = 0; i < m && !untoldAt(far, r); i++) {
+    const [x0, y0] = xy[i], [x1, y1] = xy[(i + 1) % m];
+    const ax = x0 - cx, ay = y0 - cy, bx = x1 - cx, by = y1 - cy;
+    if (Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) > most) return null;
+  }
   const centre = [0, 1, 2].map((k) => c[k] + ux[k] * cx + uy[k] * cy);
   // (inside the test, but as stored it cannot be told from a shape that is not a circle: untold)
   return untoldAt(far, r) || dev > RADIUS_TOL * r ? { centre, normal: nz, radius: r, dev, untold: true } : { centre, normal: nz, radius: r, dev };
@@ -274,7 +285,9 @@ export function bodyGeometry(model, meshIndex) {
       for (const v of loop) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], P[3 * v + k]); hi[k] = Math.max(hi[k], P[3 * v + k]); }
       return Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
     });
-    const outer = ext.indexOf(Math.max(...ext));
+    // (by a loop: spread, one argument a loop, a face of 140,000 holes threw -- r108 M4)
+    let outer = 0;
+    for (let i = 1; i < ext.length; i++) if (ext[i] > ext[outer]) outer = i;
     // (the face's boundary nodes: which faces adjoin which, for a hole's wall -- holeWall)
     f.bnodes = [];
     loops.forEach((loop, li) => {

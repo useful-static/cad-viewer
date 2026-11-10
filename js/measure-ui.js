@@ -62,6 +62,16 @@ const HOLE = '#5fd3ff';
 //   main.js's one rule, not a second kept here: r46 A3), queueFrame(), syncOptbar(),
 //   coarse(), showsHidden(), closed(mi) (the body is closed: closedOf), beforeOn() (run as
 //   Measure turns on) }
+// The point of segment a-b nearest the ray { o, d }: the edge point under the pointer, in perspective
+// as in ortho. Parallel to the ray (an edge seen end on), t: the screen parameter's point.
+export function nearestOnRay(a, b, ray, t) {
+  const u = sub(b, a), w = sub(a, ray.o);
+  const A = dot(u, u), B = dot(u, ray.d), C = dot(ray.d, ray.d), D = dot(u, w), E = dot(ray.d, w);
+  const den = A * C - B * B;
+  const s = den > 1e-12 * A * C ? Math.max(0, Math.min(1, (B * E - C * D) / den)) : t;
+  return add(a, mul(u, s));
+}
+
 export function createMeasure(deps) {
   const { $, scene } = deps;
   // text to the clipboard, said when copied and when not (a failure, or no clipboard: said
@@ -172,6 +182,7 @@ export function createMeasure(deps) {
     const deadline = performance.now() + 40;
     const pts = [];
     const edgePts = [];
+    const pray = v.rayAt(x, y); // (the pointer's ray: an edge's point under it)
     let pending = false;
     for (const mi of near) {
       const g = geomOf(mi, deadline);
@@ -198,9 +209,10 @@ export function createMeasure(deps) {
           const sx = a[0] + ab[0] * t, sy = a[1] + ab[1] * t;
           const dd = Math.hypot(sx - x, sy - y);
           if (dd > r) continue;
-          // the screen parameter maps to 3D linearly in ortho; in perspective
-          // closely enough over one tessellation segment
-          const p = add(line[i - 1], mul(sub(line[i], line[i - 1]), t));
+          // the point of the edge nearest the pointer's ray: the screen parameter is no measure
+          // along it in perspective, and a straight b-rep edge is one segment however long -- a
+          // 100 mm board edge snapped 3.6 to 7.1 mm from the point under the cursor (r108 M1)
+          const p = nearestOnRay(line[i - 1], line[i], pray, t);
           edgePts.push({ p, kind: 'edge', mesh: mi, info: { length: g.mids[e].len, diameter: null }, dd });
         }
       }

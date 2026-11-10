@@ -26,5 +26,8 @@ test('left as they are: a raw URL, a GitHub repo page, Dropbox dl=1, not a URL',
     assert.equal(r.from, null);
   }
 });
+test('a www.github.com blob link is GitHub\'s file, as github.com\'s is (r108 D9)', () => {
+  assert.deepEqual(directUrl('https://www.github.com/o/r/blob/main/x.stl'), { url: 'https://raw.githubusercontent.com/o/r/main/x.stl', from: 'GitHub' });
+});
 
 done();

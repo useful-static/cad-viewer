@@ -12,7 +12,8 @@ export function directUrl(url) {
   let u;
   try { u = new URL(url); } catch { return { url, from: null }; }
   // github.com/<owner>/<repo>/blob/<ref>/<path> -> raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
-  if (u.hostname === 'github.com') {
+  // (www.github.com as github.com: its blob link fetched GitHub's page -- r108 D9)
+  if (u.hostname === 'github.com' || u.hostname === 'www.github.com') {
     const m = /^\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/.exec(u.pathname);
     if (m) return { url: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}`, from: 'GitHub' };
   }

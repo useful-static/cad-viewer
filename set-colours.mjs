@@ -81,6 +81,8 @@ async function main() {
   // (unpacked as the page unpacks it: its limit and words, every member -- r75 A6)
   const inGz = isGzip(raw); // (written back as it came: gzipsOutput)
   if (inGz) raw = Buffer.from(await gunzip(raw));
+  // (a bad input said with its name, as the other tools say it -- r108 L3)
+  try { decodeCadmesh(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)); } catch (e) { throw new Error(`${a.in}: ${e.message}`); }
   if (a.show) {
     const h = decodeCadmesh(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)).header;
     console.log(JSON.stringify({ vertexCount: h.vertexCount, recolour: h.recolour || null }));
