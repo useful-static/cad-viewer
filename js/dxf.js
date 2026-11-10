@@ -506,17 +506,35 @@ export function parseDXF(s, opts = {}) {
       // alone, dropped a line its text beside it kept: r103 A2)
       const seen = viewInModel(M, clip.box);
       cull(budget, out.paths.length + out.texts.length);
+      // (one polyline drawn as several paths -- a tapering one's centreline and its filled outlines,
+      // one `band` id, added together -- is kept or dropped whole: kept by its fill alone, it was
+      // drawn but not counted, and its layer not listed -- r105 A3)
       for (let k = 0; k < out.paths.length; k++) {
-        const bb = pathBoxes[k];
-        if (bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3]) continue;
-        if (frozenHere(out.paths[k])) continue;
-        // (a path costs its points times the outline's, drawn or not: what the keep test and the
-        // view's inside test cost -- by the points alone, 8,000 x 8,000 took 3.3 s, four times as
-        // long per doubling: r99 A4)
-        // (a frame's four points charged as one, as before r103: charged as four, two drawings of
-        // the corpus, fish_processing_plant and 051-drawing, were refused)
-        clipped(budget, (out.paths[k].pts.length / 2) * (poly ? ring.length : 1));
-        seenThrough(out.paths[k], M, s, clip, lo.paths);
+        let e = k + 1;
+        if (out.paths[k].band) while (e < out.paths.length && out.paths[e].band === out.paths[k].band) e++;
+        const group = [];
+        let shown = false;
+        for (let j = k; j < e; j++) {
+          const bb = pathBoxes[j];
+          // (a part the cull passes over is still the group's: carried when another part shows)
+          const culled = bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3];
+          if (culled && e - k === 1) continue;
+          if (frozenHere(out.paths[j])) continue;
+          // (a path costs its points times the outline's, drawn or not: what the keep test and the
+          // view's inside test cost -- by the points alone, 8,000 x 8,000 took 3.3 s, four times as
+          // long per doubling: r99 A4)
+          // (a frame's four points charged as one, as before r103: charged as four, two drawings of
+          // the corpus, fish_processing_plant and 051-drawing, were refused)
+          clipped(budget, (out.paths[j].pts.length / 2) * (poly ? ring.length : 1));
+          const q = seenThrough(out.paths[j], M, s, clip);
+          group.push(q);
+          // (kept only where the outline shows some of it, as drawn: kept whole whatever it showed, a
+          // line in an L's notch counted as drawn and listed its layer, which the sheet draws nothing
+          // of -- r103 A3)
+          if (!shown && !culled) shown = pathMeetsOutline(q, clip.poly);
+        }
+        if (shown) for (const q of group) lo.paths.push(q);
+        k = e - 1;
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
       // not cancel with the sheet's hatches or another viewport's view of it)
@@ -631,37 +649,107 @@ function segsMeet(ax, ay, bx, by, cx, cy, dx, dy) {
   const on = (px, py, qx, qy, rx, ry) => Math.min(px, qx) <= rx && rx <= Math.max(px, qx) && Math.min(py, qy) <= ry && ry <= Math.max(py, qy);
   return (d1 === 0 && on(cx, cy, dx, dy, ax, ay)) || (d2 === 0 && on(cx, cy, dx, dy, bx, by)) || (d3 === 0 && on(ax, ay, bx, by, cx, cy)) || (d4 === 0 && on(ax, ay, bx, by, dx, dy));
 }
+// The pieces of segment a-b that an outline (flat) shows, inOutline's rule: [t0, t1, ...] along it
+// (0 at a, 1 at b). The hover's nearest point of a line the outline hides some of (r105 Q4)
+export function insidePieces(p, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy, ts = [0, 1], out = [];
+  if (!L2) return inOutline(p, ax, ay) ? [0, 1] : out;
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+    const cx = p[j], cy = p[j + 1], ex = p[i] - cx, ey = p[i + 1] - cy, den = vx * ey - vy * ex;
+    if (den) {
+      const t = ((cx - ax) * ey - (cy - ay) * ex) / den, u = ((cx - ax) * vy - (cy - ay) * vx) / den;
+      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+    } else {
+      // (parallel: an edge along it starts and ends a piece)
+      for (const [x, y] of [[cx, cy], [p[i], p[i + 1]]]) { const t = ((x - ax) * vx + (y - ay) * vy) / L2; if (t > 0 && t < 1) ts.push(t); }
+    }
+  }
+  ts.sort((a, b) => a - b);
+  for (let k = 0; k + 1 < ts.length; k++) {
+    const t0 = ts[k], t1 = ts[k + 1];
+    if (!(t1 > t0)) continue;
+    const tm = (t0 + t1) / 2;
+    if (!inOutline(p, ax + tm * vx, ay + tm * vy)) continue;
+    if (out.length && out[out.length - 1] === t0) out[out.length - 1] = t1; else out.push(t0, t1);
+  }
+  return out;
+}
 // Whether an outline (flat) shows some of a path (flat points, closed or not; a fill's inside too):
 // a point of it the outline shows, an edge of the outline across it, or -- a fill -- the outline
 // inside it. A test, not a cut: what is drawn of it the view's clip decides
-// (half: a wide polyline's half width -- what it shows is its band, not its centreline: a width-4
-// line whose centreline ran 1 below a frame, its band 1 inside, was dropped -- r104 A1. Within half
-// of an outline's edge, it meets it)
-function meetsOutline(pts, closed, fill, poly, half = 0) {
+function meetsOutline(pts, closed, fill, poly) {
   const n = pts.length / 2, m = poly.length / 2;
   for (let i = 0; i < n; i++) if (inOutline(poly, pts[2 * i], pts[2 * i + 1])) return true;
   const segs = closed ? n : n - 1;
-  const h2 = half * half;
   for (let i = 0; i < segs; i++) {
     const j = (i + 1) % n;
     for (let e = 0; e < m; e++) {
       const f = (e + 1) % m;
       if (segsMeet(pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1], poly[2 * e], poly[2 * e + 1], poly[2 * f], poly[2 * f + 1])) return true;
-      if (h2 > 0 && segSegDist2(pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1], poly[2 * e], poly[2 * e + 1], poly[2 * f], poly[2 * f + 1]) <= h2) return true;
     }
   }
   return !!fill && n >= 3 && insideFlat(pts, poly[0], poly[1]);
 }
+// Whether an outline shows some of a path as drawn: a wide polyline's band (pathBands), any piece
+// of it, as a fill; else the path itself
+function pathMeetsOutline(p, poly) {
+  const bands = pathBands(p);
+  if (!bands) return meetsOutline(p.pts, p.closed || p.fill, p.fill, poly);
+  return bands.some((b) => meetsOutline(b, true, true, poly));
+}
 // the squared distance from point (x, y) to segment a-b
-function ptSegDist2(x, y, ax, ay, bx, by) {
+export function ptSegDist2(x, y, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
   const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
   return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
 }
-// the squared distance between segments a-b and c-d that do not cross: the least of each end's to
-// the other segment
-function segSegDist2(ax, ay, bx, by, cx, cy, dx, dy) {
-  return Math.min(ptSegDist2(ax, ay, cx, cy, dx, dy), ptSegDist2(bx, by, cx, cy, dx, dy), ptSegDist2(cx, cy, ax, ay, bx, by), ptSegDist2(dx, dy, ax, ay, bx, by));
+
+// A wide polyline as the canvas strokes it (js/dxf-view.js: ends flat, joins mitred up to
+// MITER_LIMIT, else bevelled): its pieces, each a convex polygon (flat, xy...) -- a rectangle a
+// segment, a wedge a join. The one shape the keep test, the cull, the extents and the hover read
+// (r104 read it as round-ended and round-jointed: a band whose flat end stopped short of a frame
+// was kept with nothing drawn, and a mitre's tip inside one was dropped -- r105 A1, A2, A4, A5)
+export const MITER_LIMIT = 10;
+export function bandPolys(pts, closed, half) {
+  // (a repeated point makes no segment and no join, as the canvas takes it)
+  const q = [];
+  for (let k = 0; k < pts.length; k += 2) {
+    const x = pts[k], y = pts[k + 1];
+    if (q.length && q[q.length - 2] === x && q[q.length - 1] === y) continue;
+    q.push(x, y);
+  }
+  if (closed && q.length > 4 && q[0] === q[q.length - 2] && q[1] === q[q.length - 1]) q.length -= 2;
+  const n = q.length / 2, out = [];
+  if (n < 2 || !(half > 0)) return out;
+  const segs = closed ? n : n - 1, dir = new Float64Array(2 * segs);
+  for (let i = 0; i < segs; i++) {
+    const j = (i + 1) % n, dx = q[2 * j] - q[2 * i], dy = q[2 * j + 1] - q[2 * i + 1], L = Math.hypot(dx, dy);
+    dir[2 * i] = dx / L; dir[2 * i + 1] = dy / L;
+    const nx = (-dy / L) * half, ny = (dx / L) * half;
+    out.push(Float64Array.of(q[2 * i] + nx, q[2 * i + 1] + ny, q[2 * j] + nx, q[2 * j + 1] + ny, q[2 * j] - nx, q[2 * j + 1] - ny, q[2 * i] - nx, q[2 * i + 1] - ny));
+  }
+  // the joins: at vertex v, from segment v - 1 to segment v (every vertex of a closed one)
+  for (let v = closed ? 0 : 1; v <= (closed ? n - 1 : n - 2); v++) {
+    const a = (v - 1 + segs) % segs, ux = dir[2 * a], uy = dir[2 * a + 1], wx = dir[2 * v], wy = dir[2 * v + 1];
+    const cr = ux * wy - uy * wx, dot = ux * wx + uy * wy;
+    if (Math.abs(cr) < 1e-12) continue; // (straight on, or back on itself: no wedge)
+    const s = cr > 0 ? -1 : 1; // (the outer side: the right of a left turn)
+    const vx = q[2 * v], vy = q[2 * v + 1];
+    const ax = vx - s * uy * half, ay = vy + s * ux * half, bx = vx - s * wy * half, by = vy + s * wx * half;
+    const c = Math.sqrt((1 + dot) / 2); // (the cosine of half the turn: the mitre is 1 / c widths long)
+    if (c > 0 && 1 / c <= MITER_LIMIT) {
+      const mx = -(uy + wy), my = ux + wx, ml = Math.hypot(mx, my), k = (s * half) / (c * ml);
+      out.push(Float64Array.of(vx, vy, ax, ay, vx + mx * k, vy + my * k, bx, by));
+    } else out.push(Float64Array.of(vx, vy, ax, ay, bx, by));
+  }
+  return out;
+}
+// A path's band as drawn, or null when it is a line: a wide polyline's pieces (bandPolys), a wide
+// polyline's filled outline (a tapering one's, or one through a stretch: `outline`) itself
+export function pathBands(p) {
+  if (p.width > 0 && !p.fill) return bandPolys(p.pts, p.closed, p.width / 2);
+  if (p.outline && p.fill) return [p.pts];
+  return null;
 }
 // Whether an outline shows some of a text's box (box [x0, y0, x1, y1], its corners c): a corner
 // inside, an edge of the outline across it (r100 A2), or the outline inside it
@@ -674,26 +762,27 @@ function boxMeetsOutline(box, c, poly) {
 // is, with the outline it is seen through (clipPoly, and its box, clip) -- the view clips it there
 // (js/dxf-view.js: ctx.clip(outline, 'evenodd')), and 2D Measure and the hover ask inOutline of a
 // point. Cut here by hand, rounds 99 to 102 each found an outline the cut got wrong (r103)
-function seenThrough(p, M, s, clip, out) {
+function seenThrough(p, M, s, clip) {
   const n = p.pts.length / 2;
   const pts = new Float64Array(2 * n);
   for (let i = 0; i < n; i++) { const [x, y] = ap(M, p.pts[2 * i], p.pts[2 * i + 1]); pts[2 * i] = x; pts[2 * i + 1] = y; }
-  // (kept only where the outline shows some of it: kept whole whatever it showed, a line in an L's
-  // notch counted as drawn and listed its layer, which the sheet draws nothing of -- r103 A3)
-  if (!meetsOutline(pts, p.closed || p.fill, p.fill, clip.poly, p.width && !p.fill ? (p.width * s) / 2 : 0)) return;
-  out.push({ ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box });
+  return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box };
 }
 
-// a path's box [x0, y0, x1, y1], a wide polyline's grown by its half width (its band: r104 A1)
-function boxOf(p) {
+// a path's box [x0, y0, x1, y1] as drawn: a wide polyline's its band's (pathBands: r104 A1, r105 A2)
+// -- the viewports' cull and the extents (itemsBox) by one rule; its points not a number left out
+export function boxOf(p) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const q = p.pts;
-  for (let k = 0; k < q.length; k += 2) {
-    if (q[k] < x0) x0 = q[k]; if (q[k] > x1) x1 = q[k];
-    if (q[k + 1] < y0) y0 = q[k + 1]; if (q[k + 1] > y1) y1 = q[k + 1];
-  }
-  const h = p.width && !p.fill ? p.width / 2 : 0;
-  return [x0 - h, y0 - h, x1 + h, y1 + h];
+  const add = (q) => {
+    for (let k = 0; k < q.length; k += 2) {
+      if (!Number.isFinite(q[k]) || !Number.isFinite(q[k + 1])) continue;
+      if (q[k] < x0) x0 = q[k]; if (q[k] > x1) x1 = q[k];
+      if (q[k + 1] < y0) y0 = q[k + 1]; if (q[k + 1] > y1) y1 = q[k + 1];
+    }
+  };
+  const bands = p.width > 0 && !p.fill ? pathBands(p) : null;
+  if (bands && bands.length) bands.forEach(add); else add(p.pts);
+  return [x0, y0, x1, y1];
 }
 // The box, in model space, of what a viewport (model -> paper transform M) shows of rect on
 // paper: the rect's corners taken back through M (a similarity, so its inverse is exact)
@@ -954,8 +1043,10 @@ function emit(recs, M, byBlock, depth, ctx) {
         outlines = taperOutlines(xs, ys, bul, w, w, closed);
         width = 0;
       }
-      path(sh.pts, sh.closed, false, width, sh.circle && conformal ? { circle: true } : null);
-      if (outlines) for (const o of outlines) if (o.every(Number.isFinite)) path(o, true, true, 0, { outline: true });
+      // (its centreline and its outlines one `band`: a viewport keeps or drops them together, r105 A3)
+      const band = outlines && outlines.length ? { band: (ctx.budget.bands = (ctx.budget.bands || 0) + 1) } : null;
+      path(sh.pts, sh.closed, false, width, sh.circle && conformal ? { circle: true, ...band } : band);
+      if (outlines) for (const o of outlines) if (o.every(Number.isFinite)) path(o, true, true, 0, { outline: true, ...band });
     };
     switch (r.type) {
       case 'LINE': {
@@ -1720,14 +1811,9 @@ function extentsOf(out, layers) {
 export function itemsBox(out) {
   const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
   for (const p of out.paths) {
-    // (a wide polyline reaches half its width past its points: Fit cut it at the edge)
-    const r = p.width > 0 ? p.width / 2 : 0;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (let k = 0; k < p.pts.length; k += 2) {
-      if (!Number.isFinite(p.pts[k]) || !Number.isFinite(p.pts[k + 1])) continue;
-      x0 = Math.min(x0, p.pts[k] - r); x1 = Math.max(x1, p.pts[k] + r);
-      y0 = Math.min(y0, p.pts[k + 1] - r); y1 = Math.max(y1, p.pts[k + 1] + r);
-    }
+    // (a wide polyline as drawn, its band: boxOf, the cull's box -- grown by half its width all round,
+    // Fit cut a mitre's tip and framed empty sheet past a flat end: r105 A5)
+    let [x0, y0, x1, y1] = boxOf(p);
     // (one seen through a clip outline, whole: what the outline's box shows of it, as a text's)
     if (p.clip) { x0 = Math.max(x0, p.clip[0]); y0 = Math.max(y0, p.clip[1]); x1 = Math.min(x1, p.clip[2]); y1 = Math.min(y1, p.clip[3]); }
     if (!(x0 <= x1 && y0 <= y1)) continue;

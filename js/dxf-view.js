@@ -11,10 +11,10 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { inOutline, edgeOverlaps, itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
+import { MITER_LIMIT, edgeOverlaps, inOutline, insideFlat, insidePieces, itemsBox, layersOf, onPaper, pathBands, ptSegDist2, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
-import { boxTree, nearestItem } from './box-tree.js';
+import { boxTree, itemsAt, nearestItem } from './box-tree.js';
 
 // a selected or faded layer's lines: the 3D paper styles' visible-edge colours
 const SELECTED = PAPER_EDGES.selected[0];
@@ -126,7 +126,11 @@ export function textAt(index, x, y, accept = () => true) {
 // segment of no length. (Every open path had one more, of no length at its last point, already
 // the end of its last segment: 15.1 % of the dozens drawings' segments.)
 export function segmentIndex(paths, o, span) {
-  const segsOf = (p) => { const m = p.pts.length / 2; return m === 1 || p.closed ? m : Math.max(0, m - 1); };
+  // (a band -- a wide polyline, a wide polyline's filled outline -- is indexed as its pieces, below)
+  // (made path by path, twice -- counted, then copied in -- and never all held: an array a piece,
+  // millions of them, is hundreds of MB of heap)
+  const isBand = (p) => (p.width > 0 && !p.fill) || (!!p.outline && !!p.fill);
+  const segsOf = (p) => { if (isBand(p)) return 0; const m = p.pts.length / 2; return m === 1 || p.closed ? m : Math.max(0, m - 1); };
   let n = 0;
   for (const p of paths) n += segsOf(p);
   const segs = new Float64Array(4 * n), pathOf = new Uint32Array(n);
@@ -146,56 +150,116 @@ export function segmentIndex(paths, o, span) {
   // the segments far longer than most (a border, a line across the sheet) in a tree of their own:
   // one in a leaf of short ones made every box above it as wide
   const longest = (span || Math.max(hx - lx, hy - ly) || 1) / 8;
-  // (a wide polyline's segments, in a tree of their own whose boxes are grown by their half width:
-  // what it shows is its band, and the hover found nothing on a band whose centreline lay past the
-  // search radius -- r104 A3)
-  // (sized by the wide segments alone, and their half width read from the path: an array a segment
-  // is 160 MB for 5.2 million)
-  const short = [], long = [], wide = [];
+  const short = [], long = [];
   for (let t = 0; t < n; t++) {
     const w = Math.max(Math.abs(segs[4 * t + 2] - segs[4 * t]), Math.abs(segs[4 * t + 3] - segs[4 * t + 1]));
     if (!Number.isFinite(w)) continue; // (a point not a number is never near)
-    if (halfWidth(paths[pathOf[t]]) > 0) wide.push(t);
-    else (w > longest ? long : short).push(t);
+    (w > longest ? long : short).push(t);
   }
-  // (the wide tree's items are its own, 0 .. W - 1, wideSeg[i] the segment: boxTree reads item i's
-  // box at 4i)
-  const wideSeg = Uint32Array.from(wide), grown = new Float64Array(4 * wide.length);
-  wideSeg.forEach((t, i) => {
-    const h = halfWidth(paths[pathOf[t]]);
-    grown[4 * i] = Math.min(segs[4 * t], segs[4 * t + 2]) - h; grown[4 * i + 1] = Math.min(segs[4 * t + 1], segs[4 * t + 3]) - h;
-    grown[4 * i + 2] = Math.max(segs[4 * t], segs[4 * t + 2]) + h; grown[4 * i + 3] = Math.max(segs[4 * t + 1], segs[4 * t + 3]) + h;
+  // The bands' pieces (js/dxf.js pathBands: a rectangle a segment and a wedge a join of a wide
+  // polyline, as the canvas strokes it; a wide polyline's filled outline itself), relative to o, in
+  // trees of their own, short and long as the lines' (one tree of them all was 27 ms a hover over a
+  // million short pieces and 20,000 long: r105 Q6). A piece is hovered anywhere inside it: what is
+  // drawn is the band, not its centreline (r104 A3; a tapering one's only near its edges, r105 A6)
+  let np = 0, nc = 0;
+  for (const p of paths) if (isBand(p)) for (const q of pathBands(p)) { np++; nc += q.length; }
+  const bxy = new Float64Array(nc), bstart = new Uint32Array(np + 1), bpath = new Uint32Array(np), bbox = new Float64Array(4 * np);
+  const bShort = [], bLong = [];
+  let c = 0, i = 0;
+  paths.forEach((p, pi) => {
+    if (!isBand(p)) return;
+    for (const q of pathBands(p)) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      bstart[i] = c;
+      for (let k = 0; k < q.length; k += 2) {
+        const qx = q[k] - o[0], qy = q[k + 1] - o[1];
+        bxy[c++] = qx; bxy[c++] = qy;
+        x0 = Math.min(x0, qx); y0 = Math.min(y0, qy); x1 = Math.max(x1, qx); y1 = Math.max(y1, qy);
+      }
+      bpath[i] = pi;
+      bbox[4 * i] = x0; bbox[4 * i + 1] = y0; bbox[4 * i + 2] = x1; bbox[4 * i + 3] = y1;
+      if (Number.isFinite(x0 + y0 + x1 + y1)) (Math.max(x1 - x0, y1 - y0) > longest ? bLong : bShort).push(i);
+      i++;
+    }
   });
-  return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)), wideTree: boxTree(grown, wideSeg.map((_, i) => i)), wideSeg, segs, pathOf, paths, o, span };
+  bstart[np] = c;
+  return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)),
+    bandTree: boxTree(bbox, Uint32Array.from(bShort)), bandLongTree: boxTree(bbox, Uint32Array.from(bLong)), bxy, bstart, bpath,
+    segs, pathOf, paths, o, span, outlines: new Map() };
 }
-// a path's half width where it is drawn as a band (a wide polyline stroked at its width), else 0
-const halfWidth = (p) => (p.width && !p.fill ? p.width / 2 : 0);
-// -> the path index of the nearest segment within r that accept(pathIndex, [x, y] its point nearest
-// (x, y)) takes, or -1. A wide polyline's segment is its band: the distance is to the band's edge (0
-// inside it), and its nearest point the band's -- the cursor itself, inside it
-export function nearestSegment(index, x, y, r, accept = () => true) {
-  const { segs, pathOf, paths } = index;
-  const near = (s) => {
-    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
+// -> the path index of the nearest line or band within r of (x, y) that accept(pathIndex) takes,
+// or -1. A band is hovered anywhere inside it. A path seen through a clip outline (clipPoly) is
+// measured to the part of it the outline shows (inOutline's rule): its nearest point hidden, the
+// whole of it was passed over though a part the outline shows lay within r, and a farther line won
+// (r105 Q4). Of two at one distance -- two bands under the cursor, both 0 -- the one drawn on top:
+// rank(pathIndex), higher on top (by default the later path; the view's, its group's place in the
+// draw -- the earlier won, the one drawn underneath: r105 Q7)
+export function nearestSegment(index, x, y, r, accept = () => true, rank = (pi) => pi) {
+  const { segs, pathOf, paths, bxy, bstart, bpath, o } = index;
+  // (a path's outline relative to o, made once)
+  const clipOf = (p) => {
+    if (!p.clipPoly) return null;
+    let f = index.outlines.get(p.clipPoly);
+    if (!f) { f = p.clipPoly.map((v, k) => v - o[k % 2]); index.outlines.set(p.clipPoly, f); }
+    return f;
+  };
+  // the squared distance from (x, y) to segment a-b, or to its pieces t0..t1 (insidePieces) when given
+  const segD2 = (ax, ay, bx, by, pieces = null) => {
+    if (!pieces) return ptSegDist2(x, y, ax, ay, bx, by);
+    let d = Infinity;
+    for (let k = 0; k < pieces.length; k += 2) {
+      const vx = bx - ax, vy = by - ay;
+      d = Math.min(d, ptSegDist2(x, y, ax + vx * pieces[k], ay + vy * pieces[k], ax + vx * pieces[k + 1], ay + vy * pieces[k + 1]));
+    }
+    return d;
+  };
+  const lineD2 = (s) => {
+    const ax = segs[4 * s], ay = segs[4 * s + 1], bx = segs[4 * s + 2], by = segs[4 * s + 3];
+    const d = ptSegDist2(x, y, ax, ay, bx, by), f = clipOf(paths[pathOf[s]]);
+    if (!f) return d;
+    // (its nearest point, if the outline shows it; else the nearest the outline shows)
+    const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
-    return [ax + t * vx, ay + t * vy];
+    if (inOutline(f, ax + t * vx, ay + t * vy)) return d;
+    return segD2(ax, ay, bx, by, insidePieces(f, ax, ay, bx, by));
   };
-  const d2Of = (s) => { const [cx, cy] = near(s); return (x - cx) ** 2 + (y - cy) ** 2; };
-  const s = nearestItem([index.longTree, index.tree], [x, y], r, d2Of, (k) => accept(pathOf[k], near(k)));
-  if (!index.wideTree || !index.wideSeg.length) return s < 0 ? -1 : pathOf[s];
-  // the wide segments: the distance to the band's edge, its point the band's nearest (the cursor
-  // itself inside it); nearer than the hairline found, or as near and earlier, wins
-  const ws = index.wideSeg, hOf = (s2) => halfWidth(paths[pathOf[s2]]);
-  const bandD2 = (i) => Math.max(0, Math.sqrt(d2Of(ws[i])) - hOf(ws[i])) ** 2;
-  const bandHit = (s2) => {
-    const [cx, cy] = near(s2), h = hOf(s2), d = Math.hypot(x - cx, y - cy);
-    return d <= h ? [x, y] : [cx + ((x - cx) * h) / d, cy + ((y - cy) * h) / d];
+  const bandD2 = (i) => {
+    const q = bxy.subarray(bstart[i], bstart[i + 1]), f = clipOf(paths[bpath[i]]);
+    const inside = insideFlat(q, x, y);
+    // (the nearest point of the piece: the cursor inside it, else on its edge)
+    let d = 0, hx = x, hy = y;
+    if (!inside) {
+      d = Infinity;
+      for (let k = 0, j = q.length - 2; k < q.length; j = k, k += 2) {
+        const e = ptSegDist2(x, y, q[j], q[j + 1], q[k], q[k + 1]);
+        if (e < d) {
+          d = e;
+          const vx = q[k] - q[j], vy = q[k + 1] - q[j + 1], l2 = vx * vx + vy * vy;
+          const t = l2 ? Math.max(0, Math.min(1, ((x - q[j]) * vx + (y - q[j + 1]) * vy) / l2)) : 0;
+          hx = q[j] + t * vx; hy = q[j + 1] + t * vy;
+        }
+      }
+    }
+    if (!f || inOutline(f, hx, hy)) return d;
+    // (hidden there: the nearest point of what the outline shows of it -- on its edges the outline
+    // shows, or on the outline's edges inside it)
+    d = Infinity;
+    for (let k = 0, j = q.length - 2; k < q.length; j = k, k += 2) d = Math.min(d, segD2(q[j], q[j + 1], q[k], q[k + 1], insidePieces(f, q[j], q[j + 1], q[k], q[k + 1])));
+    for (let k = 0, j = f.length - 2; k < f.length; j = k, k += 2) d = Math.min(d, segD2(f[j], f[j + 1], f[k], f[k + 1], insidePieces(q, f[j], f[j + 1], f[k], f[k + 1])));
+    return d;
   };
-  const best = s < 0 ? r : Math.sqrt(d2Of(s));
-  const w = nearestItem([index.wideTree], [x, y], best, bandD2, (i) => accept(pathOf[ws[i]], bandHit(ws[i])));
+  const s = nearestItem([index.longTree, index.tree], [x, y], r, lineD2, (k) => accept(pathOf[k]));
+  const w = nearestItem([index.bandLongTree, index.bandTree], [x, y], r, bandD2, (i) => accept(bpath[i]));
   if (w < 0) return s < 0 ? -1 : pathOf[s];
-  if (s >= 0 && bandD2(w) === d2Of(s) && s < ws[w]) return pathOf[s];
-  return pathOf[ws[w]];
+  let dw = bandD2(w), pw = bpath[w];
+  // (under the cursor: of every band there, the one on top)
+  if (dw === 0) {
+    const on = (i) => { if (bandD2(i) === 0 && rank(bpath[i]) > rank(pw) && accept(bpath[i])) pw = bpath[i]; };
+    for (const t of [index.bandLongTree, index.bandTree]) if (t.m) itemsAt(t, [x, y], on);
+  }
+  if (s < 0) return pw;
+  const ds = lineD2(s);
+  return ds < dw || (ds === dw && rank(pathOf[s]) > rank(pw)) ? pathOf[s] : pw;
 }
 
 // whether a path is added to its group reversed: a fill (not a hatch's even-odd loops) wound
@@ -316,13 +380,17 @@ export function createDxfView(canvas, drawing, cb = {}) {
   const outlineId = (f) => outlineOf(f).id;
   // the paths, grouped, relative to o
   const groups = new Map();
-  for (const p of drawing.paths) {
+  // (each path's group, and each group's place in the last draw: which of two is on top)
+  const groupOfPath = new Array(drawing.paths.length), drawnAt = new Map();
+  for (let pi = 0; pi < drawing.paths.length; pi++) {
+    const p = drawing.paths[pi];
     // (and by the clip outline it is seen through, if any: the group is drawn clipped to it, r103)
     const key = `${p.layer}\u0000${p.hold ? p.hold.join('\u0001') : ''}\u0000${p.colour.r},${p.colour.g},${p.colour.b},${p.colour.aci}\u0000${p.fill ? 1 : 0}\u0000${p.dash ? p.dash.join(',') : ''}\u0000${p.weight ?? ''}\u0000${p.width || ''}\u0000${p.evenodd || ''}\u0000${p.clipPoly ? outlineId(p.clipPoly) : ''}`;
     let g = groups.get(key);
     // a line weight in mm shows as 4 px a mm on screen, at least 1 px; a polyline's width is in
     // drawing units (it scales with the zoom, as on paper)
     if (!g) { g = { layer: p.layer, hold: p.hold, colour: onPaper(p.colour), fill: p.fill, dash: p.dash || null, px: p.weight ? Math.max(1, p.weight * 4) : 1, width: p.width || 0, evenodd: !!p.evenodd, clipPoly: p.clipPoly || null, clipId: p.clipPoly ? outlineId(p.clipPoly) : 0, path: new Path2D(), points: [] }; groups.set(key, g); }
+    groupOfPath[pi] = g;
     if (p.point) { g.points.push(p.pts[0] - o[0], p.pts[1] - o[1]); continue; }
     // (a fill not a hatch's even-odd loops is added counter-clockwise: the group's fills are one
     // non-zero path, and two overlapping SOLIDs wound opposite ways left their overlap empty)
@@ -338,15 +406,22 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // onto the sheet -- r104 A2)
     if (p.clipPoly && !p.fill && !p.width) {
       const segs = p.closed ? n : n - 1;
+      let along = 0; // (the length along the path to segment i's start: where its dashes stand)
       for (let i = 0; i < segs; i++) {
         const j = (i + 1) % n, ax = p.pts[2 * i], ay = p.pts[2 * i + 1], bx = p.pts[2 * j], by = p.pts[2 * j + 1];
+        const L = Math.hypot(bx - ax, by - ay);
         // (only the pieces along an edge: js/dxf.js edgeOverlaps, r104 Q1, Q2)
         const t = edgeOverlaps(p.clipPoly, ax, ay, bx, by);
         for (let k = 0; k < t.length; k += 2) {
-          if (!g.edge) g.edge = new Path2D();
-          g.edge.moveTo(ax + (bx - ax) * t[k] - o[0], ay + (by - ay) * t[k] - o[1]);
-          g.edge.lineTo(ax + (bx - ax) * t[k + 1] - o[0], ay + (by - ay) * t[k + 1] - o[1]);
+          if (!g.edge) { g.edge = new Path2D(); g.edgePieces = []; }
+          const x0 = ax + (bx - ax) * t[k] - o[0], y0 = ay + (by - ay) * t[k] - o[1], x1 = ax + (bx - ax) * t[k + 1] - o[0], y1 = ay + (by - ay) * t[k + 1] - o[1];
+          g.edge.moveTo(x0, y0);
+          g.edge.lineTo(x1, y1);
+          // (and where along the path it starts: a dashed one's pieces are dashed in its phase, each
+          // a subpath of its own restarting the pattern -- r105 Q5)
+          g.edgePieces.push(x0, y0, x1, y1, along + L * t[k]);
         }
+        along += L;
       }
     }
   }
@@ -425,8 +500,6 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // y up: x' = s (x - cx) + w/2, y' = -s (y - cy) + h/2, in device px
     const k = st.s * dpr;
     ctx.setTransform(k, 0, 0, -k, (w / 2 - st.c[0] * st.s) * dpr, (h / 2 + st.c[1] * st.s) * dpr);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
     const sel = st.selected;
     // (an item is a layer's when it answers to it: its own, or a frozen reference's it is drawn under
     // -- the layer list's rule, js/dxf.js layersOf; the selection lit only an item's own, and a frozen
@@ -434,6 +507,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const isOf = (it, n) => n != null && layersOf(it).includes(n);
     // (the selected layer last, on top; and those seen through one outline together)
     const order = [...groups.values()].sort((a, b) => isOf(a, sel) - isOf(b, sel) || a.clipId - b.clipId);
+    order.forEach((g, i) => drawnAt.set(g, i));
     // (seen through a viewport's clip outline: the canvas clips it there, even-odd -- the rule
     // inOutline keeps for the snaps and the hover; cut here by hand, rounds 99 to 102 each found an
     // outline the cut got wrong: r103. Clipped once for all its groups and texts in a draw: once
@@ -450,10 +524,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
       const wide = g.width > (g.px + (hot ? 1 : 0)) / st.s;
       ctx.lineCap = wide ? 'butt' : 'round';
       ctx.lineJoin = wide ? 'miter' : 'round';
+      // (the mitre's limit js/dxf.js bandPolys shapes a band by: the keep test, the extents and the
+      // hover read the corner drawn -- r105 A2)
+      ctx.miterLimit = MITER_LIMIT;
       // a line type's dashes are drawing units (under the transform): they
       // scale with the zoom, as on paper; too fine to see, drawn solid
-      ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
-      return { hot, col };
+      const dashed = !!g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3;
+      ctx.setLineDash(dashed ? g.dash : []);
+      return { hot, col, dashed };
     };
     let cur = null;
     const clipTo = (f) => {
@@ -480,8 +558,20 @@ export function createDxfView(canvas, drawing, cb = {}) {
     clipTo(null);
     for (const g of order) {
       if (!g.edge || hid(g)) continue;
-      strokeOf(g);
-      ctx.stroke(g.edge);
+      const { dashed } = strokeOf(g);
+      // (ends flat: a piece ends where its edge does, at a corner or a notch, and a round end drew
+      // half a line past it, outside the outline -- r105 Q12)
+      ctx.lineCap = 'butt';
+      if (!dashed) ctx.stroke(g.edge);
+      else {
+        // (dashed: each piece at its place in the pattern, as the clipped pass dashes its other half)
+        const e = g.edgePieces;
+        for (let k = 0; k < e.length; k += 5) {
+          ctx.lineDashOffset = e[k + 4];
+          ctx.beginPath(); ctx.moveTo(e[k], e[k + 1]); ctx.lineTo(e[k + 2], e[k + 3]); ctx.stroke();
+        }
+        ctx.lineDashOffset = 0;
+      }
       ctx.setLineDash([]);
     }
     // text: native, upright in its own frame
@@ -634,9 +724,12 @@ export function createDxfView(canvas, drawing, cb = {}) {
   function layerAt(px, py) {
     const [ux, uy] = toUnits(px, py);
     // (a path seen through a clip outline is hit only at a point the outline shows -- the point hit,
-    // not the cursor: a line the canvas clipped away was found from inside the outline, r103 A4)
-    const shows = (p, [hx, hy]) => !p.clipPoly || inOutline(p.clipPoly, hx + o[0], hy + o[1]);
-    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i, h) => !hid(drawing.paths[i]) && shows(drawing.paths[i], h));
+    // not the cursor: a line the canvas clipped away was found from inside the outline, r103 A4 --
+    // nearestSegment's own rule; and of two under the cursor, the one drawn on top: its group's
+    // place in the last draw, then its own -- r105 Q7)
+    const n = drawing.paths.length;
+    const rank = (i) => (drawnAt.get(groupOfPath[i]) ?? 0) * n + i;
+    const pi = nearestSegment(segments(), ux, uy, HIT_PX / st.s, (i) => !hid(drawing.paths[i]), rank);
     if (pi >= 0) return drawing.paths[pi].layer;
     // else a text under the point (inside its box, as the extents take it): a layer only texts
     // use could not be picked

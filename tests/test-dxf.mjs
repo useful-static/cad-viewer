@@ -1813,6 +1813,99 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.equal(v.layerAt(...v.toPx(10, 6)), null, 'past the band');
     v.destroy();
   });
+  // (r105: a band is what the canvas strokes -- ends flat, joins mitred up to MITER_LIMIT -- for the
+  // keep test, the cull, the extents and the hover; a tapering one's centreline and fills one thing)
+  // (paper points: model = paper - (30, 20), as wideAt's)
+  const lwAt = (layer, pts, w) => [[0, 'LWPOLYLINE'], [8, layer], [90, pts.length], [70, 0], [43, w], ...pts.flatMap(([x, y]) => [[10, x - 30], [20, y - 20]])];
+  const kept = (ents, clipped, layer) => sheetWith(ents, clipped).paths.filter((p) => p.layer === layer).length;
+  test('a wide polyline kept by its band as drawn: not by a flat end short of the frame, yes by a mitre\'s tip or a band over its corner (r105 A1, A2, Q10)', () => {
+    for (const clipped of [false, true]) {
+      const w = clipped ? 'outline' : 'frame';
+      // (a flat end 1.5 below the bottom edge, width 4: a round end would reach 0.5 inside)
+      assert.equal(kept(lwAt('E', [[10, -20], [10, -1.5]], 4), clipped, 'E'), 0, `a flat end short of the ${w} kept`);
+      assert.equal(kept(lwAt('E', [[10, -20], [10, 1]], 4), clipped, 'E'), 1, `a band into the ${w} dropped`);
+      // (a V, its vertex 2.5 below, width 4: its mitre's tip 2.83 inside; at width 0.5 1.83 below)
+      assert.equal(kept(lwAt('V', [[5, -10], [10, -2.5], [15, -10]], 4), clipped, 'V'), 1, `a mitre's tip inside the ${w} dropped`);
+      assert.equal(kept(lwAt('V', [[5, -10], [10, -2.5], [15, -10]], 0.5), clipped, 'V'), 0, `a mitre wholly outside the ${w} kept`);
+      // (a band across the corner (0, 0), its centreline 2.12 from it, both ends 15 off: width 6 over
+      // it, width 4 not)
+      assert.equal(kept(lwAt('C', [[-15, 12], [12, -15]], 6), clipped, 'C'), 1, `a band over the ${w}'s corner dropped`);
+      assert.equal(kept(lwAt('C', [[-15, 12], [12, -15]], 4), clipped, 'C'), 0, `a band short of the ${w}'s corner kept`);
+    }
+  });
+  test('a tapering polyline\'s centreline is kept with its band, counted and listed, though the centreline lies outside (r105 A3)', () => {
+    const taper = [[0, 'LWPOLYLINE'], [8, 'TAPER'], [90, 2], [70, 0], [10, -20], [20, -21], [40, 4], [41, 6], [10, 20], [20, -21]];
+    for (const clipped of [false, true]) {
+      const sh = sheetWith(taper, clipped);
+      const mine = sh.paths.filter((p) => p.layer === 'TAPER');
+      assert.ok(mine.some((p) => p.outline) && mine.some((p) => !p.outline), `${clipped ? 'outline' : 'frame'}: ${mine.map((p) => (p.outline ? 'fill' : 'line')).join(' ')}`);
+      assert.equal(openCounts({ paths: mine, texts: [] }, [{ name: 'TAPER', on: true }]).shapes, 1);
+    }
+    // (must-reject: wholly outside, neither)
+    const far = [[0, 'LWPOLYLINE'], [8, 'TAPER'], [90, 2], [70, 0], [10, -20], [20, -30], [40, 4], [41, 6], [10, 20], [20, -30]];
+    assert.equal(sheetWith(far, false).paths.filter((p) => p.layer === 'TAPER').length, 0);
+  });
+  test('the extents of a wide polyline: its mitre\'s tip, its flat ends (r105 A5)', () => {
+    const d = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'LWPOLYLINE'], [8, '0'], [90, 3], [70, 0], [43, 4], [10, 0], [20, 10], [10, 5], [20, 2], [10, 10], [20, 10], [0, 'ENDSEC'], [0, 'EOF']]));
+    // (the tip 2 / cos(half the turn) below the vertex; the ends' corners 2 * 5 / |(5, 8)| above them)
+    const c = Math.sqrt((1 + (25 - 64) / 89) / 2);
+    assert.ok(Math.abs(d.extents.min[1] - (2 - 2 / c)) < 1e-9, `min y ${d.extents.min[1]}`);
+    assert.ok(Math.abs(d.extents.max[1] - (10 + (2 * 5) / Math.hypot(5, 8))) < 1e-9, `max y ${d.extents.max[1]}`);
+  });
+  test('the hover on bands as drawn: not past a flat end, inside a tapering one, the visible part of a clipped one, the one on top (r105 A4, A6, Q4, Q7, Q8, Q9)', () => {
+    const near = (paths, x, y, r, rank) => nearestSegment(segmentIndex(paths, [0, 0], 30), x, y, r, undefined, rank);
+    const wide = { layer: 'W', pts: Float64Array.of(0, 0, 20, 0), width: 10, closed: false };
+    // (3 past the flat end, a hairline 0.5 away: the hairline; nothing past it within 2)
+    assert.equal(near([wide, { layer: 'H', pts: Float64Array.of(23.5, -10, 23.5, 10), closed: false }], 23, 3, 1), 1, 'past a flat end');
+    assert.equal(near([wide], 23, 0, 2), -1, 'empty sheet past a flat end hovered');
+    assert.equal(near([wide], 19, 4, 0.1), 0, 'inside the band');
+    // (a tapering band, its filled outline: 4 off its centreline, inside it, at r 0.5)
+    const fill = { layer: 'T', pts: Float64Array.of(0, -5, 20, -6, 20, 6, 0, 5), closed: true, fill: true, outline: true };
+    assert.equal(near([{ layer: 'T', pts: Float64Array.of(0, 0, 20, 0), closed: false }, fill], 10, 4, 0.5), 1, 'inside a tapering band');
+    // (through a frame [0, 10]^2: a line whose nearest point is hidden, its visible end 0.3 away, and
+    // another 1.8 away; a band whose nearest point is hidden, its visible part 0.4 away)
+    const clip = Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10);
+    assert.equal(near([{ layer: 'A', pts: Float64Array.of(5, -10, 5, 5), clipPoly: clip }, { layer: 'B', pts: Float64Array.of(0, 1.5, 10, 1.5), clipPoly: clip }], 5, -0.3, 2), 0, 'a line hidden at its nearest point, shown 0.3 away');
+    const cband = { layer: 'WIDE', pts: Float64Array.of(-5, -3, 15, -3), width: 10, clipPoly: clip };
+    assert.equal(near([cband, { layer: 'B', pts: Float64Array.of(0, 3.5, 10, 3.5), clipPoly: clip }], 5, -0.4, 5), 0, 'a band hidden at the cursor, shown 0.4 away');
+    // (outside the band, 0.4 past its edge at y 2, which the frame shows; its centreline hidden)
+    assert.equal(near([cband], 5, 2.4, 1), 0, 'a band beside its visible edge');
+    assert.equal(near([cband], 5, 3.4, 1), -1, 'past it');
+    // (two bands under the cursor: the one on top, the later by default, else by rank)
+    const a = { layer: 'A', pts: Float64Array.of(0, 0, 20, 0), width: 10 }, b = { layer: 'B', pts: Float64Array.of(0, 2, 20, 2), width: 10 };
+    assert.equal(near([a, b], 5, 1, 1), 1, 'the band underneath');
+    assert.equal(near([a, b], 5, 1, 1, (i) => -i), 0, 'not by its rank');
+    // (a hairline and a band: the nearer, either way)
+    const thin = { layer: 'W', pts: Float64Array.of(0, 0, 20, 0), width: 2 }, hair = { layer: 'H', pts: Float64Array.of(0, 1.5, 20, 1.5) };
+    assert.equal(near([thin, hair], 5, 1.6, 1), 1, 'the hairline 0.1 away');
+    assert.equal(near([thin, hair], 5, 1.1, 1), 0, 'the band 0.1 away');
+  });
+  test('the bands\' pieces in short and long trees, as the lines (r105 Q6)', () => {
+    const paths = [{ layer: 'B', pts: Float64Array.of(-500, 0, 500, 0), width: 2 }];
+    for (let i = 0; i < 50; i++) paths.push({ layer: 'S', pts: Float64Array.of(i, 5, i + 0.5, 5), width: 0.2 });
+    const ix = segmentIndex(paths, [0, 0], 100);
+    assert.equal(ix.bandLongTree.m, 1);
+    assert.equal(ix.bandTree.m, 50);
+  });
+  await test('a dashed line on its outline\'s edge: the edge pass dashes each piece at its place in the pattern, ends flat (r105 Q5, Q12)', async () => {
+    const strokes = [];
+    let cur = [];
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'beginPath' ? () => { cur = []; } : k === 'moveTo' || k === 'lineTo' ? (x, y) => cur.push(x, y) : k === 'stroke' ? (p) => strokes.push({ pts: p ? null : cur, off: t.lineDashOffset || 0, cap: t.lineCap }) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const P2 = globalThis.Path2D;
+    globalThis.Path2D = class { moveTo() {} lineTo() {} closePath() {} };
+    const box = Float64Array.of(0, 0, 60, 0, 60, 40, 0, 40);
+    const line = { layer: '0', colour: aciColour(7), fill: false, closed: false, dash: [3, 2], pts: Float64Array.of(-11, 0, 70, 0), clipPoly: box, clip: [0, 0, 60, 40] };
+    const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: '0', on: true }], paths: [line], texts: [], extents: { min: [-11, 0], max: [70, 40] } }, {});
+    v.fit();
+    globalThis.Path2D = P2;
+    const piece = strokes.find((s) => s.pts && s.pts.length === 4);
+    assert.ok(piece, 'the edge piece not stroked on its own');
+    // (it starts 11 along the line: x 0, relative to the middle o = 29.5)
+    assert.equal(piece.off, 11);
+    assert.deepEqual(piece.pts.map((x, i) => x + [29.5, 20][i % 2]), [0, 0, 60, 0]);
+    assert.equal(piece.cap, 'butt');
+    v.destroy();
+  });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
