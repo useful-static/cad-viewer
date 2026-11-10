@@ -749,6 +749,17 @@ function setExplode(on, focus = false) {
   if (focus) (on ? $('xpoff') : toolFocus('explode')).focus();
 }
 
+// A new model (or none) opens together: Explode off, its directions the last model's no more, and
+// its row and button with it -- one reset, where loadBuffer had set the flag alone and left the row
+// up, its x doing nothing (r111 H2-M1)
+function explodeOffForModel() {
+  const x = app.explode;
+  x.on = false;
+  x.for = null;
+  $('xpopt').hidden = true;
+  $('explode').setAttribute('aria-pressed', 'false');
+}
+
 function syncExplodeRow() {
   const x = app.explode;
   $('xpopt').hidden = !x.on;
@@ -895,6 +906,11 @@ const EDGE_HOVER_PX = 1;
 // the plate on WebGPU at 3x the opening distance, 5e-4 15, 1e-3 4; 1e-3 began to draw the rack's
 // rails' insides over them at 3x (618 px changed, as 548 with no pull)
 const CUT_PULL = 5e-4;
+// ... and at most this share of the cut body's own radius (its bounding sphere's): a 0.005 mm lead
+// plate of a small part on a 55 mm board took the board's 0.027 mm pull and drew its inside over its
+// top, 100 of its 118 px (r111 G1). At 1e-3 the R1 bracket's pull fell 4 % under CUT_PULL's and one
+// more click took the plate; 1.1e-3 leaves that bracket's pull as it was.
+const CUT_PULL_BODY = 1.1e-3;
 // (app.edgeMinPx: a body under that projected radius, CSS px, draws no
 // edges; they would only darken it)
 const pxScale = (r) => (r.canvas.clientWidth ? r.canvas.width / r.canvas.clientWidth : 1);
@@ -949,7 +965,7 @@ function frameState(pic = null) {
   const ps = pic ? pic.scale : pxScale(r);
   return {
     viewProj: vp, eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
-    cutPull: CUT_PULL * (app.sphereBase || app.sphere).radius,
+    cutPull: CUT_PULL * (app.sphereBase || app.sphere).radius, cutPullBody: CUT_PULL_BODY,
     ...styleFrame(currentStyle(), ps, !!(pic && pic.light)),
     // the face boundaries over the shaded faces, in device px: the canvas's
     // own scale, not devicePixelRatio, which the canvas size caps
@@ -1286,6 +1302,9 @@ function applyView(v, link = false) {
     app.explode.t = v.explode.t;
     setExplode(true);
     if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
+    // (the sphere grown by the link's amount: in a tab already exploded in that mode neither call
+    // above did it, and the depth range of the old amount clipped the moved parts -- r111 H2-M2)
+    syncExplodeSphere();
     syncExplodeRow();
   } else if (v.cam && app.explode.on) setExplode(false);
   select(bodies.selected, false);
@@ -4119,9 +4138,7 @@ function clearModel() {
   // lands; a view link sets the section again after this). Turntable and the
   // Display looks are preferences and stay.
   app.section.axis = 'off';
-  app.explode.on = false;
-  app.explode.for = null;
-  $('xpopt').hidden = true;
+  explodeOffForModel();
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   if (app.paintFaces) setPaint(false);
   app.hidden.clear();
@@ -4240,8 +4257,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.header = mesh.header;
   app.sphere = sphereOf(mesh.header.bbox);
   app.sphereBase = app.sphere; // (Explode grows app.sphere from it)
-  app.explode.on = false; // a new model opens together
-  app.explode.for = null;
+  explodeOffForModel(); // a new model opens together
   // nor with the last one's cut or Walk viewpoint (a view link sets the
   // section again below; updateButtons syncs the section's controls)
   app.section.axis = 'off';
@@ -4431,9 +4447,7 @@ async function showScene(models, { newTree = false } = {}) {
   app.modelKey = '';
   app.sphere = sphereOf(mesh.header.bbox);
   app.sphereBase = app.sphere;
-  app.explode.on = false;
-  app.explode.for = null;
-  $('xpopt').hidden = true;
+  explodeOffForModel();
   app.holesFor = null;
   $('holes').hidden = true;
   app.lastStepBuffer = null; // (Save .cadmesh writes one converted file, not a scene)

@@ -169,6 +169,20 @@ test('a solid\'s material by its winding number: a cavity (wound in) outside, a 
   assert.equal(insideOf([...outer, ...cubeT([3, 3, 3], [7, 7, 7])], [5, 5, 5]), true, 'in an embedded part');
   assert.equal(insideOf([...outer, ...cubeT([5, 5, 5], [15, 15, 15])], [7, 7, 7]), true, 'in the overlap');
   assert.equal(insideOf(rev(outer), [5, 5, 5]), false, 'a body wound inside out: none, by its winding (Clearance turns it to its normals first)');
+  // (points outside whose first ray -- solid.js's RAYS[0] -- passes through the cube and out through
+  // its edge x = y = 10: that ray counts the exit twice, winding 1, and only the majority of the
+  // three rays reads them outside; by any one ray, 95 of them read inside, Clearance's distance 0:
+  // r111 H1-M5)
+  const d0 = [0.3141592, 0.5772156, 0.7536422], dl = Math.hypot(...d0);
+  let outside = 0, wrong = 0;
+  for (let zi = 1; zi < 100; zi++) for (const s of [15, 20, 25]) {
+    const p = [10, 10, zi / 10].map((q, k) => q - (s * d0[k]) / dl);
+    if (p.every((x) => x >= 0 && x <= 10)) continue;
+    outside++;
+    if (insideOf(outer, p)) wrong++;
+  }
+  assert.ok(outside > 200, `${outside} points`);
+  assert.equal(wrong, 0, `${wrong} of ${outside} points outside read inside`);
 });
 test('a pin in the overlap of a branched shell (two or three boxes sharing a face) turns with it, never by its own sign: mirrored, nothing turned (r31 A2: the parity of 2 read outside, the pin turned)', () => {
   for (const N of [2, 3]) {

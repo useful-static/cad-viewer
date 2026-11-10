@@ -121,6 +121,13 @@ await test('GLB: the header and chunks; per body a node, positions in metres wit
   // (linear, normalized 16 bits: r70 Q1)
   assert.deepEqual([ca.componentType, ca.normalized], [5123, true]);
   assert.deepEqual([...new Uint16Array(g.buffer.slice(binOff + cv.byteOffset, binOff + cv.byteOffset + 8))], [0, 0, 65535, 65535]);
+  // (the normals in the file's axes, as the positions are: the model's +z is the file's +y. Left in
+  // the model's axes, every tool that shades by NORMAL lit it wrong: r111 H1-M6)
+  for (const mi of [0, 1]) {
+    const na = j.accessors[j.meshes[mi].primitives[0].attributes.NORMAL], nv = j.bufferViews[na.bufferView];
+    const N = new Float32Array(g.buffer.slice(binOff + nv.byteOffset, binOff + nv.byteOffset + nv.byteLength));
+    for (let v = 0; v < na.count; v++) assert.deepEqual([N[3 * v], N[3 * v + 1], N[3 * v + 2]].map((x) => +x.toFixed(4) + 0), [0, 1, 0], `body ${mi} vertex ${v}`);
+  }
   for (const v of j.bufferViews) assert.equal(v.byteOffset % 4, 0);
 });
 await test('3MF of a large body: written in batches, the page given turns between them -- no hold of the thread past a fraction of a second (r70 Q4: 5 M triangles held it 16.8 s, 9 M ran past the string limit)', async () => {

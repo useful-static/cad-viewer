@@ -51,6 +51,12 @@ test('3D Measure\'s edge snap: the edge\'s point nearest the pointer\'s ray, in 
   // (an edge seen end on, along the ray: the screen parameter's point)
   const q = nearestOnRay([0, 0, -10], [0, 0, -20], { o: [0, 0, 0], d: [0, 0, -1] }, 0.25);
   assert.ok(Math.abs(q[2] + 12.5) < 1e-9, JSON.stringify(q));
+  // (a ray past either end -- the pointer within the snap radius of an end, beyond it: that end,
+  // not a point on the edge's extension, outside the part: r111 H1-M3)
+  const pb = nearestOnRay(a, b, { o: [0, 0, 0], d: [5.3 / 450, 5 / 450, -1] }, 1);
+  assert.ok(Math.hypot(pb[0] - 5, pb[1] - 5, pb[2] + 400) < 1e-9, `past the far end: ${JSON.stringify(pb)}`);
+  const pa = nearestOnRay(a, b, { o: [0, 0, 0], d: [5.3 / 30, 5 / 30, -1] }, 0);
+  assert.ok(Math.hypot(pa[0] - 5, pa[1] - 5, pa[2] + 40) < 1e-9, `past the near end: ${JSON.stringify(pa)}`);
 });
 await test('3D Measure\'s snapAt on a board\'s long edge, at the viewer\'s own camera in perspective: the point under the cursor (r108 M1)', async () => {
   const { createMeasure } = await import('../js/measure-ui.js');
@@ -466,6 +472,15 @@ test('ray cast: the washer top is hit, its hole is not; the face found by triang
   assert.equal(faceOfTri(m.faces, m.header.meshes[0], h.tri), 0, 'the top face');
   assert.equal(c.cast([0], [0, 0, 10], [0, 0, -1]), null, 'down the bore');
   assert.equal(c.cast([0], [3, 0, 10], [0, 0, -1], 5), null, 'stops at tmax');
+  // (every triangle against the faces section: a face's first and last triangle too, where an
+  // off-by-one in the search's bound names the neighbouring face -- r111 H1-M4)
+  const mh = m.header.meshes[0];
+  let wrong = 0, tris = 0;
+  for (let fi = mh.faceStart; fi < mh.faceStart + mh.faceCount; fi++) {
+    for (let t = m.faces[2 * fi]; t < m.faces[2 * fi] + m.faces[2 * fi + 1]; t++) { tris++; if (faceOfTri(m.faces, mh, t) !== fi) wrong++; }
+  }
+  assert.ok(mh.faceCount >= 4 && tris > 100, `${mh.faceCount} faces, ${tris} triangles`);
+  assert.equal(wrong, 0, `${wrong} of ${tris} triangles named the wrong face`);
 });
 test(`the BVH (bodies over ${BVH_MIN} triangles) answers as the scan does`, () => {
   const n = 3000; // 4 faces x 2n triangles = 24,000

@@ -38,7 +38,8 @@ uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper style
 uniform vec4 uXp;          // x explode: the fraction of each body's direction it moves by (0 none)
 uniform vec4 uCutV;        // x: the section on, y: the cut faces' pull (below; the vertex stage's own,
                            // not uParams: a uniform in both stages must agree in precision); z: the
-                           // body table is this mesh's (bodyCR below reads it)
+                           // pull's cap as a share of the cut body's own radius, 0 when the body
+                           // table is not this mesh's (bodyCR below reads it)
 // this vertex's body: its centre and radius (the table's texel 2 id + 1; CULL_ATTR: aBody)
 vec4 bodyCR() {
 #ifdef CULL_TEX
@@ -78,14 +79,18 @@ void main() {
   // distance: a share grew as the view zoomed out until a 1 mm sheet's inside drew over its outside
   // (r110 E1). Only a body the plane passes through has a cut face: one it misses is not pulled,
   // so a closed body thinner than the pull, away from the cut, keeps its far side behind its near
-  // side (r110 F2). (renderer-webgpu.js vs, the same)
+  // side (r110 F2). And no more than uCutV.z of the cut body's own radius: a small part's 0.005 mm
+  // lead, the model's pull 0.027 mm on its board, drew its inside over its top (r111 G1).
+  // (renderer-webgpu.js vs, the same)
   if (uCutV.x > 0.5 && dot(aNrm.xyz, vView) < 0.0) {
     bool cut = true;
-    if (uCutV.z > 0.5) {
+    float pull = uCutV.y;
+    if (uCutV.z > 0.0) {
       vec4 cb = bodyCR();
       cut = abs(dot(uClipV.xyz, cb.xyz + xo) - uClipV.w) <= cb.w * length(uClipV.xyz);
+      pull = min(pull, uCutV.z * cb.w);
     }
-    if (cut) gl_Position = uViewProj * vec4(p + uCutV.y * vView, 1.0);
+    if (cut) gl_Position = uViewProj * vec4(p + pull * vView, 1.0);
   }
   // the paper styles: a body under uCull.y px (whose edges are culled) is
   // collapsed in the face and pick passes too, so it neither blanks the lines
@@ -917,7 +922,7 @@ export class WebGLRenderer {
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
-    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, frame.cutPull || 0, cutBodies ? 1 : 0, 0);
+    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, frame.cutPull || 0, cutBodies ? frame.cutPullBody || 0 : 0, 0);
     gl.uniform4f(u.uXp, xp, 0, 0, 0);
     if (!this.bodyTexOk) {
       // CULL_ATTR: attribute 4 is aBody, from the per-vertex buffer once it

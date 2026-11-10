@@ -488,6 +488,18 @@ await test('3MF: unit cm, a component moved, a base material colour, the tree', 
   assert.equal(model.root.children[0].name, 'assembly');
   assert.equal(model.root.children[0].children[0].name, 'cube');
 });
+await test('3MF: a component turned and moved, inside an item moved -- the component\'s transform first, then the item\'s (r111 H1-M2)', async () => {
+  // (the vertex (1, 0, 0) turned 90 degrees about z, + 5 along x, then + 10: (15, 1, 0). The other
+  // order gives (5, 11, 0); translations alone, as the arm above, commute and read alike)
+  const doc = '<?xml version="1.0"?><model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources>'
+    + '<object id="1" type="model"><mesh><vertices><vertex x="1" y="0" z="0"/><vertex x="2" y="0" z="0"/><vertex x="1" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>'
+    + '<object id="2" type="model"><components><component objectid="1" transform="0 1 0 -1 0 0 0 0 1 5 0 0"/></components></object>'
+    + '</resources><build><item objectid="2" transform="1 0 0 0 1 0 0 0 1 10 0 0"/></build></model>';
+  const m = await parseMesh('3mf', zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', enc(doc)]]), 'order.3mf');
+  const P = m.meshes[0].positions, pts = [];
+  for (let i = 0; i < P.length; i += 3) pts.push([P[i], P[i + 1], P[i + 2]].map((x) => +x.toFixed(3)).join(','));
+  assert.deepEqual([...new Set(pts)].sort(), ['14,1,0', '15,1,0', '15,2,0']);
+});
 await test('GLB: metres to mm, the node moved, the linear colour as sRGB', async () => {
   const b = glb();
   assert.equal(meshFormatOf('cube.glb', b), 'glb');
@@ -1241,6 +1253,10 @@ await test('r7-6c PLY face colours (MeshLab: red green blue on the face element)
   const head = (vprops) => `ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\n${vprops}element face 1\nproperty list uchar int vertex_indices\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty uchar alpha\nend_header\n`;
   const fc = await parseMesh('ply', enc(`${head('')}0 0 0\n1 0 0\n1 1 0\n3 0 1 2 255 0 0 255\n`), 'fc.ply');
   assert.deepEqual(colourSet(fc.meshes[0]), ['255,0,0']);
+  // (a mid tone, the vertices colourless: scaled by the face element's own type -- by the vertex
+  // element's, a float's 1, it read 255,255,255, and 255 0 0 above reads alike either way: r111 H1-M1)
+  const mid = await parseMesh('ply', enc(`${head('')}0 0 0\n1 0 0\n1 1 0\n3 0 1 2 128 64 32 255\n`), 'fc.ply');
+  assert.deepEqual(colourSet(mid.meshes[0]), ['128,64,32']);
   const both = await parseMesh('ply', enc(`${head('property uchar red\nproperty uchar green\nproperty uchar blue\n')}0 0 0 0 255 0\n1 0 0 0 255 0\n1 1 0 0 255 0\n3 0 1 2 0 0 255 255\n`), 'fc.ply');
   assert.deepEqual(colourSet(both.meshes[0]), ['0,0,255']);
 });

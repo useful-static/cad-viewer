@@ -902,6 +902,53 @@ test('code pages: the DWG numbers the drawings at hand show, 850 decoded, and a 
     [0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, '%%192'], [0, 'ENDSEC'], [0, 'EOF']]));
   assert.equal(ru.texts[0].text, 'А');
   assert.equal(textCodes('%%192'), 'À');
+  // (r111 H2-M3: the whole table, the R2007 boundary, the double-byte pages -- each could be wrong
+  // and every test passed. 38 is Japanese: 7 corpus DWGs carry it, read as GBK their text is wrong)
+  assert.deepEqual(DWG_CODEPAGES, { 12: 'DOS850', 28: 'ANSI_1250', 29: 'ANSI_1251', 30: 'ANSI_1252', 32: 'ANSI_1253', 33: 'ANSI_1254',
+    34: 'ANSI_1255', 35: 'ANSI_1256', 36: 'ANSI_1257', 37: 'ANSI_874', 38: 'ANSI_932', 39: 'ANSI_936', 40: 'ANSI_949', 41: 'ANSI_950' });
+  const hd = (ver, cp) => [[0, 'SECTION'], [2, 'HEADER'], [9, '$ACADVER'], [1, ver], [9, '$DWGCODEPAGE'], [3, cp], [0, 'ENDSEC']];
+  const one = (t) => [[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [1, t], [0, 'ENDSEC'], [0, 'EOF']];
+  // an R2007 file is UTF-8 whatever page it names; an R2004 one is read in its page
+  assert.equal(parseDXF(new TextEncoder().encode(dxf([...hd('AC1021', 'ANSI_1252'), ...one('Ø20')])).buffer).texts[0].text, 'Ø20');
+  assert.equal(parseDXF(Uint8Array.from([...dxf([...hd('AC1018', 'ANSI_1252'), ...one('\xd820')])].map((c) => c.charCodeAt(0))).buffer).texts[0].text, 'Ø20');
+  // %%200 in a GBK drawing: one byte is no GBK character, read as 1252's
+  const gb = parseDXF(dxf([...hd('AC1015', 'ANSI_936'), ...one('%%200')]));
+  assert.equal(gb.texts[0].text, 'È');
+});
+test('eight drawing rules no test held (r111 H2-M4): a full-turn ARC, a part ELLIPSE\'s side, TEXT Middle, MTEXT\'s rows, a turned MINSERT\'s rows, a mirrored dimension, a twisted viewport\'s texts, a BYBLOCK weight', () => {
+  // an ARC 0..360 (some exporters' circle): a whole turn, not nothing
+  const arc = parseDXF(ents([[0, 'ARC'], [8, '0'], [10, 0], [20, 0], [40, 5], [50, 0], [51, 360]])).paths[0].pts;
+  const ax = arc.filter((_, i) => i % 2 === 0);
+  assert.ok(Math.min(...ax) < -4.99 && Math.max(...ax) > 4.99, `x ${Math.min(...ax)} .. ${Math.max(...ax)}`);
+  // an ELLIPSE's quarter from its major axis end: the minor is N x major, (0, 5) -- not (0, -5)
+  const el = parseDXF(ents([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 10], [21, 0], [31, 0], [40, 0.5], [41, 0], [42, Math.PI / 2]])).paths[0].pts;
+  assert.ok(Math.hypot(el[el.length - 2], el[el.length - 1] - 5) < 1e-9, `ends at ${el[el.length - 2]}, ${el[el.length - 1]}`);
+  // TEXT 72 = 4 (Middle): centred both ways
+  const mid = parseDXF(ents([[0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [11, 5], [21, 5], [40, 1], [72, 4], [1, 'M']])).texts[0];
+  assert.deepEqual([mid.align, mid.valign, mid.x, mid.y], ['center', 'middle', 5, 5]);
+  // MTEXT 71 = 1..9: rows of three, top to bottom
+  const va = [];
+  for (let a = 1; a <= 9; a++) va.push(parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 1], [71, a], [1, 'T']])).texts[0].valign);
+  assert.deepEqual(va, ['top', 'top', 'top', 'middle', 'middle', 'middle', 'bottom', 'bottom', 'bottom']);
+  // a MINSERT turned 90 degrees, two rows 10 apart: the rows go along the turned y, -x
+  const blk = blocks([[0, 'BLOCK'], [2, 'B'], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'ENDBLK']]);
+  const mi = parseDXF(dxf([...blk, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [100, 'AcDbMInsertBlock'], [8, '0'], [2, 'B'], [10, 0], [20, 0], [50, 90], [70, 1], [71, 2], [44, 0], [45, 10], [0, 'ENDSEC'], [0, 'EOF']]));
+  const starts = mi.paths.map((p) => [+p.pts[0].toFixed(6) + 0, +p.pts[1].toFixed(6) + 0].join(',')).sort();
+  assert.deepEqual(starts, ['-10,0', '0,0']);
+  // a dimension written with extrusion 0,0,-1: its block is in world coordinates, not its OCS
+  const dblk = blocks([[0, 'BLOCK'], [2, '*D1'], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [10, 5], [20, 0], [11, 6], [21, 0], [0, 'ENDBLK']]);
+  const dm = parseDXF(dxf([...dblk, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'DIMENSION'], [8, '0'], [2, '*D1'], [10, 0], [20, 0], [70, 0], [210, 0], [220, 0], [230, -1], [0, 'ENDSEC'], [0, 'EOF']]));
+  const dx = dm.paths.flatMap((p) => [p.pts[0], p.pts[2]]).sort((a, b) => a - b);
+  assert.deepEqual(dx, [5, 6]);
+  // a text seen through a viewport twisted 30 degrees turns with it
+  const vp = (tw) => parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], [0, 'TEXT'], [8, '0'], [10, 0], [20, 0], [40, 2], [1, 'TW'],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [51, tw], [0, 'ENDSEC'], [0, 'EOF']])).layouts[0].texts.find((t) => t.text === 'TW').rot;
+  const turned = vp(30) - vp(0);
+  assert.ok(Math.abs(turned - Math.PI / 6) < 1e-9 || Math.abs(turned - 30) < 1e-9, `turned by ${turned}`);
+  // a BYBLOCK weight (370 = -2) inside a block inserted at 0.50 mm: 0.5
+  const wb = blocks([[0, 'BLOCK'], [2, 'W'], [10, 0], [20, 0], [0, 'LINE'], [8, '0'], [370, -2], [10, 0], [20, 0], [11, 1], [21, 0], [0, 'ENDBLK']]);
+  const wd = parseDXF(dxf([...wb, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'W'], [10, 0], [20, 0], [370, 50], [0, 'ENDSEC'], [0, 'EOF']]));
+  assert.equal(wd.paths[0].weight, 0.5);
 });
 test('round 13: a binary R2000 DXF in its code page, a header behind a long comment, text extents', () => {
   // binary R2000, 1252: its strings in the drawing's code page, not UTF-8

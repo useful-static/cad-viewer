@@ -38,7 +38,7 @@ struct U {
   hover : vec4f,    // the hovered body's id bytes (0 = none)
   cull : vec4f,     // x focal px, y min radius px, z on for edges, w on for faces (the paper styles)
   fill : vec4f,     // the cut fill's colour
-  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none); y: the hidden parts' ghost alpha (0 = not drawn); z: the cut faces' pull, model units (vs)
+  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none); y: the hidden parts' ghost alpha (0 = not drawn); z: the cut faces' pull, model units; w: its cap as a share of the cut body's radius, 0 with no body table (vs)
 };
 @group(0) @binding(0) var<uniform> u : U;
 @group(0) @binding(1) var stateTex : texture_2d<f32>;
@@ -70,17 +70,20 @@ struct VOut {
   // model units nearer, along its own view ray (so on the same pixel): at one depth with a
   // neighbour's outside (a bracket's floor on its plate) they fought, and a click inside the bracket
   // took the plate (r109 R1). A length, not a share of the distance, which grew as the view zoomed
-  // out (r110 E1). Only a body the plane passes through (xp.w: the body table is this mesh's; with
-  // none, every body): a closed body thinner than the pull, away from the cut, keeps its far side
-  // behind its near side (r110 F2; renderer-webgl.js VS, the same)
+  // out (r110 E1). Only a body the plane passes through (xp.w > 0: the body table is this mesh's;
+  // with none, every body): a closed body thinner than the pull, away from the cut, keeps its far
+  // side behind its near side (r110 F2). And no more than xp.w of the cut body's own radius: a small
+  // part's 0.005 mm lead drew its inside over its top (r111 G1; renderer-webgl.js VS, the same)
   let vv = normalize(u.eye.xyz - p * u.eye.w);
   if (u.params.z > 0.5 && dot(v.nrm.xyz, vv) < 0.0) {
     var cut = true;
-    if (u.xp.w > 0.5) {
+    var pull = u.xp.z;
+    if (u.xp.w > 0.0) {
       let cb = bodies[meshId(v.idc) * 2u + 1u];
       cut = abs(dot(u.clip.xyz, cb.xyz + xoff(v.idc)) - u.clip.w) <= cb.w * length(u.clip.xyz);
+      pull = min(pull, u.xp.w * cb.w);
     }
-    if (cut) { o.clipPos = u.viewProj * vec4f(p + u.xp.z * vv, 1.0); }
+    if (cut) { o.clipPos = u.viewProj * vec4f(p + pull * vv, 1.0); }
   }
   o.wpos = p;
   o.nrm = v.nrm.xyz;
@@ -647,7 +650,7 @@ export class WebGPURenderer {
     // (a table the GPU could not take, or one still of the previous model, moves nothing;
     // renderer-webgl.js checks the same)
     const explode = this.bodiesFor === this.drawn ? frame.explode || 0 : 0;
-    f.set([explode, frame.ghost || 0, frame.cutPull || 0, frame.clip && this.bodiesFor === this.drawn ? 1 : 0], 56);
+    f.set([explode, frame.ghost || 0, frame.cutPull || 0, frame.clip && this.bodiesFor === this.drawn ? frame.cutPullBody || 0 : 0], 56);
     this.device.queue.writeBuffer(this.ubo, 0, f);
   }
 
