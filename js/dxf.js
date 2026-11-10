@@ -424,6 +424,17 @@ export function parseDXF(s, opts = {}) {
   sets.sort((a, b) => tabOf(a) - tabOf(b));
   // each model path's box [x0, y0, x1, y1], once, for the viewports' cull
   const pathBoxes = sets.length ? out.paths.map(boxOf) : [];
+  // and where each band group (one `band` id: a tapering polyline's paths) that starts at k ends,
+  // past its last path; 0 for a path of none -- once, not a property read a path a viewport
+  const bandEnd = new Uint32Array(sets.length ? out.paths.length : 0);
+  for (let k = 0; k < bandEnd.length; k++) {
+    const b = out.paths[k].band;
+    if (!b) continue;
+    let e = k + 1;
+    while (e < out.paths.length && out.paths[e].band === b) e++;
+    bandEnd[k] = e;
+    k = e - 1;
+  }
   const layouts = sets.map(({ recs, sheet }, li) => {
     const lo = { paths: [], texts: [] };
     emit(recs.filter((r) => r.type !== 'VIEWPORT'), IDENT, null, 0, ctxOf(lo));
@@ -509,31 +520,49 @@ export function parseDXF(s, opts = {}) {
       // (one polyline drawn as several paths -- a tapering one's centreline and its filled outlines,
       // one `band` id, added together -- is kept or dropped whole: kept by its fill alone, it was
       // drawn but not counted, and its layer not listed -- r105 A3)
+      // (a path costs its points times the outline's, drawn or not: what the keep test and the view's
+      // inside test cost -- by the points alone, 8,000 x 8,000 took 3.3 s, four times as long per
+      // doubling: r99 A4. A frame's four points charged as one, as before r103: charged as four, two
+      // drawings of the corpus, fish_processing_plant and 051-drawing, were refused)
+      const per = poly ? ring.length : 1;
+      const charge1 = (p) => clipped(budget, (p.pts.length / 2) * per);
+      // (and a band tested as its pieces, theirs: a wide polyline's are some 8 points a segment, and
+      // charged its points alone, 24,000 of them through a 407-point outline took 5.2 s within the
+      // budget sized for 0.5 -- r106 A4)
+      const chargeMore = (n) => clipped(budget, n * per);
+      const outside = (bb) => bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3];
       for (let k = 0; k < out.paths.length; k++) {
-        let e = k + 1;
-        if (out.paths[k].band) while (e < out.paths.length && out.paths[e].band === out.paths[k].band) e++;
+        // (kept only where the outline shows some of it, as drawn: kept whole whatever it showed, a
+        // line in an L's notch counted as drawn and listed its layer, which the sheet draws nothing
+        // of -- r103 A3. A path of no band group by one box test, as before r105: a group made and a
+        // property read for every path in every viewport took 20,000 viewports 1.7 times as long --
+        // r106)
+        const e = bandEnd[k];
+        if (!e) {
+          if (outside(pathBoxes[k])) continue;
+          const p = out.paths[k];
+          if (frozenHere(p)) continue;
+          charge1(p);
+          const pts = seenPts(p, M);
+          if (meetsAsDrawn(p, pts, s, clip.poly, chargeMore)) lo.paths.push(seenThrough(p, pts, s, clip));
+          continue;
+        }
+        // (a group: its parts the cull passes, tested and charged; a part it passes over costs
+        // nothing, and is carried, seen through, only when another part shows -- charged and seen
+        // through always, tapering polylines outside a sheet's viewports refused a drawing that opened
+        // with them at one width: r106 A3)
         const group = [];
         let shown = false;
         for (let j = k; j < e; j++) {
-          const bb = pathBoxes[j];
-          // (a part the cull passes over is still the group's: carried when another part shows)
-          const culled = bb[2] < seen[0] || bb[0] > seen[2] || bb[3] < seen[1] || bb[1] > seen[3];
-          if (culled && e - k === 1) continue;
-          if (frozenHere(out.paths[j])) continue;
-          // (a path costs its points times the outline's, drawn or not: what the keep test and the
-          // view's inside test cost -- by the points alone, 8,000 x 8,000 took 3.3 s, four times as
-          // long per doubling: r99 A4)
-          // (a frame's four points charged as one, as before r103: charged as four, two drawings of
-          // the corpus, fish_processing_plant and 051-drawing, were refused)
-          clipped(budget, (out.paths[j].pts.length / 2) * (poly ? ring.length : 1));
-          const q = seenThrough(out.paths[j], M, s, clip);
-          group.push(q);
-          // (kept only where the outline shows some of it, as drawn: kept whole whatever it showed, a
-          // line in an L's notch counted as drawn and listed its layer, which the sheet draws nothing
-          // of -- r103 A3)
-          if (!shown && !culled) shown = pathMeetsOutline(q, clip.poly);
+          const q = out.paths[j];
+          if (frozenHere(q)) continue;
+          if (outside(pathBoxes[j])) { group.push([q, null]); continue; }
+          charge1(q);
+          const pts = seenPts(q, M);
+          group.push([q, pts]);
+          if (!shown) shown = meetsAsDrawn(q, pts, s, clip.poly, chargeMore);
         }
-        if (shown) for (const q of group) lo.paths.push(q);
+        if (shown) for (const [q, pts] of group) lo.paths.push(seenThrough(q, pts || seenPts(q, M), s, clip));
         k = e - 1;
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
@@ -658,7 +687,9 @@ export function insidePieces(p, ax, ay, bx, by) {
     const cx = p[j], cy = p[j + 1], ex = p[i] - cx, ey = p[i + 1] - cy, den = vx * ey - vy * ex;
     if (den) {
       const t = ((cx - ax) * ey - (cy - ay) * ex) / den, u = ((cx - ax) * vy - (cy - ay) * vx) / den;
-      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+      // (u within a hair of the edge's ends: a crossing at an outline's vertex can round just past
+      // both edges' ends, and a hidden piece counted shown -- r106 Q2)
+      if (t > 0 && t < 1 && u >= -1e-9 && u <= 1 + 1e-9) ts.push(t);
     } else {
       // (parallel: an edge along it starts and ends a piece)
       for (const [x, y] of [[cx, cy], [p[i], p[i + 1]]]) { const t = ((x - ax) * vx + (y - ay) * vy) / L2; if (t > 0 && t < 1) ts.push(t); }
@@ -673,6 +704,80 @@ export function insidePieces(p, ax, ay, bx, by) {
     if (out.length && out[out.length - 1] === t0) out[out.length - 1] = t1; else out.push(t0, t1);
   }
   return out;
+}
+// An outline (flat) with its edges in a grid: inOutline and insidePieces for it, the same answers, by
+// the edges near the question alone -- the hover asks them of every line and band near the cursor,
+// and through a 16,000-point outline each walked every edge: 268 ms a hover (r106 Q5)
+export function outlineIndex(p) {
+  const m = p.length / 2;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]); }
+  const G = Math.max(1, Math.ceil(Math.sqrt(m / 4))), cw = (x1 - x0) / G || 1, ch = (y1 - y0) / G || 1;
+  const col = (x) => Math.max(0, Math.min(G - 1, Math.floor((x - x0) / cw))), row = (y) => Math.max(0, Math.min(G - 1, Math.floor((y - y0) / ch)));
+  const cells = Array.from({ length: G * G }, () => []);
+  // (edge e runs from point e - 1 to point e, as insideFlat walks them)
+  for (let e = 0; e < m; e++) {
+    const j = ((e + m - 1) % m) * 2, i = e * 2;
+    for (let r = row(Math.min(p[j + 1], p[i + 1])); r <= row(Math.max(p[j + 1], p[i + 1])); r++) {
+      for (let c = col(Math.min(p[j], p[i])); c <= col(Math.max(p[j], p[i])); c++) cells[r * G + c].push(e);
+    }
+  }
+  const stamp = new Uint32Array(m);
+  let tick = 0;
+  // every edge of the cells of rows r0..r1 and columns c0..c1, once
+  const visit = (r0, r1, c0, c1, f) => {
+    if (++tick === 0xffffffff) { stamp.fill(0); tick = 1; }
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) for (const e of cells[r * G + c]) if (stamp[e] !== tick) { stamp[e] = tick; f(e); }
+  };
+  const onEdge = (x, y, e) => {
+    const j = ((e + m - 1) % m) * 2, i = e * 2;
+    const cx = p[j], cy = p[j + 1], dx = p[i] - cx, dy = p[i + 1] - cy, L2 = dx * dx + dy * dy;
+    if (!L2) return false;
+    const w = (x - cx) * dx + (y - cy) * dy;
+    if (w < 0 || w > L2) return false;
+    const tol = 1e-9 * Math.max(1, Math.abs(x), Math.abs(y), Math.sqrt(L2));
+    return Math.abs(dx * (y - cy) - dy * (x - cx)) <= tol * Math.sqrt(L2);
+  };
+  const inside = (x, y) => {
+    // (past the outline's box by more than onEdge's tolerance at most: outside)
+    const tol = 1e-9 * Math.max(1, Math.abs(x), Math.abs(y), x1 - x0 + (y1 - y0));
+    if (x < x0 - tol || x > x1 + tol || y < y0 - tol || y > y1 + tol) return false;
+    // even-odd by the edges a ray to the right crosses (insideFlat's rule), and on an edge near it
+    let ins = false, on = false;
+    const r = row(y), c = col(x);
+    visit(r, r, c, G - 1, (e) => {
+      const j = ((e + m - 1) % m) * 2, i = e * 2;
+      const xi = p[i], yi = p[i + 1], xj = p[j], yj = p[j + 1];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ins = !ins;
+    });
+    if (ins) return true;
+    visit(Math.max(0, r - 1), Math.min(G - 1, r + 1), Math.max(0, c - 1), Math.min(G - 1, c + 1), (e) => { if (!on) on = onEdge(x, y, e); });
+    return on;
+  };
+  const pieces = (ax, ay, bx, by) => {
+    const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy, ts = [0, 1], out = [];
+    if (!L2) return inside(ax, ay) ? [0, 1] : out;
+    visit(row(Math.min(ay, by)), row(Math.max(ay, by)), col(Math.min(ax, bx)), col(Math.max(ax, bx)), (e) => {
+      const j = ((e + m - 1) % m) * 2, i = e * 2;
+      const cx = p[j], cy = p[j + 1], ex = p[i] - cx, ey = p[i + 1] - cy, den = vx * ey - vy * ex;
+      if (den) {
+        const t = ((cx - ax) * ey - (cy - ay) * ex) / den, u = ((cx - ax) * vy - (cy - ay) * vx) / den;
+        if (t > 0 && t < 1 && u >= -1e-9 && u <= 1 + 1e-9) ts.push(t);
+      } else {
+        for (const [x, y] of [[cx, cy], [p[i], p[i + 1]]]) { const t = ((x - ax) * vx + (y - ay) * vy) / L2; if (t > 0 && t < 1) ts.push(t); }
+      }
+    });
+    ts.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < ts.length; k++) {
+      const t0 = ts[k], t1 = ts[k + 1];
+      if (!(t1 > t0)) continue;
+      const tm = (t0 + t1) / 2;
+      if (!inside(ax + tm * vx, ay + tm * vy)) continue;
+      if (out.length && out[out.length - 1] === t0) out[out.length - 1] = t1; else out.push(t0, t1);
+    }
+    return out;
+  };
+  return { inside, pieces };
 }
 // Whether an outline (flat) shows some of a path (flat points, closed or not; a fill's inside too):
 // a point of it the outline shows, an edge of the outline across it, or -- a fill -- the outline
@@ -692,9 +797,17 @@ function meetsOutline(pts, closed, fill, poly) {
 }
 // Whether an outline shows some of a path as drawn: a wide polyline's band (pathBands), any piece
 // of it, as a fill; else the path itself
-function pathMeetsOutline(p, poly) {
-  const bands = pathBands(p);
-  if (!bands) return meetsOutline(p.pts, p.closed || p.fill, p.fill, poly);
+// (p's points pts, its width scaled by s: a path seen through a viewport, tested before it is copied)
+// (charge(n): what testing n points more costs -- a band's pieces past its own points)
+function meetsAsDrawn(p, pts, s, poly, charge = () => {}) {
+  if (!isBand(p)) return meetsOutline(pts, p.closed || p.fill, p.fill, poly);
+  const bands = pathBands(p, pts, s);
+  if (!bands.length) return false; // (nothing drawn: one repeated point, ends flat)
+  // (a point of its centreline the outline shows is a point of its band it shows: no pieces needed)
+  for (let i = 0; i < pts.length; i += 2) if (inOutline(poly, pts[i], pts[i + 1])) return true;
+  let n = 0;
+  for (const b of bands) n += b.length / 2;
+  charge(n);
   return bands.some((b) => meetsOutline(b, true, true, poly));
 }
 // the squared distance from point (x, y) to segment a-b
@@ -712,13 +825,7 @@ export function ptSegDist2(x, y, ax, ay, bx, by) {
 export const MITER_LIMIT = 10;
 export function bandPolys(pts, closed, half) {
   // (a repeated point makes no segment and no join, as the canvas takes it)
-  const q = [];
-  for (let k = 0; k < pts.length; k += 2) {
-    const x = pts[k], y = pts[k + 1];
-    if (q.length && q[q.length - 2] === x && q[q.length - 1] === y) continue;
-    q.push(x, y);
-  }
-  if (closed && q.length > 4 && q[0] === q[q.length - 2] && q[1] === q[q.length - 1]) q.length -= 2;
+  const q = distinctPts(pts, closed);
   const n = q.length / 2, out = [];
   if (n < 2 || !(half > 0)) return out;
   const segs = closed ? n : n - 1, dir = new Float64Array(2 * segs);
@@ -730,27 +837,51 @@ export function bandPolys(pts, closed, half) {
   }
   // the joins: at vertex v, from segment v - 1 to segment v (every vertex of a closed one)
   for (let v = closed ? 0 : 1; v <= (closed ? n - 1 : n - 2); v++) {
-    const a = (v - 1 + segs) % segs, ux = dir[2 * a], uy = dir[2 * a + 1], wx = dir[2 * v], wy = dir[2 * v + 1];
-    const cr = ux * wy - uy * wx, dot = ux * wx + uy * wy;
-    if (Math.abs(cr) < 1e-12) continue; // (straight on, or back on itself: no wedge)
-    const s = cr > 0 ? -1 : 1; // (the outer side: the right of a left turn)
-    const vx = q[2 * v], vy = q[2 * v + 1];
-    const ax = vx - s * uy * half, ay = vy + s * ux * half, bx = vx - s * wy * half, by = vy + s * wx * half;
-    const c = Math.sqrt((1 + dot) / 2); // (the cosine of half the turn: the mitre is 1 / c widths long)
-    if (c > 0 && 1 / c <= MITER_LIMIT) {
-      const mx = -(uy + wy), my = ux + wx, ml = Math.hypot(mx, my), k = (s * half) / (c * ml);
-      out.push(Float64Array.of(vx, vy, ax, ay, vx + mx * k, vy + my * k, bx, by));
-    } else out.push(Float64Array.of(vx, vy, ax, ay, bx, by));
+    const a = (v - 1 + segs) % segs;
+    const w = joinWedge(q[2 * v], q[2 * v + 1], dir[2 * a], dir[2 * a + 1], dir[2 * v], dir[2 * v + 1], half);
+    if (w) out.push(w);
   }
   return out;
 }
+// A band's join at vertex (vx, vy) from the unit direction u to the unit direction w, half wide: the
+// wedge (flat, xy...) on its outer side, mitred up to MITER_LIMIT, else bevelled; null going straight
+// on or back on itself. bandPolys's, and the hover's, which makes it when asked (r106 A5)
+export function joinWedge(vx, vy, ux, uy, wx, wy, half) {
+  const cr = ux * wy - uy * wx, dot = ux * wx + uy * wy;
+  if (!(Math.abs(cr) >= 1e-12)) return null;
+  const s = cr > 0 ? -1 : 1; // (the outer side: the right of a left turn)
+  const ax = vx - s * uy * half, ay = vy + s * ux * half, bx = vx - s * wy * half, by = vy + s * wx * half;
+  const c = Math.sqrt((1 + dot) / 2); // (the cosine of half the turn: the mitre is 1 / c widths long)
+  if (c > 0 && 1 / c <= MITER_LIMIT) {
+    const mx = -(uy + wy), my = ux + wx, ml = Math.hypot(mx, my), k = (s * half) / (c * ml);
+    return Float64Array.of(vx, vy, ax, ay, vx + mx * k, vy + my * k, bx, by);
+  }
+  return Float64Array.of(vx, vy, ax, ay, bx, by);
+}
+// A polyline's points with each repeat of the point before dropped (and a closed one's last, its
+// first again): what the canvas joins, bandPolys's points and the hover's
+export function distinctPts(pts, closed) {
+  const q = [];
+  for (let k = 0; k < pts.length; k += 2) {
+    const x = pts[k], y = pts[k + 1];
+    if (q.length && q[q.length - 2] === x && q[q.length - 1] === y) continue;
+    q.push(x, y);
+  }
+  if (closed && q.length > 4 && q[0] === q[q.length - 2] && q[1] === q[q.length - 1]) q.length -= 2;
+  return q;
+}
 // A path's band as drawn, or null when it is a line: a wide polyline's pieces (bandPolys), a wide
 // polyline's filled outline (a tapering one's, or one through a stretch: `outline`) itself
-export function pathBands(p) {
-  if (p.width > 0 && !p.fill) return bandPolys(p.pts, p.closed, p.width / 2);
-  if (p.outline && p.fill) return [p.pts];
+// (pts, s: its points and the scale of a view of it -- a viewport's -- else its own)
+export function pathBands(p, pts = p.pts, s = 1) {
+  if (isWide(p)) return bandPolys(pts, p.closed, (p.width * s) / 2);
+  if (p.outline && p.fill) return [pts];
   return null;
 }
+// whether a path is drawn as a band: a wide polyline stroked at its width (isWide), or a wide
+// polyline's filled outline -- the one spelling (r106 L5)
+export const isWide = (p) => p.width > 0 && !p.fill;
+export const isBand = (p) => isWide(p) || (!!p.outline && !!p.fill);
 // Whether an outline shows some of a text's box (box [x0, y0, x1, y1], its corners c): a corner
 // inside, an edge of the outline across it (r100 A2), or the outline inside it
 function boxMeetsOutline(box, c, poly) {
@@ -762,11 +893,16 @@ function boxMeetsOutline(box, c, poly) {
 // is, with the outline it is seen through (clipPoly, and its box, clip) -- the view clips it there
 // (js/dxf-view.js: ctx.clip(outline, 'evenodd')), and 2D Measure and the hover ask inOutline of a
 // point. Cut here by hand, rounds 99 to 102 each found an outline the cut got wrong (r103)
-function seenThrough(p, M, s, clip) {
+// (pts: its points through the viewport, seenPts; s, the viewport's scale)
+function seenThrough(p, pts, s, clip) {
+  return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box };
+}
+// a model path's points through a viewport (M, model to paper)
+function seenPts(p, M) {
   const n = p.pts.length / 2;
   const pts = new Float64Array(2 * n);
   for (let i = 0; i < n; i++) { const [x, y] = ap(M, p.pts[2 * i], p.pts[2 * i + 1]); pts[2 * i] = x; pts[2 * i + 1] = y; }
-  return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box };
+  return pts;
 }
 
 // a path's box [x0, y0, x1, y1] as drawn: a wide polyline's its band's (pathBands: r104 A1, r105 A2)
@@ -780,7 +916,7 @@ export function boxOf(p) {
       if (q[k + 1] < y0) y0 = q[k + 1]; if (q[k + 1] > y1) y1 = q[k + 1];
     }
   };
-  const bands = p.width > 0 && !p.fill ? pathBands(p) : null;
+  const bands = isWide(p) ? pathBands(p) : null;
   if (bands && bands.length) bands.forEach(add); else add(p.pts);
   return [x0, y0, x1, y1];
 }

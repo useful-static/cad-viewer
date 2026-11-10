@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
+import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts, insidePieces, bandPolys, outlineIndex } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, sizeRow, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -1884,8 +1884,8 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     const paths = [{ layer: 'B', pts: Float64Array.of(-500, 0, 500, 0), width: 2 }];
     for (let i = 0; i < 50; i++) paths.push({ layer: 'S', pts: Float64Array.of(i, 5, i + 0.5, 5), width: 0.2 });
     const ix = segmentIndex(paths, [0, 0], 100);
-    assert.equal(ix.bandLongTree.m, 1);
-    assert.equal(ix.bandTree.m, 50);
+    assert.equal(ix.wideLongTree.m, 1);
+    assert.equal(ix.wideTree.m, 50);
   });
   await test('a dashed line on its outline\'s edge: the edge pass dashes each piece at its place in the pattern, ends flat (r105 Q5, Q12)', async () => {
     const strokes = [];
@@ -1905,6 +1905,151 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.deepEqual(piece.pts.map((x, i) => x + [29.5, 20][i % 2]), [0, 0, 60, 0]);
     assert.equal(piece.cap, 'butt');
     v.destroy();
+  });
+  // (r106: what reads the band -- the hover with what is drawn over a band, the picture, the budget)
+  const quiet = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? (s) => ({ width: 60 * s.length }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+  const col = { r: 0, g: 0, b: 0, aci: 7 };
+  test('under the cursor in a band, a line drawn over it within reach, or a text over it, is what is found (r106 A1)', () => {
+    const near = (paths, x, y, r, rank) => nearestSegment(segmentIndex(paths, [0, 0], 30), x, y, r, undefined, rank);
+    const wall = { layer: 'WALL', pts: Float64Array.of(0, 0, 20, 0), width: 10 }, dim = { layer: 'DIM', pts: Float64Array.of(0, 1, 20, 1) };
+    assert.equal(near([wall, dim], 5, 1.2, 1), 1, 'the line drawn over the band');
+    assert.equal(near([dim, wall], 5, 1.2, 1), 1, 'the band drawn over the line');
+    assert.equal(near([wall, dim], 5, 3.5, 1), 0, 'the band, the line out of reach');
+    // (a text inside a band: the texts are drawn over every path)
+    const band = { layer: 'ROAD', pts: Float64Array.of(0, 0, 100, 0), width: 10, closed: false, colour: col };
+    const text = { text: 'MAIN ST', x: 40, y: -1.5, h: 3, rot: 0, align: 'left', layer: 'LABELS', colour: col };
+    const v = createDxfView({ ...canvas, getContext: () => quiet }, { layers: [{ name: 'ROAD', on: true }, { name: 'LABELS', on: true }], paths: [band], texts: [text], extents: { min: [0, -5], max: [100, 5] } }, {});
+    v.fit();
+    assert.equal(v.layerAt(...v.toPx(45, 0)), 'LABELS', 'the text inside the band');
+    assert.equal(v.layerAt(...v.toPx(80, 0)), 'ROAD', 'the band past the text');
+    v.destroy();
+  });
+  test('the pointer gone from the canvas, the hover goes with it: the picture is drawn without it (r106 A2)', () => {
+    const on = {}, widths = [];
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'stroke' ? () => widths.push(t.lineWidth) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const A = { layer: 'A', pts: Float64Array.of(0, 0, 100, 0), closed: false, colour: col };
+    const v = createDxfView({ ...canvas, getContext: () => rec, addEventListener(k, f) { on[k] = f; } }, { layers: [{ name: 'A', on: true }], paths: [A], texts: [], extents: { min: [0, 0], max: [100, 50] } }, {});
+    const [px, py] = v.toPx(50, 0);
+    on.pointermove({ pointerId: 1, clientX: px, clientY: py });
+    widths.length = 0; v.draw();
+    assert.ok(Math.abs(widths[0] * v.scale - 2) < 1e-9, `hovered: ${widths[0] * v.scale} px`);
+    assert.ok(on.pointerleave, 'no pointerleave');
+    on.pointerleave({ pointerId: 1 });
+    widths.length = 0; v.draw();
+    assert.ok(Math.abs(widths[0] * v.scale - 1) < 1e-9, `after the pointer left: ${widths[0] * v.scale} px`);
+    v.destroy();
+  });
+  // (a sheet of n clipped viewports, each a ring of m points, over model paths `ents`)
+  const clippedSheet = (ents, n, m, at = [0, 0]) => {
+    const g = [[0, 'SECTION'], [2, 'ENTITIES'], ...ents];
+    for (let v = 0; v < n; v++) {
+      const ring = Array.from({ length: m }, (_, i) => [500 + 10 * Math.cos((2 * Math.PI * i) / m), 500 + 10 * Math.sin((2 * Math.PI * i) / m)]);
+      g.push([0, 'LWPOLYLINE'], [5, `C${v}`], [8, 'B'], [67, 1], [90, m], [70, 1], ...ring.flatMap(([x, y]) => [[10, x], [20, y]]));
+      g.push([0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 500], [20, 500], [40, 20], [41, 20], [69, v + 2], [12, at[0]], [22, at[1]], [45, 20], [90, 65536], [340, `C${v}`]);
+    }
+    return dxf([...g, [0, 'ENDSEC'], [0, 'EOF']]);
+  };
+  test('a tapering polyline the viewport\'s cull passes over costs its budget nothing (r106 A3)', () => {
+    // (10,000 tapering polylines far outside 10 viewports of 20 points: they open, as at one width)
+    const far = [];
+    for (let k = 0; k < 10000; k++) far.push([0, 'LWPOLYLINE'], [8, 'T'], [90, 2], [70, 0], [10, 1000 + k], [20, 1000], [40, 2], [41, 0], [10, 1001 + k], [20, 1000]);
+    const d = parseDXF(clippedSheet(far, 10, 20));
+    assert.equal(d.paths.filter((p) => p.layer === 'T').length, 20000);
+    assert.equal(d.layouts[0].paths.filter((p) => p.layer === 'T').length, 0);
+  });
+  test('a wide polyline tested as its band is charged its band\'s points: refused in time, not run long (r106 A4)', () => {
+    // (a zigzag of 20,000 points through a 407-point outline, its centreline wholly outside it: as a
+    // line it opens; as a band, tested piece by piece, its pieces are charged, and it is refused)
+    // (in the viewport's box, x 8..28 at y 9: 12 or more from the circle's middle, its radius 10)
+    const zig = (w) => { const g = [[0, 'LWPOLYLINE'], [8, 'Z'], [90, 20000], [70, 0], [43, w]]; for (let i = 0; i < 20000; i++) g.push([10, 8 + i * 0.001], [20, 9 + (i % 2) * 0.001]); return g; };
+    assert.ok(parseDXF(clippedSheet(zig(0), 1, 407)).layouts.length, 'the line refused');
+    assert.throws(() => parseDXF(clippedSheet(zig(0.5), 1, 407)), /too large to draw here/);
+  });
+  test('a wide polyline in the hover\'s index: its segments and half width, not a polygon a piece (r106 A5)', () => {
+    const pts = new Float64Array(2002);
+    for (let i = 0; i <= 1000; i++) { pts[2 * i] = i; pts[2 * i + 1] = i % 2; }
+    const ix = segmentIndex([{ layer: 'W', pts, width: 0.5 }], [0, 0], 1000);
+    assert.equal(ix.wsegs.length, 4000);
+    assert.equal(ix.bxy.length, 0);
+    // (and its joins found when asked: inside the mitre at (1, 1), outside both rectangles)
+    const c = Math.sqrt((1 + 0) / 2);
+    assert.equal(nearestSegment(ix, 1, 1 + 0.25 / c - 0.01, 0.001), 0, 'the mitre\'s tip');
+    assert.equal(nearestSegment(ix, 1, 1 + 0.25 / c + 0.01, 0.001), -1, 'past the mitre\'s tip');
+  });
+  test('the pieces of a line through an outline\'s vertex: none before it (r106 Q2)', () => {
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    let bad = 0;
+    for (let t = 0; t < 20000; t++) {
+      const x0 = rnd() * 10, y0 = rnd() * 10, x1 = x0 + 1 + rnd() * 10, y1 = y0 + 1 + rnd() * 10;
+      const f = Float64Array.of(x0, y0, x1, y0, x1, y1, x0, y1);
+      const dx = 0.2 + rnd(), dy = 0.2 + rnd();
+      const pc = insidePieces(f, x0 - dx * 3, y0 - dy * 3, x0 + dx * 3, y0 + dy * 3);
+      if (pc.length && pc[0] < 0.5 - 1e-9) bad++;
+    }
+    assert.equal(bad, 0, `${bad} of 20000 lines through a frame's corner have a piece before it`);
+  });
+  test('the hover through an outline: a band\'s visible part 0.4 away beats a line 1.0 away; an exact tie, the one on top (r106 Q7, Q8)', () => {
+    const near = (paths, x, y, r, rank) => nearestSegment(segmentIndex(paths, [0, 0], 30), x, y, r, undefined, rank);
+    const clip = Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10);
+    const cband = { layer: 'WIDE', pts: Float64Array.of(-5, -3, 15, -3), width: 10, clipPoly: clip };
+    assert.equal(near([cband, { layer: 'B', pts: Float64Array.of(0, 0.6, 10, 0.6), clipPoly: clip }], 5, -0.4, 5), 0, 'the band hidden at the cursor, shown 0.4 away');
+    // (a band's edge at y 1 and a line at y 3, the cursor at y 2: both 1 away)
+    const band = { layer: 'W', pts: Float64Array.of(0, 0, 20, 0), width: 2 }, line = { layer: 'H', pts: Float64Array.of(0, 3, 20, 3) };
+    assert.equal(near([band, line], 5, 2, 2), 1, 'the later, the line');
+    assert.equal(near([band, line], 5, 2, 2, (i) => -i), 0, 'the earlier by rank, the band');
+  });
+  await test('a dashed line of several segments on its outline\'s edge: each piece at its length along it (r106 Q9)', async () => {
+    const strokes = [];
+    let cur = [];
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'beginPath' ? () => { cur = []; } : k === 'moveTo' || k === 'lineTo' ? (x, y) => cur.push(x, y) : k === 'stroke' ? (p) => strokes.push({ pts: p ? null : cur, off: t.lineDashOffset || 0 }) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const P2 = globalThis.Path2D;
+    globalThis.Path2D = class { moveTo() {} lineTo() {} closePath() {} };
+    const box = Float64Array.of(0, 0, 60, 0, 60, 40, 0, 40);
+    const line = { layer: '0', colour: col, fill: false, closed: false, dash: [3, 2], pts: Float64Array.of(-11, 0, 20, 0, 70, 0), clipPoly: box, clip: [0, 0, 60, 40] };
+    const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: '0', on: true }], paths: [line], texts: [], extents: { min: [-11, 0], max: [70, 40] } }, {});
+    v.fit();
+    globalThis.Path2D = P2;
+    const r9 = (x) => Math.round(x * 1e9) / 1e9;
+    const pieces = strokes.filter((s) => s.pts && s.pts.length === 4).map((s) => [r9(s.pts[0] + 29.5), r9(s.pts[2] + 29.5), r9(s.off)]);
+    // (a draw's two pieces: the view draws as it is made, and again at fit)
+    assert.deepEqual(pieces.slice(0, 2), [[0, 20, 11], [20, 60, 31]]);
+    v.destroy();
+  });
+  test('a large outline asked through its grid: the same answers as inOutline and insidePieces, and the hover uses it (r106 Q5)', () => {
+    // (a 400-point star with a notch-like inner ring: points inside, outside, on its edges and
+    // vertices; segments across it, along its edges and through its vertices)
+    const M = 400, f = new Float64Array(2 * M);
+    for (let i = 0; i < M; i++) { const a = (2 * Math.PI * i) / M, rr = i % 2 ? 60 : 100; f[2 * i] = rr * Math.cos(a); f[2 * i + 1] = rr * Math.sin(a); }
+    const g = outlineIndex(f);
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648) * 240 - 120;
+    let bad = 0;
+    for (let k = 0; k < 3000; k++) {
+      const x = rnd(), y = rnd();
+      if (g.inside(x, y) !== inOutline(f, x, y)) bad++;
+      const v = 2 * (k % M), w = 2 * ((k * 7) % M);
+      for (const [px, py] of [[f[v], f[v + 1]], [(f[v] + f[(v + 2) % (2 * M)]) / 2, (f[v + 1] + f[(v + 3) % (2 * M)]) / 2]]) if (g.inside(px, py) !== inOutline(f, px, py)) bad++;
+      const segs = [[x, y, rnd(), rnd()], [f[v], f[v + 1], f[w], f[w + 1]], [x, y, f[v], f[v + 1]]];
+      for (const [ax, ay, bx, by] of segs) if (JSON.stringify(g.pieces(ax, ay, bx, by)) !== JSON.stringify(insidePieces(f, ax, ay, bx, by))) bad++;
+    }
+    assert.equal(bad, 0, `${bad} answers differ`);
+    // (the hover's index makes it for an outline this large, and finds what the plain test finds)
+    const ix = segmentIndex([{ layer: 'L', pts: Float64Array.of(50, -5, 50, 5), clipPoly: f }], [0, 0], 300);
+    assert.equal(nearestSegment(ix, 50.5, 0, 1), 0);
+    assert.equal(ix.geo.size, 1);
+  });
+  test('a wide polyline\'s band: a closed one\'s first join, a repeated point skipped (r106 Q10, Q11)', () => {
+    const near = (p, x, y) => nearestSegment(segmentIndex([p], [0, 0], 30), x, y, 0.001);
+    // (a closed square, width 2: (-0.5, -0.5) lies in the mitre at its first point alone)
+    assert.equal(near({ layer: 'S', pts: Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10), width: 2, closed: true }, -0.5, -0.5), 0, 'the first join');
+    assert.equal(near({ layer: 'S', pts: Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10), width: 2, closed: false }, -0.5, -0.5), -1, 'an open one has none');
+    // (and in bandPolys, which the keep test, the cull and the extents read)
+    assert.ok(bandPolys(Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10), true, 1).some((q) => insideFlat(q, -0.5, -0.5)), 'bandPolys: no first join');
+    // (a repeated point at the corner (10, 0): its mitre still there)
+    const rep = { layer: 'R', pts: Float64Array.of(0, 0, 10, 0, 10, 0, 10, 10), width: 2 };
+    assert.equal(near(rep, 10.5, -0.5), 0, 'the mitre at a repeated point');
+    assert.ok(bandPolys(rep.pts, false, 1).every((q) => q.every(Number.isFinite)), 'a piece not a number');
   });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
