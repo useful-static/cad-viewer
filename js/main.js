@@ -887,6 +887,14 @@ async function recoverRenderer(why) {
 // Edge width in CSS px, and how much wider the hovered body's edges are
 const EDGE_PX = 1.5;
 const EDGE_HOVER_PX = 1;
+// With a section on, a face seen from inside (a cut face) is drawn this share of the model's
+// radius nearer, along its view ray (renderer-webgl.js VS): enough to settle a cut face on the face
+// it rests on (r109 R1), a length that does not grow as the view zooms out (r110 E1), and under
+// the corpus's thin walls: 0.34 mm on the 683 mm rack, whose rails are 0.73 mm and its chassis
+// sheet 1 mm. Measured (r110): 2e-4 left 23 of 362 clicks inside a cut bracket on its plate taking
+// the plate on WebGPU at 3x the opening distance, 5e-4 15, 1e-3 4; 1e-3 began to draw the rack's
+// rails' insides over them at 3x (618 px changed, as 548 with no pull)
+const CUT_PULL = 5e-4;
 // (app.edgeMinPx: a body under that projected radius, CSS px, draws no
 // edges; they would only darken it)
 const pxScale = (r) => (r.canvas.clientWidth ? r.canvas.width / r.canvas.clientWidth : 1);
@@ -941,6 +949,7 @@ function frameState(pic = null) {
   const ps = pic ? pic.scale : pxScale(r);
   return {
     viewProj: vp, eye: eye4, light, up, clip: sectionPlane(), highlight: [...HIGHLIGHT, app.selected.size ? 1 : 0],
+    cutPull: CUT_PULL * (app.sphereBase || app.sphere).radius,
     ...styleFrame(currentStyle(), ps, !!(pic && pic.light)),
     // the face boundaries over the shaded faces, in device px: the canvas's
     // own scale, not devicePixelRatio, which the canvas size caps

@@ -5,12 +5,6 @@
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
 import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
-// A cut face's depth pulled nearer, as a share of its own (reverse-Z: a share of its distance, 0.04 mm
-// at a 160 mm view): measured on a software WebGPU, a bracket on its plate cut through, the clicks
-// inside the cut bracket that took the plate under it -- none pulled 49 of 495, 64 float32 steps 35,
-// 512 steps 14, 2.5e-4 2, 1e-3 1 (r109 R1)
-const CUT_NEAR_GPU = (2.5e-4).toExponential(6);
-
 // The ground shadow, as renderer-webgl.js's VS_GROUND / FS_GROUND: a quad
 // centre + x * ax + y * ay over x, y in [-1, 1], dark at the middle and
 // fading to nothing at the rim; g.a = its strongest alpha
@@ -44,7 +38,7 @@ struct U {
   hover : vec4f,    // the hovered body's id bytes (0 = none)
   cull : vec4f,     // x focal px, y min radius px, z on for edges, w on for faces (the paper styles)
   fill : vec4f,     // the cut fill's colour
-  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none); y: the hidden parts' ghost alpha (0 = not drawn)
+  xp : vec4f,       // x: explode, the fraction of each body's explode direction it is moved by (0 = none); y: the hidden parts' ghost alpha (0 = not drawn); z: the cut faces' pull, model units (vs)
 };
 @group(0) @binding(0) var<uniform> u : U;
 @group(0) @binding(1) var stateTex : texture_2d<f32>;
@@ -72,11 +66,22 @@ struct VOut {
   // before the clip and the view values, so the section cuts it where it is
   let p = v.pos + xoff(v.idc);
   o.clipPos = u.viewProj * vec4f(p, 1.0);
-  // with a section on, a face seen from inside -- what fsShade draws as a cut face -- nearer by
-  // CUT_NEAR_GPU of its depth (reverse-Z: nearer is larger): at one depth with a neighbour's outside
-  // (a bracket's floor on its plate) they fought, and a click inside the bracket took the plate
-  // (r109 R1; renderer-webgl.js VS, the same by its 24-bit step)
-  if (u.params.z > 0.5 && dot(v.nrm.xyz, normalize(u.eye.xyz - p * u.eye.w)) < 0.0) { o.clipPos.z = o.clipPos.z * (1.0 + ${CUT_NEAR_GPU}); }
+  // with a section on, a face seen from inside -- what fsShade draws as a cut face -- drawn xp.z
+  // model units nearer, along its own view ray (so on the same pixel): at one depth with a
+  // neighbour's outside (a bracket's floor on its plate) they fought, and a click inside the bracket
+  // took the plate (r109 R1). A length, not a share of the distance, which grew as the view zoomed
+  // out (r110 E1). Only a body the plane passes through (xp.w: the body table is this mesh's; with
+  // none, every body): a closed body thinner than the pull, away from the cut, keeps its far side
+  // behind its near side (r110 F2; renderer-webgl.js VS, the same)
+  let vv = normalize(u.eye.xyz - p * u.eye.w);
+  if (u.params.z > 0.5 && dot(v.nrm.xyz, vv) < 0.0) {
+    var cut = true;
+    if (u.xp.w > 0.5) {
+      let cb = bodies[meshId(v.idc) * 2u + 1u];
+      cut = abs(dot(u.clip.xyz, cb.xyz + xoff(v.idc)) - u.clip.w) <= cb.w * length(u.clip.xyz);
+    }
+    if (cut) { o.clipPos = u.viewProj * vec4f(p + u.xp.z * vv, 1.0); }
+  }
   o.wpos = p;
   o.nrm = v.nrm.xyz;
   o.col = v.col.rgb;
@@ -642,7 +647,7 @@ export class WebGPURenderer {
     // (a table the GPU could not take, or one still of the previous model, moves nothing;
     // renderer-webgl.js checks the same)
     const explode = this.bodiesFor === this.drawn ? frame.explode || 0 : 0;
-    f.set([explode, frame.ghost || 0, 0, 0], 56);
+    f.set([explode, frame.ghost || 0, frame.cutPull || 0, frame.clip && this.bodiesFor === this.drawn ? 1 : 0], 56);
     this.device.queue.writeBuffer(this.ubo, 0, f);
   }
 

@@ -593,7 +593,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // stroked again unclipped, the clip having cut their outer half: r103 Q3. A hairline's alone: a
     // wide polyline's band is on paper and clipped there, and stroked again it spilled half its width
     // onto the sheet -- r104 A2)
-    if (p.clipPoly && !p.fill && !p.width) {
+    // (a wide polyline's too: drawn thinner than its px -- zoomed out, or under a layer's weight --
+    // it is a hairline the clip halves, and the edge pass takes it then: r110 F1)
+    if (p.clipPoly && !p.fill) {
       const segs = p.closed ? n : n - 1;
       let along = 0; // (the length along the path to segment i's start: where its dashes stand)
       for (let i = 0; i < segs; i++) {
@@ -722,7 +724,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       // scale with the zoom, as on paper; too fine to see, drawn solid
       const dashed = !!g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3;
       ctx.setLineDash(dashed ? g.dash : []);
-      return { hot, col, dashed };
+      return { hot, col, dashed, wide };
     };
     let cur = null;
     const clipTo = (f) => {
@@ -749,7 +751,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
     clipTo(null);
     for (const g of order) {
       if (!g.edge || hid(g)) continue;
-      const { dashed } = strokeOf(g);
+      const { dashed, wide } = strokeOf(g);
+      // (a band drawn at its width is on paper and clipped there: stroked again unclipped, half its
+      // width spilled onto the sheet -- r104 A2; drawn as a hairline, it is one -- r110 F1)
+      if (wide) { ctx.setLineDash([]); continue; }
       // (ends flat: a piece ends where its edge does, at a corner or a notch, and a round end drew
       // half a line past it, outside the outline -- r105 Q12)
       ctx.lineCap = 'butt';

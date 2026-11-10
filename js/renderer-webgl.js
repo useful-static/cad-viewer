@@ -13,13 +13,6 @@
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
 import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
-// A cut face's depth pulled nearer, as renderer-webgpu.js CUT_NEAR_GPU: a share of w - z, which is
-// to WebGL's depth what reverse-Z's z is to WebGPU's -- near / distance, perspective; the distance to
-// the far plane, ortho -- so both pull a cut face by one share of its distance. (Eight 24-bit units,
-// absolute, held on a hardware GPU and not on a software one: 47 of 495 clicks inside a cut bracket
-// took the plate under it, as 50 with none -- r109 R1)
-const CUT_NEAR_GL = (2.5e-4).toExponential(6);
-
 const VS = `
 attribute vec3 aPos;
 attribute vec4 aNrm;
@@ -43,8 +36,19 @@ attribute vec4 aXd;        // its body's Explode direction (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
 uniform vec4 uXp;          // x explode: the fraction of each body's direction it moves by (0 none)
-uniform vec4 uCutV;        // x: the section on (the cut faces' depth, below; the vertex stage's own,
-                           // not uParams: a uniform in both stages must agree in precision)
+uniform vec4 uCutV;        // x: the section on, y: the cut faces' pull (below; the vertex stage's own,
+                           // not uParams: a uniform in both stages must agree in precision); z: the
+                           // body table is this mesh's (bodyCR below reads it)
+// this vertex's body: its centre and radius (the table's texel 2 id + 1; CULL_ATTR: aBody)
+vec4 bodyCR() {
+#ifdef CULL_TEX
+  vec4 b = floor(aId * 255.0 + 0.5);
+  float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
+  return texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
+#else
+  return aBody;
+#endif
+}
 void main() {
   // Explode: the body moved along its direction (the body table's texel
   // 2 id; without the table texture, the aXd attribute), before the clip
@@ -68,21 +72,26 @@ void main() {
   vId = aId;
   gl_Position = uViewProj * vec4(p, 1.0);
   // with a section on, a face seen from inside -- what the fragment shader draws as a cut face --
-  // nearer by CUT_NEAR_GL of its distance: at one depth with a neighbour's outside (a bracket's floor
-  // on its plate) they fought, the cut face striped and a third of the clicks inside the bracket took
-  // the plate (r109 R1). (renderer-webgpu.js vs, the same share)
-  if (uCutV.x > 0.5 && dot(aNrm.xyz, vView) < 0.0) gl_Position.z -= ${CUT_NEAR_GL} * (gl_Position.w - gl_Position.z);
+  // drawn uCutV.y model units nearer, along its own view ray (so on the same pixel): at one depth
+  // with a neighbour's outside (a bracket's floor on its plate) they fought, the cut face striped and
+  // a third of the clicks inside the bracket took the plate (r109 R1). A length, not a share of the
+  // distance: a share grew as the view zoomed out until a 1 mm sheet's inside drew over its outside
+  // (r110 E1). Only a body the plane passes through has a cut face: one it misses is not pulled,
+  // so a closed body thinner than the pull, away from the cut, keeps its far side behind its near
+  // side (r110 F2). (renderer-webgpu.js vs, the same)
+  if (uCutV.x > 0.5 && dot(aNrm.xyz, vView) < 0.0) {
+    bool cut = true;
+    if (uCutV.z > 0.5) {
+      vec4 cb = bodyCR();
+      cut = abs(dot(uClipV.xyz, cb.xyz + xo) - uClipV.w) <= cb.w * length(uClipV.xyz);
+    }
+    if (cut) gl_Position = uViewProj * vec4(p + uCutV.y * vView, 1.0);
+  }
   // the paper styles: a body under uCull.y px (whose edges are culled) is
   // collapsed in the face and pick passes too, so it neither blanks the lines
   // behind it nor can be picked unseen
   if (uCull.w > 0.5) {
-#ifdef CULL_TEX
-    vec4 b = floor(aId * 255.0 + 0.5);
-    float t = (b.x + 256.0 * b.y + 65536.0 * b.z) * 2.0 + 1.0;
-    vec4 cr = texture2D(uBodies, vec2((mod(t, uBodyTex.x) + 0.5) / uBodyTex.x, (floor(t / uBodyTex.x) + 0.5) / uBodyTex.y));
-#else
-    vec4 cr = aBody;
-#endif
+    vec4 cr = bodyCR();
     vec4 cc = uViewProj * vec4(cr.xyz + xo, 1.0);
     if (cc.w > 0.0 && cr.w * uCull.x < uCull.y * cc.w) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   }
@@ -729,7 +738,7 @@ export class WebGLRenderer {
     gl.uniformMatrix4fv(u.uViewProj, false, frame.viewProj);
     gl.uniform1i(u.uState, 0);
     gl.uniform4f(u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 0);
-    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, 0, 0, 0);
+    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, frame.cutPull || 0, 0, 0);
     gl.uniform4fv(u.uClipV, frame.clip || [0, 0, 0, 0]);
     gl.uniform4f(u.uEyeV, frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1);
     gl.uniform4fv(u.uHi, frame.highlight);
@@ -883,7 +892,6 @@ export class WebGLRenderer {
     gl.uniformMatrix4fv(u.uViewProj, false, frame.viewProj);
     gl.uniform1i(u.uState, 0);
     gl.uniform4f(u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 0);
-    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, 0, 0, 0);
     gl.uniform4fv(u.uClipV, frame.clip || [0, 0, 0, 0]);
     gl.uniform4f(u.uEyeV, frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1);
     gl.uniform4f(u.uLight, frame.light[0], frame.light[1], frame.light[2], 0);
@@ -902,11 +910,14 @@ export class WebGLRenderer {
     // Explode reads the same table (its direction texels): bound for it too,
     // and only while the table is this mesh's
     const xp = this._explode(frame);
-    if ((cull || xp) && this.bodyTexOk) {
+    // and the cut faces' pull, for which body the plane passes through (with no table: every one)
+    const cutBodies = !!frame.clip && this._cullReady('faces');
+    if ((cull || xp || cutBodies) && this.bodyTexOk) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, this.bodyTex);
       gl.activeTexture(gl.TEXTURE0);
     }
+    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, frame.cutPull || 0, cutBodies ? 1 : 0, 0);
     gl.uniform4f(u.uXp, xp, 0, 0, 0);
     if (!this.bodyTexOk) {
       // CULL_ATTR: attribute 4 is aBody, from the per-vertex buffer once it
@@ -926,7 +937,7 @@ export class WebGLRenderer {
         gl.vertexAttrib4f(5, 0, 0, 0, 0);
       }
     }
-    gl.uniform1i(u.uBodies, (cull || xp) && this.bodyTexOk ? 1 : 0);
+    gl.uniform1i(u.uBodies, (cull || xp || cutBodies) && this.bodyTexOk ? 1 : 0);
     gl.uniform4f(u.uBodyTex, this.bodySize[0], this.bodySize[1], 0, 0);
     gl.uniform4f(u.uCull, frame.focalPx || 0, cull ? e.minPx : 0, 0, cull ? 1 : 0);
   }

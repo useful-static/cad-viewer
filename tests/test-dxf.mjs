@@ -2183,6 +2183,31 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     const d = parseDXF(clippedSheet(g, 1, 407));
     assert.equal(d.layouts[0].paths.filter((p) => p.layer === 'Z').length, 1);
   });
+  test('a wide polyline drawn as a hairline -- thinner than its px, its layer\'s weight -- on its outline\'s edge is stroked again unclipped; one drawn at its width is not (r110 F1)', () => {
+    const run = (path) => {
+      const strokes = [], stack = [];
+      const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'clip' ? () => { if (stack.length) stack[stack.length - 1] = true; } : k === 'stroke' ? (p) => strokes.push({ p, clipped: stack.some(Boolean), w: t.lineWidth }) : k === 'fill' ? (p) => { if (p) fills.push({ clipped: stack.some(Boolean) }); } : k === 'save' ? () => stack.push(false) : k === 'restore' ? () => stack.pop() : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+      const P2 = globalThis.Path2D;
+      globalThis.Path2D = class { constructor() { this.pts = []; } moveTo(x, y) { this.pts.push(x, y); } lineTo(x, y) { this.pts.push(x, y); } closePath() {} };
+      const box = Float64Array.of(0, 0, 60, 0, 60, 40, 0, 40);
+      const p = { layer: 'W', colour: col, fill: false, closed: false, dash: null, clipPoly: box, clip: [0, 0, 60, 40], pts: Float64Array.of(10, 0, 50, 0), ...path };
+      const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: 'W', on: true }], paths: [p], texts: [], extents: { min: [-5, -5], max: [65, 45] } }, {});
+      strokes.length = 0;
+      fills.length = 0;
+      v.draw();
+      globalThis.Path2D = P2;
+      v.destroy();
+      return strokes.filter((x) => x.p && !x.clipped).length;
+    };
+    const fills = [];
+    assert.equal(run({ width: 0.05, weight: 0.35 }), 1, 'a 0.05 band under a 0.35 mm weight, drawn 1.4 px');
+    assert.equal(run({ width: 0.05 }), 1, 'a 0.05 band drawn 1 px');
+    assert.equal(run({ width: 4 }), 0, 'a band at its width');
+    // (r110 pair 1e: a fill whose border lies on the outline's edge is filled inside the clip, to
+    // the edge, and its border is not stroked again onto the sheet -- F3, low, kept)
+    assert.equal(run({ fill: true, closed: true, pts: Float64Array.of(10, 0, 50, 0, 50, 20, 10, 20) }), 0, 'a fill\'s border on the edge');
+    assert.ok(fills.length >= 1 && fills.every((f) => f.clipped), `the fill drawn, clipped: ${JSON.stringify(fills)}`);
+  });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
