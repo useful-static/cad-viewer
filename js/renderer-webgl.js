@@ -13,6 +13,13 @@
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
 import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
+// A cut face's depth pulled nearer, as renderer-webgpu.js CUT_NEAR_GPU: a share of w - z, which is
+// to WebGL's depth what reverse-Z's z is to WebGPU's -- near / distance, perspective; the distance to
+// the far plane, ortho -- so both pull a cut face by one share of its distance. (Eight 24-bit units,
+// absolute, held on a hardware GPU and not on a software one: 47 of 495 clicks inside a cut bracket
+// took the plate under it, as 50 with none -- r109 R1)
+const CUT_NEAR_GL = (2.5e-4).toExponential(6);
+
 const VS = `
 attribute vec3 aPos;
 attribute vec4 aNrm;
@@ -36,6 +43,8 @@ attribute vec4 aXd;        // its body's Explode direction (no table texture)
 #endif
 uniform vec4 uCull;        // x focal px, y min radius px, w on (the paper styles)
 uniform vec4 uXp;          // x explode: the fraction of each body's direction it moves by (0 none)
+uniform vec4 uCutV;        // x: the section on (the cut faces' depth, below; the vertex stage's own,
+                           // not uParams: a uniform in both stages must agree in precision)
 void main() {
   // Explode: the body moved along its direction (the body table's texel
   // 2 id; without the table texture, the aXd attribute), before the clip
@@ -58,6 +67,11 @@ void main() {
   vCol = aCol.rgb;
   vId = aId;
   gl_Position = uViewProj * vec4(p, 1.0);
+  // with a section on, a face seen from inside -- what the fragment shader draws as a cut face --
+  // nearer by CUT_NEAR_GL of its distance: at one depth with a neighbour's outside (a bracket's floor
+  // on its plate) they fought, the cut face striped and a third of the clicks inside the bracket took
+  // the plate (r109 R1). (renderer-webgpu.js vs, the same share)
+  if (uCutV.x > 0.5 && dot(aNrm.xyz, vView) < 0.0) gl_Position.z -= ${CUT_NEAR_GL} * (gl_Position.w - gl_Position.z);
   // the paper styles: a body under uCull.y px (whose edges are culled) is
   // collapsed in the face and pick passes too, so it neither blanks the lines
   // behind it nor can be picked unseen
@@ -333,7 +347,7 @@ function compile(gl, type, src) {
   return s;
 }
 
-const UNIFORMS = ['uViewProj', 'uState', 'uParams', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN', 'uPx', 'uHoverId', 'uNear',
+const UNIFORMS = ['uViewProj', 'uState', 'uParams', 'uCutV', 'uClipV', 'uEyeV', 'uLight', 'uUp', 'uHi', 'uCapN', 'uPx', 'uHoverId', 'uNear',
   'uBodies', 'uBodyTex', 'uCull', 'uSil', 'uEdgeMode', 'uPaperPlain', 'uPaperSel', 'uPaperFaded', 'uFill', 'uXp', 'uGhost', 'uGc', 'uGx', 'uGy', 'uGa'];
 
 // The ground shadow (frame.ground): a quad centre + x * ax + y * ay over x, y
@@ -715,6 +729,7 @@ export class WebGLRenderer {
     gl.uniformMatrix4fv(u.uViewProj, false, frame.viewProj);
     gl.uniform1i(u.uState, 0);
     gl.uniform4f(u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 0);
+    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, 0, 0, 0);
     gl.uniform4fv(u.uClipV, frame.clip || [0, 0, 0, 0]);
     gl.uniform4f(u.uEyeV, frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1);
     gl.uniform4fv(u.uHi, frame.highlight);
@@ -868,6 +883,7 @@ export class WebGLRenderer {
     gl.uniformMatrix4fv(u.uViewProj, false, frame.viewProj);
     gl.uniform1i(u.uState, 0);
     gl.uniform4f(u.uParams, this.stateW, this.stateH, frame.clip ? 1 : 0, 0);
+    gl.uniform4f(u.uCutV, frame.clip ? 1 : 0, 0, 0, 0);
     gl.uniform4fv(u.uClipV, frame.clip || [0, 0, 0, 0]);
     gl.uniform4f(u.uEyeV, frame.eye[0], frame.eye[1], frame.eye[2], frame.eye[3] ?? 1);
     gl.uniform4f(u.uLight, frame.light[0], frame.light[1], frame.light[2], 0);

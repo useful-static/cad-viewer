@@ -372,15 +372,16 @@ export function opensAsZip(name, bytes) {
 // ascii" in 512 bytes and called two 700 MB ASCII PLYs "ok" (a late format line, and none: r73 A2)
 export function plyHeader(u8) {
   const head = new TextDecoder('latin1').decode(u8.subarray(0, Math.min(u8.length, 65536)));
-  const hdrEnd = head.indexOf('end_header');
-  if (hdrEnd < 0) return null;
+  // (the line that is end_header, spaces after it allowed -- by the word anywhere, a comment naming
+  // it ended the header there, and a trailing space was read as the body: r109 C1)
+  const m = /(?:^|\n)end_header[ \t]*(\r?\n|$)/.exec(head);
+  if (!m) return null;
+  const hdrEnd = m.index + (head[m.index] === '\n' ? 1 : 0);
   const lines = head.slice(0, hdrEnd).split(/\r?\n/);
   let format = 'ascii';
   for (const l of lines) { const sp = l.trim().split(/\s+/); if (sp[0] === 'format') format = sp[1]; }
-  // (where its body starts: past end_header and its line's end)
-  let bodyStart = hdrEnd + 'end_header'.length;
-  while (u8[bodyStart] === 13) bodyStart++;
-  if (u8[bodyStart] === 10) bodyStart++;
+  // (where its body starts: past end_header's line and its end)
+  const bodyStart = m.index + m[0].length;
   return { hdrEnd, lines, format, bodyStart };
 }
 // How much of a file its reader holds to the text limit: a PLY's body alone, its header read apart

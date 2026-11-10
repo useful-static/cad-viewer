@@ -47,6 +47,12 @@ export function draftToTour(draft, modelUrl = null) {
 const EDITOR_FIELDS = ['id', 'title', 'text', 'dim', 'transition', 'hold', 'ease', 'orbit'];
 // what a new step takes from the one before it (ease was left out: a draft of linear steps got
 // an inOut one)
+// A step taken in a reading of the file in modelUnit, written at the draft's size, draftUnit (the
+// visitor changed "this file is in" since the first step): tourAt's scaling, as the recorder adds it
+// (inside the recorder, no test reached it -- r109 C5)
+export function stepAtSize(s, modelUnit, draftUnit) {
+  return modelUnit && draftUnit && modelUnit !== draftUnit ? tourAt({ unit: modelUnit, steps: [s] }, draftUnit).steps[0] : s;
+}
 export const CARRIED_FIELDS = ['dim', 'transition', 'hold', 'ease'];
 export function stepFromView(captured, keep = {}) {
   const s = { ...captured, title: '', text: '', dim: DEFAULTS.dim, transition: DEFAULTS.transition, hold: DEFAULTS.hold };
@@ -173,7 +179,7 @@ export function createTourRecorder(api) {
   // is in" since the first step: js/tour.js tourAt)
   function atDraftSize(s) {
     const m = model();
-    return m && m.unit && draft.unit && m.unit !== draft.unit ? tourAt({ unit: m.unit, steps: [s] }, draft.unit).steps[0] : s;
+    return stepAtSize(s, m && m.unit, draft.unit);
   }
   // The draft as it would be with step s at index i (added, or replacing), checked by the parser as
   // a whole -- names, notes and the file's size -- when the step is taken, in the parser's words

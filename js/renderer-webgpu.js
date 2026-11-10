@@ -5,6 +5,12 @@
 import { BIAS_SHEET, BIAS_SOLID, sheetsLast } from './face-order.js';
 import { EDGE_STRIDE, SIL_STRIDE } from './edges.js';
 
+// A cut face's depth pulled nearer, as a share of its own (reverse-Z: a share of its distance, 0.04 mm
+// at a 160 mm view): measured on a software WebGPU, a bracket on its plate cut through, the clicks
+// inside the cut bracket that took the plate under it -- none pulled 49 of 495, 64 float32 steps 35,
+// 512 steps 14, 2.5e-4 2, 1e-3 1 (r109 R1)
+const CUT_NEAR_GPU = (2.5e-4).toExponential(6);
+
 // The ground shadow, as renderer-webgl.js's VS_GROUND / FS_GROUND: a quad
 // centre + x * ax + y * ay over x, y in [-1, 1], dark at the middle and
 // fading to nothing at the rim; g.a = its strongest alpha
@@ -66,6 +72,11 @@ struct VOut {
   // before the clip and the view values, so the section cuts it where it is
   let p = v.pos + xoff(v.idc);
   o.clipPos = u.viewProj * vec4f(p, 1.0);
+  // with a section on, a face seen from inside -- what fsShade draws as a cut face -- nearer by
+  // CUT_NEAR_GPU of its depth (reverse-Z: nearer is larger): at one depth with a neighbour's outside
+  // (a bracket's floor on its plate) they fought, and a click inside the bracket took the plate
+  // (r109 R1; renderer-webgl.js VS, the same by its 24-bit step)
+  if (u.params.z > 0.5 && dot(v.nrm.xyz, normalize(u.eye.xyz - p * u.eye.w)) < 0.0) { o.clipPos.z = o.clipPos.z * (1.0 + ${CUT_NEAR_GPU}); }
   o.wpos = p;
   o.nrm = v.nrm.xyz;
   o.col = v.col.rgb;

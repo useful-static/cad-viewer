@@ -48,8 +48,8 @@ const stlAscii = () => enc(`solid cube\n${TRIS.map((t) => ` facet normal 0 0 0\n
 const obj = () => enc(`mtllib cube.mtl\no cube\n${C.map((p) => `v ${p.join(' ')}`).join('\n')}\nusemtl red\n${TRIS.map((t) => `f ${t.map((v) => v + 1).join(' ')}`).join('\n')}\n`);
 const mtl = () => enc('newmtl red\nKd 1 0 0\n');
 const plyAscii = () => enc(`ply\nformat ascii 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nelement face 12\nproperty list uchar int vertex_indices\nend_header\n${C.map((p) => `${p.join(' ')} 0 255 0`).join('\n')}\n${TRIS.map((t) => `3 ${t.join(' ')}`).join('\n')}\n`);
-function plyBinary() {
-  const head = enc('ply\nformat binary_little_endian 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nelement face 12\nproperty list uchar uint vertex_indices\nend_header\n');
+function plyBinary(headText = 'ply\nformat binary_little_endian 1.0\nelement vertex 8\nproperty float x\nproperty float y\nproperty float z\nelement face 12\nproperty list uchar uint vertex_indices\nend_header\n') {
+  const head = enc(headText);
   const b = new ArrayBuffer(head.byteLength + 8 * 12 + 12 * 13);
   new Uint8Array(b).set(new Uint8Array(head));
   const dv = new DataView(b);
@@ -471,6 +471,12 @@ await test('PLY ASCII with vertex colours', async () => {
   assert.ok(m.colors && m.colors[1] === 255 && m.colors[0] === 0, `colours ${m.colors && m.colors.slice(0, 4)}`);
 });
 await test('PLY binary little-endian', async () => { cube(await parseMesh('ply', plyBinary(), 'cube.ply')); });
+await test('PLY: its header ends at the line that is end_header -- a space after it, a comment naming it (r109 C1)', async () => {
+  const h = (comment, end) => `ply\nformat binary_little_endian 1.0\n${comment}element vertex 8\nproperty float x\nproperty float y\nproperty float z\nelement face 12\nproperty list uchar uint vertex_indices\n${end}\n`;
+  cube(await parseMesh('ply', plyBinary(h('', 'end_header ')), 'cube.ply'));
+  // (a comment line ending in the word: by the word anywhere, the header ended in it)
+  cube(await parseMesh('ply', plyBinary(h('comment the line after these is end_header\n', 'end_header')), 'cube.ply'));
+});
 await test('OFF', async () => { cube(await parseMesh('off', off(), 'cube.off')); });
 await test('3MF: unit cm, a component moved, a base material colour, the tree', async () => {
   const z = zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', model3mf()]]);
@@ -1012,6 +1018,37 @@ await test('r6-3 3MF production extension (Bambu / Orca): a component naming its
   assert.equal(model.root.children[0].children[0].name, 'cube');
   // a part that is not in the zip: refused in words naming it
   await refusedFast(() => parseMesh('3mf', zipStored([['3D/3dmodel.model', main]]), 'b.3mf'), /b\.3mf is damaged: object 2 names object 1 in \/3D\/Objects\/object_1\.model, which is not there/);
+});
+await test('an OPEN body mirrored by a 3MF item or a glTF node: its normals still point out (r109 C3)', async () => {
+  // (a lidless tray, wound outward: no weld turns an open shell, so the mirror's winding flip alone
+  // keeps it right -- the closed cube of r6-4 passed with the flip taken out)
+  const V = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]];
+  const T = [[0, 2, 1], [0, 3, 2], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+  const bottomNz = (m) => {
+    const b = m.meshes[0];
+    let nz = 0;
+    for (let t = 0; t < b.indices.length; t += 3) {
+      const ids = [b.indices[t], b.indices[t + 1], b.indices[t + 2]];
+      if (ids.every((i) => Math.abs(b.positions[3 * i + 2]) < 1e-6)) for (const i of ids) nz += b.normals[3 * i + 2];
+    }
+    return nz;
+  };
+  const tray = (tf) => enc(`<?xml version="1.0"?><model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources><object id="1" type="model" name="tray"><mesh><vertices>${V.map((v) => `<vertex x="${v[0]}" y="${v[1]}" z="${v[2]}"/>`).join('')}</vertices><triangles>${T.map((t) => `<triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>`).join('')}</triangles></mesh></object></resources><build><item objectid="1" transform="${tf}"/></build></model>`);
+  for (const tf of ['1 0 0 0 1 0 0 0 1 0 0 0', '-1 0 0 0 1 0 0 0 1 0 0 0']) {
+    const nz = bottomNz(await parseMesh('3mf', zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', tray(tf)]]), 'tray.3mf'));
+    assert.ok(nz < 0, `3MF ${tf}: the bottom's normals z ${nz} (inward)`);
+  }
+  const pos = new Float32Array(V.flat().map((x) => x / 1000)), idx = new Uint16Array(T.flat());
+  const bin = new Uint8Array(pos.byteLength + idx.byteLength);
+  bin.set(new Uint8Array(pos.buffer)); bin.set(new Uint8Array(idx.buffer), pos.byteLength);
+  for (const node of [{ mesh: 0 }, { mesh: 0, scale: [-1, 1, 1] }]) {
+    const j = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [node], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 8, type: 'VEC3', min: [0, 0, 0], max: [0.01, 0.01, 0.01] }, { bufferView: 1, componentType: 5123, count: idx.length, type: 'SCALAR' }],
+      bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: pos.byteLength }, { buffer: 0, byteOffset: pos.byteLength, byteLength: idx.byteLength }],
+      buffers: [{ byteLength: bin.byteLength, uri: `data:application/octet-stream;base64,${Buffer.from(bin).toString('base64')}` }] };
+    const nz = bottomNz(await parseMesh('gltf', enc(JSON.stringify(j)), 'tray.gltf'));
+    assert.ok(nz < 0, `glTF ${JSON.stringify(node)}: the bottom's normals z ${nz} (inward)`);
+  }
 });
 await test('r6-4 3MF mirrored placements (negative determinant): the winding flipped, so every normal points out; two mirrors cancel', async () => {
   const m3 = (comp, item) => zipStored([['3D/3dmodel.model', enc(`<model unit="millimeter"><resources>

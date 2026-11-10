@@ -18,7 +18,7 @@ import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
 import { EASE, poseAt, slerp, turnAngle } from '../js/tour-path.js';
-import { CARRIED_FIELDS, draftToTour, stepFromView } from '../js/tour-recorder.js';
+import { CARRIED_FIELDS, draftToTour, stepAtSize, stepFromView } from '../js/tour-recorder.js';
 import { blockedShare, obstacleTree, clearestDirection, meshFaceBoxes, obstaclesFor, rayHitsBox } from '../js/tour-sight.js';
 
 import { test, done } from './harness.mjs';
@@ -251,6 +251,14 @@ test('namesFor on a flat assembly of 40,000 bodies, half of them wanted: each na
   assert.ok(ms < 1000, `${ms} ms (it was 4.9 s)`);
 });
 
+test('the recorder\'s step taken in the inch reading, written to a draft in mm, at the draft\'s size (r109 C5)', () => {
+  const s = { id: 's', view: { cam: { target: [254, 0, 25.4], dist: 2540, q: [0, 0, 0, 1] } } };
+  const m = stepAtSize(s, 'in', 'mm');
+  assert.ok(m.view.cam.target.every((x, i) => Math.abs(x - [10, 0, 1][i]) < 1e-9), JSON.stringify(m.view.cam.target));
+  assert.ok(Math.abs(m.view.cam.dist - 100) < 1e-9);
+  assert.equal(stepAtSize(s, 'mm', 'mm'), s);
+  assert.equal(stepAtSize(s, null, 'mm'), s);
+});
 test('tourAt: a tour made in inches, played over the mm reading, has its sizes scaled by 1/25.4; fractions are not sizes', () => {
   const t = parseTour(JSON.stringify({ cadtour: 2, unit: 'in', steps: [
     { id: 'a', view: { cam: { target: [254, 0, 25.4], dist: 2540, q: [0, 0, 0, 1] } }, section: { axis: 'z', t: 0.3 }, explode: 0.5,
@@ -609,6 +617,9 @@ test('the outside view\'s box tree blocks as the list does, and 100,000 bodies t
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const boxes = Array.from({ length: 3000 }, () => { const c = [rnd() * 200 - 100, rnd() * 200 - 100, rnd() * 200 - 100]; return { min: c.map((v) => v - 2), max: c.map((v) => v + 2) }; });
   const part = { min: [-1, -1, -1], max: [1, 1, 1] };
+  // (and boxes that hold some of the part's sample points: none did, and a tree leaf dropping the
+  // inside rule passed, changing 11 answers on a real board -- r109 C6)
+  boxes.push({ min: [-3, -3, -0.5], max: [3, 3, 0.5] }, { min: [0.5, 0.5, 0.5], max: [4, 4, 4] }, { min: [-2, -0.2, -2], max: [2, 0.2, 2] });
   const tree = obstacleTree(boxes);
   for (const d of [[1, 0, 0], [0, 0, 1], [0.6, 0.48, 0.64], [-0.36, 0.48, 0.8]]) assert.equal(blockedShare(part, d, tree), blockedShare(part, d, boxes), `direction ${d}`);
   const many = Array.from({ length: 100000 }, () => { const c = [rnd() * 2000 - 1000, rnd() * 2000 - 1000, rnd() * 2000 - 1000]; return { min: c.map((v) => v - 1), max: c.map((v) => v + 1) }; });

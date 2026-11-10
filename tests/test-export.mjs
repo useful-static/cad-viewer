@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
-import { EXPORTS, crc32, exportable, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
+import { EXPORTS, crc32, exportBasis, exportable, to3MF, toGLB, toSTL } from '../js/export-mesh.js';
 import { parseMesh } from '../js/mesh-formats.js';
 
 import { test, done } from './harness.mjs';
@@ -305,6 +305,15 @@ await test('an empty body is left out of the GLB and the 3MF (it made a count-0 
   await assert.rejects(toGLB(m3, [3], YUP, ['empty']), /nothing to export/);
   await assert.rejects(toSTL(m3, [3], IDENT, 'empty'), /nothing to export/); // (it wrote an 84-byte STL)
   await assert.rejects(to3MF(m3, [3], IDENT, ['empty']), /nothing to export/);
+});
+test('the export axes are right-handed for every orientation, Z up and Y up: no export mirrored (r109 C4)', () => {
+  const det = ([a, b, c]) => a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+  let n = 0;
+  for (const u of ['+x', '-x', '+y', '-y', '+z', '-z']) for (const f of ['+x', '-x', '+y', '-y', '+z', '-z']) {
+    if (u[1] === f[1]) continue;
+    for (const up of ['z', 'y']) { n++; assert.ok(Math.abs(det(exportBasis(u + f, up)) - 1) < 1e-12, `${u}${f} ${up} up: det ${det(exportBasis(u + f, up))}`); }
+  }
+  assert.equal(n, 48);
 });
 
 done();

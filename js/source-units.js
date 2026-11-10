@@ -154,7 +154,8 @@ export function igesUnits(u8) {
     if (g[i] === delim[1]) break;
     i++;
   }
-  const flag = Number(params[13]);
+  // (a blank flag is the spec's default, 1: inches -- read as 0, no unit, and Auto showed mm: r109 C2)
+  const flag = params[13] === undefined || params[13] === '' ? 1 : Number(params[13]);
   if (flag === 3) return IGES_NAME[(params[14] || '').toUpperCase()] || null;
   return IGES_FLAG[flag] || null;
 }

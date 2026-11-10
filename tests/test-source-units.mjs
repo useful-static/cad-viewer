@@ -115,6 +115,9 @@ test('IGES units flag 2 is mm, 1 is in, 10 is cm', () => {
 test('IGES flag 3 reads the unit name; a comma inside a Hollerith string is not a delimiter', () => {
   assert.equal(igesUnits(iges(G(3, '4HINCH'))), 'in');
 });
+test('IGES units flag left blank is the spec\'s default, 1: inches (r109 C2)', () => {
+  assert.equal(igesUnits(iges(G('', ''))), 'in');
+});
 test('IGES default delimiters (parameters 1 and 2 empty)', () => {
   assert.equal(igesUnits(iges(',,4HPART,8Hpart.igs,3HCAD,3H1.0,32,38,6,308,15,4HPART,1.0,6,1HM;')), 'm');
 });
