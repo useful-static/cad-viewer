@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { UNITS, blockKey, parseDXF, inOutline, insideFlat, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
+import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, sizeRow, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
@@ -1752,6 +1752,65 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.equal(v.layerAt(...v.toPx(49.8, 47)), null, 'a line the outline hides was hovered');
     // (and one the outline shows is found: WALL, inside the arm)
     assert.equal(v.layerAt(...v.toPx(25.2, 30)), 'WALL');
+    v.destroy();
+  });
+  // (r104: a wide polyline is its band -- kept, stroked and hovered as the band the canvas draws,
+  // not as its centreline; and a line along an outline's edge stroked unclipped only where it lies on it)
+  const sheetWith = (ents, clipped) => {
+    const O = [[0, 0], [34, 0], [34, 10], [40, 10], [40, 0], [60, 0], [60, 40], [0, 40]]; // (a notch in the bottom edge, x 34..40)
+    return parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'], ...ents,
+      ...(clipped ? [[0, 'LWPOLYLINE'], [5, 'L1'], [8, 'B'], [67, 1], [90, O.length], [70, 1], ...O.flatMap(([x, y]) => [[10, x], [20, y]])] : []),
+      [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 30], [20, 20], [40, 60], [41, 40], [69, 2], [12, 0], [22, 0], [45, 40], [90, clipped ? 65536 : 0], ...(clipped ? [[340, 'L1']] : []),
+      [0, 'ENDSEC'], [0, 'EOF']])).layouts[0];
+  };
+  // (model = paper here: the viewport's centre 30, 20 shows model 0, 0 at 1:1; paper y = model y + 20)
+  const wideAt = (y, w) => [[0, 'LWPOLYLINE'], [8, 'WIDE'], [90, 2], [70, 0], [43, w], [10, -20], [20, y - 20], [10, 20], [20, y - 20]];
+  test('a wide polyline whose centreline runs just past a frame or an outline, its band inside, is kept (r104 A1, Q3)', () => {
+    for (const clipped of [false, true]) {
+      // (width 4 at paper y -1: its band reaches y 1, inside; must-reject: width 1, wholly outside)
+      assert.equal(sheetWith(wideAt(-1, 4), clipped).paths.filter((p) => p.layer === 'WIDE').length, 1, clipped ? 'through an outline' : 'through a frame');
+      assert.equal(sheetWith(wideAt(-1, 1), clipped).paths.filter((p) => p.layer === 'WIDE').length, 0, `a band wholly outside kept, ${clipped ? 'outline' : 'frame'}`);
+    }
+  });
+  test('the pieces of a line along an outline\'s edges: not across a notch in the edge, not past the edge\'s end (r104 Q1, Q2)', () => {
+    const notch = Float64Array.of(0, 0, 34, 0, 34, 10, 40, 10, 40, 0, 60, 0, 60, 40, 0, 40);
+    const near = (a, b) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) < 1e-12);
+    assert.ok(near(edgeOverlaps(notch, 0, 0, 60, 0), [0, 34 / 60, 40 / 60, 1]), String(edgeOverlaps(notch, 0, 0, 60, 0)));
+    const box = Float64Array.of(0, 0, 60, 0, 60, 40, 0, 40);
+    assert.ok(near(edgeOverlaps(box, -10, 0, 70, 0), [1 / 8, 7 / 8]), String(edgeOverlaps(box, -10, 0, 70, 0)));
+    assert.deepEqual(edgeOverlaps(box, 0, 0.5, 60, 0.5), [], 'a line beside the edge is not on it');
+  });
+  await test('stroked unclipped: a hairline\'s pieces along its outline\'s edge, never a wide polyline (r104 A2, Q1, Q4)', async () => {
+    const strokes = [];
+    const stack = [];
+    const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'clip' ? () => { if (stack.length) stack[stack.length - 1] = true; } : k === 'stroke' ? (p) => strokes.push({ p, clipped: stack.some(Boolean), w: t.lineWidth, cap: t.lineCap }) : k === 'save' ? () => stack.push(false) : k === 'restore' ? () => stack.pop() : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    const P2 = globalThis.Path2D;
+    globalThis.Path2D = class { constructor() { this.pts = []; } moveTo(x, y) { this.pts.push(x, y); } lineTo(x, y) { this.pts.push(x, y); } closePath() {} rect() {} arc() {} };
+    const cv = { ...canvas, getContext: () => rec };
+    const sh = sheetWith([[0, 'LINE'], [8, 'WALL'], [10, -30], [20, -20], [11, 30], [21, -20], ...wideAt(40, 4)], true);
+    const v = createDxfView(cv, { layers: [{ name: '0', on: true }], paths: sh.paths, texts: sh.texts, extents: sh.extents }, {});
+    v.fit();
+    globalThis.Path2D = P2;
+    const o = [(sh.extents.min[0] + sh.extents.max[0]) / 2, (sh.extents.min[1] + sh.extents.max[1]) / 2];
+    const free = strokes.filter((s) => !s.clipped);
+    // (the wall on paper y 0, x 0..60: its pieces 0..34 and 40..60, not across the notch)
+    const wall = free.filter((s) => s.p.pts.length === 8);
+    assert.ok(wall.length > 0, 'the wall\'s edge pieces not stroked unclipped');
+    assert.deepEqual(wall[0].p.pts.map((x, i) => Math.round((x + o[i % 2]) * 1e9) / 1e9), [0, 0, 34, 0, 40, 0, 60, 0]);
+    // (the width-4 polyline along the outline's top edge, y 40, x 10..50: never stroked unclipped)
+    assert.ok(!free.some((s) => s.w === 4), 'a wide polyline stroked unclipped');
+    assert.ok(strokes.some((s) => s.clipped && s.w === 4 && s.cap === 'butt'), 'the wide polyline not stroked, clipped, flat-ended');
+    v.destroy();
+  });
+  test('the hover finds a wide polyline on its visible band, though its centreline lies outside the outline (r104 A3)', () => {
+    // (width 10 at paper y -3: its band reaches y 2, inside; the cursor at y 1.5)
+    const sh = sheetWith(wideAt(-3, 10), true);
+    assert.equal(sh.paths.filter((p) => p.layer === 'WIDE').length, 1);
+    const v = createDxfView(canvas, { layers: [{ name: '0', on: true }, { name: 'WIDE', on: true }], paths: sh.paths, texts: sh.texts, extents: sh.extents }, {});
+    v.fit();
+    assert.equal(v.layerAt(...v.toPx(10, 1.5)), 'WIDE', 'on the band the outline shows');
+    // (must-reject: at y 3.5, 1.5 past the band's edge and farther than HIT_PX at this zoom)
+    assert.equal(v.layerAt(...v.toPx(10, 6)), null, 'past the band');
     v.destroy();
   });
   Object.assign(globalThis, saved);

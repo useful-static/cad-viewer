@@ -603,6 +603,26 @@ export function onOutlineEdge(p, x, y) {
   }
   return false;
 }
+// The pieces of segment a-b that lie along an outline's edges: [t0, t1, ...] along it (0 at a, 1 at
+// b), one pair an edge it overlaps. What the view strokes again unclipped, the clip having cut a
+// line's outer half there. (Decided for the whole segment by five points on some edge, a wall across
+// a notch in its edge was drawn over the notch, and one running past its edge's end not at all --
+// r104 Q1, Q2)
+export function edgeOverlaps(p, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy, out = [];
+  if (!L2) return out;
+  const L = Math.sqrt(L2);
+  const off = (x, y) => Math.abs(vx * (y - ay) - vy * (x - ax)) / L; // (from the line through a, b)
+  for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+    const cx = p[j], cy = p[j + 1], dx = p[i], dy = p[i + 1];
+    const tol = 1e-9 * Math.max(1, Math.abs(cx), Math.abs(cy), Math.abs(dx), Math.abs(dy), L);
+    if (off(cx, cy) > tol || off(dx, dy) > tol) continue;
+    const tc = ((cx - ax) * vx + (cy - ay) * vy) / L2, td = ((dx - ax) * vx + (dy - ay) * vy) / L2;
+    const t0 = Math.max(0, Math.min(tc, td)), t1 = Math.min(1, Math.max(tc, td));
+    if (t1 > t0) out.push(t0, t1);
+  }
+  return out;
+}
 // Whether segments a-b and c-d meet (touching counts)
 function segsMeet(ax, ay, bx, by, cx, cy, dx, dy) {
   const o = (px, py, qx, qy, rx, ry) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
@@ -614,18 +634,34 @@ function segsMeet(ax, ay, bx, by, cx, cy, dx, dy) {
 // Whether an outline (flat) shows some of a path (flat points, closed or not; a fill's inside too):
 // a point of it the outline shows, an edge of the outline across it, or -- a fill -- the outline
 // inside it. A test, not a cut: what is drawn of it the view's clip decides
-function meetsOutline(pts, closed, fill, poly) {
+// (half: a wide polyline's half width -- what it shows is its band, not its centreline: a width-4
+// line whose centreline ran 1 below a frame, its band 1 inside, was dropped -- r104 A1. Within half
+// of an outline's edge, it meets it)
+function meetsOutline(pts, closed, fill, poly, half = 0) {
   const n = pts.length / 2, m = poly.length / 2;
   for (let i = 0; i < n; i++) if (inOutline(poly, pts[2 * i], pts[2 * i + 1])) return true;
   const segs = closed ? n : n - 1;
+  const h2 = half * half;
   for (let i = 0; i < segs; i++) {
     const j = (i + 1) % n;
     for (let e = 0; e < m; e++) {
       const f = (e + 1) % m;
       if (segsMeet(pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1], poly[2 * e], poly[2 * e + 1], poly[2 * f], poly[2 * f + 1])) return true;
+      if (h2 > 0 && segSegDist2(pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1], poly[2 * e], poly[2 * e + 1], poly[2 * f], poly[2 * f + 1]) <= h2) return true;
     }
   }
   return !!fill && n >= 3 && insideFlat(pts, poly[0], poly[1]);
+}
+// the squared distance from point (x, y) to segment a-b
+function ptSegDist2(x, y, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+  const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
+  return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
+}
+// the squared distance between segments a-b and c-d that do not cross: the least of each end's to
+// the other segment
+function segSegDist2(ax, ay, bx, by, cx, cy, dx, dy) {
+  return Math.min(ptSegDist2(ax, ay, cx, cy, dx, dy), ptSegDist2(bx, by, cx, cy, dx, dy), ptSegDist2(cx, cy, ax, ay, bx, by), ptSegDist2(dx, dy, ax, ay, bx, by));
 }
 // Whether an outline shows some of a text's box (box [x0, y0, x1, y1], its corners c): a corner
 // inside, an edge of the outline across it (r100 A2), or the outline inside it
@@ -644,11 +680,11 @@ function seenThrough(p, M, s, clip, out) {
   for (let i = 0; i < n; i++) { const [x, y] = ap(M, p.pts[2 * i], p.pts[2 * i + 1]); pts[2 * i] = x; pts[2 * i + 1] = y; }
   // (kept only where the outline shows some of it: kept whole whatever it showed, a line in an L's
   // notch counted as drawn and listed its layer, which the sheet draws nothing of -- r103 A3)
-  if (!meetsOutline(pts, p.closed || p.fill, p.fill, clip.poly)) return;
+  if (!meetsOutline(pts, p.closed || p.fill, p.fill, clip.poly, p.width && !p.fill ? (p.width * s) / 2 : 0)) return;
   out.push({ ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box });
 }
 
-// a path's box [x0, y0, x1, y1]
+// a path's box [x0, y0, x1, y1], a wide polyline's grown by its half width (its band: r104 A1)
 function boxOf(p) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const q = p.pts;
@@ -656,7 +692,8 @@ function boxOf(p) {
     if (q[k] < x0) x0 = q[k]; if (q[k] > x1) x1 = q[k];
     if (q[k + 1] < y0) y0 = q[k + 1]; if (q[k + 1] > y1) y1 = q[k + 1];
   }
-  return [x0, y0, x1, y1];
+  const h = p.width && !p.fill ? p.width / 2 : 0;
+  return [x0 - h, y0 - h, x1 + h, y1 + h];
 }
 // The box, in model space, of what a viewport (model -> paper transform M) shows of rect on
 // paper: the rect's corners taken back through M (a similarity, so its inverse is exact)

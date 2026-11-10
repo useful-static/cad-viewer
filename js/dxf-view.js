@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { inOutline, onOutlineEdge, itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
+import { inOutline, edgeOverlaps, itemsBox, layersOf, onPaper, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, nearestItem } from './box-tree.js';
@@ -146,30 +146,56 @@ export function segmentIndex(paths, o, span) {
   // the segments far longer than most (a border, a line across the sheet) in a tree of their own:
   // one in a leaf of short ones made every box above it as wide
   const longest = (span || Math.max(hx - lx, hy - ly) || 1) / 8;
-  const short = [], long = [];
+  // (a wide polyline's segments, in a tree of their own whose boxes are grown by their half width:
+  // what it shows is its band, and the hover found nothing on a band whose centreline lay past the
+  // search radius -- r104 A3)
+  // (sized by the wide segments alone, and their half width read from the path: an array a segment
+  // is 160 MB for 5.2 million)
+  const short = [], long = [], wide = [];
   for (let t = 0; t < n; t++) {
     const w = Math.max(Math.abs(segs[4 * t + 2] - segs[4 * t]), Math.abs(segs[4 * t + 3] - segs[4 * t + 1]));
     if (!Number.isFinite(w)) continue; // (a point not a number is never near)
-    (w > longest ? long : short).push(t);
+    if (halfWidth(paths[pathOf[t]]) > 0) wide.push(t);
+    else (w > longest ? long : short).push(t);
   }
-  return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)), segs, pathOf, paths, o, span };
+  // (the wide tree's items are its own, 0 .. W - 1, wideSeg[i] the segment: boxTree reads item i's
+  // box at 4i)
+  const wideSeg = Uint32Array.from(wide), grown = new Float64Array(4 * wide.length);
+  wideSeg.forEach((t, i) => {
+    const h = halfWidth(paths[pathOf[t]]);
+    grown[4 * i] = Math.min(segs[4 * t], segs[4 * t + 2]) - h; grown[4 * i + 1] = Math.min(segs[4 * t + 1], segs[4 * t + 3]) - h;
+    grown[4 * i + 2] = Math.max(segs[4 * t], segs[4 * t + 2]) + h; grown[4 * i + 3] = Math.max(segs[4 * t + 1], segs[4 * t + 3]) + h;
+  });
+  return { tree: boxTree(segs, Uint32Array.from(short)), longTree: boxTree(segs, Uint32Array.from(long)), wideTree: boxTree(grown, wideSeg.map((_, i) => i)), wideSeg, segs, pathOf, paths, o, span };
 }
+// a path's half width where it is drawn as a band (a wide polyline stroked at its width), else 0
+const halfWidth = (p) => (p.width && !p.fill ? p.width / 2 : 0);
 // -> the path index of the nearest segment within r that accept(pathIndex, [x, y] its point nearest
-// (x, y)) takes, or -1
+// (x, y)) takes, or -1. A wide polyline's segment is its band: the distance is to the band's edge (0
+// inside it), and its nearest point the band's -- the cursor itself, inside it
 export function nearestSegment(index, x, y, r, accept = () => true) {
-  const { segs, pathOf } = index;
-  const dist = (s) => {
-    const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
-    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
-    return (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2;
-  };
-  const hit = (s) => {
+  const { segs, pathOf, paths } = index;
+  const near = (s) => {
     const ax = segs[4 * s], ay = segs[4 * s + 1], vx = segs[4 * s + 2] - ax, vy = segs[4 * s + 3] - ay, l2 = vx * vx + vy * vy;
     const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0;
     return [ax + t * vx, ay + t * vy];
   };
-  const s = nearestItem([index.longTree, index.tree], [x, y], r, dist, (k) => accept(pathOf[k], hit(k)));
-  return s < 0 ? -1 : pathOf[s];
+  const d2Of = (s) => { const [cx, cy] = near(s); return (x - cx) ** 2 + (y - cy) ** 2; };
+  const s = nearestItem([index.longTree, index.tree], [x, y], r, d2Of, (k) => accept(pathOf[k], near(k)));
+  if (!index.wideTree || !index.wideSeg.length) return s < 0 ? -1 : pathOf[s];
+  // the wide segments: the distance to the band's edge, its point the band's nearest (the cursor
+  // itself inside it); nearer than the hairline found, or as near and earlier, wins
+  const ws = index.wideSeg, hOf = (s2) => halfWidth(paths[pathOf[s2]]);
+  const bandD2 = (i) => Math.max(0, Math.sqrt(d2Of(ws[i])) - hOf(ws[i])) ** 2;
+  const bandHit = (s2) => {
+    const [cx, cy] = near(s2), h = hOf(s2), d = Math.hypot(x - cx, y - cy);
+    return d <= h ? [x, y] : [cx + ((x - cx) * h) / d, cy + ((y - cy) * h) / d];
+  };
+  const best = s < 0 ? r : Math.sqrt(d2Of(s));
+  const w = nearestItem([index.wideTree], [x, y], best, bandD2, (i) => accept(pathOf[ws[i]], bandHit(ws[i])));
+  if (w < 0) return s < 0 ? -1 : pathOf[s];
+  if (s >= 0 && bandD2(w) === d2Of(s) && s < ws[w]) return pathOf[s];
+  return pathOf[ws[w]];
 }
 
 // whether a path is added to its group reversed: a fill (not a hatch's even-odd loops) wound
@@ -307,15 +333,20 @@ export function createDxfView(canvas, drawing, cb = {}) {
     for (let i = 1; i < n; i++) g.path.lineTo(p.pts[2 * at(i)] - o[0], p.pts[2 * at(i) + 1] - o[1]);
     if (p.closed) g.path.closePath();
     // (its segments lying along its outline's edges -- both ends and three points between on one --
-    // stroked again unclipped, the clip having cut their outer half: r103 Q3)
-    if (p.clipPoly && !p.fill) {
+    // stroked again unclipped, the clip having cut their outer half: r103 Q3. A hairline's alone: a
+    // wide polyline's band is on paper and clipped there, and stroked again it spilled half its width
+    // onto the sheet -- r104 A2)
+    if (p.clipPoly && !p.fill && !p.width) {
       const segs = p.closed ? n : n - 1;
       for (let i = 0; i < segs; i++) {
         const j = (i + 1) % n, ax = p.pts[2 * i], ay = p.pts[2 * i + 1], bx = p.pts[2 * j], by = p.pts[2 * j + 1];
-        if (![0, 0.25, 0.5, 0.75, 1].every((t) => onOutlineEdge(p.clipPoly, ax + (bx - ax) * t, ay + (by - ay) * t))) continue;
-        if (!g.edge) g.edge = new Path2D();
-        g.edge.moveTo(ax - o[0], ay - o[1]);
-        g.edge.lineTo(bx - o[0], by - o[1]);
+        // (only the pieces along an edge: js/dxf.js edgeOverlaps, r104 Q1, Q2)
+        const t = edgeOverlaps(p.clipPoly, ax, ay, bx, by);
+        for (let k = 0; k < t.length; k += 2) {
+          if (!g.edge) g.edge = new Path2D();
+          g.edge.moveTo(ax + (bx - ax) * t[k] - o[0], ay + (by - ay) * t[k] - o[1]);
+          g.edge.lineTo(ax + (bx - ax) * t[k + 1] - o[0], ay + (by - ay) * t[k + 1] - o[1]);
+        }
       }
     }
   }
@@ -407,19 +438,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // inOutline keeps for the snaps and the hover; cut here by hand, rounds 99 to 102 each found an
     // outline the cut got wrong: r103. Clipped once for all its groups and texts in a draw: once
     // each, 280 groups through a 16,000-point outline took 9.2 s a draw -- r103 Q2)
-    let cur = null;
-    const clipTo = (f) => {
-      if (f === cur) return;
-      if (cur) ctx.restore();
-      cur = f;
-      if (f) { ctx.save(); ctx.clip(outlineOf(f).path, 'evenodd'); }
-    };
-    for (const g of order) {
-      if (hid(g)) continue;
+    // a group's stroke: its colour, width, ends, joins and dashes -- one setting for the clipped pass
+    // and the edge pass (the edge pass set no ends or joins, and took the last group's: r104 A2)
+    const strokeOf = (g) => {
       const hot = isOf(g, sel) || isOf(g, st.hover);
       const col = isOf(g, sel) ? SELECTED : sel && !isOf(g, st.hover) ? FADED : g.colour;
-      clipTo(g.clipPoly);
-      if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
       ctx.strokeStyle = col;
       ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
       // a wide polyline ends flat and meets mitred, as on paper (rounded, it reached half its width
@@ -430,6 +453,20 @@ export function createDxfView(canvas, drawing, cb = {}) {
       // a line type's dashes are drawing units (under the transform): they
       // scale with the zoom, as on paper; too fine to see, drawn solid
       ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
+      return { hot, col };
+    };
+    let cur = null;
+    const clipTo = (f) => {
+      if (f === cur) return;
+      if (cur) ctx.restore();
+      cur = f;
+      if (f) { ctx.save(); ctx.clip(outlineOf(f).path, 'evenodd'); }
+    };
+    for (const g of order) {
+      if (hid(g)) continue;
+      clipTo(g.clipPoly);
+      const { hot, col } = strokeOf(g);
+      if (g.fill) { ctx.fillStyle = col; ctx.globalAlpha = sel && !hot ? 0.35 : 0.85; ctx.fill(g.path, g.evenodd ? 'evenodd' : 'nonzero'); ctx.globalAlpha = 1; }
       ctx.stroke(g.path);
       ctx.setLineDash([]);
       if (g.points.length) {
@@ -443,10 +480,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     clipTo(null);
     for (const g of order) {
       if (!g.edge || hid(g)) continue;
-      const hot = isOf(g, sel) || isOf(g, st.hover);
-      ctx.strokeStyle = isOf(g, sel) ? SELECTED : sel && !isOf(g, st.hover) ? FADED : g.colour;
-      ctx.lineWidth = Math.max((g.px + (hot ? 1 : 0)) / st.s, g.width);
-      ctx.setLineDash(g.dash && g.dash.reduce((a, x) => a + x, 0) * st.s > 3 ? g.dash : []);
+      strokeOf(g);
       ctx.stroke(g.edge);
       ctx.setLineDash([]);
     }
@@ -461,7 +495,6 @@ export function createDxfView(canvas, drawing, cb = {}) {
       // a text was painted in a star's middle, where they had none, r102 A1; once for all its texts)
       clipTo(t.clipPoly || null);
       ctx.save();
-      if (!t.clipPoly && t.clip) { ctx.beginPath(); ctx.rect(t.clip[0] - o[0], t.clip[1] - o[1], t.clip[2] - t.clip[0], t.clip[3] - t.clip[1]); ctx.clip(); }
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
       // (in the font's own px from here, scaled to the text's height: FONT_PX)
