@@ -424,6 +424,13 @@ export function parseDXF(s, opts = {}) {
   sets.sort((a, b) => tabOf(a) - tabOf(b));
   // each model path's box [x0, y0, x1, y1], once, for the viewports' cull
   const pathBoxes = sets.length ? out.paths.map(boxOf) : [];
+  // and each model text's box, its corners' (textCorners): a viewport is a turn and a scale, so a
+  // text whose box lies outside what it shows of the model is outside it
+  const textBoxes = sets.length ? out.texts.map((t) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of textCorners(t)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return [x0, y0, x1, y1];
+  }) : [];
   // and where each band group (one `band` id: a tapering polyline's paths) that starts at k ends,
   // past its last path; 0 for a path of none -- once, not a property read a path a viewport
   const bandEnd = new Uint32Array(sets.length ? out.paths.length : 0);
@@ -577,7 +584,12 @@ export function parseDXF(s, opts = {}) {
       let coords = 0;
       for (let k = p0; k < lo.paths.length; k++) coords += lo.paths[k].pts.length;
       charge(budget, lo.paths.length - p0, coords);
-      for (const t of out.texts) {
+      for (let ti = 0; ti < out.texts.length; ti++) {
+        const t = out.texts[ti];
+        // (passed over by its model box, as a path is: every text was moved, measured and boxed in
+        // every viewport, and charged as one box test -- 20,000 texts through 100 viewports took
+        // 12.3 s within 1 % of the budget: r107 Q2)
+        if (outside(textBoxes[ti])) continue;
         if (frozenHere(t)) continue;
         const [x, y] = ap(M, t.x, t.y);
         // (every length of it scaled by the viewport, TEXT_LENGTHS: a fit width unscaled drew it 10
@@ -715,19 +727,36 @@ export function outlineIndex(p) {
   const G = Math.max(1, Math.ceil(Math.sqrt(m / 4))), cw = (x1 - x0) / G || 1, ch = (y1 - y0) / G || 1;
   const col = (x) => Math.max(0, Math.min(G - 1, Math.floor((x - x0) / cw))), row = (y) => Math.max(0, Math.min(G - 1, Math.floor((y - y0) / ch)));
   const cells = Array.from({ length: G * G }, () => []);
+  // the cells segment a-b crosses, row by row: in each row, the columns of its part in that row's
+  // band of y (by its box, a long edge was in every cell of its box -- a hub and spokes of 32,000
+  // points built in 726 ms and 474 MB: r107 Q4)
+  const cellsOf = (ax, ay, bx, by, f) => {
+    const r0 = row(Math.min(ay, by)), r1 = row(Math.max(ay, by));
+    for (let r = r0; r <= r1; r++) {
+      let lo = Math.min(ax, bx), hi = Math.max(ax, bx);
+      if (ay !== by && r0 !== r1) {
+        // (x where it crosses the row's lower and upper y, clamped to the segment)
+        const ya = y0 + r * ch, yb = ya + ch, xAt = (yy) => ax + ((bx - ax) * (yy - ay)) / (by - ay);
+        const ta = Math.max(Math.min(ay, by), ya), tb = Math.min(Math.max(ay, by), yb);
+        const xa = xAt(ta), xb = xAt(tb);
+        lo = Math.min(xa, xb); hi = Math.max(xa, xb);
+      }
+      for (let c = Math.max(0, col(lo) - 1); c <= Math.min(G - 1, col(hi) + 1); c++) f(r * G + c);
+    }
+  };
   // (edge e runs from point e - 1 to point e, as insideFlat walks them)
   for (let e = 0; e < m; e++) {
     const j = ((e + m - 1) % m) * 2, i = e * 2;
-    for (let r = row(Math.min(p[j + 1], p[i + 1])); r <= row(Math.max(p[j + 1], p[i + 1])); r++) {
-      for (let c = col(Math.min(p[j], p[i])); c <= col(Math.max(p[j], p[i])); c++) cells[r * G + c].push(e);
-    }
+    cellsOf(p[j], p[j + 1], p[i], p[i + 1], (cell) => cells[cell].push(e));
   }
   const stamp = new Uint32Array(m);
   let tick = 0;
+  const fresh = () => { if (++tick === 0xffffffff) { stamp.fill(0); tick = 1; } };
+  const each = (cell, f) => { for (const e of cells[cell]) if (stamp[e] !== tick) { stamp[e] = tick; f(e); } };
   // every edge of the cells of rows r0..r1 and columns c0..c1, once
   const visit = (r0, r1, c0, c1, f) => {
-    if (++tick === 0xffffffff) { stamp.fill(0); tick = 1; }
-    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) for (const e of cells[r * G + c]) if (stamp[e] !== tick) { stamp[e] = tick; f(e); }
+    fresh();
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) each(r * G + c, f);
   };
   const onEdge = (x, y, e) => {
     const j = ((e + m - 1) % m) * 2, i = e * 2;
@@ -757,7 +786,8 @@ export function outlineIndex(p) {
   const pieces = (ax, ay, bx, by) => {
     const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy, ts = [0, 1], out = [];
     if (!L2) return inside(ax, ay) ? [0, 1] : out;
-    visit(row(Math.min(ay, by)), row(Math.max(ay, by)), col(Math.min(ax, bx)), col(Math.max(ax, bx)), (e) => {
+    fresh();
+    cellsOf(ax, ay, bx, by, (cell) => each(cell, (e) => {
       const j = ((e + m - 1) % m) * 2, i = e * 2;
       const cx = p[j], cy = p[j + 1], ex = p[i] - cx, ey = p[i + 1] - cy, den = vx * ey - vy * ex;
       if (den) {
@@ -766,7 +796,7 @@ export function outlineIndex(p) {
       } else {
         for (const [x, y] of [[cx, cy], [p[i], p[i + 1]]]) { const t = ((x - ax) * vx + (y - ay) * vy) / L2; if (t > 0 && t < 1) ts.push(t); }
       }
-    });
+    }));
     ts.sort((a, b) => a - b);
     for (let k = 0; k + 1 < ts.length; k++) {
       const t0 = ts[k], t1 = ts[k + 1];
@@ -777,7 +807,18 @@ export function outlineIndex(p) {
     }
     return out;
   };
-  return { inside, pieces };
+  // the edges within r of (x, y): their points' offsets, [from, to, ...] (the hover's shownD2)
+  const near = (x, y, r) => {
+    const out = [];
+    visit(row(y - r), row(y + r), col(x - r), col(x + r), (e) => {
+      const j = ((e + m - 1) % m) * 2, i = e * 2;
+      if (ptSegDist2(x, y, p[j], p[j + 1], p[i], p[i + 1]) <= r * r) out.push(j, i);
+    });
+    return out;
+  };
+  let entries = 0;
+  for (const c of cells) entries += c.length;
+  return { inside, pieces, near, cells: G * G, entries };
 }
 // Whether an outline (flat) shows some of a path (flat points, closed or not; a fill's inside too):
 // a point of it the outline shows, an edge of the outline across it, or -- a fill -- the outline
@@ -805,9 +846,8 @@ function meetsAsDrawn(p, pts, s, poly, charge = () => {}) {
   if (!bands.length) return false; // (nothing drawn: one repeated point, ends flat)
   // (a point of its centreline the outline shows is a point of its band it shows: no pieces needed)
   for (let i = 0; i < pts.length; i += 2) if (inOutline(poly, pts[i], pts[i + 1])) return true;
-  let n = 0;
-  for (const b of bands) n += b.length / 2;
-  charge(n);
+  // (a wide polyline's pieces; a filled outline is its own points, charged already: r107 A8)
+  if (isWide(p)) { let n = 0; for (const b of bands) n += b.length / 2; charge(n); }
   return bands.some((b) => meetsOutline(b, true, true, poly));
 }
 // the squared distance from point (x, y) to segment a-b

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts, insidePieces, bandPolys, outlineIndex } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
-import { addedReversed, measureText, nearestPoint,nearestSegment, pointTree, segmentIndex, sizeRow, snapPoints, textAt, textIndex } from '../js/dxf-view.js';
+import { addedReversed, measureText, nearestPoint, nearestSegment, pickAt, pointTree, segmentIndex, sizeRow, snapPoints, textIndex } from '../js/dxf-view.js';
 import { boxTree, nearestItem } from '../js/box-tree.js';
 import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
 
@@ -1227,7 +1227,9 @@ test('a drawing whose lines cluster in a corner of its extents: the hover stays 
   // and right: against a scan of every segment, for the first 20
   for (const [x, y] of qs.slice(0, 20)) {
     let best = -1, bd = 0.02 * 0.02;
-    paths.forEach((p, pi) => { for (let i = 0; i + 1 < p.pts.length / 2; i++) { const ax = p.pts[2 * i], ay = p.pts[2 * i + 1], vx = p.pts[2 * i + 2] - ax, vy = p.pts[2 * i + 3] - ay, l2 = vx * vx + vy * vy; const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0; const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2; if (d2 < bd) { bd = d2; best = pi; } } });
+    paths.forEach((p, pi) => { for (let i = 0; i + 1 < p.pts.length / 2; i++) { const ax = p.pts[2 * i], ay = p.pts[2 * i + 1], vx = p.pts[2 * i + 2] - ax, vy = p.pts[2 * i + 3] - ay, l2 = vx * vx + vy * vy; const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / l2)) : 0; const d2 = (x - ax - t * vx) ** 2 + (y - ay - t * vy) ** 2; if (d2 < bd || (d2 === bd && best >= 0 && pi > best)) { bd = d2; best = pi; } } });
+    // (of two at one distance -- two segments at the vertex they share -- the later, drawn on top:
+    // pickAt's rule, r107 A1)
     assert.equal(nearestSegment(grid, x, y, 0.02), best);
   }
 });
@@ -1302,7 +1304,10 @@ test('the box tree: a hit at exactly r is within r, and the nearer child is walk
   assert.equal(id, 0);
   assert.ok(visited <= 32, `${visited} items tested (the far side first: every leaf within 50)`);
 });
-test('the hover\'s texts are in the one box tree: the first text whose quad holds the point, as a scan finds it, fast over a million (r25 A5, A7)', () => {
+test('the hover\'s texts are in the one box tree: the top text whose quad holds the point, as a scan finds it, fast over a million (r25 A5, A7, r107 A6)', () => {
+  // (by pickAt's rule, among texts alone: the last in the draw on top -- the first was found, r107 A6)
+  const none = segmentIndex([], [0, 0], 1);
+  const textAt = (index, x, y, accept = () => true) => { const h = pickAt(none, x, y, 0, { texts: { index, accept } }); return h ? h.text : -1; };
   let s = 3;
   const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   // quads (bottom-left, bottom-right, top-left, top-right) of rotated, overlapping texts
@@ -1319,7 +1324,7 @@ test('the hover\'s texts are in the one box tree: the first text whose quad hold
   let hits = 0;
   for (let q = 0; q < 2000; q++) {
     const x = rnd() * 110 - 5, y = rnd() * 110 - 5;
-    const want = texts.findIndex((t, i) => ok(i) && inside(quad(t), x + o[0], y + o[1]));
+    const want = texts.findLastIndex((t, i) => ok(i) && inside(quad(t), x + o[0], y + o[1]));
     if (want >= 0) hits++;
     assert.equal(textAt(index, x, y, ok), want, `query ${q}`);
   }
@@ -2050,6 +2055,133 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     const rep = { layer: 'R', pts: Float64Array.of(0, 0, 10, 0, 10, 0, 10, 10), width: 2 };
     assert.equal(near(rep, 10.5, -0.5), 0, 'the mitre at a repeated point');
     assert.ok(bandPolys(rep.pts, false, 1).every((q) => q.every(Number.isFinite)), 'a piece not a number');
+  });
+  // (r107: the pick order -- js/dxf-view.js pickAt, one rule -- a pair of kinds an arm: what is drawn
+  // on top at the cursor, lines counted within reach)
+  {
+    const clip = Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10);
+    // (a drawing of `items`, each [kind, ...]; rank: their order, later on top, texts over every path)
+    const pick = (items, x, y, r = 1) => {
+      const paths = [], texts = [], name = [];
+      for (const it of items) {
+        if (it[0] === 'text') { texts.push(it[1]); continue; }
+        paths.push(it[1]);
+      }
+      const ix = segmentIndex(paths, [0, 0], 30);
+      const tix = textIndex(texts, (t) => [[t.x0, t.y0], [t.x1, t.y0], [t.x0, t.y1], [t.x1, t.y1]], [0, 0]);
+      const h = pickAt(ix, x, y, r, { texts: { index: tix, accept: () => true } });
+      return !h ? null : h.text !== undefined ? texts[h.text].layer : paths[h.path].layer;
+    };
+    const line = (layer, ...pts) => ['line', { layer, pts: Float64Array.of(...pts) }];
+    const band = (layer, w, ...pts) => ['band', { layer, width: w, pts: Float64Array.of(...pts) }];
+    const fill = (layer, ...pts) => ['fill', { layer, fill: true, closed: true, pts: Float64Array.of(...pts) }];
+    const edge = (layer) => ['edge', { layer, pts: Float64Array.of(0, 0, 10, 0), clipPoly: clip }];
+    const text = (layer, x0, y0, x1, y1) => ['text', { layer, x0, y0, x1, y1 }];
+    const sq = (l, x0, y0, x1, y1) => fill(l, x0, y0, x1, y0, x1, y1, x0, y1);
+    test('pick order: a text under the cursor over a line, a band, a fill or an edge piece within reach (r107 A2)', () => {
+      assert.equal(pick([line('L', 0, 1, 10, 1), text('T', 2, 1.5, 8, 3)], 5, 2), 'T', 'text/line');
+      assert.equal(pick([line('L', 0, 1, 10, 1), text('T', 2, 1.5, 8, 3)], 5, 1.2), 'L', 'the line, the cursor off the text');
+      assert.equal(pick([band('B', 4, 0, 0, 10, 0), text('T', 2, -1, 8, 1)], 5, 0), 'T', 'text/band');
+      assert.equal(pick([band('B', 2, 0, 0, 10, 0), text('T', 2, 1.6, 8, 3)], 5, 1.5), 'B', 'the band, the cursor off the text');
+      assert.equal(pick([sq('F', 0, 0, 10, 10), text('T', 2, 2, 8, 3)], 5, 2.5), 'T', 'text/fill');
+      assert.equal(pick([edge('E'), text('T', 2, 0.5, 8, 2)], 5, 1), 'T', 'text/edge');
+    });
+    test('pick order: lines, bands and fills, the one drawn on top, a line counted within reach (r107 A1, A3, A5)', () => {
+      // (line/band: within reach over the band, the line; under it, the band -- and a line under the
+      // band nearer than one over it does not hide the one over it, r107 A5)
+      assert.equal(pick([band('B', 10, 0, 0, 10, 0), line('L', 0, 1, 10, 1)], 5, 0.5), 'L', 'a line over a band');
+      assert.equal(pick([line('L', 0, 1, 10, 1), band('B', 10, 0, 0, 10, 0)], 5, 0.5), 'B', 'a band over a line');
+      assert.equal(pick([line('C', 0, 0.3, 10, 0.3), band('B', 10, 0, 0, 10, 0), line('L', 0, 1.2, 10, 1.2)], 5, 0.4), 'L', 'the line over the band, one under it nearer');
+      // (line/fill: inside a SOLID, it; a fill over a line, the fill; a line over a fill, the line)
+      assert.equal(pick([sq('F', 0, 0, 10, 10)], 5, 5), 'F', 'inside a SOLID');
+      assert.equal(pick([line('L', 0, 5, 10, 5), sq('F', 0, 0, 10, 10)], 5, 5.5), 'F', 'a fill over a line');
+      assert.equal(pick([sq('F', 0, 0, 10, 10), line('L', 0, 5, 10, 5)], 5, 5.5), 'L', 'a line over a fill');
+      // (band/fill, both ways)
+      assert.equal(pick([band('B', 4, 0, 5, 10, 5), sq('F', 0, 0, 10, 10)], 5, 5), 'F', 'a fill over a band');
+      assert.equal(pick([sq('F', 0, 0, 10, 10), band('B', 4, 0, 5, 10, 5)], 5, 5), 'B', 'a band over a fill');
+      // (one kind at one place: the one on top)
+      assert.equal(pick([line('A', 0, 0, 10, 0), line('B', 0, 0, 10, 0)], 5, 0.5), 'B', 'coincident lines');
+      assert.equal(pick([band('A', 2, 0, 0, 10, 0), band('B', 2, 0, 0, 10, 0)], 5, 1.5), 'B', 'coincident bands, the cursor outside');
+      assert.equal(pick([text('A', 0, 0, 4, 2), text('B', 0, 0, 4, 2)], 1, 1), 'B', 'two texts at one place');
+      // (an even-odd hatch's loops filled together: its ring, it; its hole, nothing)
+      const ring = { layer: 'H', fill: true, closed: true, evenodd: 7, pts: Float64Array.of(0, 0, 10, 0, 10, 10, 0, 10) };
+      const hole = { layer: 'H', fill: true, closed: true, evenodd: 7, pts: Float64Array.of(3, 3, 7, 3, 7, 7, 3, 7) };
+      assert.equal(pick([['fill', ring], ['fill', hole]], 1.5, 5, 0.5), 'H', 'in the ring');
+      assert.equal(pick([['fill', ring], ['fill', hole]], 5, 5, 0.5), null, 'in the hole');
+    });
+    test('pick order: a line\'s piece along its outline\'s edge is drawn over every group: over a band, a fill or a line (r107 A4)', () => {
+      // (the edge piece's path first in the draw, the other later: the edge pass strokes the piece last)
+      assert.equal(pick([edge('E'), band('B', 2, 0, 0, 10, 0)], 5, 0.1), 'E', 'band/edge');
+      assert.equal(pick([edge('E'), sq('F', 0, -1, 10, 1)], 5, 0.1), 'E', 'fill/edge');
+      assert.equal(pick([edge('E'), line('L', 0, 0, 10, 0)], 5, 0.5), 'E', 'line/edge');
+      // (and a part of it not on the edge is drawn in its group's place: under the later band)
+      const cross = ['line', { layer: 'X', pts: Float64Array.of(5, 0, 5, 10), clipPoly: clip }];
+      assert.equal(pick([cross, band('B', 2, 0, 5, 10, 5)], 5.1, 5), 'B', 'off the edge, in its place');
+    });
+  }
+  test('a model text outside a viewport is passed over by its box: 20,000 texts through 100 viewports open fast (r107 Q2)', () => {
+    const g = [[0, 'SECTION'], [2, 'ENTITIES']];
+    for (let k = 0; k < 20000; k++) g.push([0, 'TEXT'], [8, 'T'], [10, 1000 + k], [20, 1000], [40, 1], [1, 'LABEL']);
+    for (let v = 0; v < 100; v++) g.push([0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 50], [40, 20], [41, 20], [69, v + 2], [12, 0], [22, 0], [45, 20]);
+    const t0 = performance.now();
+    const d = parseDXF(dxf([...g, [0, 'ENDSEC'], [0, 'EOF']]));
+    const ms = performance.now() - t0;
+    assert.equal(d.layouts[0].texts.length, 0);
+    assert.ok(ms < 4000, `${ms.toFixed(0)} ms (12.3 s before)`);
+  });
+  test('a large outline\'s grid: an edge in the cells it crosses, the hover asking it for the edges near (r107 Q3 to Q6)', () => {
+    // (a hub and spokes, 32,000 points: by its box every spoke was in every cell of it)
+    const M = 32000, f = new Float64Array(2 * M);
+    for (let i = 0; i < M; i++) { const a = (2 * Math.PI * Math.floor(i / 2)) / (M / 2), rr = i % 2 ? 100 : 1; f[2 * i] = rr * Math.cos(a); f[2 * i + 1] = rr * Math.sin(a); }
+    const g = outlineIndex(f);
+    // (a spoke 100 long crosses some 45 of the grid's 90 columns, a column either side kept: at most
+    // 3 x (the grid's side + 2) cells an edge, not its box's side squared)
+    const side = Math.sqrt(g.cells);
+    assert.ok(g.entries <= 3 * (side + 2) * M, `${g.entries} cell entries for ${M} edges, a ${side}-cell side`);
+    assert.ok(g.cells > 1, 'one cell');
+    // (points within the edge tolerance of an edge, either side of cell boundaries: the same answer)
+    const star = new Float64Array(800);
+    for (let i = 0; i < 400; i++) { const a = (2 * Math.PI * i) / 400, rr = i % 2 ? 60 : 100; star[2 * i] = rr * Math.cos(a); star[2 * i + 1] = rr * Math.sin(a); }
+    const gs = outlineIndex(star);
+    let bad = 0;
+    for (let e = 0; e < 400; e++) {
+      const j = ((e + 399) % 400) * 2, i = e * 2, dx = star[i] - star[j], dy = star[i + 1] - star[j + 1], L = Math.hypot(dx, dy);
+      for (const t of [0.001, 0.25, 0.5, 0.999]) for (const off of [-1e-10, 1e-10, 1e-6]) {
+        const px = star[j] + t * dx - (dy / L) * off, py = star[j + 1] + t * dy + (dx / L) * off;
+        if (gs.inside(px, py) !== inOutline(star, px, py)) bad++;
+      }
+    }
+    assert.equal(bad, 0, `${bad} near-edge answers differ`);
+    // (a notch whose top edge lies on a row's boundary, y 60 of a 5-row grid of rows 20 high, and a
+    // point in the notch 1e-10 below it, the row beneath: on the edge, shown -- asked of its own
+    // cell, not)
+    const nb = [[0, 0], [40, 0], [40, 60], [60, 60], [60, 0], [100, 0]];
+    for (let k = 1; k <= 60; k++) nb.push([100, (100 * k) / 60]);
+    nb.push([0, 100]);
+    const notched = Float64Array.from(nb.flat()), gn = outlineIndex(notched);
+    assert.equal(gn.cells, 25);
+    assert.equal(inOutline(notched, 50, 60 - 1e-10), true);
+    assert.equal(gn.inside(50, 60 - 1e-10), true, 'on the notch\'s edge across a row boundary');
+    assert.equal(gn.inside(50, 59), false, 'in the notch');
+    // (the hover asks the grid -- inside, pieces, the edges near -- not the plain walks)
+    // (a band across the star's tip at (0, 100), the cursor in it beyond the tip: hidden there, its
+    // visible part is asked for)
+    const ix = segmentIndex([{ layer: 'W', pts: Float64Array.of(0, 90, 0, 110), width: 4, clipPoly: star }], [0, 0], 300);
+    nearestSegment(ix, 1.5, 104, 3); // (makes the grid)
+    const [gg] = [...ix.geo.values()], asked = { inside: 0, pieces: 0, near: 0 };
+    for (const k of Object.keys(asked)) { const fn = gg[k]; gg[k] = (...a) => { asked[k]++; return fn(...a); }; }
+    // (its visible part ends at the tip, 4.27 away)
+    assert.equal(nearestSegment(ix, 1.5, 104, 5), 0, 'the band\'s visible part within reach');
+    assert.equal(nearestSegment(ix, 1.5, 104, 4), -1, 'nothing nearer');
+    assert.ok(asked.inside > 0 && asked.near > 0 && asked.pieces > 0, JSON.stringify(asked));
+  });
+  test('a wide polyline whose centreline the outline shows is kept without its pieces charged (r107 Q7)', () => {
+    // (a 20,000-point zigzag inside the 407-point circle: as a line it is charged 8.1 M of 10 M; its
+    // pieces charged too, it was refused)
+    const g = [[0, 'LWPOLYLINE'], [8, 'Z'], [90, 20000], [70, 0], [43, 0.5]];
+    for (let i = 0; i < 20000; i++) g.push([10, -5 + i * 0.0005], [20, (i % 2) * 0.001]);
+    const d = parseDXF(clippedSheet(g, 1, 407));
+    assert.equal(d.layouts[0].paths.filter((p) => p.layer === 'Z').length, 1);
   });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
