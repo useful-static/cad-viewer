@@ -1819,6 +1819,26 @@ test('a block reference on a frozen layer: every item it draws is held to that l
       v.destroy();
     }
   });
+  // (r116, survivors of r115's mutant pass the golden views missed: dxf-view-C131, an ellipse's
+  // centre hovered as "centre (Ø 0 …)"; dxf-view-O516, the extreme search skipping point 1)
+  await test('an ellipse\'s centre hovers as "centre", no Ø; a closed curve\'s quadrant snaps take point 1 when it is the extreme (r116: r115 dxf-view-C131, O516)', () => {
+    const on = {};
+    const cv = { ...canvas, addEventListener(k, f) { on[k] = f; } };
+    const d = parseDXF(dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'],
+      [0, 'SECTION'], [2, 'ENTITIES'], [0, 'ELLIPSE'], [8, '0'], [10, 50], [20, 20], [30, 0], [11, 10], [21, 0], [31, 0], [40, 0.5], [41, 0], [42, 2 * Math.PI], [0, 'ENDSEC'], [0, 'EOF']]));
+    const hovers = [];
+    const v = createDxfView(cv, d, { onHover: (w) => hovers.push(w) });
+    v.setMeasure(true);
+    const c = v.toPx(50, 20);
+    on.pointermove({ pointerId: 1, clientX: c[0], clientY: c[1] });
+    assert.equal(hovers[hovers.length - 1], 'centre');
+    v.destroy();
+    // a closed outline of no own point whose leftmost point is its second (index 1)
+    const sp = snapPoints([{ closed: true, own: [], mids: [], pts: Float64Array.of(0, 0, -5, 1, 0, 5, 5, 1, 0, 0) }], [0, 0]);
+    const q = [];
+    for (let i = 0; i < sp.n; i++) { const a = sp.at(i); q.push(`${a[2]} ${a[0]} ${a[1]}`); }
+    assert.deepEqual(q.sort(), ['quadrant -5 1', 'quadrant 0 0', 'quadrant 0 5', 'quadrant 5 1']);
+  });
   // (r102 A1: a text through a clip outline is clipped by the even-odd rule the outline's lines,
   // fills and hover keep -- canvas's nonzero default painted it in a star's middle)
   // (r103: and the paths seen through it -- drawn whole, the canvas clipping them by the outline, as
