@@ -121,6 +121,23 @@ test('IGES units flag left blank is the spec\'s default, 1: inches (r109 C2)', (
 test('IGES default delimiters (parameters 1 and 2 empty)', () => {
   assert.equal(igesUnits(iges(',,4HPART,8Hpart.igs,3HCAD,3H1.0,32,38,6,308,15,4HPART,1.0,6,1HM;')), 'm');
 });
+// (r112 M source-units-B3, source-units-C3) sourceUnits routes an IGES file to the IGES reader,
+// and only an IGES file
+test('sourceUnits reads an IGES file by its G section, and the same bytes as STL say nothing (r112 M source-units-B3, source-units-C3)', () => {
+  assert.equal(sourceUnits(iges(G(1, '4HINCH')), 'iges'), 'in');
+  assert.equal(sourceUnits(iges(G(2, '2HMM')), 'iges'), 'mm');
+  assert.equal(sourceUnits(iges(G(1, '4HINCH')), 'stl'), null);
+});
+// (r112 M source-units-B22) a file with no G section has no unit, not the blank flag's inch
+test('an IGES file with no global section has no unit (r112 M source-units-B22)', () => {
+  assert.equal(sourceUnits(enc('just text\n'), 'iges'), null);
+  assert.equal(igesUnits(enc('just text\n')), null);
+});
+// (r112 M source-units-B13) a unit defined through itself ends at the depth stop: null, no stack overflow
+test('an inch CONVERSION_BASED_UNIT measured in itself is no unit, not a stack overflow (r112 M source-units-B13)', () => {
+  const cyc = "#10=(CONVERSION_BASED_UNIT('INCH',#11)LENGTH_UNIT()NAMED_UNIT(#12));\n#11=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#10);\n#12=DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.);\n#20=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#10))REPRESENTATION_CONTEXT('',''));";
+  assert.equal(sourceUnits(step(cyc), 'step'), null);
+});
 
 // a real inch file (an AP203 sample whose inch is a CONVERSION_BASED_UNIT on
 // an SI millimetre): CADV_INCH_STEP=<file.stp>

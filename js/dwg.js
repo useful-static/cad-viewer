@@ -188,7 +188,7 @@ class Bits {
   }
   align() { this.p = (this.p + 7) & ~7; }
 }
-const LATIN1 = new TextDecoder('windows-1252');
+const LATIN1 = decoderFor('windows-1252'); // (the same on every runtime: codepages.js, r112 b)
 // a handle value as a Number when exact (to 2^53), else a BigInt; and a sum of two such
 const hnorm = (v) => (v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= -BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v);
 // handle order across Number and BigInt (subtraction would throw on a mix)

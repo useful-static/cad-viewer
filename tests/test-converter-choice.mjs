@@ -44,6 +44,13 @@ test('an iPad whose Safari says "Macintosh" is told apart from a Mac by its touc
   assert.equal(useThreads({ ...safari, touchPoints: 5 }), false, 'iPad');
   assert.equal(useThreads({ ...safari, touchPoints: 0 }), true, 'Mac');
 });
+// (r112 M converter-choice-O2) more than one touch point is an iPad: two is the first count that is
+test('a "Macintosh" with 2 touch points is an iPad, with 1 a Mac (r112 M converter-choice-O2)', () => {
+  const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+  const mac = { isolated: true, cores: 8, memoryGB: 16, ua: MAC_UA, mobile: false };
+  assert.equal(useThreads({ ...mac, touchPoints: 2 }), false);
+  assert.equal(useThreads({ ...mac, touchPoints: 1 }), true);
+});
 
 test('a desktop browser that does not say its memory (Firefox, Safari) gets it', () => {
   assert.equal(useThreads({ ...desk, memoryGB: undefined }), true);

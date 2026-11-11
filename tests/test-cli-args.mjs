@@ -367,4 +367,11 @@ await test('a write in place as one was: through a link, the mode kept, gzipped 
   }
 });
 
+// (r112 M cli-args-C0) a lone "-" (stdin by convention) is a positional word, not an option;
+// "-x" is an option
+test('a lone "-" is a positional word, "-x" an unknown option (r112 M cli-args-C0)', () => {
+  assert.deepEqual(parseCli(['-'], { max: 1 }), { opts: {}, pos: ['-'] });
+  assert.throws(() => parseCli(['-x'], { max: 1 }), (e) => e instanceof CliError && /unknown option -x/.test(e.message));
+});
+
 done();

@@ -1580,4 +1580,29 @@ await test('a binary STL cut short past the text limit is damaged, not "N MB of 
   await assert.rejects(parseMesh('stl', buf, 'cut.stl'), /^Error: cut\.stl is damaged: its header counts 12,000,000 triangles, so it should be 600,000,084 bytes, but it is 599,785,472 bytes$/, 'must fire: "572 MB of text"');
 });
 
+// a .gltf of one mesh "bracket" of np one-triangle primitives (its buffer a data: URI), or of the
+// primitives given
+const bracketGltf = (np, prims = null) => {
+  const bin = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+  return new TextEncoder().encode(JSON.stringify({
+    asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ name: 'bracket', primitives: prims || Array.from({ length: np }, () => ({ attributes: { POSITION: 0 } })) }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+    bufferViews: [{ buffer: 0, byteLength: bin.length }],
+    buffers: [{ byteLength: bin.length, uri: `data:application/octet-stream;base64,${bin.toString('base64')}` }],
+  })).buffer;
+};
+// (r112 M mesh-formats-O784) a mesh of two primitives gives two bodies numbered by it, one keeps its name
+await test('a glTF mesh of two primitives is two bodies "bracket 1", "bracket 2"; of one, "bracket" (r112 M mesh-formats-O784)', async () => {
+  const names = async (np) => (await parseMesh('gltf', bracketGltf(np), 'b.gltf')).meshes.map((x) => x.name);
+  assert.deepEqual(await names(2), ['bracket 1', 'bracket 2']);
+  assert.deepEqual(await names(1), ['bracket']);
+});
+// (r112 M mesh-formats-B203) a primitive that is not an object is refused in the damaged words
+await test('a glTF primitive that is not an object is refused as damaged, in its own words (r112 M mesh-formats-B203)', async () => {
+  for (const p of [5, null, 'x']) {
+    await assert.rejects(parseMesh('gltf', bracketGltf(0, [p]), 'a.gltf'), { message: 'a.gltf is damaged: mesh 0 primitive 1 is not an object' }, JSON.stringify(p));
+  }
+});
+
 done();

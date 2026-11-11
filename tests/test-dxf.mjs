@@ -11,7 +11,7 @@ import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, measureText, nearestPoint, nearestSegment, pickAt, pointTree, segmentIndex, sizeRow, snapPoints, textIndex } from '../js/dxf-view.js';
 import { boxTree, nearestItem } from '../js/box-tree.js';
-import { DWG_CODEPAGES, codePageLabel, decoderFor } from '../js/codepages.js';
+import { DWG_CODEPAGES, codePageLabel, cp1252Over, decoderFor } from '../js/codepages.js';
 
 import { test, done } from './harness.mjs';
 
@@ -896,6 +896,12 @@ test('round 12: text placement -- aligned / fit from the first point, vertical a
 test('code pages: the DWG numbers the drawings at hand show, 850 decoded, and a DWG writes its $DWGCODEPAGE for %%nnn', () => {
   assert.deepEqual([12, 28, 29, 30, 39].map((n) => DWG_CODEPAGES[n]), ['DOS850', 'ANSI_1250', 'ANSI_1251', 'ANSI_1252', 'ANSI_936']);
   assert.equal(decoderFor(codePageLabel('dos850')).decode(Uint8Array.of(0x48, 0x99)), 'HÖ');
+  // (0x80 the first of 850's upper half: Ç, not the control U+0080 -- r112 M codepages-O2)
+  assert.equal(decoderFor('ibm850').decode(Uint8Array.of(0x43, 0x80, 0x61)), 'CÇa');
+  // (a segment touching a triangle only at its apex: no piece inside, the two edges' one crossing
+  // not counted twice -- r112 M dxf-C194; through a square's side, the piece inside)
+  assert.deepEqual(insidePieces([-1, 0, 1, 0, 0, 1], -1, 1, 1, 1), []);
+  assert.deepEqual(insidePieces([0, 0, 2, 0, 2, 2, 0, 2], -1, 1, 3, 1), [0.25, 0.75]);
   assert.equal(codePageLabel('ANSI_1251'), 'windows-1251');
   // %%192 in a 1251 drawing is "А" (Cyrillic), in a 1252 one "À"
   const ru = parseDXF(dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$DWGCODEPAGE'], [3, 'ANSI_1251'], [0, 'ENDSEC'],
@@ -914,6 +920,15 @@ test('code pages: the DWG numbers the drawings at hand show, 850 decoded, and a 
   // %%200 in a GBK drawing: one byte is no GBK character, read as 1252's
   const gb = parseDXF(dxf([...hd('AC1015', 'ANSI_936'), ...one('%%200')]));
   assert.equal(gb.texts[0].text, 'È');
+  // (r112 b: 1252's 0x80..0x9F as the Encoding standard's index has them on every runtime -- Node 20's
+  // TextDecoder read them as Latin-1, 0x80 "\u0080"; the cover for such a runtime asked of a Latin-1
+  // decoder here, as Node 22 has none to cover)
+  const HIGH = '€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008dŽ\u008f\u0090‘’“”•–—˜™š›œ\u009džŸ';
+  const hi = Uint8Array.from({ length: 32 }, (_, i) => 0x80 + i);
+  assert.equal(decoderFor('windows-1252').decode(hi), HIGH);
+  const latin = { decode: (u8) => String.fromCharCode(...u8) };
+  assert.equal(cp1252Over(latin).decode(Uint8Array.of(0x41, 0x80, 0x9f, 0xa0, 0xff)), 'A€Ÿ ÿ');
+  assert.equal(parseDXF(Uint8Array.from([...dxf([...hd('AC1015', 'ANSI_1252'), ...one('\x80 \x99')])].map((c) => c.charCodeAt(0))).buffer).texts[0].text, '€ ™');
 });
 test('eight drawing rules no test held (r111 H2-M4): a full-turn ARC, a part ELLIPSE\'s side, TEXT Middle, MTEXT\'s rows, a turned MINSERT\'s rows, a mirrored dimension, a twisted viewport\'s texts, a BYBLOCK weight', () => {
   // an ARC 0..360 (some exporters' circle): a whole turn, not nothing

@@ -51,8 +51,8 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // import; 926 KB in 42 at r81, js/companions.js (r80) and formats.js's glTF, reader and companion
   // rules moved into it from mesh-formats.js and list-check.js; 941 KB in 42 at r88, units.js's one
   // unit name and digits, datum.js's above / below words, cadmesh.js's mm rule by it, no new import;
-  // 956 KB in 42 at r111, the cut faces' pull and Explode's reset, no new import)
-  assert.ok(bytes < 960e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // r111's 956 KB went back under 955 at r112, its comments' measurements left to its audit)
+  assert.ok(bytes < 955e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

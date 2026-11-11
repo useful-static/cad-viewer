@@ -101,6 +101,34 @@ const decodeData = (type, v, s) => {
   _internal.DECODE[type].call({ entityHandles() {} }, o, new Bits(bits(s), v), v);
   return o.d;
 };
+t('four rules a mutation pass found no arm for: a true colour\'s ACI, a layer\'s RGB pair, a centred TEXT\'s z group, a hatch\'s seed points read (r112 M dwg-O186, B310, O1402, C331)', () => {
+  // (a CMC of index 0, RGB 0xc2ff0000: pure red, ACI 1 -- by a mask of the wrong width every true
+  // colour came out ACI 18)
+  const cmc = [];
+  const put = (v, n) => { for (let i = n - 1; i >= 0; i--) cmc.push((v >>> i) & 1); };
+  put(2, 2); put(0, 2); for (let k = 0; k < 4; k++) put((0xc2ff0000 >>> (8 * k)) & 255, 8); put(0, 8);
+  while (cmc.length % 8) cmc.push(0);
+  const cb = new Uint8Array(cmc.length / 8 + 8);
+  cmc.forEach((x, i) => { cb[i >> 3] |= x << (7 - (i & 7)); });
+  const c = new Bits(cb, 18).CMC();
+  assert.deepEqual([c.aci, c.rgb], [1, 0xff0000]);
+  // a layer's true colour written as its 420, and a centred TEXT's alignment point with its z in 31
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [3] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: 'WALLS', colour: { aci: 1, rgb: 0xff8000 }, on: true, lw: -3 } }],
+    [3, { handle: 3, name: 'TEXT', decoded: true, e: { entmode: 2, owner: 1, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 },
+      d: { p: [1, 2], a: [5, 2], elev: 2, h: 2.5, text: 'Hi', rot: 0, wf: 1, oblique: 0, gen: 0, ha: 1, va: 0, ext: [0, 0, 1] } }],
+  ]);
+  const pairs = dwgToPairs({ objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 }).filter(([k]) => [420, 11, 21, 31, 32].includes(k)).map((p) => p.join('='));
+  assert.deepEqual(pairs, ['420=16744448', '11=5', '21=2', '31=2']);
+  // a solid hatch of no loops and one seed point: its 16 bytes read -- the object ending at the
+  // count is "past the end", with the seed there the read runs to 156
+  const hb = (s) => { const q = s.replace(/[^01]/g, ''); const b = new Uint8Array(Math.ceil(q.length / 8) + 1); for (let i = 0; i < q.length; i++) if (q[i] === '1') b[i >> 3] |= 0x80 >> (i & 7); return { b, n: q.length }; };
+  const head = '10 10 10 01 10 1 0 10 10 10 01 00000001';
+  const hatch = (s) => { const { b, n } = hb(s); const r = new Bits(b, 15); r.end = n; const o = { v: 15 }; _internal.DECODE.HATCH.call({ entityHandles() {} }, o, r, 15); return r.p; };
+  assert.equal(hatch(head + '0'.repeat(128)), 156);
+  assert.throws(() => hatch(head), /past the end of the object/);
+});
 t('T (to R2004): \\U+XXXX decoded, but not after an escaped backslash (a typed "\\\\U+00B0" stays text, as its DXF keeps it)', () => {
   assert.equal(new Bits(bits(tv('45\\U+00B0')), 15).T(), '45°');
   assert.equal(new Bits(bits(tv('C:\\\\U+00B0')), 15).T(), 'C:\\\\U+00B0');

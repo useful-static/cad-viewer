@@ -102,5 +102,14 @@ test('the views table: unique ids and keys, opposites that point back, and the p
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.ok(!/data-view=|data-fmt=/.test(html), 'index.html carries no view or export button of its own');
 });
+// (r112 M orient-B0, orient-B4) an empty or non-string orientation, and a role named twice, are
+// refused with their own words
+test('an empty or missing orientation, and a role named twice, are refused in their own words (r112 M orient-B0, orient-B4)', () => {
+  const want = { message: 'an orientation names two of up, front and right, e.g. "up:+z,front:-y"' };
+  assert.throws(() => parseOrient(''), want);
+  assert.throws(() => parseOrient('   '), want);
+  assert.throws(() => parseOrient(null), want);
+  assert.throws(() => parseOrient('up:+z,up:+y'), { message: 'up is named twice' });
+});
 
 done();

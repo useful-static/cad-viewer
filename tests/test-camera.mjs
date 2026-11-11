@@ -447,4 +447,23 @@ test('levelOrbitBy: no roll, tilts as orbitBy does, stops short of the pole', ()
   assert.ok(dot(camDir(lvl), up) < Math.sin(Math.PI / 2 - 0.019) && dot(camDir(lvl), up) > 0.99);
 });
 
+// (r112 M camera-O124) a y-up camera off the poles has the unit +y up (a camera fitted by it sees
+// the box at its true distance)
+test('a y-up camera off the poles has up [0, 1, 0], a unit vector (r112 M camera-O124)', () => {
+  assert.deepEqual(camUp({ yaw: 0.3, pitch: 0.2, up: 'y' }), [0, 1, 0]);
+  assert.deepEqual(camUp({ yaw: 0.3, pitch: 0.2, up: 'z' }), [0, 0, 1]);
+  const d = fitBox({ yaw: 0.3, pitch: 0.2, up: 'y' }, { min: [0, 0, 0], max: [100, 70, 2] }, Math.PI / 4, 1.6).dist;
+  assert.ok(Math.abs(d - 111.0935) < 1e-3, String(d));
+});
+// (r112 M mat4-O42) WebGL's ortho puts the near plane at depth -1 and the far at +1 (WebGPU's 0..1)
+test('ortho maps the near plane to depth -1 and the far to +1 on WebGL, 0..1 on WebGPU (r112 M mat4-O42)', () => {
+  const depth = (m, z) => m[10] * z + m[14]; // (the matrix is Float32: 1e-6)
+  const gl = ortho(10, 5, 1, 100, false);
+  assert.ok(Math.abs(depth(gl, -1) + 1) < 1e-6 && Math.abs(depth(gl, -100) - 1) < 1e-6, `${depth(gl, -1)} ${depth(gl, -100)}`);
+  const gpu = ortho(10, 5, 1, 100, true);
+  assert.ok(Math.abs(depth(gpu, -1)) < 1e-6 && Math.abs(depth(gpu, -100) - 1) < 1e-6);
+  const rev = ortho(10, 5, 1, 100, true, true);
+  assert.ok(Math.abs(depth(rev, -1) - 1) < 1e-6 && Math.abs(depth(rev, -100)) < 1e-6);
+});
+
 done();

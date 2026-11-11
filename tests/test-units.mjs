@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unconvertedWord, unitSaid, unitWord } from '../js/units.js';
+import { DISPLAY_UNITS, LENGTH_MM, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, lengthUnitOf, unconvertedBack, unconvertedNum, unconvertedUnit, unconvertedWord, unitSaid, unitWord } from '../js/units.js';
 
 import { test, done } from './harness.mjs';
 
@@ -127,6 +127,15 @@ test('Auto, derived from the tables: each declared unit to itself or its system\
   for (const [u, w] of Object.entries(want)) assert.equal(autoUnit(u), w, u);
   assert.equal(autoUnit(null), 'mm');
   assert.equal(autoUnit('mixed'), 'mm');
+});
+
+// (r112 M units-O21) the US survey units keep their exact ratios: 1 US mi = 5280 US ft = 1760 US yd
+test('the US survey mile is 5280 US survey feet, exactly enough (r112 M units-O21)', () => {
+  const rel = (a, b) => Math.abs(a / b - 1);
+  assert.ok(rel(LENGTH_MM['US mi'], 5280 * LENGTH_MM['US ft']) < 1e-12, String(LENGTH_MM['US mi']));
+  assert.ok(rel(LENGTH_MM['US mi'], 1760 * LENGTH_MM['US yd']) < 1e-12);
+  assert.ok(rel(LENGTH_MM['US mi'], 63360 * LENGTH_MM['US in']) < 1e-12);
+  assert.ok(rel(LENGTH_MM['US mi'], LENGTH_MM.mi) > 1e-6, 'and it is not the international mile');
 });
 
 done();

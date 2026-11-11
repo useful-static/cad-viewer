@@ -15,7 +15,7 @@ import { mergeModels, modelRanges, staleModels, sceneEdgesFacts } from '../js/sc
 import * as SCENE from '../js/scene.js';
 import { buildEdges, FACTS_RULE, factsCurrent, momentaryFailure, overSilhouetteCap } from '../js/edges.js';
 import { clearance } from '../js/clearance.js';
-import { triangleDistance } from '../js/tri-distance.js';
+import { surfaceDistance, triangleDistance } from '../js/tri-distance.js';
 import { bodyGeometry } from '../js/measure-geom.js';
 import { box, washer } from './brep-model.mjs';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
@@ -2182,6 +2182,36 @@ await test('the units row names the unit the lengths are shown in, for geometry 
     'furlong (not converted) | Auto (furlong) [auto] | furlong 0.0004 0 12.3 0',
     'not recorded | Auto (mm) [auto] | mm 0.0 0.0 12.3 0.00', 'not recorded | Auto (mm) [auto] | mm 0.0 0.0 12.3 0.00',
     'not recorded | Auto (mm) [auto] | mm 0.0 0.0 12.3 0.00']);
+});
+
+// a cube of side s at o, as positions and its 12 triangles' indices
+const cubeAt = (o, s) => {
+  const P = [], I = [];
+  for (let i = 0; i < 8; i++) P.push(o[0] + (i & 1) * s, o[1] + ((i >> 1) & 1) * s, o[2] + ((i >> 2) & 1) * s);
+  for (const [a, b, c, d] of [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]) I.push(a, b, c, a, c, d);
+  return { P, I };
+};
+// (r112 M clearance-B0) parts whose surfaces touch are 0 apart as the distance search says --
+// touching, not "inside", its own triangles named
+test('a cube touching the inside of a solid at a corner is 0 apart by touch, not "inside" (r112 M clearance-B0)', () => {
+  const small = cubeAt([0, 0, 0], 0.5), big = cubeAt([0, 0, 0], 2);
+  const pos = new Float32Array([...small.P, ...big.P]), index = new Uint32Array([...small.I, ...big.I.map((v) => v + 8)]);
+  const r = clearance(pos, index, [[0, 12]], [[12, 12]], { solidA: [[0, 12]], solidB: [[12, 12]] });
+  const d = surfaceDistance(pos, index, [[0, 12]], [[12, 12]]);
+  assert.equal(r.distance, 0);
+  assert.equal(r.inside, undefined, 'touching: not said to be inside');
+  assert.deepEqual([r.triA, r.triB], [d.triA, d.triB]);
+});
+// (r112 M clearance-O51) a part of one triangle is a part: lying in a closed cube it is inside it
+test('a one-triangle part inside a closed cube is inside it, distance 0 (r112 M clearance-O51)', () => {
+  const big = cubeAt([0, 0, 0], 10);
+  const pos = new Float32Array([...big.P, 4, 4, 4, 5, 4, 4, 4, 5, 4]), index = new Uint32Array([...big.I, 8, 9, 10]);
+  const r = clearance(pos, index, [[12, 1]], [[0, 12]], { solidA: [], solidB: [[0, 12]] });
+  assert.deepEqual([r.distance, r.inside], [0, true]);
+  // and outside it, the true gap
+  const out = new Float32Array([...big.P, 14, 4, 4, 15, 4, 4, 14, 5, 4]);
+  const q = clearance(out, index, [[12, 1]], [[0, 12]], { solidA: [], solidB: [[0, 12]] });
+  assert.ok(Math.abs(q.distance - 4) < 1e-6 && !q.inside, `${q.distance} ${q.inside}`);
 });
 
 done();

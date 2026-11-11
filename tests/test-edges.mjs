@@ -204,6 +204,13 @@ test('the body table: slot 0 empty, then each body\'s centre and half-diagonal',
   assert.deepEqual([...t.slice(20, 24)], [0, 0, 0, 0], 'no vertices: radius 0');
   assert.ok(Math.abs(t[31] - Math.sqrt(3)) < 1e-6);
 });
+// (r112 M edges-O14) the half-diagonal is each axis's own extent, for a body away from the origin
+test('the body table\'s radius is the half-diagonal of a box away from the origin (r112 M edges-O14)', () => {
+  const t = bodyTable({ meshes: [{ bbox: { min: [10, 0, 0], max: [12, 2, 2] } }, { bbox: { min: [0, 10, 0], max: [2, 12, 2] } }] });
+  assert.deepEqual([...t.slice(12, 15)], [11, 1, 1]);
+  assert.ok(Math.abs(t[15] - Math.sqrt(3)) < 1e-6, String(t[15]));
+  assert.ok(Math.abs(t[23] - Math.sqrt(3)) < 1e-6, String(t[23]));
+});
 
 // A body whose triangles share no edge has 3 boundary edges per triangle: the
 // hash tables must not fill (a full open-addressed table probes forever). Run

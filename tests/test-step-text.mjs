@@ -4,7 +4,7 @@
 //   node tests/test-step-text.mjs   -> "RESULT: N passed, 0 failed"
 
 import assert from 'node:assert/strict';
-import { STEP_SLICE, forEachStepSlice } from '../js/step-text.js';
+import { STEP_SLICE, forEachStepSlice, withoutBom } from '../js/step-text.js';
 import { stepFeatures } from '../js/step-features.js';
 import { stepUnits } from '../js/source-units.js';
 import { test, done } from './harness.mjs';
@@ -50,6 +50,23 @@ test('a real ADVANCED_FACE is still counted, with its bounds', () => {
   const f = stepFeatures(enc("ISO-10303-21;\nDATA;\n#5=ADVANCED_FACE('',(#6,#7,#8),#9,.T.);\n#6=FACE_OUTER_BOUND('',#10,.T.);\nENDSEC;"));
   assert.equal(f.faces, 1);
   assert.equal(f.bounds2, 9);
+});
+
+// (r112 M step-text-B0, step-text-C5) a ;-less run longer than a slice is dropped; one of exactly a
+// slice is still carried (the drop is for "longer than", not "as long as")
+test('a ;-less run past a slice is dropped, one of exactly a slice is carried (r112 M step-text-B0, step-text-C5)', () => {
+  const lens = (s) => { const got = []; forEachStepSlice(enc(s), (t) => got.push(t.length)); return got; };
+  assert.deepEqual(lens(`${'x'.repeat(2 * STEP_SLICE + 10)};#1=A;`), [0, 0, 16]);
+  assert.deepEqual(lens(`${'x'.repeat(STEP_SLICE)}#1=A;`), [0, STEP_SLICE + 5]);
+});
+// (r112 M step-text-C0, C1, C2, O2, O4, O8) withoutBom drops exactly the three BOM bytes, and only
+// when all three are there
+test('withoutBom drops exactly ef bb bf and nothing else (r112 M step-text-C0, step-text-C1, step-text-C2, step-text-O2, step-text-O4, step-text-O8)', () => {
+  const wb = (a) => Array.from(withoutBom(new Uint8Array(a)));
+  assert.deepEqual(wb([0xef, 0xbb, 0xbf, 0x49, 0x53]), [0x49, 0x53]);
+  assert.deepEqual(wb([0xef, 0x00, 0xbf, 0x49]), [0xef, 0x00, 0xbf, 0x49]);
+  assert.deepEqual(wb([0xef, 0xbb, 0x00, 0x49]), [0xef, 0xbb, 0x00, 0x49]);
+  assert.deepEqual(wb([0x00, 0xbb, 0xbf, 0x49]), [0x00, 0xbb, 0xbf, 0x49]);
 });
 
 done();

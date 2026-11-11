@@ -79,9 +79,7 @@ void main() {
   // distance: a share grew as the view zoomed out until a 1 mm sheet's inside drew over its outside
   // (r110 E1). Only a body the plane passes through has a cut face: one it misses is not pulled,
   // so a closed body thinner than the pull, away from the cut, keeps its far side behind its near
-  // side (r110 F2). And no more than uCutV.z of the cut body's own radius: a small part's 0.005 mm
-  // lead, the model's pull 0.027 mm on its board, drew its inside over its top (r111 G1).
-  // (renderer-webgpu.js vs, the same)
+  // side (r110 F2); at most uCutV.z of the cut body's radius (r111 G1). (renderer-webgpu.js vs too)
   if (uCutV.x > 0.5 && dot(aNrm.xyz, vView) < 0.0) {
     bool cut = true;
     float pull = uCutV.y;

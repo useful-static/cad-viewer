@@ -1435,4 +1435,42 @@ await test('a tour\'s own model is reported as the page opens it, from the URL t
   assert.match(t.detail, /; its model https:\/\/example\.com\/moved\/c\.stl$/);
 });
 
+// a GLB chunk (padded to 4) and a GLB of chunks
+const glbChunk = (type, data) => { const d = Buffer.from(data); const pad = (4 - (d.length % 4)) % 4; const h = Buffer.alloc(8); h.writeUInt32LE(d.length + pad, 0); h.write(type, 4, 'latin1'); return Buffer.concat([h, d, Buffer.alloc(pad, type === 'JSON' ? 0x20 : 0)]); };
+// (r112 M list-check-B185) a GLB too large to fetch whole, from a server that sends no range after
+// the first: its JSON said not read, not passed over in silence
+await test('a large GLB whose server stops sending ranges: its JSON said not read (r112 M list-check-B185)', async () => {
+  const TOTAL = 100000000;
+  const j = glbChunk('JSON', JSON.stringify({ asset: { version: '2.0' }, meshes: [] }));
+  const h = Buffer.alloc(12); h.writeUInt32LE(0x46546c67, 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(TOTAL, 8);
+  const binH = Buffer.alloc(8); binH.writeUInt32LE(TOTAL - 12 - j.length - 8, 0); binH.write('BIN\0', 4, 'latin1');
+  const start = Buffer.concat([h, j, binH]);
+  const first = Buffer.concat([start, Buffer.alloc(65536 - start.length)]);
+  let n = 0;
+  const fetchFn = async (u, o = {}) => {
+    n++;
+    const rg = (o.headers && o.headers.Range) || '';
+    if (rg === 'bytes=0-65535' && n === 1) return new Response(first, { status: 206, headers: { 'content-length': '65536', 'content-range': `bytes 0-65535/${TOTAL}` } });
+    return new Response(Buffer.alloc(16), { status: 200, headers: { 'content-length': String(TOTAL) } });
+  };
+  const r = await checkFile('https://example.org/m/big.glb', { fetchFn, sniff: true });
+  assert.equal(r.level, 'warn');
+  assert.match(r.detail, /^95\.4 MB · GLB · big\.glb's JSON was not read here \(the server sent no range\) · /);
+});
+// (r112 M list-check-B31) a GLB read by range whose JSON lies past its 64th chunk: said not read
+// (a warning), not "damaged: it holds no glTF JSON"
+await test('a ranged GLB whose JSON is its 65th chunk: "more than 64 chunks", a warning, not damaged (r112 M list-check-B31)', async () => {
+  const body = Buffer.concat([glbChunk('BIN\0', Buffer.alloc(70000)), ...Array.from({ length: 63 }, () => glbChunk('BIN\0', Buffer.alloc(4))), glbChunk('JSON', JSON.stringify({ asset: { version: '2.0' }, meshes: [] }))]);
+  const h = Buffer.alloc(12); h.writeUInt32LE(0x46546c67, 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + body.length, 8);
+  const b = Buffer.concat([h, body]);
+  const fetchFn = async (u, o = {}) => {
+    const m = /bytes=(\d+)-(\d+)/.exec((o.headers && o.headers.Range) || '');
+    if (!m) return new Response(b, { status: 200, headers: { 'content-length': String(b.length) } });
+    const a = +m[1], e = Math.min(+m[2], b.length - 1);
+    return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
+  };
+  const r = await checkFile('https://example.org/m/many.glb', { fetchFn, sniff: true });
+  assert.deepEqual([r.level, r.detail], ['warn', '0.07 MB · GLB · many.glb has more than 64 chunks: its JSON was not read here']);
+});
+
 done();

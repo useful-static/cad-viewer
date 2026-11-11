@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FORMATS, formatOfName, fileNameOfUrl, sniffFormat, drawingReaderOf, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES } from '../js/formats.js';
+import { FORMATS, formatOfName, fileNameOfUrl, sniffFormat, drawingReaderOf, acceptList, isCompanion, MODEL_NAME, isDWGBytes, opensShort, opensText, SNIFF_BYTES, zipModel, zipCompanions } from '../js/formats.js';
 import { test, done } from './harness.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +128,13 @@ test('a DXF named .dwg is read as the DXF it is, as a DWG named .dxf is read as 
   assert.equal(drawingReaderOf('plan.dwg', dxf).label, 'DXF');
   assert.equal(drawingReaderOf('plan.dwg', new TextEncoder().encode('AC1015')).label, 'DWG');
   assert.equal(drawingReaderOf('plan.dxf', new TextEncoder().encode('AC1015')).label, 'DWG');
+});
+// (r112 M formats-C40) another model in this model's own folder claims no folder of its own, so a
+// companion stored with a leading "/" (or a "//") is still this model's
+test('another model in the same folder claims no folder: a "/"-stored companion is still found (r112 M formats-C40)', () => {
+  const run = (names) => { const z = zipModel(names); return zipCompanions(z.files, z.model, z.opens).map((c) => `${c.path}=>${c.name}`); };
+  assert.deepEqual(run(['chair.obj', 'table.obj', '/chair.mtl']), ['/chair.mtl=>/chair.mtl']);
+  assert.deepEqual(run(['red/chair.obj', 'red/chair.mtl', 'blue/x.obj', 'blue/x.mtl']), ['red/chair.mtl=>chair.mtl']);
 });
 
 done();

@@ -48,5 +48,68 @@ await test('entries of an older CACHE_VERSION are stale, this one\'s are not', (
 await test('the cap is generous for a large assembly (the rack is 3.2 MB gzipped)', () => {
   assert.ok(CACHE_CAP_BYTES >= 100e6);
 });
+// (r112 M mesh-cache-C1, mesh-cache-O4) a total of exactly the cap fits; one byte over drops the oldest
+await test('a total exactly at the cap keeps everything, one byte over drops the oldest (r112 M mesh-cache-C1, mesh-cache-O4)', () => {
+  const e = [{ key: 'a', size: 40, used: 1 }, { key: 'b', size: 50, used: 2 }];
+  assert.deepEqual(evictionPlan(e, 10, 100), []);
+  assert.deepEqual(evictionPlan(e, 11, 100), ['a']);
+});
+
+// The IndexedDB side over a small in-memory stand-in (the browser run is tests/mesh-cache.py): enough
+// of IDBFactory / transaction / object store / request for mesh-cache.js's calls. A request's
+// result is set at once; onsuccess and the transaction's oncomplete fire on a later task.
+class FakeRequest { constructor(result) { this.result = result; } }
+function fakeIndexedDB() {
+  const stores = { meta: new Map(), data: new Map() };
+  const later = (f) => setTimeout(f, 0);
+  const store = (m) => ({
+    get: (k) => { const r = new FakeRequest(m.get(k)); later(() => r.onsuccess && r.onsuccess()); return r; },
+    put: (v) => { m.set(v.key, v); return new FakeRequest(v.key); },
+    delete: (k) => { m.delete(k); return new FakeRequest(undefined); },
+    getAll: () => new FakeRequest([...m.values()]),
+    clear: () => { m.clear(); return new FakeRequest(undefined); },
+  });
+  const d = { createObjectStore() {}, transaction: () => { const t = { objectStore: (n) => store(stores[n]) }; later(() => t.oncomplete && t.oncomplete()); return t; } };
+  return { open: () => { const r = { result: d }; later(() => { if (r.onupgradeneeded) r.onupgradeneeded(); if (r.onsuccess) r.onsuccess(); }); return r; } };
+}
+const mc = await import('../js/mesh-cache.js');
+// (r112 M mesh-cache-C0) no IndexedDB (Node, an old browser): the cache is off; with one, on
+await test('the cache is off without IndexedDB and on with it (r112 M mesh-cache-C0)', () => {
+  assert.equal(typeof globalThis.indexedDB, 'undefined');
+  assert.equal(mc.cacheAvailable(), false);
+  globalThis.IDBRequest = FakeRequest;
+  globalThis.indexedDB = fakeIndexedDB();
+  assert.equal(mc.cacheAvailable(), true);
+});
+// (r112 M mesh-cache-B1, mesh-cache-R2, mesh-cache-C2, mesh-cache-R13, mesh-cache-R8) a small mesh
+// put is stored, listed and read back
+await test('a small mesh put is stored, listed and read back (r112 M mesh-cache-B1, mesh-cache-R2, mesh-cache-C2, mesh-cache-R13, mesh-cache-R8)', async () => {
+  assert.equal(mc.cacheAvailable(), true, 'the stand-in is in');
+  const key = `v${CACHE_VERSION}|abc`;
+  assert.equal(await mc.cachePut(key, new Uint8Array([1, 2, 3]).buffer, 'part.step'), true);
+  assert.deepEqual((await mc.cacheList()).map((e) => `${e.key} ${e.name} ${e.size}`), [`${key} part.step 3`]);
+  const got = await mc.cacheGet(key);
+  assert.ok(got, 'read back');
+  assert.deepEqual([...new Uint8Array(got)], [1, 2, 3]);
+  assert.equal(await mc.cacheGet(`v${CACHE_VERSION}|none`), null, 'a miss is null');
+});
+// (r112 M mesh-cache-B4, untriaged in M's report) a hit marks the entry used now: the LRU order
+// follows reads, not only writes
+await test('a hit marks its entry used now, so eviction follows reads (r112 M mesh-cache-B4)', async () => {
+  assert.equal(mc.cacheAvailable(), true, 'the stand-in is in');
+  const now = Date.now;
+  try {
+    const key = `v${CACHE_VERSION}|lru`;
+    Date.now = () => 1000;
+    await mc.cachePut(key, new Uint8Array([7]).buffer, 'lru.step');
+    Date.now = () => 5000;
+    assert.ok(await mc.cacheGet(key));
+    await new Promise((r) => setTimeout(r, 20)); // the refresh is not awaited by cacheGet
+    const e = (await mc.cacheList()).find((x) => x.key === key);
+    assert.equal(e.used, 5000);
+  } finally {
+    Date.now = now;
+  }
+});
 
 done();

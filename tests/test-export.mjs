@@ -323,4 +323,43 @@ test('the export axes are right-handed for every orientation, Z up and Y up: no 
   assert.equal(n, 48);
 });
 
+// (r112 M export-mesh-O170) every GLB accessor's buffer view is exactly its count x element size,
+// COLOR_0 four normalized uint16 a vertex (no padding element)
+await test('GLB: each buffer view is exactly its accessor\'s count x element size, COLOR_0 4 x uint16 a vertex (r112 M export-mesh-O170)', async () => {
+  const g = await toGLB(model, [1, 2], IDENT);
+  const jl = new DataView(g.buffer, g.byteOffset).getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(g.subarray(20, 20 + jl)));
+  const comp = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 }, width = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+  let colours = 0;
+  for (const mesh of json.meshes) for (const pr of mesh.primitives) {
+    const c = json.accessors[pr.attributes.COLOR_0];
+    assert.deepEqual([c.type, c.componentType, c.normalized], ['VEC4', 5123, true]);
+    colours += c.count;
+  }
+  assert.equal(colours, 7);
+  for (const a of json.accessors) {
+    const v = json.bufferViews[a.bufferView];
+    assert.equal(v.byteLength, a.count * comp[a.componentType] * width[a.type], `accessor ${JSON.stringify(a)}`);
+  }
+  assert.equal(g.length, 2048);
+});
+// (r112 M export-mesh-O89) each 3MF entry's local header says the version its central directory
+// entry says: 2.0 (deflate)
+await test('3MF: every local header needs version 2.0, as its central directory entry says (r112 M export-mesh-O89)', async () => {
+  const z = await to3MF(model, [1, 2], IDENT);
+  const dv = new DataView(z.buffer, z.byteOffset, z.byteLength);
+  let e = z.length - 22;
+  while (dv.getUint32(e, true) !== 0x06054b50) e--;
+  let p = dv.getUint32(e + 16, true);
+  const n = dv.getUint16(e + 10, true);
+  assert.equal(n, 3);
+  for (let i = 0; i < n; i++) {
+    const off = dv.getUint32(p + 42, true);
+    assert.equal(dv.getUint32(off, true), 0x04034b50);
+    assert.equal(dv.getUint16(off + 4, true), 20, `entry ${i}: local version needed`);
+    assert.equal(dv.getUint16(p + 6, true), 20, `entry ${i}: central version needed`);
+    p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+  }
+});
+
 done();

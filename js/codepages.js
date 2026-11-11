@@ -53,11 +53,22 @@ export function dxfDecoder(acadver, pageName, isUtf8) {
   return isUtf8() ? decoderFor('utf-8') : decoderFor('windows-1252');
 }
 
+// windows-1252's 0x80..0x9F, by the Encoding standard's index (0x81, 0x8D, 0x8F, 0x90 and 0x9D are
+// themselves). A runtime whose TextDecoder reads them as Latin-1 (Node 20: 0x80 "\u0080", where
+// browsers and Node 22 read "€") gets them from here, so a drawing's text is the same everywhere
+// (r112 b)
+const W1252_HIGH = '€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008dŽ\u008f\u0090‘’“”•–—˜™š›œ\u009džŸ';
+export const cp1252Over = (dec) => ({
+  encoding: 'windows-1252',
+  decode: (u8, o) => dec.decode(u8, o).replace(/[\x80-\x9f]/g, (c) => W1252_HIGH[c.charCodeAt(0) - 0x80]),
+});
+
 // a decoder for a label (a TextDecoder, or the 850 table), or null when there is none
 const made = {};
 export function decoderFor(label) {
   if (!label) return null;
   if (label === 'ibm850') return ibm850;
   if (!(label in made)) { try { made[label] = new TextDecoder(label); } catch { made[label] = null; } }
+  if (label === 'windows-1252' && made[label] && made[label].decode(Uint8Array.of(0x80)) !== '€') made[label] = cp1252Over(made[label]);
   return made[label];
 }

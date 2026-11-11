@@ -6,7 +6,7 @@
 // cost.   node tests/test-solid.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { crossingsAt, solidIndex, windingAt } from '../js/solid.js';
+import { crossingsAt, nesting, solidIndex, windingAt } from '../js/solid.js';
 import { buildEdges, shellTurns, FACTS_RULE, factsCurrent, BODY_FACTS, flagCounts, flagsSaid } from '../js/edges.js';
 import { encodeCadmesh, decodeCadmesh } from '../js/cadmesh.js';
 import { mergeModels } from '../js/scene.js';
@@ -452,6 +452,52 @@ test('8,000 shells each inside the one before (concentric): the nearest holder o
   const ms = performance.now() - t0;
   assert.equal(flip, null, 'wound as they lie (each inner one against the one round it): none turned');
   assert.ok(ms < 6000, `${ms.toFixed(0)} ms`);
+});
+
+// shells of triangles -> nesting()'s arguments: P, I, shell (per triangle), the shell count
+const shellsOf = (shells) => {
+  const T = shells.flat(), { P, I } = meshOf(T);
+  return { P: Float64Array.from(P), I, shell: Int32Array.from(shells.flatMap((s, k) => s.map(() => k))), ns: shells.length };
+};
+const openTop = (lo, hi) => cubeT(lo, hi).filter((t) => !t.every((p) => p[2] === hi[2]));
+// (r112 M solid-B36) an open shell holds nothing: a closed cube in a 10-cube is held by it, an
+// open-topped one beside it is its own outer shell
+test('nesting: an open shell is never placed inside a solid, nor holds one (r112 M solid-B36)', () => {
+  const { P, I, shell, ns } = shellsOf([cubeT([0, 0, 0], [10, 10, 10]), cubeT([4, 4, 4], [6, 6, 6]), openTop([1, 1, 1], [3, 3, 3])]);
+  const r = nesting(P, I, shell, ns, Uint8Array.from([0, 0, 1]));
+  assert.deepEqual(Array.from(r.parent), [-1, 0, -1]);
+  assert.deepEqual(Array.from(r.root), [0, 0, 2]);
+});
+// (r112 M solid-C41) each shell's box is its triangles' true box, off the axes too
+test('nesting: each shell\'s box is its vertices\' box, for shells turned off the axes (r112 M solid-C41)', () => {
+  const turn = (p) => {
+    let [x, y, z] = p;
+    [x, y] = [x * Math.cos(0.5) - y * Math.sin(0.5), x * Math.sin(0.5) + y * Math.cos(0.5)];
+    [y, z] = [y * Math.cos(0.3) - z * Math.sin(0.3), y * Math.sin(0.3) + z * Math.cos(0.3)];
+    return [x, y, z];
+  };
+  const shells = [cubeT([0, 0, 0], [10, 10, 10]), cubeT([4, 4, 4], [6, 6, 6]), openTop([1, 1, 1], [3, 3, 3])].map((s) => s.map((t) => t.map(turn)));
+  const { P, I, shell, ns } = shellsOf(shells);
+  const r = nesting(P, I, shell, ns, Uint8Array.from([0, 0, 1]));
+  shells.forEach((s, k) => {
+    for (let c = 0; c < 3; c++) {
+      const vs = s.flat().map((p) => Math.fround(p[c]));
+      assert.ok(Math.abs(r.lo[3 * k + c] - Math.min(...vs)) < 1e-9, `shell ${k} lo[${c}] ${r.lo[3 * k + c]} vs ${Math.min(...vs)}`);
+      assert.ok(Math.abs(r.hi[3 * k + c] - Math.max(...vs)) < 1e-9, `shell ${k} hi[${c}]`);
+    }
+  });
+  assert.deepEqual(Array.from(r.parent), [-1, 0, -1], 'and the same nesting as unturned');
+});
+// (r112 M edges-B21, untriaged in M's report) a part inside two crossing outer shells is net from
+// the nesting alone: said net even when the surfaces' overlap test runs out of budget at once
+test('a part in two outer shells is net by its nesting, before the overlap test (r112 M edges-B21)', () => {
+  const T = [...cubeT([0, 0, 0], [3, 3, 3]), ...cubeT([2, 0, 0], [5, 3, 3]), ...cubeT([2.2, 1, 1], [2.8, 2, 2])];
+  const { P, I } = meshOf(T);
+  const f = (opts) => buildEdges({ position: P, index: I, meshes: [{ idxStart: 0, idxCount: I.length, vtxStart: 0, vtxCount: P.length / 3, bbox: { min: [0, 0, 0], max: [5, 3, 3] } }] }, opts).facts;
+  const tight = f({ overlapBudget: 1 });
+  assert.deepEqual([tight.net[0], tight.unchecked[0]], [true, false]);
+  const free = f();
+  assert.deepEqual([free.net[0], free.unchecked[0]], [true, false]);
 });
 
 done();

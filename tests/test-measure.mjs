@@ -519,4 +519,141 @@ test(`the BVH (bodies over ${BVH_MIN} triangles) answers as the scan does`, () =
   assert.equal(agree, 300, `${agree}/300 agree (${hits} hit)`);
 });
 
+// createMeasure at the viewer's opening camera (the r108 M1 arm's): bodies, the hidden set; the page's
+// elements stubs, made elements recorded, what is told recorded. -> { meas, $, toScreen, made, told }
+const measureAt = async (bodies, hidden = new Set()) => {
+  const { createMeasure } = await import('../js/measure-ui.js');
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const stub = () => new Proxy(function () {}, {
+    get(t, k) { if (k in t) return t[k]; if (k === 'querySelectorAll') return () => []; if (k === 'querySelector') return () => stub(); if (k === 'children') return []; if (k === Symbol.iterator) return undefined; return stub(); },
+    set(t, k, v) { t[k] = v; return true; }, apply() { return stub(); },
+  });
+  const els = new Map(), $ = (id) => { if (!els.has(id)) els.set(id, stub()); return els.get(id); };
+  const m = model(bodies);
+  const W = 1280, H = 800, fov = Math.PI / 4, centre = [50, 35, 0.8], dist = 160, yaw = 0.7, pitch = 0.45;
+  const eye = [centre[0] + dist * Math.cos(pitch) * Math.sin(yaw), centre[1] - dist * Math.cos(pitch) * Math.cos(yaw), centre[2] + dist * Math.sin(pitch)];
+  const view = lookAt(eye, centre, [0, 0, 1]), vp = multiply(perspective(fov, W / H, 1, 5000, false), view);
+  const dv = eye.map((x, k) => x - centre[k]), L = Math.hypot(...dv);
+  const v = { vp, eye, dir: dv.map((x) => x / L), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], ortho: false, tanV: Math.tan(fov / 2), w: W, h: H, target: centre, dist: L };
+  const told = [];
+  const meas = createMeasure({ $, view: () => ({ ...v }), sectionPlane: () => null, closed: () => true,
+    scene: { mesh: m, header: m.header, hidden, sphere: { center: centre, radius: 61 } },
+    lenText: (x) => `${x.toFixed(2)} mm`, num: (x) => x.toFixed(2), unit: () => 'mm', announce() {}, tell: (s) => told.push(s), queueFrame() {}, syncOptbar() {}, coarse: () => false, showsHidden: () => false });
+  const toScreen = (p) => {
+    const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+    return [((x / w + 1) * W) / 2, ((1 - y / w) * H) / 2];
+  };
+  return { meas, $, toScreen, told };
+};
+// a canvas context that records what is drawn: texts (fillText) and arcs' start/end angles
+const recordingCtx = () => {
+  const texts = [], arcs = [];
+  const ctx = new Proxy({}, { get: (t, k) => (k === 'fillText' ? (s) => texts.push(s) : k === 'arc' ? (...a) => arcs.push(`${Math.round(a[3] * 100) / 100},${Math.round(a[4] * 100) / 100}`) : k === 'measureText' ? (s) => ({ width: String(s).length * 7 }) : k in t ? t[k] : () => {}), set: (t, k, x) => { t[k] = x; return true; } });
+  return { ctx, texts, arcs };
+};
+const BOARD = () => ({ name: 'board', faces: box([0, 0, 0], [100, 70, 1.6]) });
+
+// (r112 M measure-ui-B6) a hidden body is not snapped to: the edge of the board under a hidden cover
+await test('snapAt passes over a hidden body: the board\'s edge under a hidden cover (r112 M measure-ui-B6)', async () => {
+  const { meas, toScreen } = await measureAt([{ name: 'cover', faces: box([0, 0, 10], [100, 70, 12]) }, BOARD()], new Set([1]));
+  const s = meas.snapAt(...toScreen([25, 70, 1.6]));
+  assert.ok(s && s.kind === 'edge' && s.mesh === 1, `${s && s.kind} of ${s && s.mesh}`);
+  assert.ok(Math.hypot(...s.p.map((x, k) => x - [25, 70, 1.6][k])) < 1e-3);
+});
+// (r112 M measure-ui-C64, measure-ui-B75, measure-ui-O237) the chip counts results in the singular
+// and the plural; a saved picture's labels carry their second line; its end dots are whole circles
+await test('the results chip says "1 result", "2 results"; the picture has each label\'s two lines and whole dots (r112 M measure-ui-C64, measure-ui-B75, measure-ui-O237)', async () => {
+  const { meas, $ } = await measureAt([BOARD()]);
+  const chip = [];
+  meas.addDistance([0, 0, 0], [10, 0, 0], 'gap A'); chip.push($('measchip').textContent);
+  meas.addDistance([0, 0, 0], [0, 20, 0], 'gap B'); chip.push($('measchip').textContent);
+  assert.deepEqual(chip, ['1 result', '2 results']);
+  const { ctx, texts, arcs } = recordingCtx();
+  meas.paint(ctx, 1);
+  assert.deepEqual(texts, ['10.00 mm', 'gap A', '20.00 mm', 'gap B']);
+  assert.ok(arcs.length >= 4, `${arcs.length} dots`);
+  assert.deepEqual([...new Set(arcs)], ['0,6.28']);
+});
+// (r112 M measure-ui-C35) a note of the user's own is theirs, a note the page gave is given
+await test('setNotes: a note marked own is the user\'s, any other the page\'s (given) (r112 M measure-ui-C35)', async () => {
+  const { meas } = await measureAt([BOARD()]);
+  meas.setNotes([{ p: [1, 2, 3], text: 'mine', own: true }, { p: [4, 5, 6], text: 'given' }]);
+  assert.deepEqual(meas.results.filter((r) => r.mode === 'note').map((r) => `${r.main}:${r.given}`), ['mine:false', 'given:true']);
+  assert.deepEqual(meas.notes(), [{ p: [1, 2, 3], text: 'mine', own: true }, { p: [4, 5, 6], text: 'given' }]);
+});
+// (r112 M measure-ui-R26) loupe(x, y) shows the loupe, loupe(null) hides it
+await test('loupe(x, y) shows the loupe, loupe(null) takes it away (r112 M measure-ui-R26)', async () => {
+  const { meas } = await measureAt([BOARD()]);
+  meas.loupe(640, 400);
+  assert.equal(meas.loupeShown, true);
+  meas.loupe(null);
+  assert.equal(meas.loupeShown, false);
+});
+// (r112 M measure-ui-O129) an Angle placed on three corners of the board reads to two decimals
+await test('an Angle placed on three of the board\'s corners reads "90.00°" (r112 M measure-ui-O129)', async () => {
+  const { meas, toScreen } = await measureAt([BOARD()]);
+  meas.setOn(true);
+  meas.setMode('angle');
+  for (const p of [[100, 70, 1.6], [0, 70, 1.6], [0, 0, 1.6]]) meas.place(...toScreen(p));
+  const a = meas.results.filter((r) => r.mode === 'angle');
+  assert.equal(a.length, 1, JSON.stringify(meas.results.map((r) => r.mode)));
+  assert.equal(a[0].main, '90.00°');
+});
+// (r112 M measure-ui-R49) a hole table's row is picked by Enter or Space, as by a click; another key does nothing
+await test('a hole table row is picked from the keyboard by Enter and Space, not by another key (r112 M measure-ui-R49)', async () => {
+  const had = globalThis.document;
+  const made = [];
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }; made.push(e); return e; } };
+  try {
+    const { meas, told } = await measureAt([BOARD(), { name: 'washer', faces: washer(1.6, 4, 1.6, 48, 20, 30) }]);
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    const tr = made.find((e) => e.tag === 'tr');
+    assert.ok(tr && tr.onkeydown, 'a row with a key handler');
+    const n0 = told.length;
+    for (const key of ['Enter', ' ', 'a']) tr.onkeydown({ key, preventDefault() {} });
+    assert.equal(told.length - n0, 2);
+    assert.match(told[told.length - 1], /^hole 1: Ø /);
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
+});
+// (r112 M measure-ui-B41, untriaged in M's report) while a note's text is being typed, a click
+// places nothing more
+await test('while a note\'s text is typed, a click on the model places nothing more (r112 M measure-ui-B41)', async () => {
+  const { meas, toScreen } = await measureAt([BOARD()]);
+  meas.setOn(true);
+  meas.setMode('note');
+  assert.ok(meas.place(...toScreen([50, 35, 1.6])));
+  const before = JSON.stringify([meas.pending.length, meas.results.length]);
+  assert.equal(meas.place(...toScreen([20, 20, 1.6])), true);
+  assert.equal(JSON.stringify([meas.pending.length, meas.results.length]), before);
+  assert.equal(meas.pending.length, 1, 'the note\'s point kept, waiting for its text');
+});
+
+// (r112 M measure-geom-C50) a box wound inward with its normals out (a mirrored placement): every
+// face's plane turned to its normals, the last face too
+test('a mirrored box\'s face planes all face out by the normals, the last face too (r112 M measure-geom-C50)', () => {
+  const m = model([{ name: 'b', faces: box([0, 0, 0], [10, 20, 4]) }]);
+  const I = m.index;
+  for (let t = 0; t < I.length / 3; t++) { const x = I[3 * t + 1]; I[3 * t + 1] = I[3 * t + 2]; I[3 * t + 2] = x; }
+  const g = bodyGeometry(m, 0);
+  assert.deepEqual(g.faces.map((f) => f.plane.normal.map((x) => Math.round(x) + 0).join(',')), ['0,0,1', '0,0,-1', '0,1,0', '0,-1,0', '1,0,0', '-1,0,0']);
+});
+// (r112 M measure-geom-B36, untriaged in M's report) an open b-rep edge with points along it -- a
+// D-shaped plate's half-circle rims -- is one edge corner to corner, even where a point along it is
+// numbered before its corners (the curved side's triangles listed from the middle of the arc)
+test('a D-shaped plate\'s half-circle rims are one edge each, corner to corner (r112 M measure-geom-B36)', () => {
+  const n = 12, r = 10, h = 2;
+  const arc = (z) => Array.from({ length: n + 1 }, (_, i) => P(r * Math.cos((Math.PI * i) / n), r * Math.sin((Math.PI * i) / n), z));
+  const top = arc(h), bot = arc(0), c0 = P(0, 0, 0), ch = P(0, 0, h);
+  const fan = (ring, c, up) => ring.slice(0, -1).map((p, i) => (up ? [c, p, ring[i + 1]] : [c, ring[i + 1], p]));
+  const side = [];
+  for (let j = 0; j < n; j++) { const i = (j + n / 2) % n; side.push([bot[i], bot[i + 1], top[i + 1]], [bot[i], top[i + 1], top[i]]); }
+  const flat = [[bot[0], top[n], bot[n]], [bot[0], top[0], top[n]]];
+  const g = bodyGeometry(model([{ name: 'd', faces: [side, fan(top, ch, true), fan(bot, c0, false), flat] }]), 0);
+  assert.equal(g.corners.length, 4);
+  // two rims of 13 points, two straight edges through the centre (3), four ends of 2 -- 8 edges
+  assert.deepEqual(g.edges.map((e) => e.length).sort((a, b) => a - b), [2, 2, 2, 2, 3, 3, 13, 13]);
+});
+
 done();

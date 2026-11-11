@@ -749,9 +749,7 @@ function setExplode(on, focus = false) {
   if (focus) (on ? $('xpoff') : toolFocus('explode')).focus();
 }
 
-// A new model (or none) opens together: Explode off, its directions the last model's no more, and
-// its row and button with it -- one reset, where loadBuffer had set the flag alone and left the row
-// up, its x doing nothing (r111 H2-M1)
+// Explode off for a new model (or none), its row and button with it (r111 H2-M1)
 function explodeOffForModel() {
   const x = app.explode;
   x.on = false;
@@ -901,15 +899,10 @@ const EDGE_HOVER_PX = 1;
 // With a section on, a face seen from inside (a cut face) is drawn this share of the model's
 // radius nearer, along its view ray (renderer-webgl.js VS): enough to settle a cut face on the face
 // it rests on (r109 R1), a length that does not grow as the view zooms out (r110 E1), and under
-// the corpus's thin walls: 0.34 mm on the 683 mm rack, whose rails are 0.73 mm and its chassis
-// sheet 1 mm. Measured (r110): 2e-4 left 23 of 362 clicks inside a cut bracket on its plate taking
-// the plate on WebGPU at 3x the opening distance, 5e-4 15, 1e-3 4; 1e-3 began to draw the rack's
-// rails' insides over them at 3x (618 px changed, as 548 with no pull)
+// the corpus's thin walls (0.34 mm on the rack, its rails 0.73 mm: r110's audit has the sweep)
 const CUT_PULL = 5e-4;
-// ... and at most this share of the cut body's own radius (its bounding sphere's): a 0.005 mm lead
-// plate of a small part on a 55 mm board took the board's 0.027 mm pull and drew its inside over its
-// top, 100 of its 118 px (r111 G1). At 1e-3 the R1 bracket's pull fell 4 % under CUT_PULL's and one
-// more click took the plate; 1.1e-3 leaves that bracket's pull as it was.
+// ... and at most this share of the cut body's own radius: a small part's lead drew its inside
+// (r111 G1; the round's audit has the lengths measured)
 const CUT_PULL_BODY = 1.1e-3;
 // (app.edgeMinPx: a body under that projected radius, CSS px, draws no
 // edges; they would only darken it)
@@ -1302,8 +1295,7 @@ function applyView(v, link = false) {
     app.explode.t = v.explode.t;
     setExplode(true);
     if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
-    // (the sphere grown by the link's amount: in a tab already exploded in that mode neither call
-    // above did it, and the depth range of the old amount clipped the moved parts -- r111 H2-M2)
+    // (the sphere grown by the link's amount, which neither call above does when on in that mode: r111 H2-M2)
     syncExplodeSphere();
     syncExplodeRow();
   } else if (v.cam && app.explode.on) setExplode(false);

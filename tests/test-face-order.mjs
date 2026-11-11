@@ -41,5 +41,16 @@ test('solids sit further back than sheets', () => {
   assert.ok(BIAS_SOLID[0] > BIAS_SHEET[0] && BIAS_SOLID[1] >= BIAS_SHEET[1], 'the gap is in the slope factor');
   assert.ok(BIAS_SHEET[0] > 0 && BIAS_SHEET[1] > 0, 'sheets stay behind their own edges');
 });
+// (r112 M face-order-O4) the gap is in the slope ONLY: the solids' constant units are the sheets'
+test('the solids\' bias is 2 slope + the sheets\' own units, [2, 1] (r112 M face-order-O4)', () => {
+  assert.deepEqual(BIAS_SOLID, [2, 1]);
+  assert.equal(BIAS_SOLID[1], BIAS_SHEET[1]);
+});
+// (r112 M face-order-C1) an empty body (idxCount 0) still tiles the index: the sheet moves last
+test('an empty body between the ranges still tiles the index, so the sheets move last (r112 M face-order-C1)', () => {
+  const r = sheetsLast(Uint32Array.from([0, 1, 2, 3, 4, 5]), [body(0, 3, 'sheet'), body(3, 0, 'closed'), body(3, 3, 'closed')]);
+  assert.deepEqual([...r.index], [3, 4, 5, 0, 1, 2]);
+  assert.equal(r.split, 3);
+});
 
 done();

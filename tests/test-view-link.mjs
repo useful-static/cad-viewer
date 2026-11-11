@@ -167,4 +167,18 @@ test('a note cut to its limit never through a surrogate pair (an emoji at the cu
   assert.equal(cutText(`${'a'.repeat(NOTE_TEXT_MAX - 2)}😀b`, NOTE_TEXT_MAX), `${'a'.repeat(NOTE_TEXT_MAX - 2)}😀`);
 });
 
+// (r112 M view-link-B0) with no distance to scale by, the target is rounded as a plain number
+test('a camera at distance 0 still has its target rounded (r112 M view-link-B0)', () => {
+  const c = roundCamera({ target: [1.23456789, 2, 3], dist: 0, q: [0, 0, 0, 1] });
+  assert.deepEqual(c.target, [1.23457, 2, 3]);
+  assert.equal(c.dist, 0);
+});
+// (r112 M view-link-C17) the last body (id n) is a body of the link, id n + 1 and 0 are not
+test('a link\'s ids run 1..n: the last body is kept, n + 1 and 0 dropped (r112 M view-link-C17)', () => {
+  const r = resolveBodies({ hidden: [1, 3], selected: [3] }, ['a', 'b', 'c']);
+  assert.deepEqual(r.hidden, [1, 3]);
+  assert.deepEqual(r.selected, [3]);
+  assert.deepEqual(resolveBodies({ hidden: [0, 3, 4], selected: [4] }, ['a', 'b', 'c']).hidden, [3]);
+});
+
 done();

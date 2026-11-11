@@ -628,4 +628,86 @@ test('the outside view\'s box tree blocks as the list does, and 100,000 bodies t
   assert.ok(Date.now() - t0 < 1500, `${Date.now() - t0} ms`);
 });
 
+// r112: the rules a mutation pass found no arm for (r112 M tour-*, tour-path-*, tour-sight-*,
+// tour-recorder-*), each asserted on the input that told the original from its mutant
+const r4 = (v) => (Array.isArray(v) ? v.map(r4) : typeof v === 'number' ? Math.round(v * 1e4) / 1e4 : v);
+await test('tour.js: a margin past 10 refused; a body\'s own name its chain under an unnamed root (r112 M tour-O49, tour-R15)', async () => {
+  const { nameChains } = await import('../js/tour.js');
+  assert.throws(() => parseTour(JSON.stringify({ cadtour: 1, mode: 'static', steps: [{ view: 'iso', frame: 'all', margin: 10.5 }] })), /must be 1 to 10/);
+  assert.equal(parseTour(JSON.stringify({ cadtour: 1, mode: 'static', steps: [{ view: 'iso', frame: 'all', margin: 10 }] })).steps[0].margin, 10);
+  assert.deepEqual(nameChains({ meshes: [{ name: 'Bolt' }, { name: '' }], root: { name: '', meshes: [], children: [] } }), [['Bolt'], []]);
+});
+test('tour-path.js: the ease\'s first half, and slerp the near way round and by its whole dot (r112 M tour-path-O0, O14, O7)', () => {
+  assert.deepEqual(r4([0.1, 0.25, 0.4].map((t) => EASE.inOut(t))), [0.004, 0.0625, 0.256]);
+  assert.deepEqual(r4(slerp([0, 0, 0, 1], [0, 0, Math.sin(0.5), Math.cos(0.5)], 0.5)), [0, 0, 0.2474, 0.9689]);
+  assert.deepEqual(r4(slerp([1, 0, 0, 0], [Math.SQRT1_2, Math.SQRT1_2, 0, 0], 0.5)), [0.9239, 0.3827, 0, 0]);
+  assert.deepEqual(r4(slerp([0.5, 0.5, 0.5, 0.5], [0, Math.SQRT1_2, 0, Math.SQRT1_2], 0.3)), [0.3695, 0.6029, 0.3695, 0.6029]);
+});
+await test('tour-sight.js: a ray beside a box parallel to its slab misses; a face of no triangles no box; the tree of 12 boxes split and walked; the rises as listed (r112 M tour-sight-B1, B13, B7, R3, O3)', async () => {
+  const { candidates } = await import('../js/tour-sight.js');
+  const unit = { min: [0, 0, 0], max: [1, 1, 1] };
+  assert.equal(rayHitsBox([-5, 5, 0.5], [1, 0, 0], unit), false);
+  assert.equal(rayHitsBox([-5, 0.5, 0.5], [1, 0, 0], unit), true);
+  assert.equal(meshFaceBoxes({ faceStart: 0, faceCount: 2 }, new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2]), new Uint32Array([0, 1, 1, 0])).length, 1);
+  const boxes = Array.from({ length: 12 }, (_, i) => ({ min: [i * 2, 0, 0], max: [i * 2 + 1, 1, 1] }));
+  assert.equal(blockedShare({ min: [5, 5, 0], max: [6, 6, 1] }, [0, -1, 0], obstacleTree(boxes)), 0);
+  assert.equal(blockedShare({ min: [4, 5, 0], max: [5, 6, 1] }, [0, -1, 0], obstacleTree(boxes)), blockedShare({ min: [4, 5, 0], max: [5, 6, 1] }, [0, -1, 0], boxes));
+  assert.deepEqual(candidates([0, 0, 1], [1, 0, 0]).filter((d, i) => i % 12 === 0).map((d) => r4(d)),
+    [[0.866, 0, 0.5], [0.5736, 0, 0.8192], [0.1736, 0, 0.9848], [0.866, 0, -0.5], [0.5736, 0, -0.8192], [0.1736, 0, -0.9848]]);
+});
+await test('tour-recorder.js: a tour names its model; Add numbers its steps from 1; typing, moving, deleting and the Up / Down buttons in the editor (r112 M tour-recorder-B1, O1, O32, B14, B28, C13, C25, O16, R11, R22)', async () => {
+  const { createTourRecorder } = await import('../js/tour-recorder.js');
+  assert.equal(draftToTour({ title: 't', mode: 'static', loop: false, orient: null, steps: [] }, 'board.cadmesh').model, 'board.cadmesh');
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  // stand-in elements that keep their listeners; the step list and its rows plain, read back
+  const stub = () => {
+    const ls = {};
+    return new Proxy(function () {}, {
+      get(t, k) {
+        if (k in t) return t[k];
+        if (k === 'addEventListener') return (type, fn) => { (ls[type] ||= []).push(fn); };
+        if (k === 'fire') return (type) => (ls[type] || []).forEach((f) => f({}));
+        if (k === 'querySelectorAll') return () => [];
+        if (k === Symbol.iterator) return undefined;
+        if (k === 'value') return '';
+        return stub();
+      },
+      set(t, k, v) { t[k] = v; return true; }, apply() { return stub(); },
+    });
+  };
+  try {
+    const els = new Map();
+    const $ = (id) => { if (!els.has(id)) els.set(id, stub()); return els.get(id); };
+    const plain = (tag) => ({ tag, kids: [], textContent: '', append(...c) { this.kids.push(...c); }, setAttribute() {} });
+    const list = plain('ol');
+    Object.defineProperty(list, 'textContent', { set() { list.kids = []; }, get() { return ''; } });
+    els.set('testeps', list);
+    globalThis.document = { getElementById: $, createElement: plain };
+    const notes = [];
+    const api = { announce: (t) => notes.push(t), capture: () => ({ view: 'iso' }), model: () => ({ key: 'k', name: 'board', unit: 'mm', url: 'b.cadmesh' }), modelUrl: () => 'b.cadmesh', validate() {}, orient: () => null };
+    const rec = createTourRecorder(api);
+    $('teadd').onclick();
+    assert.ok(notes.some((n) => n.startsWith('step 1 added')), JSON.stringify(notes));
+    $('tes-title').value = 'The HDMI port'; $('tes-title').fire('input');
+    assert.deepEqual(list.kids.map((li) => li.kids[0].textContent), ['The HDMI port'], 'the list relabelled by the title');
+    $('tes-transition').value = '2.5'; $('tes-transition').fire('input');
+    assert.equal(rec.toJSON().steps[0].transition, 2.5);
+    $('tetitle').value = 'A tour'; $('tetitle').fire('input');
+    assert.equal(rec.toJSON().title, 'A tour');
+    assert.equal(rec.toJSON().steps[0].title, 'The HDMI port');
+    $('teadd').onclick();
+    assert.ok(notes.some((n) => n.startsWith('step 2 added')), JSON.stringify(notes));
+    assert.deepEqual(list.kids.map((li) => `${li.kids[1].disabled ? 'up-off' : 'up-on'} ${li.kids[2].disabled ? 'down-off' : 'down-on'}`), ['up-off down-on', 'up-on down-off']);
+    list.kids[0].kids[0].onclick();
+    assert.equal($('testep').hidden, false, 'the first step\'s editor shown');
+    list.kids[1].kids[0].onclick();
+    list.kids[0].kids[2].onclick();
+    assert.equal(list.kids.findIndex((li) => li.className === 'sel'), 0, 'the picked step, moved up, still picked');
+    list.kids[0].kids[3].onclick();
+    assert.equal(rec.toJSON().steps.length, 1, 'Delete');
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document;
+  }
+});
+
 done();

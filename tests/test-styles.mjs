@@ -52,5 +52,11 @@ test('the paper colours meet the plan\'s contrast figures', () => {
   // hidden lighter than visible in every state
   for (const [v, h] of Object.values(PAPER_EDGES)) assert.ok(contrast(h, PAPER) < contrast(v, PAPER));
 });
+// (r112 M styles-O10) the Edges style draws its edges in mode 0 (the model's own edge colours),
+// not mode 1, the Hidden-line paper pass
+test('the Edges style is one lequal pass in mode 0, unlike Hidden line\'s mode 1 (r112 M styles-O10)', () => {
+  assert.deepEqual(edgePasses('edges'), [{ depth: 'lequal', mode: 0 }]);
+  assert.equal(edgePasses('hidden')[0].mode, 1);
+});
 
 done();

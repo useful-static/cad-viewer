@@ -928,4 +928,69 @@ await test('inflateHead: nothing out is an empty view, a read it cannot make nul
   assert.deepEqual([...(await inflateHead(gzipSync(Buffer.from('abc')), 64))], [97, 98, 99]);
 });
 
+// (r112 M cadmesh-B36) in a corrupt member, a header-like run is tried as the member's end only
+// when the isize before it fits what came: one of isize 0 is tried (the read gets its 1,004 bytes
+// before it), one of isize ffffffff is not
+await test('inflateHead tries a false gzip header as a member end only when its isize fits (r112 M cadmesh-B36)', async () => {
+  const { inflateHead } = await import('../js/cadmesh.js');
+  const corrupt = (isize) => {
+    const data = Buffer.concat([Buffer.alloc(1000, 0x41), Buffer.from([...isize, 0x1f, 0x8b, 0x08]), Buffer.alloc(5000, 0x42)]);
+    const z = new Uint8Array(gzipSync(data, { level: 0 }));
+    z[z.length - 8] ^= 0xff; // (its CRC wrong: the stream stops at the member's end)
+    return z;
+  };
+  const fits = await inflateHead(corrupt([0, 0, 0, 0]), 1e6), past = await inflateHead(corrupt([0xff, 0xff, 0xff, 0xff]), 1e6);
+  assert.deepEqual([fits && fits.length, past && past.length], [1004, 0]);
+});
+// (r112 M cadmesh-O225) each b-rep face's triangles must lie inside its own mesh: a face past
+// its mesh's last triangle is refused, by the face's count as well as its start
+test('decodeCadmesh refuses a b-rep face that runs past its mesh\'s triangles (r112 M cadmesh-O225)', () => {
+  const mk = () => occtResultToModel(occt([om('a', null, [{ first: 0, last: 1 }]), om('b', null, [{ first: 0, last: 0 }, { first: 1, last: 0 }, { first: 1, last: 1 }])], { name: 'r', meshes: [0, 1], children: [] }));
+  assert.deepEqual([...decodeCadmesh(encodeCadmesh(mk())).faces], [0, 2, 2, 1, 2, 0, 3, 1]);
+  const bad = mk();
+  bad.meshes[1].faces = Uint32Array.from([0, 1, 1, 0, 5, 1]);
+  assert.throws(() => decodeCadmesh(encodeCadmesh(bad)), { message: 'cadmesh: face 3 (triangles 7 + 1) is outside mesh 1' });
+});
+
+// a unitless STL of one triangle, as text
+const stlOf = (a, b, c) => new TextEncoder().encode(`solid t\nfacet normal 0 0 1\nouter loop\nvertex ${a}\nvertex ${b}\nvertex ${c}\nendloop\nendfacet\nendsolid t\n`).buffer;
+// (r112 M read-file-B0, read-file-C0, read-file-O0, read-file-B2) a unitless file read in inches is
+// scaled to mm, every coordinate, and says it was read in inches; read in mm it is as it came
+await test('a unitless STL read in inches is scaled to mm, every coordinate, and says "in" (r112 M read-file-B0, read-file-C0, read-file-O0, read-file-B2)', async () => {
+  const read = async (unit) => {
+    const r = await readMeshFile({ buf: stlOf('1 2 3', '4 5 6', '7 8 10'), format: 'stl', name: 't.stl', unit, edges: false });
+    const d = decodeCadmesh(r.raw);
+    return { unitless: r.unitless, position: Array.from(d.position).map((x) => Math.round(x * 1000) / 1000), units: d.header.sourceUnits ?? null };
+  };
+  assert.deepEqual(await read('in'), { unitless: true, position: [25.4, 50.8, 76.2, 101.6, 127, 152.4, 177.8, 203.2, 254], units: 'in' });
+  assert.deepEqual(await read('mm'), { unitless: true, position: [1, 2, 3, 4, 5, 6, 7, 8, 10], units: 'mm' });
+});
+// (r112 M read-file-B1, read-file-C2) a coordinate scaled past the limit is refused in the reader's
+// words; an ordinary one is not
+await test('a unitless STL scaled past the coordinate limit is refused, an ordinary one read (r112 M read-file-B1, read-file-C2)', async () => {
+  await assert.rejects(readMeshFile({ buf: stlOf('0 0 0', '1e14 0 0', '0 1 0'), format: 'stl', name: 'big.stl', unit: 'in', edges: false }),
+    { message: 'big.stl is too large to show in in (a coordinate past 10^15 mm)' });
+  const r = await readMeshFile({ buf: stlOf('0 0 0', '1 0 0', '0 1 0'), format: 'stl', name: 't.stl', unit: 'in', edges: false });
+  assert.ok(r.raw.byteLength > 0);
+});
+
+// (r112 M xml-walk-B3) a tag whose attributes the walker cannot read is passed over, the next read
+await test('xmlWalk passes over a tag it cannot read and reads the next (r112 M xml-walk-B3)', async () => {
+  const { xmlWalk } = await import('../js/xml-walk.js');
+  const seen = [];
+  xmlWalk('<build><item objectid=1 /><item objectid="2"/></build>', ['item'], (t) => { seen.push(`${t.tag}:${t.attrs.objectid}`); });
+  assert.deepEqual(seen, ['item:2']);
+});
+// (r112 M zip-dir-C2, zip-dir-C7) an empty zip -- its end record alone, at offset 0, its central
+// directory at 0 -- is a zip of no entries
+await test('an empty zip (only its 22-byte end record) is a zip of no entries (r112 M zip-dir-C2, zip-dir-C7)', async () => {
+  const { zipDirectory } = await import('../js/zip-dir.js');
+  const { unzip } = await import('../js/mesh-formats.js');
+  const empty = new Uint8Array(22);
+  new DataView(empty.buffer).setUint32(0, 0x06054b50, true);
+  assert.equal((await zipDirectory(empty, 0, 22)).length, 0);
+  assert.deepEqual((await unzip(empty.buffer)).names, []);
+  await assert.rejects(zipDirectory(new Uint8Array(22), 0, 22), /not a zip file/);
+});
+
 done();

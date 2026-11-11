@@ -132,4 +132,22 @@ test('a download\'s rate: kB/s on a slow link, MB/s on a fast one, and the time 
   assert.equal(rateText(0, 1e6), '1 kB/s');
 });
 
+// (r112 M import-progress-O5) transfer is per thousand entities plus per thousand bounds
+test('the transfer forecast is per thousand entities and per thousand bounds (r112 M import-progress-O5)', () => {
+  const f = forecast({ step: true, bytes: 5e6, entities: 20000, bounds15: 7000, faces: 300 });
+  near(f.transfer, COEF.transfer[0] * 20 + COEF.transfer[1] * 7, 1e-12);
+  near(f.transfer, 0.5131, 1e-9);
+});
+// (r112 M import-progress-C2) only transfer (1) and meshing (2) are paced by their fraction;
+// reading (0) and writing (3) by the time spent, up to their forecast
+test('the bar is paced by the fraction in transfer and meshing only (r112 M import-progress-C2)', () => {
+  const fc = { read: 1, transfer: 2, mesh: 3, write: 4 };
+  assert.deepEqual([0, 1, 2, 3].map((s) => forecastDone(fc, 1, s, 0.5, 0.25)), [0.25, 2, 4.5, 6.25]);
+});
+// (r112 M import-progress-O39) a step at fraction 1 has no pace left to read: the forecast decides
+test('a paced step at fraction 1 is timed by its forecast, not a pace (r112 M import-progress-O39)', () => {
+  const fc = { read: 1, transfer: 2, mesh: 3, write: 4 };
+  near(timeLeft(fc, 1, 2, 1, 2.5), 4.5);
+});
+
 done();

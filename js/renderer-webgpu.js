@@ -72,8 +72,8 @@ struct VOut {
   // took the plate (r109 R1). A length, not a share of the distance, which grew as the view zoomed
   // out (r110 E1). Only a body the plane passes through (xp.w > 0: the body table is this mesh's;
   // with none, every body): a closed body thinner than the pull, away from the cut, keeps its far
-  // side behind its near side (r110 F2). And no more than xp.w of the cut body's own radius: a small
-  // part's 0.005 mm lead drew its inside over its top (r111 G1; renderer-webgl.js VS, the same)
+  // side behind its near side (r110 F2); at most xp.w of the cut body's radius (r111 G1;
+  // renderer-webgl.js VS, the same)
   let vv = normalize(u.eye.xyz - p * u.eye.w);
   if (u.params.z > 0.5 && dot(v.nrm.xyz, vv) < 0.0) {
     var cut = true;
