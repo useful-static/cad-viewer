@@ -109,5 +109,16 @@ test('the caption and names are escaped', () => {
   assert.doesNotMatch(c.svg, /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
   assert.match(c.svg, /<title>Pl�ate<\/title>/);
 });
+// (r114 M3 drawing-svg-O1) Save drawing passes no margin (main.js: drawingSVG(parts, right, up,
+// { title })), so the DEFAULT margin sizes the page: 5 mm, a 10 x 20 box from the top on 20 x 36 mm
+// (titled: the caption's row added), as the explicit margin 5 gives
+test('drawingSVG with no margin option: the titled 10 x 20 x 4 box from the top is a 20 x 36 mm page (r114 M3 drawing-svg-O1)', () => {
+  const g = bodyGeometry(model([{ name: 'box', faces: box([0, 0, 0], [10, 20, 4]) }]), 0);
+  const title = 'box: Top view, 1:1, mm';
+  const d = drawingSVG([{ name: 'box', geom: g }], ...TOP, { title });
+  assert.ok(Math.abs(d.width - 20) < 1e-9 && Math.abs(d.height - 36) < 1e-9, `${d.width} x ${d.height}`);
+  assert.match(d.svg, /width="20mm" height="36mm" viewBox="-5 -25 20 36"/);
+  assert.equal(drawingSVG([{ name: 'box', geom: g }], ...TOP, { title, margin: 5 }).svg, d.svg);
+});
 
 done();

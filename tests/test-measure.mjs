@@ -742,4 +742,122 @@ test('a D-shaped plate\'s half-circle rims are one edge each, corner to corner (
   assert.deepEqual(g.edges.map((e) => e.length).sort((a, b) => a - b), [2, 2, 2, 2, 3, 3, 13, 13]);
 });
 
+// r114: M3's U-medium survivors in measure-geom and measure-ui, each on its probe's input
+// (r114 M3 measure-geom-O222) the midpoint snap of a curved edge whose segments are under 1 unit:
+// an M3 hole's half rim, radius 1.6 in 24 segments of 0.21 mm
+test('polyMid of a half rim of radius 1.6 in 24 segments is [0, 1.6, 0], of a 10 mm edge in two pieces [5, 0, 0] (r114 M3 measure-geom-O222)', () => {
+  const arc = Array.from({ length: 25 }, (_, i) => [1.6 * Math.cos((Math.PI * i) / 24), 1.6 * Math.sin((Math.PI * i) / 24), 0]);
+  const r3 = (p) => p.map((x) => Math.round(x * 1000) / 1000 + 0);
+  assert.deepEqual(r3(polyMid(arc)), [0, 1.6, 0]);
+  assert.deepEqual(r3(polyMid([[0, 0, 0], [4, 0, 0], [10, 0, 0]])), [5, 0, 0]);
+});
+// a stand-in document that records what draw() makes: the overlay's SVG elements (tag, attributes)
+// and its labels (divs), put back after f({ svg, html })
+const withRecordingDocument = async (f) => {
+  const had = globalThis.document;
+  const svg = [], html = [];
+  globalThis.document = {
+    createElement: (tag) => { const e = { tag, kids: [], style: {}, textContent: '', className: '', classList: { toggle() {}, add() {} }, append(...c) { this.kids.push(...c); }, setAttribute() {} }; html.push(e); return e; },
+    createElementNS: (ns, tag) => { const e = { tag, a: {}, setAttribute(k, v) { this.a[k] = v; }, append() {} }; svg.push(e); return e; },
+  };
+  try { return await f({ svg, html }); } finally { if (had === undefined) delete globalThis.document; else globalThis.document = had; }
+};
+const drawn = (svg) => svg.map((e) => `${e.tag}.${e.a.class}`).join(' ');
+// (r114 M3 measure-ui-C58) a measured distance is drawn as its line and two dots
+await test('after a Distance between two corners, draw() puts one line.mline and two circle.mdot on the overlay (r114 M3 measure-ui-C58)', async () => {
+  await withRecordingDocument(async ({ svg }) => {
+    const { meas, toScreen } = await measureAt([BOARD()]);
+    meas.setOn(true);
+    meas.setMode('distance');
+    for (const p of [[0, 0, 1.6], [100, 70, 1.6]]) meas.place(...toScreen(p));
+    assert.equal(meas.results.length, 1);
+    svg.length = 0;
+    meas.draw();
+    assert.equal(drawn(svg.filter((e) => /^m(line|dot)$/.test(e.a.class))), 'line.mline circle.mdot circle.mdot');
+    const [a, b] = [[0, 0, 1.6], [100, 70, 1.6]].map(toScreen), l = svg.find((e) => e.a.class === 'mline');
+    assert.ok(Math.hypot(l.a.x1 - a[0], l.a.y1 - a[1], l.a.x2 - b[0], l.a.y2 - b[1]) < 1e-6, JSON.stringify(l.a));
+  });
+});
+// (r114 M3 measure-ui-O217) an Angle's label sits on its vertex, a Distance's half way along it
+await test('an Angle placed on three of the board\'s corners has its label at the vertex\'s screen point, not the third corner\'s (r114 M3 measure-ui-O217)', async () => {
+  await withRecordingDocument(async ({ html }) => {
+    const { meas, toScreen } = await measureAt([BOARD()]);
+    meas.setOn(true);
+    meas.setMode('angle');
+    const corners = [[100, 70, 1.6], [0, 70, 1.6], [0, 0, 1.6]];
+    for (const p of corners) meas.place(...toScreen(p));
+    assert.equal(meas.results.length, 1);
+    html.length = 0;
+    meas.draw();
+    const lab = html.find((e) => e.tag === 'div' && /mlabel/.test(e.className));
+    assert.ok(lab, 'a label');
+    const at = [parseFloat(lab.style.left), parseFloat(lab.style.top)], vx = toScreen(corners[1]), third = toScreen(corners[2]);
+    assert.ok(Math.hypot(at[0] - vx[0], at[1] - vx[1]) < 0.01, `label at ${at}, vertex at ${vx}`);
+    assert.ok(Math.hypot(at[0] - third[0], at[1] - third[1]) > 50, 'not on the third corner');
+  });
+});
+// (r114 M3 measure-ui-R22) a placed end dot is found to drag, and the drag re-reads the distance
+await test('dotAt on a placed end dot returns { i: 1 }, and moveDot / endDot onto (100, 0, 1.6) re-read the distance as 100.00 mm (r114 M3 measure-ui-R22)', async () => {
+  await withRecordingDocument(async () => {
+    const { meas, toScreen } = await measureAt([BOARD()]);
+    meas.setOn(true);
+    meas.setMode('distance');
+    for (const p of [[0, 0, 1.6], [100, 70, 1.6]]) meas.place(...toScreen(p));
+    assert.equal(meas.results[0].main, '122.07 mm');
+    const at = meas.dotAt(...toScreen([100, 70, 1.6]));
+    assert.ok(at && at.i === 1 && at.r === meas.results[0], `dotAt -> ${JSON.stringify(at && at.i)}`);
+    assert.equal(meas.dotAt(...toScreen([50, 35, 1.6])), null, 'no dot in the middle of the board');
+    meas.moveDot(at, ...toScreen([100, 0, 1.6]));
+    meas.endDot(at);
+    assert.equal(meas.results[0].main, '100.00 mm');
+  });
+});
+// (r114 M3 measure-ui-O109) face 0 of a model -- the board's bottom, seen from below -- is pickable
+await test('faceAt on the board\'s bottom seen from below returns face 0; on its top from above face 1 (r114 M3 measure-ui-O109)', async () => {
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const W = 1280, H = 800, fov = Math.PI / 4, centre = [50, 35, 0.8];
+  const mk = (eye, up) => {
+    const view = lookAt(eye, centre, up), vp = multiply(perspective(fov, W / H, 1, 5000, false), view);
+    const dv = eye.map((x, k) => x - centre[k]), L = Math.hypot(...dv);
+    return { vp, eye, dir: dv.map((x) => x / L), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], ortho: false, tanV: Math.tan(fov / 2), w: W, h: H, target: centre, dist: L };
+  };
+  const sc = (vp, p) => { const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15]; return [((x / w + 1) * W) / 2, ((1 - y / w) * H) / 2]; };
+  await withRecordingDocument(async () => {
+    let v = mk([50, 35, -160], [0, 1, 0]);
+    const { meas } = await measureAt([BOARD()], new Set(), { view: () => ({ ...v }) });
+    meas.setOn(true);
+    meas.setMode('face');
+    const below = meas.faceAt(...sc(v.vp, [50, 35, 0]));
+    assert.ok(below, 'the bottom face picked');
+    assert.equal(below.face, 0);
+    v = mk([50, 35, 160], [0, 1, 0]);
+    const above = meas.faceAt(...sc(v.vp, [50, 35, 1.6]));
+    assert.ok(above && above.face === 1, `top: ${above && above.face}`);
+  });
+});
+// (r114 M3 measure-ui-B68) the hole table shown and the eye zoomed in past a hole: the hole behind
+// the eye is not drawn, and draw() does not throw
+await test('with the hole table shown and the eye past the washer\'s hole, draw() does not throw and draws no hole; from the opening view it draws the hole (r114 M3 measure-ui-B68)', async () => {
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const W = 1280, H = 800, fov = Math.PI / 4;
+  const mk = (eye, centre) => {
+    const view = lookAt(eye, centre, [0, 0, 1]), vp = multiply(perspective(fov, W / H, 1, 5000, false), view);
+    const dv = eye.map((x, k) => x - centre[k]), L = Math.hypot(...dv);
+    return { vp, eye, dir: dv.map((x) => x / L), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], ortho: false, tanV: Math.tan(fov / 2), w: W, h: H, target: centre, dist: L };
+  };
+  await withRecordingDocument(async ({ svg }) => {
+    let v = mk([50 + 160 * Math.cos(0.45) * Math.sin(0.7), 35 - 160 * Math.cos(0.45) * Math.cos(0.7), 0.8 + 160 * Math.sin(0.45)], [50, 35, 0.8]);
+    const { meas } = await measureAt(WASHER_BOARD(), new Set(), { view: () => ({ ...v }) });
+    meas.setOn(true);
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    svg.length = 0;
+    meas.draw();
+    assert.equal(drawn(svg), 'circle.mhole text.mholetext');
+    v = mk([80, 35, 12], [100, 35, 0]);
+    svg.length = 0;
+    assert.doesNotThrow(() => meas.draw());
+    assert.equal(drawn(svg), '');
+  });
+});
+
 done();

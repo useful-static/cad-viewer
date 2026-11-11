@@ -2353,6 +2353,42 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.equal(pitchOf(mt([[44, 2]])), 10 * 5 / 3 * 2);
     assert.equal(emOf({ h: 7.2 }), 10);
   });
+  // (r114 M3 dxf-view-C112) an MTEXT hangs from its point (top), is centred on it (middle), stands on
+  // it (bottom): a two-line MTEXT's first row at 0 / -H/2 / -H, H = (rows - 1) pitch + the 100 px font
+  test('a two-line MTEXT attached top / middle / bottom has its first row at 0 / -H/2 / -H (r114 M3 dxf-view-C112)', () => {
+    const rows = (valign) => {
+      const texts = [];
+      const rec = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'fillText' ? (s, x, y) => texts.push([s, y]) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (o, k, v) => { o[k] = v; return true; } });
+      const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: 'T', on: true }], paths: [], texts: [{ layer: 'T', colour: col, x: 0, y: 0, rot: 0, align: 'left', valign, text: 'A\nB', h: 10, mtext: true }], extents: { min: [0, -40], max: [60, 20] } }, {});
+      texts.length = 0;
+      v.draw();
+      v.destroy();
+      assert.deepEqual(texts.map((t) => t[0]), ['A', 'B'], valign);
+      return texts.map((t) => t[1]);
+    };
+    const top = rows('top'), middle = rows('middle'), bottom = rows('bottom');
+    const lh = top[1] - top[0], H = lh + 100;
+    assert.ok(lh > 0, `pitch ${lh}`);
+    assert.ok(Math.abs(top[0]) < 1e-9, `top ${top}`);
+    assert.ok(Math.abs(middle[0] + H / 2) < 1e-9, `middle ${middle} (H ${H})`);
+    assert.ok(Math.abs(bottom[0] + H) < 1e-9, `bottom ${bottom} (H ${H})`);
+    for (const r of [middle, bottom]) assert.ok(Math.abs(r[1] - r[0] - lh) < 1e-9, 'one pitch');
+  });
+  // (r114 M3 dxf-view-B139) one pointer pressed and moved pans the 2D view by the move: pressed at
+  // (400, 300) and moved to (500, 350), the drawing's corner moves (100, 50) px on the canvas
+  test('a one-pointer drag on the 2D view from (400, 300) to (500, 350) moves toPx(0, 0) by (100, 50) (r114 M3 dxf-view-B139)', () => {
+    const on = {};
+    const v = createDxfView({ ...canvas, addEventListener: (k, f) => { on[k] = f; }, setPointerCapture() {} }, { layers: [{ name: 'L', on: true }], paths: [{ layer: 'L', colour: col, pts: Float64Array.of(0, 0, 60, 0, 60, 60, 0, 60), closed: true }], texts: [], extents: { min: [0, 0], max: [60, 60] } }, {});
+    const before = v.toPx(0, 0);
+    const ev = (x, y) => ({ pointerId: 1, clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() {} });
+    on.pointerdown(ev(400, 300));
+    on.pointermove(ev(450, 325));
+    on.pointermove(ev(500, 350));
+    on.pointerup(ev(500, 350));
+    const after = v.toPx(0, 0);
+    v.destroy();
+    assert.ok(Math.abs(after[0] - before[0] - 100) < 1e-6 && Math.abs(after[1] - before[1] - 50) < 1e-6, `${before} -> ${after}`);
+  });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
@@ -2370,6 +2406,17 @@ test('2D Measure snaps to a curve\'s own points: an arc\'s ends and its middle o
   // segment's middle, the arc's middle at (15, 5) on it)
   assert.deepEqual(snaps([[0, 'LWPOLYLINE'], [8, '0'], [90, 3], [70, 0], [10, 0], [20, 0], [10, 10], [20, 0], [42, 1], [10, 10], [20, 10]]),
     ['end 0.0000 0.0000', 'end 10.0000 0.0000', 'end 10.0000 10.0000', 'mid 15.0000 5.0000', 'mid 5.0000 0.0000']);
+  // (r114 R4-M1: a closed curve with no ends -- a whole ellipse, a circle through a stretching
+  // insert, a closed spline -- its four extreme points on the curve, and the ellipse's and the
+  // stretched circle's centre with no Ø; r113's marks had left them no snap at all)
+  const all = (g, extra = []) => { const d = parseDXF(dxf([...extra, [0, 'SECTION'], [2, 'ENTITIES'], ...g, [0, 'ENDSEC'], [0, 'EOF']])); const sp = snapPoints(d.paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) { const a = sp.at(i), f = (v) => (Math.abs(v) < 5e-4 ? 0 : v).toFixed(3); s.push(`${a[2]} ${f(a[0])} ${f(a[1])}${a[2] === 'centre' ? ` r${a[4]}` : ''}`); } return s.sort(); };
+  assert.deepEqual(all([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [30, 0], [11, 20], [21, 0], [31, 0], [40, 0.5], [41, 0], [42, 2 * Math.PI]]),
+    ['centre 0.000 0.000 r0', 'quadrant -20.000 0.000', 'quadrant 0.000 -10.000', 'quadrant 0.000 10.000', 'quadrant 20.000 0.000']);
+  const stretched = all([[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, 2], [42, 1]], blocks([[0, 'BLOCK'], [2, 'C'], [10, 0], [20, 0], [0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 5], [0, 'ENDBLK']]));
+  assert.deepEqual(stretched, ['centre 0.000 0.000 r0', 'quadrant -10.000 0.000', 'quadrant 0.000 -5.000', 'quadrant 0.000 5.000', 'quadrant 10.000 0.000']);
+  // (r114 R4-M2: a spline-fit 2D POLYLINE, 70 bit 4: its samples are no ends -- its two ends only)
+  const fit = all([[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 4], [10, 0], [20, 0], ...[[0, 0], [3, 4], [6, 5], [9, 4], [12, 0]].flatMap(([x, y], k) => [[0, 'VERTEX'], [8, '0'], [10, x], [20, y], [70, k ? 8 : 0]]), [0, 'SEQEND']]);
+  assert.deepEqual(fit, ['end 0.000 0.000', 'end 12.000 0.000']);
 });
 test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-gon, an ellipse, or a circle inserted at 1 x 0.985 (r70 Q6)', () => {
   const lw = (pts) => [[0, 'LWPOLYLINE'], [8, '0'], [90, pts.length], [70, 1], ...pts.flatMap(([x, y]) => [[10, x], [20, y]])];
@@ -2378,7 +2425,9 @@ test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-go
     const d = parseDXF(dxf([...(blk.length ? blocks(...blk) : []), [0, 'SECTION'], [2, 'ENTITIES'], ...ents, [0, 'ENDSEC'], [0, 'EOF']]));
     const s = snapPoints(d.paths, [0, 0]);
     const c = [];
-    for (let i = 0; i < s.n; i++) if (s.kind[i] === 2) c.push(+(2 * s.at(i)[4]).toFixed(3));
+    // (a centre with a Ø: an ellipse's, or a circle's through a stretch, is a centre with none since
+    // r114 R4-M1 -- the snap, not a Ø)
+    for (let i = 0; i < s.n; i++) if (s.kind[i] === 2 && s.at(i)[4] > 0) c.push(+(2 * s.at(i)[4]).toFixed(3));
     return c;
   };
   assert.deepEqual(centres(lw(ngon(12, 10))), [], 'a 12-gon (must fire: "centre (Ø 20.000)")');

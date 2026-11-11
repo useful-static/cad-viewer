@@ -202,6 +202,14 @@ await test('links: named, resolved against the list; a wrong one (or a script UR
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', links: k } }), L), /its links/);
   }
 });
+// (r114 M3 model-list-C51) "at most 10" links: exactly 10 are read, 11 refused
+await test('links: an entry with exactly 10 links is read, 11 refused (r114 M3 model-list-C51)', () => {
+  const links = (n) => Array.from({ length: n }, (_, i) => ({ name: `Doc ${i + 1}`, url: `/docs/${i + 1}.pdf` }));
+  const [e] = parseModelList(JSON.stringify({ board: { name: 'Board', src: 'board.stp', links: links(10) } }), L);
+  assert.equal(e.links.length, 10);
+  assert.equal(e.links[9].url, 'https://site.example/docs/10.pdf');
+  assert.throws(() => parseModelList(JSON.stringify({ board: { name: 'Board', src: 'board.stp', links: links(11) } }), L), /"board": its links must be a list \(at most 10\)/);
+});
 await test('a wrong extra field refuses the list, naming the file and the field', () => {
   for (const [v, re] of [[{ step: 'javascript:alert(1)' }, /"a": its step .* not an http/], [{ page: 3 }, /its page must be a URL/],
     [{ labels: ['x'] }, /its labels must be/], [{ labels: { a: 1 } }, /its labels must be/], [{ style: 'fancy' }, /its style must be one of/],

@@ -22,6 +22,13 @@ test('id and description by product name; the name alone is not kept', () => {
   assert.equal(p.has('HDMI'), false, 'its id is its name and it has no description');
   assert.deepEqual(p.get('USB_A'), { id: 'J1', description: "USB-A receptacle, it's stacked" });
 });
+test('a placeholder description is none: NOT SPECIFIED, and its kin, as none / n/a (r114 R3-M1)', () => {
+  const p = stepProducts(`ISO-10303-21;\nDATA;\n#1=PRODUCT('PRT0001','BRACKET','NOT SPECIFIED',(#2));\n#2=PRODUCT('X9','PLATE','Not Specified',(#2));\n#3=PRODUCT('Y','PIN','unspecified',(#2));\n#4=PRODUCT('PIN2','PIN2','NOT SPECIFIED',(#2));\nENDSEC;`);
+  assert.deepEqual(p.get('BRACKET'), { id: 'PRT0001', description: '' });
+  assert.deepEqual(p.get('PLATE'), { id: 'X9', description: '' });
+  assert.deepEqual(p.get('PIN'), { id: 'Y', description: '' });
+  assert.equal(p.has('PIN2'), false, 'its id its name, and no description: nothing to show');
+});
 test('the first product of a name wins; escapes decoded', () => {
   const p = stepProducts(STEP);
   assert.equal(p.get('R1').id, 'RC0402FR-0710KL');

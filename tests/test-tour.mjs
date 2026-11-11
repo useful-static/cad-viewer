@@ -811,4 +811,53 @@ await test('tour-recorder.js: three steps, the first picked, Add puts the new st
   });
 });
 
+// r114: M3's U-medium survivors in tour and tour-recorder, each on its probe's input
+const tour2 = (step) => JSON.stringify({ cadtour: 2, title: 't', model: 'https://site.example/b.cadmesh', steps: [{ view: 'iso', ...step }] });
+test('tour.js: a step\'s "text" (its caption) is read back as written; a step with none reads "" (r114 M3 tour-B40)', () => {
+  assert.equal(parseTour(tour2({ text: 'The HDMI port' })).steps[0].text, 'The HDMI port');
+  assert.equal(parseTour(tour2({})).steps[0].text, '');
+  assert.throws(() => parseTour(tour2({ text: 5 })), /"text": must be text of at most/);
+});
+test('tour.js: a step "style" not in STYLE_IDS ("hidden-line") is refused naming the styles; "wire" is read (r114 M3 tour-B77)', () => {
+  assert.throws(() => parseTour(tour2({ style: 'hidden-line' })), /step 1 "style": must be one of shaded, edges, hidden, hiddengrey, wire, xray/);
+  assert.equal(parseTour(tour2({ style: 'wire' })).steps[0].style, 'wire');
+});
+await test('tour-recorder.js: Save after one step calls api.save once with the tour as "tour.cadtour.json" and says so (r114 M3 tour-recorder-R26)', async () => {
+  const saved = [], notes = [];
+  await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), save: (text, name) => saved.push([name, JSON.parse(text).steps.length]) }, async ({ $ }) => {
+    $('teadd').onclick();
+    $('tesave').onclick();
+  });
+  assert.deepEqual(saved, [['tour.cadtour.json', 1]]);
+  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved tour.cadtour.json']);
+});
+await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved the video, 3.0 MB", Pictures resolving 4 "saved 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30)', async () => {
+  for (const [bytes, pics, want] of [[3145728, 4, ['saved the video, 3.0 MB', 'saved 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {
+    const notes = [];
+    await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), video: async () => bytes, pictures: async () => pics }, async ({ $ }) => {
+      $('teadd').onclick();
+      await $('tevideo').onclick();
+      await $('tepics').onclick();
+    });
+    assert.deepEqual(notes.filter((n) => /^(saved|no )/.test(n)), want);
+  }
+});
+await test('tour-recorder.js: steps made on "board", then "case" opened: Video and Pictures make nothing and say the steps were made on board (r114 M3 tour-recorder-B33)', async () => {
+  const notes = [], made = [];
+  let open = { key: 'k', name: 'board', unit: 'mm', url: 'b.cadmesh' };
+  await withRecorder({ announce: (t) => notes.push(t), model: () => open, modelUrl: () => open.url, validate: () => ({ steps: [{}] }),
+    video: async () => { made.push(`video over ${open.name}`); return 3145728; }, pictures: async () => { made.push(`pictures of ${open.name}`); return 4; } }, async ({ $ }) => {
+    $('teadd').onclick();
+    open = { key: 'k2', name: 'case', unit: 'mm', url: 'c.cadmesh' };
+    await $('tevideo').onclick();
+    await $('tepics').onclick();
+    assert.deepEqual(made, []);
+    assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['not recorded: these steps were made on board; open it again to go on with them', 'not pictured: these steps were made on board; open it again to go on with them']);
+    // the model it was made on opened again: recorded
+    open = { key: 'k', name: 'board', unit: 'mm', url: 'b.cadmesh' };
+    await $('tevideo').onclick();
+    assert.deepEqual(made, ['video over board']);
+  });
+});
+
 done();

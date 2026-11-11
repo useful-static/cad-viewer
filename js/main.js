@@ -4107,6 +4107,7 @@ function clearModel() {
   app.mesh = null;
   showBase(null, [], 'stopped: another model was opened');
   app.scene = null;
+  app.sceneAsked = null;
   app.overrides = new Map();
   app.modelKey = '';
   endTour(false);
@@ -4259,6 +4260,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   // the models in the view: this one alone (Add model… appends)
   app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
+  app.sceneAsked = null;
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   syncUnitParam(); // (another model's ?unit= is not this one's)
   forgetClearance();
@@ -4376,6 +4378,8 @@ function startAdd(fn) {
   return p;
 }
 
+// the scene a move or add builds on: the last asked for (r114 R4-M3)
+const sceneNow = () => app.sceneAsked || app.scene;
 async function addToScene(base, name, seq) {
   app.adding = null;
   if (!app.scene || stale(seq)) return;
@@ -4383,7 +4387,7 @@ async function addToScene(base, name, seq) {
   // (named as its model list entry names it, when one does)
   if (url && listEntry(url)?.name) name = listEntry(url).name;
   if (app.scene.length === 1 && app.scene[0].url && listEntry(app.scene[0].url)?.name) app.scene[0].name = listEntry(app.scene[0].url).name;
-  const models = [...app.scene, { base, name, url, offset: app.addOffset ? app.addOffset.slice() : [0, 0, 0] }];
+  const models = [...sceneNow(), { base, name, url, offset: app.addOffset ? app.addOffset.slice() : [0, 0, 0] }];
   app.addOffset = null;
   // (one unit to a scene: refused before anything is shown, as a 2D drawing is -- r85 A1)
   const unitsClash = sceneUnitsRefusal(models);
@@ -4414,15 +4418,18 @@ async function showScene(models, { newTree = false } = {}) {
   const mesh = inScheme(merged, app.overrides);
   checkFits(app.renderer, mesh);
   app.wanted = mesh;
+  app.sceneAsked = models; // (sceneNow: r114 R4-M3)
   try {
     await gpuSync();
   } catch (e) {
+    if (app.sceneAsked === models) app.sceneAsked = null;
     handBack(mesh);
     throw e;
   }
   if (app.wanted !== mesh) return false; // a newer load or move took the GPU
   if (app.clearanceRun) app.clearanceRun.stop();
   app.scene = models;
+  if (app.sceneAsked === models) app.sceneAsked = null;
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
   // Add model kept "1.65 mm" for a scene whose new case touched)
   forgetClearance();
@@ -4659,8 +4666,9 @@ function syncScene() {
 // Move added model i along axis k to v mm from where its file puts it
 let moveSeq = 0;
 async function moveModel(i, k, v) {
-  if (!app.scene || !app.scene[i] || i === 0) return;
-  const models = app.scene.map((m, j) => (j === i ? { ...m, offset: m.offset.map((o, a) => (a === k ? v : o)) } : m));
+  const now = app.scene && sceneNow();
+  if (!now || !now[i] || i === 0) return;
+  const models = now.map((m, j) => (j === i ? { ...m, offset: m.offset.map((o, a) => (a === k ? v : o)) } : m));
   const mine = ++moveSeq;
   try {
     if (!(await showScene(models)) || mine !== moveSeq) return;

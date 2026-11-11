@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   camDir, camUp, eyeDist, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy,
 } from '../js/camera.js';
-import { lookAt, ortho, perspective } from '../js/mat4.js';
+import { identity, lookAt, ortho, perspective } from '../js/mat4.js';
 import { VIEW_PRESETS } from '../js/orient.js';
 
 import { test, done } from './harness.mjs';
@@ -492,6 +492,18 @@ test('ortho maps the near plane to depth -1 and the far to +1 on WebGL, 0..1 on 
   assert.ok(Math.abs(depth(gpu, -1)) < 1e-6 && Math.abs(depth(gpu, -100) - 1) < 1e-6);
   const rev = ortho(10, 5, 1, 100, true, true);
   assert.ok(Math.abs(depth(rev, -1) - 1) < 1e-6 && Math.abs(depth(rev, -100)) < 1e-6);
+});
+// (r114 M3 mat4-O2) identity() is the identity, and ortho keeps no stray 1 off the diagonal: clip z
+// must not take the view-space y, or the orthographic view clips every point off the vertical centre
+test('identity() is the 16-entry identity, and ortho\'s column 1 is [0, 1/h, 0, 0] (r114 M3 mat4-O2)', () => {
+  assert.deepEqual([...identity()], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  for (const zo of [false, true]) {
+    const m = ortho(120, 80, 1, 1000, zo);
+    assert.deepEqual([...m.slice(4, 8)], [0, Math.fround(1 / 80), 0, 0], `zo ${zo}`);
+    // a point 40 mm above the centre lies at the depth of the centre
+    const z = (y) => m[6] * y + m[10] * -300 + m[14];
+    assert.equal(z(40), z(0));
+  }
 });
 
 done();

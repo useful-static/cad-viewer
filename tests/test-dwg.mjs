@@ -625,6 +625,44 @@ t('a line weight\'s index 28 is BYLAYER, as 29 is; 30 BYBLOCK, 31 the default (r
 t('a DIMENSION object\'s type as DXF\'s 70: the angulars and the diameter too (r108 D4)', () => {
   assert.deepEqual([20, 21, 22, 23, 24, 25, 26].map((k) => DIM_TYPE[k]), [6, 0, 1, 5, 2, 4, 3]);
 });
+// (r114 M3 dwg-R92) a DIMENSION object is decoded: an R2000 aligned dimension (type 21) spelled bit by
+// bit -- 20.4.x's common dimension data, then its 13 / 14 / 10 points and rotation -- reads its
+// points, its text and its block, to the record's last bit (no corpus needed)
+t('an R2000 aligned DIMENSION (type 21) built bit by bit decodes its points, text and block (r114 M3 dwg-R92)', () => {
+  const BD = (x) => (x === 0 ? '10' : x === 1 ? '01' : `00${rd(x)}`);
+  const BD3 = (p) => p.map(BD).join(' ');
+  const common = [BD3([0, 0, 1]), rd(5), rd(2), BD(0), b8(0), tv('12'), BD(0), BD(0), BD(0), BD(0), BD(0), BD(0), '10 10', BD(0), BD(0), rd(0), rd(0)];
+  const own = [BD3([0, 0, 0]), BD3([10, 0, 0]), BD3([10, 5, 0]), BD(0), BD(0)];
+  const s = [...common, ...own].join(' ');
+  const n = s.replace(/[^01]/g, '').length;
+  let h = 40;
+  const o = { type: 21, handle: 9, h: { Ha: () => ++h } };
+  const r = new Bits(bits(s), 15);
+  _internal.DECODE.DIMENSION.call({ entityHandles() {} }, o, r, 15);
+  assert.ok(o.d, 'decoded');
+  assert.deepEqual([o.d.ext, o.d.mid, o.d.text], [[0, 0, 1], [5, 2], '12']);
+  assert.deepEqual([o.d.p13, o.d.p14, o.d.p10, o.d.rot], [[0, 0, 0], [10, 0, 0], [10, 5, 0], 0]);
+  assert.deepEqual([o.d.dimstyle, o.d.block], [41, 42]);
+  assert.equal(r.p, n, 'read to the record\'s last bit');
+});
+// (r114 M3 dwg-C288) from R2004 (v 18) a POLYLINE_3D / mesh owns its vertices by a count (BL) and a
+// handle each: at v 18 itself the count is read -- three owned vertices -- where R2000 (v 15) names
+// its first and last
+t('an R2004 POLYLINE_3D reads its owned-vertex count and handles; R2000 its first and last (r114 M3 dwg-C288)', () => {
+  const run = (v, s) => {
+    let h = 100;
+    const o = { type: 16, handle: 7, h: { Ha: () => ++h } };
+    const r = new Bits(bits(s), v);
+    _internal.DECODE.POLYLINE.call({ entityHandles() {} }, o, r, v);
+    return { d: o.d, p: r.p };
+  };
+  // (RC RC flags, then BL 3 in its one-byte form: 01 + 00000011)
+  const at18 = run(18, `${b8(0)} ${b8(1)} 01 ${b8(3)} 00000000`);
+  assert.deepEqual(at18.d.vertices, [101, 102, 103]);
+  assert.equal(at18.p, 26, 'the count read');
+  const at15 = run(15, `${b8(0)} ${b8(1)} 00000000`);
+  assert.deepEqual([at15.d.vertices, at15.d.first, at15.d.last, at15.p], [undefined, 101, 102, 16]);
+});
 t('a password-protected R2004 DWG is refused in those words, not as damaged (r108 D2)', () => {
   // (a synthetic container whose section map marks AcDb:Header encrypted, enc = 1)
   const lit = (data) => { const n = data.length, out = []; if (n <= 18) out.push(n - 3); else { out.push(0); let r = n - 3 - 0x0f; while (r > 255) { out.push(0); r -= 255; } out.push(r); } out.push(...data, 0x11); return out; };

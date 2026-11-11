@@ -263,6 +263,29 @@ test('a pin wholly inside a solid block overlaps it: 0, not the gap between thei
   const r2 = clearance(s2.position, s2.index, trisOf(s2, [2]), trisOf(s2, [1]), { solidA: trisOf(s2, [2]), solidB: trisOf(s2, [1]) });
   assert.ok(Math.abs(r2.distance - 2) < 1e-9 && !r2.inside, JSON.stringify(r2));
 });
+// (r114 M3 clearance-C5) the same pin and block 100 mm off the origin (a part anywhere but there):
+// still inside, distance 0 -- at the origin a wrong local vertex numbering hides, the moved corner
+// landing where it was
+test('a pin wholly inside a solid block, both 100 mm off the origin, reads 0 and inside (r114 M3 clearance-C5)', () => {
+  const o = 100;
+  const block = file('block', [['block', [o, o, o], [o + 10, o + 10, o + 10]]]);
+  const pin = file('pin', [['pin', [o + 4, o + 4, o + 4], [o + 6, o + 6, o + 6]]]);
+  const s = mergeModels([{ base: block, name: 'block.stp' }, { base: pin, name: 'pin.stp' }]);
+  const r = clearance(s.position, s.index, trisOf(s, [2]), trisOf(s, [1]), { solidA: trisOf(s, [2]), solidB: trisOf(s, [1]) });
+  assert.deepEqual([r.distance, !!r.inside], [0, true]);
+  // (must-accept: the pin moved out beside the block reads its 2 mm gap, not inside)
+  const beside = file('pin', [['pin', [o + 12, o + 4, o + 4], [o + 14, o + 6, o + 6]]]);
+  const s2 = mergeModels([{ base: block, name: 'block.stp' }, { base: beside, name: 'pin.stp' }]);
+  const r2 = clearance(s2.position, s2.index, trisOf(s2, [2]), trisOf(s2, [1]), { solidA: trisOf(s2, [2]), solidB: trisOf(s2, [1]) });
+  assert.ok(Math.abs(r2.distance - 2) < 1e-9 && !r2.inside, JSON.stringify(r2));
+});
+// (r114 M3 scene-C15) the first body of each model is in that model: modelOfBody over the ranges
+// modelRanges gives a board of 3 bodies and a case of 2 maps bodies 1-3 to model 0 and 4-5 to model 1
+test('modelOfBody maps each model\'s first body to its model: 1-3 -> 0, 4-5 -> 1 (r114 M3 scene-C15)', () => {
+  const ranges = modelRanges([{ base: { header: { meshes: [{}, {}, {}] } } }, { base: { header: { meshes: [{}, {}] } } }]);
+  assert.deepEqual(ranges, [{ first: 1, count: 3 }, { first: 4, count: 2 }]);
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((id) => SCENE.modelOfBody(ranges, id)), [-1, 0, 0, 0, 1, 1, -1]);
+});
 test('containment names the part and the solid that holds it; a part in two overlapping solids is inside', () => {
   // the pin in block 1; part 2 half a mm from block 2 (the nearest surfaces' pair, which was named)
   const blocks = file('blocks', [['block1', [0, 0, 0], [10, 10, 10]], ['block2', [20, 0, 0], [30, 10, 10]]]);

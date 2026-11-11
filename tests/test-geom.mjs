@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { seesInside } from '../js/raycast.js';
-import { closestOnTriangle, surfaceDistance, triangleDistance } from '../js/tri-distance.js';
+import { closestOnTriangle, closestSegments, surfaceDistance, triangleDistance } from '../js/tri-distance.js';
 import { boxTree, nearestItem } from '../js/box-tree.js';
 import { test, done } from './harness.mjs';
 
@@ -67,6 +67,19 @@ test('surfaceDistance of one triangle against one triangle (r112 M tri-distance-
   assert.equal(r.triB, 1);
 });
 
+// (r114 M3 tri-distance-C41) two edges crossing 2 mm apart (one along x at z = 0, one along y at z = 2,
+// over (5, 5)): their nearest points are the crossing's, and two fins carrying them are 2 apart -- the
+// degenerate branch (a second segment of no length) is for a point only, which it still handles
+test('closestSegments of edges crossing 2 mm apart, and two fins carrying them 2 apart (r114 M3 tri-distance-C41)', () => {
+  const near = (u, v) => u.every((x, i) => Math.abs(x - v[i]) < 1e-9);
+  const [p, q] = closestSegments([0, 5, 0], [10, 5, 0], [5, 0, 2], [5, 10, 2]);
+  assert.ok(near(p, [5, 5, 0]) && near(q, [5, 5, 2]), JSON.stringify([p, q]));
+  const t = triangleDistance([[0, 5, 0], [10, 5, 0], [5, 5, -6]], [[5, 0, 2], [5, 10, 2], [5, 5, 8]]);
+  assert.ok(Math.abs(Math.sqrt(t.d2) - 2) < 1e-9, String(Math.sqrt(t.d2)));
+  // (must-accept arm of the degenerate branch: a segment against a point)
+  const [a, b] = closestSegments([0, 0, 0], [10, 0, 0], [3, 4, 0], [3, 4, 0]);
+  assert.ok(near(a, [3, 0, 0]) && near(b, [3, 4, 0]), JSON.stringify([a, b]));
+});
 // (r112 M box-tree-O86) of two items equally near, nearestItem gives the lower id (its tie rule)
 test('nearestItem breaks a distance tie by the lower id (r112 M box-tree-O86)', () => {
   const pts = new Float64Array([-1, 0, 1, 0]);

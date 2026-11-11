@@ -111,5 +111,15 @@ test('an empty or missing orientation, and a role named twice, are refused in th
   assert.throws(() => parseOrient(null), want);
   assert.throws(() => parseOrient('up:+z,up:+y'), { message: 'up is named twice' });
 });
+// (r114 M3 orient-O28, orient-O35) every named view's [yaw, pitch] pinned: Back looks level (a pitch
+// of 1 looks from 57 deg above), Bottom lies square as Top does (a yaw of 1 turns it 57 deg)
+test('every VIEWS row\'s yp is pinned: back [pi, 0], bottom [0, -pi/2 + 1e-4] (r114 M3 orient-O28, orient-O35)', () => {
+  const yp = Object.fromEntries(VIEW_ROWS.filter((v) => v.id !== 'iso').map((v) => [v.id, v.yp]));
+  assert.deepEqual(yp, {
+    front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0], right: [Math.PI / 2, 0],
+    top: [0, Math.PI / 2 - 1e-4], bottom: [0, -Math.PI / 2 + 1e-4],
+  });
+  assert.deepEqual(VIEW_ROWS.find((v) => v.id === 'iso').yp, ISO);
+});
 
 done();

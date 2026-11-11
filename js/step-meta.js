@@ -29,7 +29,8 @@ function scan(text, out) {
   while ((m = re.exec(text))) {
     const id = decodeStepString(m[1]).trim(), name = decodeStepString(m[2]).trim(), description = decodeStepString(m[3]).trim();
     if (!name) continue;
-    const useful = (s) => s && s !== name && !/^(none|n\/a|unknown|\$)$/i.test(s);
+    // (a placeholder is none: r114 R3-M1)
+    const useful = (s) => s && s !== name && !/^(none|n\/a|unknown|not specified|unspecified|\$)$/i.test(s);
     if (!useful(id) && !useful(description)) continue;
     if (!out.has(name)) out.set(name, { id: useful(id) ? id : '', description: useful(description) ? description : '' });
   }

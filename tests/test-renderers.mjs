@@ -607,4 +607,68 @@ await test('WebGPU edges: each pass writes its own slot (mode, dash, selected-on
   void s;
 });
 
+// r114: M3's U-medium survivors in renderer-webgl and renderer-webgpu, each on its probe's input
+// (r114 M3 renderer-webgl-B34: the silhouette pass never pointed attributes 5 and 6 at the two face normals)
+await test('WebGL edges: with silhouettes uploaded, the outline pass enables and points attributes 5 and 6 (SHORT, normalised, at inst + 32 / + 40); a frame with no outline points them nowhere (r114 M3 renderer-webgl-B34)', async () => {
+  for (const cfg of [{ version: 2 }, { version: 1, vtu: 0 }]) {
+    const { g, r, s } = await glScene(cfg);
+    r.uploadEdges(s.mesh, s.edges, s.sil);
+    g.since();
+    r.render(frame({ ground: null }));
+    const c = g.since();
+    const ptr = (i) => named(c, 'vertexAttribPointer').filter((x) => x.a[0] === i).map((x) => x.a.join(','));
+    const L = r.silLay;
+    assert.deepEqual(ptr(5), [`5,4,SHORT,true,${L.stride},${L.inst + 32}`], `${cfg.version}: attribute 5`);
+    assert.deepEqual(ptr(6), [`6,4,SHORT,true,${L.stride},${L.inst + 40}`], `${cfg.version}: attribute 6`);
+    assert.ok(named(c, 'enableVertexAttribArray').some((x) => x.a[0] === 5) && named(c, 'enableVertexAttribArray').some((x) => x.a[0] === 6));
+    assert.deepEqual(uni(c, 'uSil'), [[0, 0, 0, 0], [1, 0, 0, 0]], 'the plain edges, then the silhouettes');
+    // (no outline style: no silhouette pass, attributes 5 and 6 pointed nowhere)
+    r.render(frame({ ground: null, style: { faces: 'shade' } }));
+    const c2 = g.since();
+    assert.deepEqual(named(c2, 'vertexAttribPointer').filter((x) => x.a[0] === 5 || x.a[0] === 6), []);
+  }
+});
+// (r114 M3 renderer-webgpu-C6: a taller window kept the old render targets)
+await test('WebGPU targets: a frame at 80 x 60, resize(80, 90), a frame: the second makes four 80 x 90 targets; an unchanged third makes none (r114 M3 renderer-webgpu-C6)', async () => {
+  const { g, r } = await gpuScene({});
+  r.render(frame());
+  assert.deepEqual(on(g.since(), 'device', 'createTexture').map((x) => x.a[0].size.join('x')), ['80x60', '80x60', '80x60', '80x60']);
+  r.resize(80, 90);
+  r.render(frame());
+  assert.deepEqual(on(g.since(), 'device', 'createTexture').map((x) => x.a[0].size.join('x')), ['80x90', '80x90', '80x90', '80x90']);
+  assert.deepEqual(r.size, [80, 90]);
+  r.render(frame());
+  assert.deepEqual(on(g.since(), 'device', 'createTexture'), [], 'an unchanged frame makes no targets');
+  r.resize(120, 90);
+  r.render(frame());
+  assert.deepEqual(on(g.since(), 'device', 'createTexture').map((x) => x.a[0].size.join('x')), ['120x90', '120x90', '120x90', '120x90'], 'wider too');
+});
+// (r114 M3 renderer-webgpu-O152: edges with no silhouette data counted one silhouette)
+await test('WebGPU edges with no silhouette data: silCount 0, and an outline-style frame draws the edges only, never a null vertex buffer (r114 M3 renderer-webgpu-O152)', async () => {
+  const g = fakeGPU();
+  const r = await WebGPURenderer.create(g.canvas);
+  const s = scene();
+  await r.upload(s.mesh);
+  await r.uploadEdges(s.mesh, s.edges, null);
+  r.resize(80, 60);
+  assert.equal(r.silCount, 0);
+  assert.equal(r.edgeCount, 2);
+  g.since();
+  r.render(frame({ ground: null, style: { faces: 'none', outline: true } }));
+  const c = g.since();
+  assert.deepEqual(passCalls(c, r), ['setPipeline(edge.lequal|false)', 'draw(4,2)']);
+  assert.deepEqual(c.filter((x) => x.on === 'pass' && x.k === 'setVertexBuffer' && !x.a[1]), [], 'no null vertex buffer');
+});
+// (r114 M3 renderer-webgpu-O77: a one-body model's table in a 65-byte storage buffer)
+await test('WebGPU setBodies: a one-body (32-byte) table gets a 64-byte storage buffer, every storage buffer a multiple of 4 (r114 M3 renderer-webgpu-O77)', async () => {
+  const { g, r, s } = await gpuScene({});
+  r.setBodies(s.mesh, new Float32Array(8));
+  const nb = on(g.since(), 'device', 'createBuffer').map((x) => x.a[0]);
+  assert.deepEqual(nb, [{ size: 64, usage: U.STORAGE | U.COPY_DST }]);
+  r.setBodies(s.mesh, new Float32Array(18));
+  const nb2 = on(g.since(), 'device', 'createBuffer').map((x) => x.a[0].size);
+  assert.deepEqual(nb2, [72]);
+  assert.ok([...nb.map((x) => x.size), ...nb2].every((x) => x % 4 === 0));
+});
+
 done();

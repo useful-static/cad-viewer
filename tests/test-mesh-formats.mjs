@@ -493,6 +493,18 @@ await test('3MF: unit cm, a component moved, a base material colour, the tree', 
   assert.equal(model.root.children[0].name, 'assembly');
   assert.equal(model.root.children[0].children[0].name, 'cube');
 });
+// (r114 M3 xml-walk-O8) single-quoted attributes are valid XML (unit='millimeter', x='0'): the same
+// 3MF written with ' for " reads as the double-quoted one -- unit, placement, colour, tree
+await test('3MF: a model whose attributes are single-quoted reads as the double-quoted one (r114 M3 xml-walk-O8)', async () => {
+  const sq = (b) => enc(new TextDecoder().decode(b).replace(/"/g, '\''));
+  const model = await parseMesh('3mf', zipStored([['_rels/.rels', sq(rels())], ['3D/3dmodel.model', sq(model3mf())]]), 'single.3mf');
+  const m = cube(model, [50, 0, 0]);
+  assert.ok(near(m.color, [0, 0, 1]), `colour ${m.color}`);
+  assert.equal(model.sourceUnits, 'cm');
+  assert.equal(model.root.children[0].name, 'assembly');
+  const dq = await parseMesh('3mf', zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', model3mf()]]), 'cube.3mf');
+  assert.deepEqual([...model.meshes[0].positions], [...dq.meshes[0].positions]);
+});
 await test('3MF: a component turned and moved, inside an item moved -- the component\'s transform first, then the item\'s (r111 H1-M2)', async () => {
   // (the vertex (1, 0, 0) turned 90 degrees about z, + 5 along x, then + 10: (15, 1, 0). The other
   // order gives (5, 11, 0); translations alone, as the arm above, commute and read alike)

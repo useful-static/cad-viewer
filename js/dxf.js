@@ -1245,8 +1245,9 @@ function emit(recs, M, byBlock, depth, ctx) {
       // centre and its Ø, which a 12-gon or a circle inserted at 1 x 0.985 read as: r70 Q6)
       case 'CIRCLE': {
         const c = arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI);
-        c.own = []; c.mids = []; // (no ends, no middle: its centre is its snap)
-        path(c, true, false, 0, conformal ? { circle: true } : null);
+        c.own = []; c.mids = []; // (no ends, no middle: its centre and quadrants are its snaps)
+        // (through a stretching insert no circle, but its centre still a snap -- r114 R4-M1)
+        path(c, true, false, 0, conformal ? { circle: true } : { centre: ap(O, num(r, 10), num(r, 20)) });
         break;
       }
       case 'ARC': {
@@ -1289,7 +1290,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
         const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
         ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}),
-          own: Uint32Array.from(whole ? [] : [0, n]), mids: Uint32Array.from(whole ? [] : [n / 2]) });
+          own: Uint32Array.from(whole ? [] : [0, n]), mids: Uint32Array.from(whole ? [] : [n / 2]),
+          // (a whole one's centre a snap, as a circle's -- r114 R4-M1)
+          ...(whole && !round ? { centre: ap(M, cx, cy, cz) } : {}) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -1342,7 +1345,13 @@ function emit(recs, M, byBlock, depth, ctx) {
           const own3 = xs.flatMap((x, k) => [x, ys[k], zs[k]]);
           ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, closed), f, closed, M, flatOf(own3)), pts: f, closed, fill: false });
         }
-        else drawWide({ pts: bulgePts(xs, ys, bul, closed), closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
+        else {
+          const bp = bulgePts(xs, ys, bul, closed);
+          // (a curve- or spline-fit one, 70 bit 2 / 4: its vertices are its fit curve's samples, so
+          // its snaps are its ends, as a SPLINE's -- every sample was an "end", r114 R4-M2)
+          if (flags & 6) { bp.own = closed ? [] : [0, bp.length / 2 - 1]; bp.mids = []; }
+          drawWide({ pts: bp, closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
+        }
         break;
       }
       case 'SPLINE': {

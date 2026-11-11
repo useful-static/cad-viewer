@@ -312,6 +312,18 @@ test('occt mapping: b-rep face colours become per-vertex colours', () => {
   assert.deepEqual([...c.slice(4, 7)], [0, 0, 255], 'vertex 1 is only in triangle 0: base colour');
 });
 
+// (r114 M3 cadmesh-O55) every channel of a per-vertex colour survives encodeCadmesh: a face colour
+// with a green (0.2, 0.8, 0.4) over a yellow base (1, 1, 0) decodes as written, its G read from the
+// vertex's own G slot (not the vertex before's alpha)
+test('occt mapping: a face colour with a green through encodeCadmesh -> decodeCadmesh comes back per channel (r114 M3 cadmesh-O55)', () => {
+  const model = occtResultToModel(occt([om('m', [1, 1, 0], [{ first: 1, last: 1, color: [0.2, 0.8, 0.4] }])], { name: 'r', meshes: [0], children: [] }));
+  const d = decodeCadmesh(encodeCadmesh(model, { edges: false }));
+  const rgba = (v) => [...d.color.slice(4 * v, 4 * v + 4)];
+  // triangle 1 is (0, 2, 3): the face's vertices; vertex 1 only in triangle 0, the base
+  for (const v of [0, 2, 3]) assert.deepEqual(rgba(v), [51, 204, 102, 255], `vertex ${v}`);
+  assert.deepEqual(rgba(1), [255, 255, 0, 255], 'vertex 1');
+});
+
 test('occt mapping: a colourless file gets one colour per part NAME', () => {
   const root = { name: 'asm', meshes: [], children: [
     { name: 'WIDGET', meshes: [0], children: [] }, { name: 'WIDGET', meshes: [1], children: [] }, { name: 'BRACKET', meshes: [2], children: [] }] };

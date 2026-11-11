@@ -139,6 +139,15 @@ test('an inch CONVERSION_BASED_UNIT measured in itself is no unit, not a stack o
   assert.equal(sourceUnits(step(cyc), 'step'), null);
 });
 
+// (r114 M3 source-units-B6) a header record that holds the letters UNIT but is no "#n=" record (a
+// FILE_NAME whose organization is 'UNITED PARTS LTD') is skipped, not read as a unit: the file reads
+// mm, as with the organization left empty
+test('a STEP whose FILE_NAME organization is \'UNITED PARTS LTD\' reads mm (r114 M3 source-units-B6)', () => {
+  const withOrg = (org) => enc(`ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('plate.stp','2026-10-25T00:00:00',(''),('${org}'),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${MM + ctx(100, '#10') + angles(100)}\nENDSEC;\nEND-ISO-10303-21;\n`);
+  assert.equal(sourceUnits(withOrg(''), 'step'), 'mm');
+  assert.equal(sourceUnits(withOrg('UNITED PARTS LTD'), 'step'), 'mm');
+});
+
 // a real inch file (an AP203 sample whose inch is a CONVERSION_BASED_UNIT on
 // an SI millimetre): CADV_INCH_STEP=<file.stp>
 const inchFile = process.env.CADV_INCH_STEP;

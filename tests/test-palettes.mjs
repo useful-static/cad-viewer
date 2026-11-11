@@ -137,5 +137,22 @@ test('a painted face colours its triangles\' vertices, over the scheme', () => {
   // no paint, no scheme: the file's own array, not a copy
   assert.equal(schemeColours(mesh, 'file', new Map(), new Map()), mesh.color);
 });
+// (r114 M3 palettes-O28, palettes-O33) a painted face past face 1 reads its OWN (first, count) pair
+// and stops at its own last triangle: face 2 of a 4-face body (2 triangles, 4 vertices a face) paints
+// vertices 8-11 and nothing else -- not face 3's 12-15 instead, nor as well
+test('painting face 2 of a 4-face body (2 triangles a face) colours exactly vertices 8-11 (r114 M3 palettes-O28, palettes-O33)', () => {
+  const nf = 4, color = new Uint8Array(16 * 4).fill(128), index = new Uint32Array(nf * 6), faces = new Uint32Array(nf * 2);
+  for (let f = 0; f < nf; f++) {
+    faces[2 * f] = 2 * f; faces[2 * f + 1] = 2;
+    const v = 4 * f;
+    index.set([v, v + 1, v + 2, v, v + 2, v + 3], 6 * f);
+  }
+  const mesh = { header: { meshes: [{ name: 'a', vtxStart: 0, vtxCount: 16 }] }, color, index, faces };
+  const out = schemeColours(mesh, 'file', new Map(), new Map([[2, [1, 0, 0]]]));
+  const red = [];
+  for (let v = 0; v < 16; v++) if (out[4 * v] === 255 && out[4 * v + 1] === 0) red.push(v);
+  assert.deepEqual(red, [8, 9, 10, 11]);
+  for (let v = 0; v < 16; v++) if (v < 8 || v > 11) assert.deepEqual([...out.slice(4 * v, 4 * v + 4)], [128, 128, 128, 128], `vertex ${v}`);
+});
 
 done();

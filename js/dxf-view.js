@@ -468,7 +468,7 @@ export function addedReversed(p) {
 // polyline or hatch boundary of arcs about one centre, a ratio-1 ELLIPSE). -> a typed set { n, xy, kind, path, r, at(i) -> [x, y, kind, layer, radius?] }
 // (a JS array a snap held 808 MB for 9 M of them, built at every open: the view builds the set
 // when Measure is first turned on)
-const SNAP_KINDS = ['end', 'middle', 'centre'];
+const SNAP_KINDS = ['end', 'middle', 'centre', 'quadrant'];
 // The circle through m points of q (x, y pairs), least squares (Kåsa), taken about their mean; null
 // when they lie on a line. Exact for points on a circle, however unevenly they are spaced.
 export function circleThrough(q, m) {
@@ -491,7 +491,7 @@ export function circleThrough(q, m) {
 }
 export function snapPoints(paths, o) {
   let cap = 0;
-  for (const p of paths) if (!p.outline) cap += p.pts.length + 1; // (at most 2 a point and a centre)
+  for (const p of paths) if (!p.outline) cap += p.pts.length + 6; // (at most 2 a point, a centre and four quadrants)
   // (a radius only for a centre, a few of them: kept aside, not a number a snap)
   const xy = new Float64Array(2 * cap), kind = new Uint8Array(cap), path = new Uint32Array(cap), rad = new Map();
   let n = 0;
@@ -517,6 +517,19 @@ export function snapPoints(paths, o) {
         if (own[k] < m || !p.closed) at(q[own[k] * 2], q[own[k] * 2 + 1], 0); // (a closed one's repeated first point once)
       }
       for (const i of p.mids) at(q[i * 2], q[i * 2 + 1], 1);
+      // a closed curve of no own point (a whole ellipse, a closed spline, a circle, a hatch loop of
+      // arcs): its four extreme points, on the curve -- r113's marks left it no snap at all, 690 of
+      // one drawing's closed paths (r114 R4-M1)
+      if (p.closed && !own.length && m >= 4) {
+        let a = 0, b = 0, c = 0, d = 0;
+        for (let i = 1; i < m; i++) {
+          if (q[i * 2] < q[a * 2]) a = i;
+          if (q[i * 2] > q[b * 2]) b = i;
+          if (q[i * 2 + 1] < q[c * 2 + 1]) c = i;
+          if (q[i * 2 + 1] > q[d * 2 + 1]) d = i;
+        }
+        for (const i of new Set([a, b, c, d])) at(q[i * 2], q[i * 2 + 1], 3);
+      }
     } else {
       for (let i = 0; i < n2; i++) {
         at(q[i * 2], q[i * 2 + 1], 0);
@@ -538,7 +551,7 @@ export function snapPoints(paths, o) {
     if (p.closed && p.circle && m >= 3 && whole) {
       const c = circleThrough(q, m);
       if (c && c.r > 0 && shown(c.x, c.y)) put(c.x, c.y, 2, pi, c.r);
-    }
+    } else if (p.centre && whole && shown(p.centre[0], p.centre[1])) put(p.centre[0], p.centre[1], 2, pi, 0); // (an ellipse's: no Ø -- r114 R4-M1)
   });
   // (the same array for the same snap, so a hover that stays on it is no change: those made kept,
   // a few thousand at most)
@@ -986,7 +999,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     if (!pts.has(e.pointerId)) {
       if (st.measure) {
         const s = snapAt(...p);
-        if (s !== st.snap) { st.snap = s; draw(); if (cb.onHover) cb.onHover(s ? `${s[2]}${s[2] === 'centre' ? ` (Ø ${lengthText(2 * s[4], drawing.units, span)})` : ''}` : null, true); }
+        if (s !== st.snap) { st.snap = s; draw(); if (cb.onHover) cb.onHover(s ? `${s[2]}${s[2] === 'centre' && s[4] > 0 ? ` (Ø ${lengthText(2 * s[4], drawing.units, span)})` : ''}` : null, true); }
         return;
       }
       // hover: the layer under the pointer, un-faded
