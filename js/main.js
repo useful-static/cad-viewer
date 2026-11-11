@@ -4408,6 +4408,9 @@ async function addToScene(base, name, seq) {
 // newTree: the tree is built again (a model added); a move keeps the
 // selection, the hidden parts and the tree. Resolves false if superseded.
 async function showScene(models, { newTree = false } = {}) {
+  // (one that supersedes an add still uploading builds the add's tree: a move typed meanwhile took
+  // the GPU from it, and the added model's bodies had no rows -- r115 R5-M3)
+  newTree = newTree || !!(app.sceneAsked && app.sceneAskedTree);
   // a tour plays over the model it was started on (as a new model ends it in loadBuffer): it is
   // left, the visitor's view put back, before the scene changes under its step
   endTour();
@@ -4419,6 +4422,7 @@ async function showScene(models, { newTree = false } = {}) {
   checkFits(app.renderer, mesh);
   app.wanted = mesh;
   app.sceneAsked = models; // (sceneNow: r114 R4-M3)
+  app.sceneAskedTree = newTree;
   try {
     await gpuSync();
   } catch (e) {

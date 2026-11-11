@@ -859,5 +859,22 @@ await test('with the hole table shown and the eye past the washer\'s hole, draw(
     assert.equal(drawn(svg), '');
   });
 });
+// (r115 M4 measure-ui-B63) the hole table opened from the info panel's Holes button with Measure
+// off and no results: the live view draws its markers, as the saved picture does
+await test('with Measure off and no results, the hole table\'s markers are drawn in the live view (r115 measure-ui-B63)', async () => {
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const W = 1280, H = 800, fov = Math.PI / 4;
+  const eye = [50 + 160 * Math.cos(0.45) * Math.sin(0.7), 35 - 160 * Math.cos(0.45) * Math.cos(0.7), 0.8 + 160 * Math.sin(0.45)], centre = [50, 35, 0.8];
+  const view = lookAt(eye, centre, [0, 0, 1]), vp = multiply(perspective(fov, W / H, 1, 5000, false), view);
+  const dv = eye.map((x, k) => x - centre[k]), L = Math.hypot(...dv);
+  const v = { vp, eye, dir: dv.map((x) => x / L), right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], ortho: false, tanV: Math.tan(fov / 2), w: W, h: H, target: centre, dist: L };
+  await withRecordingDocument(async ({ svg }) => {
+    const { meas } = await measureAt(WASHER_BOARD(), new Set(), { view: () => ({ ...v }) });
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    svg.length = 0;
+    meas.draw();
+    assert.equal(drawn(svg), 'circle.mhole text.mholetext');
+  });
+});
 
 done();

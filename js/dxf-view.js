@@ -520,7 +520,12 @@ export function snapPoints(paths, o) {
       // a closed curve of no own point (a whole ellipse, a closed spline, a circle, a hatch loop of
       // arcs): its four extreme points, on the curve -- r113's marks left it no snap at all, 690 of
       // one drawing's closed paths (r114 R4-M1)
-      if (p.closed && !own.length && m >= 4) {
+      // (a circle's exact: its fitted centre plus and minus its radius -- the nearest 5° sample was
+      // up to 4.4 % of the radius off on a circle an insert turned: r115 R5-M2)
+      const round = p.closed && !own.length && p.circle && m >= 3 ? circleThrough(q, m) : null;
+      if (round && round.r > 0) {
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) at(round.x + dx * round.r, round.y + dy * round.r, 3);
+      } else if (p.closed && !own.length && m >= 4) {
         let a = 0, b = 0, c = 0, d = 0;
         for (let i = 1; i < m; i++) {
           if (q[i * 2] < q[a * 2]) a = i;

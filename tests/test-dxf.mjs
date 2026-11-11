@@ -2414,6 +2414,19 @@ test('2D Measure snaps to a curve\'s own points: an arc\'s ends and its middle o
     ['centre 0.000 0.000 r0', 'quadrant -20.000 0.000', 'quadrant 0.000 -10.000', 'quadrant 0.000 10.000', 'quadrant 20.000 0.000']);
   const stretched = all([[0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, 2], [42, 1]], blocks([[0, 'BLOCK'], [2, 'C'], [10, 0], [20, 0], [0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 5], [0, 'ENDBLK']]));
   assert.deepEqual(stretched, ['centre 0.000 0.000 r0', 'quadrant -10.000 0.000', 'quadrant 0.000 -5.000', 'quadrant 0.000 5.000', 'quadrant 10.000 0.000']);
+  // (r115 R5-M1: an ellipse's centre seen through a layout viewport is the paper's -- scale 0.5 about
+  // model (50, 0) to paper (50, 40): (40, 30) is (45, 55); it stayed (40, 30), where nothing is)
+  const vp = parseDXF(dxf([[0, 'SECTION'], [2, 'ENTITIES'],
+    [0, 'ELLIPSE'], [8, '0'], [10, 40], [20, 30], [30, 0], [11, 10], [21, 0], [31, 0], [40, 0.5], [41, 0], [42, 2 * Math.PI],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 148], [20, 105], [40, 297], [41, 210], [69, 1], [12, 148], [22, 105], [45, 210],
+    [0, 'VIEWPORT'], [8, '0'], [67, 1], [10, 50], [20, 40], [40, 60], [41, 40], [69, 2], [12, 50], [22, 0], [45, 80], [0, 'ENDSEC'], [0, 'EOF']]));
+  const lsp = snapPoints(vp.layouts[0].paths.filter((p) => !p.frame), [0, 0]), lc = [];
+  for (let i = 0; i < lsp.n; i++) if (lsp.at(i)[2] === 'centre') lc.push(lsp.at(i).slice(0, 2).map((v) => +v.toFixed(6)));
+  assert.deepEqual(lc, [[45, 55]]);
+  // (r115 R5-M2: a circle's quadrants are its own, exact -- turned 2.5 degrees by its insert, the
+  // nearest 5-degree sample was 4.36 off on a radius of 100)
+  const turned = all([[0, 'INSERT'], [8, '0'], [2, 'R'], [10, 0], [20, 0], [50, 2.5]], blocks([[0, 'BLOCK'], [2, 'R'], [10, 0], [20, 0], [0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 100], [0, 'ENDBLK']]));
+  assert.deepEqual(turned.filter((s) => s.startsWith('quadrant')), ['quadrant -100.000 0.000', 'quadrant 0.000 -100.000', 'quadrant 0.000 100.000', 'quadrant 100.000 0.000']);
   // (r114 R4-M2: a spline-fit 2D POLYLINE, 70 bit 4: its samples are no ends -- its two ends only)
   const fit = all([[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 4], [10, 0], [20, 0], ...[[0, 0], [3, 4], [6, 5], [9, 4], [12, 0]].flatMap(([x, y], k) => [[0, 'VERTEX'], [8, '0'], [10, x], [20, y], [70, k ? 8 : 0]]), [0, 'SEQEND']]);
   assert.deepEqual(fit, ['end 0.000 0.000', 'end 12.000 0.000']);

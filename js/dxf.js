@@ -551,7 +551,7 @@ export function parseDXF(s, opts = {}) {
           if (frozenHere(p)) continue;
           charge1(p);
           const pts = seenPts(p, M);
-          if (meetsAsDrawn(p, pts, s, clip.poly, chargeMore)) lo.paths.push(seenThrough(p, pts, s, clip));
+          if (meetsAsDrawn(p, pts, s, clip.poly, chargeMore)) lo.paths.push(seenThrough(p, pts, s, clip, M));
           continue;
         }
         // (a group: its parts the cull passes, tested and charged; a part it passes over costs
@@ -569,7 +569,7 @@ export function parseDXF(s, opts = {}) {
           group.push([q, pts]);
           if (!shown) shown = meetsAsDrawn(q, pts, s, clip.poly, chargeMore);
         }
-        if (shown) for (const [q, pts] of group) lo.paths.push(seenThrough(q, pts || seenPts(q, M), s, clip));
+        if (shown) for (const [q, pts] of group) lo.paths.push(seenThrough(q, pts || seenPts(q, M), s, clip, M));
         k = e - 1;
       }
       // (a hatch seen through this viewport is a hatch of its own: a fresh even-odd id, so it does
@@ -934,8 +934,11 @@ function boxMeetsOutline(box, c, poly) {
 // (js/dxf-view.js: ctx.clip(outline, 'evenodd')), and 2D Measure and the hover ask inOutline of a
 // point. Cut here by hand, rounds 99 to 102 each found an outline the cut got wrong (r103)
 // (pts: its points through the viewport, seenPts; s, the viewport's scale)
-function seenThrough(p, pts, s, clip) {
-  return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box };
+// (M, model to paper: a marked centre goes through it with the points -- left in model space, an
+// ellipse's centre snap seen through a viewport was offered where nothing is: r115 R5-M1)
+function seenThrough(p, pts, s, clip, M) {
+  return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box,
+    ...(p.centre ? { centre: ap(M, p.centre[0], p.centre[1]) } : {}) };
 }
 // a model path's points through a viewport (M, model to paper)
 function seenPts(p, M) {

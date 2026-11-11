@@ -484,7 +484,9 @@ export function createMeasure(deps) {
   function draw() {
     layer.replaceChildren();
     labels.replaceChildren();
-    if (!st.on && !st.results.length) { drawLoupe({}); return; }
+    // (the hole table's markers too: opened from Holes with Measure off, the live view showed none
+    // where the saved picture drew them -- r115 M4 measure-ui-B63)
+    if (!st.on && !st.results.length && !st.holes) { drawLoupe({}); return; }
     if (!scene.header) return;
     const v = projector();
     drawLoupe(v);

@@ -15,7 +15,9 @@ test('a record across a slice edge reaches the scan whole, every record once', (
   const rec = '#1=CARTESIAN_POINT(\'\',(0.,0.,0.));\n';
   const n = Math.ceil((2.5 * STEP_SLICE) / rec.length);
   const seen = [];
-  forEachStepSlice(enc(rec.repeat(n)), (t) => seen.push(...(t.match(/#1=CARTESIAN_POINT\([^;]*\);/g) || [])));
+  // (one push per match: a spread of a slice's ~120,000 matches overflowed the stack on an arm64
+  // Node 22 -- r115)
+  forEachStepSlice(enc(rec.repeat(n)), (t) => { for (const r of t.match(/#1=CARTESIAN_POINT\([^;]*\);/g) || []) seen.push(r); });
   assert.equal(seen.length, n);
 });
 test('64 MB with no ";" is one pass for all three scanners, no engine error', () => {
