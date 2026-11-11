@@ -1203,7 +1203,9 @@ function emit(recs, M, byBlock, depth, ctx) {
       const f = new Float64Array(pts.length);
       for (let k = 0; k < pts.length; k += 2) { const [x, y] = ap(O, pts[k], pts[k + 1]); f[k] = x; f[k + 1] = y; }
       const w = width > 0 ? width * Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) : 0;
-      ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 2, closed), f, closed, O), pts: f, closed, fill, ...(w > 0 ? { width: w } : {}), ...extra });
+      // (a curve's own points, when its maker marked them: arcPts, bulgePts -- 2D Measure snaps to those)
+      const own = pts.own ? { own: Uint32Array.from(pts.own), mids: Uint32Array.from(pts.mids || []) } : null;
+      ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 2, closed), f, closed, O), pts: f, closed, fill, ...(w > 0 ? { width: w } : {}), ...own, ...extra });
     };
     // a polyline with its widths (widthsOf): one width, stroked at it; else its line (1 px: what a
     // click and a snap find) and each wide segment's outline, filled
@@ -1241,7 +1243,12 @@ function emit(recs, M, byBlock, depth, ctx) {
       }
       // (marked a circle where it is drawn as one -- a turn and a uniform scale -- for 2D Measure's
       // centre and its Ø, which a 12-gon or a circle inserted at 1 x 0.985 read as: r70 Q6)
-      case 'CIRCLE': path(arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI), true, false, 0, conformal ? { circle: true } : null); break;
+      case 'CIRCLE': {
+        const c = arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI);
+        c.own = []; c.mids = []; // (no ends, no middle: its centre is its snap)
+        path(c, true, false, 0, conformal ? { circle: true } : null);
+        break;
+      }
       case 'ARC': {
         // (angles taken within one turn: 370° is 10°; an arc runs counter-clockwise from a0)
         const turn = (deg) => (((deg % 360) + 360) % 360) * Math.PI / 180;
@@ -1262,7 +1269,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (t1 <= t0) t1 += 2 * Math.PI;
         if (t1 - t0 > 2 * Math.PI) t1 = t0 + 2 * Math.PI; // (at most one turn)
         const minor = cross3(extrusionOf(r), [mx, my, mz]).map((v) => v * ratio);
-        const n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
+        let n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
+        n += n & 1; // (even: its mid-parameter point one of its points, a snap -- r113 R2-F3)
         const pts = [], own3 = [];
         for (let k = 0; k <= n; k++) {
           const t = t0 + ((t1 - t0) * k) / n;
@@ -1280,7 +1288,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         // tilted 1e-4 rad that a CIRCLE kept -- r96 A2; one seen tilted is not round in the view)
         const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
         const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
-        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}) });
+        ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}),
+          own: Uint32Array.from(whole ? [] : [0, n]), mids: Uint32Array.from(whole ? [] : [n / 2]) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -1342,7 +1351,9 @@ function emit(recs, M, byBlock, depth, ctx) {
           const f = new Float64Array((pts.length / 3) * 2);
           for (let k = 0, o = 0; k < pts.length; k += 3, o += 2) { const [x, y] = ap(M, pts[k], pts[k + 1], pts[k + 2]); f[o] = x; f[o + 1] = y; }
           const closed = (num(r, 70) & 1) === 1;
-          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 3, closed), f, closed, M, flatOf(pts)), pts: f, closed, fill: false });
+          // (its snaps its two ends: its points are its curve's samples, not its own -- r113 R2-F3)
+          ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(pts, 3, closed), f, closed, M, flatOf(pts)), pts: f, closed, fill: false,
+            own: Uint32Array.from(closed ? [] : [0, f.length / 2 - 1]), mids: new Uint32Array(0) });
         }
         break;
       }
@@ -1433,6 +1444,8 @@ function emit(recs, M, byBlock, depth, ctx) {
           item.valign = ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)];
           // 41, its reference width: its lines wrap at it (they ran on in one line)
           rw = num(e, 41, 0);
+          // 44, its line spacing factor (0.25 to 4; 1 when absent): its lines pitchOf apart
+          { const ls = num(e, 44, 1); if (Number.isFinite(ls) && ls !== 1) item.lineSpacing = Math.min(4, Math.max(0.25, ls)); }
           // (its direction 11/21/31 a world vector: its sizes taken in its own plane -- x along it, y
           // N x it -- as the view projects that plane, as a TEXT's are in its OCS: taken in world XY,
           // an MTEXT tilted 45° kept its full height where the TEXT beside it read 7.071 -- r97 A3)
@@ -1588,9 +1601,15 @@ function arcPts(cx, cy, r, a0, a1) {
   // a sweep is at most one turn (an angle of 1e12 asked for 2e11 points), and a non-number is none
   if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(r)) return [];
   if (a1 - a0 > 2 * Math.PI) a1 = a0 + 2 * Math.PI;
-  const n = Math.max(8, Math.ceil((a1 - a0) / SEG_RAD));
+  // (an even count, so its mid-angle point is one of its points)
+  let n = Math.max(8, Math.ceil((a1 - a0) / SEG_RAD));
+  n += n & 1;
   const out = [];
   for (let k = 0; k <= n; k++) { const t = a0 + ((a1 - a0) * k) / n; out.push(cx + r * Math.cos(t), cy + r * Math.sin(t)); }
+  // its own points, for 2D Measure's snaps: its two ends, and its middle on the arc -- not every
+  // chord's end and middle, which lie inside the curve (r113 R2-F3); a circle's call clears them
+  out.own = [0, n];
+  out.mids = [n / 2];
   return out;
 }
 
@@ -1673,8 +1692,11 @@ export function taperOutlines(xs, ys, bul, w0, w1, closed) {
 // a polyline with bulges (tan of a quarter of each segment's arc angle)
 export function bulgePts(xs, ys, bul, closed) {
   const out = [];
+  // (its own vertices' indices, and each arc's middle point's: 2D Measure's snaps -- r113 R2-F3)
+  const own = [], mids = [];
   const n = xs.length;
   for (let k = 0; k < n; k++) {
+    own.push(out.length / 2);
     out.push(xs[k], ys[k]);
     const j = k + 1 < n ? k + 1 : closed ? 0 : -1;
     if (j < 0 || !bul[k]) continue;
@@ -1688,10 +1710,14 @@ export function bulgePts(xs, ys, bul, closed) {
     const h = ch / 2 / Math.tan(th / 2);
     const cx = (x0 + x1) / 2 - ((y1 - y0) / ch) * h, cy = (y0 + y1) / 2 + ((x1 - x0) / ch) * h;
     const a0 = Math.atan2(y0 - cy, x0 - cx);
-    const steps = Math.max(2, Math.ceil(Math.abs(th) / SEG_RAD));
+    let steps = Math.max(2, Math.ceil(Math.abs(th) / SEG_RAD));
+    steps += steps & 1; // (even: the arc's middle one of its points)
+    mids.push(out.length / 2 - 1 + steps / 2);
     for (let s = 1; s < steps; s++) { const a = a0 + (th * s) / steps; out.push(cx + r * Math.cos(a), cy + r * Math.sin(a)); }
   }
-  if (closed && n) out.push(xs[0], ys[0]);
+  if (closed && n) { own.push(out.length / 2); out.push(xs[0], ys[0]); }
+  out.own = own;
+  out.mids = mids;
   return out;
 }
 
@@ -1786,17 +1812,20 @@ function hatchLoops(r) {
       for (let v = 0; v < nv; v++) { xs.push(at(10)); ys.push(at(20)); bs.push(hasB ? at(42) : 0); }
       // (a hatch boundary is closed whatever its 73 says; appended, not spread: a 200k-vertex
       // boundary spread into call arguments overflowed the stack)
-      append(pts, bulgePts(xs, ys, bs, true));
+      const bp = bulgePts(xs, ys, bs, true);
+      append(pts, bp);
+      pts.own = bp.own; pts.mids = bp.mids; // (its points from 0: the same indices)
       // (a boundary that is a circle marked one, as a polyline's is: 590 hatch circles at hand had
       // no centre since r70 -- r71 Q2)
       if (hasB && bulgeCircle(xs, ys, bs, true)) pts.circle = true;
     } else {
       const ne = count(at(93));
       const arcs = [];
-      let others = 0;
+      let others = 0, curved = false;
       for (let e = 0; e < ne; e++) {
         const et = at(72);
         if (et !== 2) others++;
+        if (et !== 1) curved = true;
         if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
           const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
           const ccwArc = at(73);
@@ -1839,6 +1868,8 @@ function hatchLoops(r) {
       // circle, marked as a polyline's is -- one edge of a full turn, or two halves or four quarters,
       // which some exporters write: r71 Q2, r72 A5)
       if (!others && hatchCircle(arcs)) pts.circle = true;
+      // (a boundary with curved edges: its points are their samples, none a snap -- r113 R2-F3)
+      if (curved) { pts.own = []; pts.mids = []; }
     }
     if (pts.length >= 6) loops.push(pts);
   }
@@ -2076,11 +2107,20 @@ export function wrapLines(lines, width, max) {
   return out;
 }
 
-// A text's corners as js/dxf-view.js places it: its lines (1.4 heights apart), its width (its
-// fit, else 0.6 of a height per character of the longest line), shifted by its alignment and
+// A text's height (40) is its capitals' height (the DXF reference; AutoCAD's SHX and TrueType
+// styles alike): its font's em is that over TEXT_CAP, a sans-serif's capitals' share of the em (the
+// em set to the height drew every text 31 % small: r113 R2-F1). An MTEXT's lines are 5/3 of its
+// height apart (the reference's "3-on-5"), times its own factor, 44 (r113 R2-F2). The view and
+// the boxes below take both from here.
+export const TEXT_CAP = 0.72;
+export const emOf = (t) => t.h / TEXT_CAP;
+export const pitchOf = (t) => (t.h * 5 / 3) * (t.lineSpacing || 1);
+
+// A text's corners as js/dxf-view.js places it: its lines (pitchOf apart), its width (its fit,
+// else 0.6 of an em per character of the longest line), shifted by its alignment and
 // vertical alignment, turned by its rotation. The extents took every text as left-aligned on its
 // baseline, one line high: a 20-line MTEXT drawn below its point was cut off by Fit
-// An MTEXT's lines wrapped by the estimate (a character -- a code point -- 0.6 of a height). The
+// An MTEXT's lines wrapped by the estimate (a character -- a code point -- 0.6 of an em). The
 // ratio is the same at any scale, so a text seen through many viewports is wrapped once (each
 // wrapped it again: 1,400 viewports of one long MTEXT reached the worker's 60 s): the lines are kept
 // with the text and given to each viewport's copy of it (a cache of 256 texts missed on every
@@ -2089,7 +2129,7 @@ const WRAPPED = new WeakMap();
 function estimatedLines(t) {
   if (!(t.mtext && t.wrap > 0)) return null;
   let w = WRAPPED.get(t);
-  if (!w) { w = wrapLines(t.text.split('\n'), (l) => [...l].length, t.wrap / (t.h * 0.6 * (t.widthFactor || 1))); WRAPPED.set(t, w); }
+  if (!w) { w = wrapLines(t.text.split('\n'), (l) => [...l].length, t.wrap / (emOf(t) * 0.6 * (t.widthFactor || 1))); WRAPPED.set(t, w); }
   return w;
 }
 const sameLines = (from, to) => { const w = estimatedLines(from); if (w) WRAPPED.set(to, w); return to; };
@@ -2097,15 +2137,17 @@ const sameLines = (from, to) => { const w = estimatedLines(from); if (w) WRAPPED
 // (drawn: its lines as the view drew them, when it has; else estimated)
 // (width: the drawn width of its widest line, when the caller measured it -- the view, by its font)
 export function textCorners(t, drawn = null, width = null) {
-  const per = t.h * 0.6 * (t.widthFactor || 1); // (a character's width, estimated)
+  const em = emOf(t);
+  const per = em * 0.6 * (t.widthFactor || 1); // (a character's width, estimated)
   // an MTEXT with a reference width wraps at it (as the view does, by measure): its lines estimated
   const lines = drawn || estimatedLines(t) || t.text.split('\n');
-  const lh = t.h * 1.4;
+  const lh = pitchOf(t);
   // (the longest line by a loop: spread into Math.max, 300k lines overflowed the stack)
   let longest = 0;
   for (const l of lines) { const n = l.length > longest ? [...l].length : 0; if (n > longest) longest = n; } // (code points: an astral character is one)
   const w = t.fit > 0 ? t.fit : width !== null ? width : per * longest;
-  const hBlock = (lines.length - 1) * lh + t.h;
+  // (an MTEXT's block: its lines' pitch, and the last line's em -- the view hangs each em-box)
+  const hBlock = (lines.length - 1) * lh + (t.mtext ? em : t.h);
   const x0 = t.fit > 0 ? 0 : t.align === 'center' ? -w / 2 : t.align === 'right' ? -w : 0;
   // (y up: the top of the block and its bottom, from the point)
   let top, bottom;
@@ -2115,7 +2157,7 @@ export function textCorners(t, drawn = null, width = null) {
   } else {
     // the last line's baseline (or its bottom / middle / top) on the point, the lines above it
     const base = t.valign === 'top' ? -t.h : t.valign === 'middle' ? -t.h / 2 : 0;
-    bottom = base - (t.valign === 'bottom' ? 0 : t.h * 0.25);
+    bottom = base - (t.valign === 'bottom' ? 0 : em * 0.25);
     top = base + t.h + (lines.length - 1) * lh;
   }
   const c = Math.cos(t.rot || 0), s = Math.sin(t.rot || 0);
@@ -2125,7 +2167,7 @@ export function textCorners(t, drawn = null, width = null) {
   // baseline -- its box left the slant 0.58 heights outside at 30°)
   // (slanted before its width is scaled, as the view does: the slant widens with the width factor,
   // or with a fit text's stretch)
-  const sxs = t.fit > 0 ? (longest > 0 ? t.fit / (t.h * 0.6 * longest) : 1) : t.widthFactor || 1;
+  const sxs = t.fit > 0 ? (longest > 0 ? t.fit / (em * 0.6 * longest) : 1) : t.widthFactor || 1;
   const k = t.oblique ? Math.tan(t.oblique) * sxs : 0;
   return [[x0, bottom], [x0 + w, bottom], [x0, top], [x0 + w, top]].map(([u0, v0]) => { const u = (u0 + v0 * k) * mx, v = v0 * my; return [t.x + u * c - v * s, t.y + u * s + v * c]; });
 }

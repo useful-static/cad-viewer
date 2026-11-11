@@ -303,6 +303,23 @@ await test('WebGL resize: the canvas takes the size asked, then shrinks to the d
   assert.deepEqual(named(g.since(), 'viewport').map((c) => c.a), [[0, 0, 80, 60]]);
 });
 
+// (r113 M2 renderer-webgl-R24: the ground shadow never drawn)
+await test('WebGL ground: a frame with a ground uses the ground program, writes its centre, axes and alpha, and draws a 4-vertex strip; a frame without one does not (r113 M2 renderer-webgl-R24)', async () => {
+  const { g, r } = await glScene({ version: 2 });
+  r.render(frame());
+  const c = g.since();
+  assert.ok(named(c, 'useProgram').some((x) => x.a[0] === r.groundProg.p), 'the ground program used');
+  assert.deepEqual(uni(c, 'uGc').map(f32), [[0, 0, -1, 0]]);
+  assert.deepEqual(uni(c, 'uGx').map(f32), [[2, 0, 0, 0]]);
+  assert.deepEqual(uni(c, 'uGy').map(f32), [[0, 2, 0, 0]]);
+  assert.deepEqual(uni(c, 'uGa').map(f32), [[0.3, 0, 0, 0]]);
+  assert.deepEqual(named(c, 'drawArrays').map((x) => x.a), [['TRIANGLE_STRIP', 0, 4]]);
+  r.render(frame({ ground: null }));
+  const c2 = g.since();
+  assert.equal(named(c2, 'useProgram').filter((x) => x.a[0] === r.groundProg.p).length, 0, 'no ground, no ground program');
+  assert.deepEqual(named(c2, 'drawArrays'), []);
+});
+
 // ---- a recording WebGPU adapter and device ----
 const flags = (names) => Object.fromEntries(names.map((k, i) => [k, 1 << i]));
 globalThis.GPUShaderStage = flags(['VERTEX', 'FRAGMENT', 'COMPUTE']);
@@ -314,6 +331,9 @@ const U = globalThis.GPUBufferUsage;
 function fakeGPU({ info = { vendor: 'acme', architecture: 'rdna9' }, lostEarly = false, maxStorage = 1 << 27, isFallbackAdapter } = {}) {
   const log = [];
   let n = 0;
+  // lose(info): the device lost after creation (its lost promise resolves then)
+  let lose = null;
+  const lostLater = new Promise((res) => { lose = res; });
   // an object whose every method is recorded ({ on, k, a }) and answers another such object
   const rec = (name, impl = {}) => new Proxy({ name }, {
     get: (t, k) => {
@@ -335,7 +355,7 @@ function fakeGPU({ info = { vendor: 'acme', architecture: 'rdna9' }, lostEarly =
   const queue = rec('queue');
   const device = rec('device', {
     limits, queue,
-    lost: lostEarly ? Promise.resolve({ reason: 'unknown', message: 'early' }) : new Promise(() => {}),
+    lost: lostEarly ? Promise.resolve({ reason: 'unknown', message: 'early' }) : lostLater,
     addEventListener: () => {},
     pushErrorScope: () => {},
     popErrorScope: async () => null,
@@ -354,7 +374,7 @@ function fakeGPU({ info = { vendor: 'acme', architecture: 'rdna9' }, lostEarly =
   Object.defineProperty(globalThis, 'navigator', { value: { gpu }, configurable: true, writable: true });
   let at = 0;
   const since = () => { const s = log.slice(at); at = log.length; return s; };
-  return { canvas, log, since, device };
+  return { canvas, log, since, device, lose };
 }
 const on = (calls, o, k) => calls.filter((c) => c.on === o && c.k === k);
 
@@ -377,6 +397,28 @@ await test('WebGPU create: a hardware adapter gives a WebGPURenderer on a "webgp
   assert.ok(await WebGPURenderer.create(ok.canvas, { allowSoftware: true }) instanceof WebGPURenderer);
   const lost = fakeGPU({ lostEarly: true });
   await assert.rejects(WebGPURenderer.create(lost.canvas), { message: 'WebGPU device was lost at creation' });
+});
+
+// (r113 M2 renderer-webgpu-R3: a device lost after creation set no flag and called no onlost)
+await test('WebGPU device lost while shown: lost becomes true and onlost is called once with the loss\'s message; a destroyed device sets lost but calls no onlost (r113 M2 renderer-webgpu-R3)', async () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const [reason, want] of [['unknown', ['GPU reset']], ['destroyed', []]]) {
+      const g = fakeGPU();
+      const r = await WebGPURenderer.create(g.canvas);
+      const calls = [];
+      r.onlost = (m) => calls.push(m);
+      assert.equal(r.lost, false);
+      g.lose({ reason, message: 'GPU reset' });
+      await new Promise((res) => setTimeout(res, 0));
+      assert.equal(r.lost, true, reason);
+      assert.equal(r.isLost(), true, reason);
+      assert.deepEqual(calls, want, reason);
+    }
+  } finally {
+    console.warn = warn;
+  }
 });
 
 // (r112 M renderer-webgpu-C1, -O18, -R14: no face pipelines made; the body buffer 65 bytes; no state texture)

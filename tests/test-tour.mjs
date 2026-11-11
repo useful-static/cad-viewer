@@ -710,4 +710,105 @@ await test('tour-recorder.js: a tour names its model; Add numbers its steps from
   }
 });
 
+// r113: M2's U-medium survivors in tour-path, tour-recorder and tour-sight, each on its probe's input
+// (a camera's turn: yaw about z, then pitch about x, as a unit quaternion)
+const camQ = (yaw, pitch) => {
+  const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2), cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2);
+  return [cy * sp, sy * sp, sy * cp, cy * cp];
+};
+test('tour-path.js: the ease\'s second half is the first\'s mirror, 0.744 / 0.9375 / 0.996 at 0.6 / 0.75 / 0.9 (r113 M2 tour-path-O4)', () => {
+  assert.deepEqual(r4([0.6, 0.75, 0.9].map((t) => EASE.inOut(t))), [0.744, 0.9375, 0.996]);
+  for (const t of [0.1, 0.25, 0.4]) assert.ok(Math.abs(EASE.inOut(1 - t) - (1 - EASE.inOut(t))) < 1e-12, `at ${t}`);
+});
+test('tour-path.js: slerp of two tour cameras (iso to yaw 2.4, pitch 0.3) at 0.75 is a unit quaternion, [0.11871, 0.14134, 0.82875, 0.52831] (r113 M2 tour-path-O8)', () => {
+  const q = slerp(camQ(0.785, 0.6), camQ(2.4, 0.3), 0.75);
+  assert.ok(Math.abs(Math.hypot(...q) - 1) < 1e-9, `|q| ${Math.hypot(...q)}`);
+  const want = [0.11871, 0.14134, 0.82875, 0.52831];
+  assert.ok(q.every((x, k) => Math.abs(x - want[k]) < 1e-5), `${q}`);
+});
+test('tour-sight.js: from "outside" on a part at the centre, the direction is a unit vector off up for a Z-, a Y- and an X-up model (r113 M2 tour-sight-O37)', () => {
+  const part = { min: [-5, -5, -5], max: [5, 5, 5] };
+  const obst = [{ min: [8, -5, -5], max: [20, 5, 5] }];
+  const got = {};
+  for (const up of [[0, 0, 1], [0, 1, 0], [1, 0, 0]]) {
+    const { dir } = clearestDirection(part, up, [0, 0, 0], obst);
+    assert.ok(dir.every(Number.isFinite) && Math.abs(Math.hypot(...dir) - 1) < 1e-9, `up ${up}: |dir| ${Math.hypot(...dir)}`);
+    const rise = dir[0] * up[0] + dir[1] * up[1] + dir[2] * up[2];
+    assert.ok(rise < 0.99, `up ${up}: straight overhead (${rise})`);
+    got[up.join(',')] = r4(dir);
+  }
+  assert.deepEqual(got['0,0,1'], [0.2868, 0.4967, 0.8192]);
+  assert.deepEqual(got['0,1,0'], [0.2868, 0.8192, -0.4967]);
+});
+// the tour maker on stand-in elements (the r112 arm's): f({ rec, $, list, api }) with the
+// document put back after
+const withRecorder = async (api, f) => {
+  const { createTourRecorder } = await import('../js/tour-recorder.js');
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const stub = () => {
+    const ls = {};
+    return new Proxy(function () {}, {
+      get(t, k) {
+        if (k in t) return t[k];
+        if (k === 'addEventListener') return (type, fn) => { (ls[type] ||= []).push(fn); };
+        if (k === 'fire') return (type) => (ls[type] || []).forEach((fn) => fn({}));
+        if (k === 'querySelectorAll') return () => [];
+        if (k === Symbol.iterator) return undefined;
+        if (k === 'value') return '';
+        return stub();
+      },
+      set(t, k, v) { t[k] = v; return true; }, apply() { return stub(); },
+    });
+  };
+  try {
+    const els = new Map();
+    const $ = (id) => { if (!els.has(id)) els.set(id, stub()); return els.get(id); };
+    const plain = (tag) => ({ tag, kids: [], textContent: '', append(...c) { this.kids.push(...c); }, setAttribute() {}, focus() {}, querySelector: () => ({ focus() {} }) });
+    const list = plain('ol');
+    Object.defineProperty(list, 'textContent', { set() { list.kids = []; }, get() { return ''; } });
+    els.set('testeps', list);
+    els.set('tourmaker', { hidden: true, addEventListener() {} });
+    globalThis.document = { getElementById: $, createElement: plain };
+    const full = { announce() {}, capture: () => ({ view: 'iso' }), model: () => ({ key: 'k', name: 'board', unit: 'mm', url: 'b.cadmesh' }), modelUrl: () => 'b.cadmesh', validate() {}, orient: () => null, stopPreview() {}, ...api };
+    const rec = createTourRecorder(full);
+    await f({ rec, $, list });
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document;
+  }
+};
+await test('tour-recorder.js: show(true) opens the maker without stopping a preview; show(false) closes it and stops the preview once (r113 M2 tour-recorder-R30, B39)', async () => {
+  let stopped = 0;
+  await withRecorder({ stopPreview: () => { stopped++; } }, async ({ rec }) => {
+    assert.equal(rec.isOpen(), false);
+    rec.show(true);
+    assert.equal(rec.isOpen(), true, 'show(true) opens the maker');
+    assert.equal(stopped, 0);
+    rec.show(false);
+    assert.equal(rec.isOpen(), false);
+    assert.equal(stopped, 1, 'the preview stopped on close');
+  });
+});
+await test('tour-recorder.js: Add asks for the camera the chooser holds, "exact" or "frame" (r113 M2 tour-recorder-C22)', async () => {
+  for (const want of ['exact', 'frame']) {
+    const asked = [];
+    await withRecorder({ capture: ({ camera }) => { asked.push(camera); return { view: 'iso' }; } }, async ({ $ }) => {
+      $('tes-cam').value = want;
+      $('teadd').onclick();
+      assert.deepEqual(asked, [want]);
+    });
+  }
+});
+await test('tour-recorder.js: three steps, the first picked, Add puts the new step second; the orbit typed as 2 is written into the picked step (r113 M2 tour-recorder-O28, R20)', async () => {
+  let n = 0;
+  await withRecorder({ capture: () => { n++; return { view: { cam: { target: [n, 0, 0], dist: 10 * n } } }; } }, async ({ rec, $, list }) => {
+    $('tes-cam').value = 'exact';
+    $('teadd').onclick(); $('teadd').onclick(); $('teadd').onclick();
+    list.kids[0].kids[0].onclick();
+    $('teadd').onclick();
+    assert.deepEqual(rec.toJSON().steps.map((s) => s.view.cam.target[0]), [1, 4, 2, 3]);
+    $('tes-orbit').value = '2'; $('tes-orbit').fire('input');
+    assert.deepEqual(rec.toJSON().steps.map((s) => s.orbit ?? null), [null, 2, null, null]);
+  });
+});
+
 done();

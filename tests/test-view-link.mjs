@@ -180,5 +180,15 @@ test('a link\'s ids run 1..n: the last body is kept, n + 1 and 0 dropped (r112 M
   assert.deepEqual(r.selected, [3]);
   assert.deepEqual(resolveBodies({ hidden: [0, 3, 4], selected: [4] }, ['a', 'b', 'c']).hidden, [3]);
 });
+// (r113 M2 view-link-O37) the fingerprint is the standard FNV-1a, pinned: every link already shared
+// carries it, so a change to the rule reads those links as another model's and drops their hidden
+// bodies
+test('modelPrint is FNV-1a (32-bit), pinned: a shipped link keeps its hidden bodies (r113 M2 view-link-O37)', () => {
+  assert.equal(modelPrint(['']), '811c9dc5'); // (the empty input: the offset basis itself)
+  assert.equal(modelPrint(['a']), 'e40c292c'); // (the published FNV-1a 32 of "a")
+  const keys = ['board', 'hdmi', 'usb', 'gpio'];
+  assert.equal(modelPrint(keys), '146b3206');
+  assert.deepEqual(resolveBodies({ model: '146b3206', hidden: [2, 3], selected: [1], selNames: ['board'] }, keys), { hidden: [2, 3], selected: [1], changed: false });
+});
 
 done();

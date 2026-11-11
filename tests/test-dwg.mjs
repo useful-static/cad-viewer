@@ -129,6 +129,49 @@ t('four rules a mutation pass found no arm for: a true colour\'s ACI, a layer\'s
   assert.equal(hatch(head + '0'.repeat(128)), 156);
   assert.throws(() => hatch(head), /past the end of the object/);
 });
+t('an LWPOLYLINE\'s bulge is written as its 42 and drawn as an arc, a SPLINE\'s control points as 10/20/30 and drawn through them (r113 M2 dwg-B355, dwg-O1611)', () => {
+  const ent = { entmode: 2, owner: 1, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 };
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [3, 4] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, on: true, lw: -3 } }],
+    // (0,0) to (10,0) as a half circle (bulge 1), then straight on to (10,5)
+    [3, { handle: 3, name: 'LWPOLYLINE', decoded: true, e: ent, d: { pts: [[0, 0], [10, 0], [10, 5]], flags: 0, bulges: [1, 0, 0], widths: [], ext: [0, 0, 1] } }],
+    // a degree-1 spline of three control points: the polyline (20,0) (30,10) (40,0)
+    [4, { handle: 4, name: 'SPLINE', decoded: true, e: ent, d: { degree: 1, flags1: 0, closed: false, periodic: false, rational: false, knots: [0, 0, 1, 2, 2], weights: [], ctrl: [[20, 0, 0], [30, 10, 0], [40, 0, 0]], fit: [] } }],
+  ]);
+  const P = dwgToPairs({ objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 });
+  const at = (type) => { const i = P.findIndex(([k, v]) => k === 0 && v === type); const j = P.findIndex(([k], n) => n > i && k === 0); return P.slice(i, j).map((p) => p.join('=')); };
+  const lw = at('LWPOLYLINE');
+  assert.deepEqual(lw.filter((s) => /^(10|20|42)=/.test(s)), ['10=0', '20=0', '42=1', '10=10', '20=0', '10=10', '20=5']);
+  const sp = at('SPLINE');
+  assert.deepEqual(sp.filter((s) => /^(1[01]|2[01]|3[01])=/.test(s)), ['10=20', '20=0', '30=0', '10=30', '20=10', '30=0', '10=40', '20=0', '30=0']);
+  const d = parseDXF(P);
+  assert.equal(d.paths.length, 2, JSON.stringify(d.paths.map((p) => p.pts.length)));
+  const pts = (p) => { const a = []; for (let k = 0; k < p.pts.length; k += 2) a.push([p.pts[k], p.pts[k + 1]]); return a; };
+  const [arc, spl] = d.paths.map(pts).sort((a, b) => a[0][0] - b[0][0]);
+  // the arc: many points, every one of the first segment's on the circle of centre (5, 0) radius 5,
+  // and counter-clockwise from (0, 0) to (10, 0), so its lowest is 5 below the chord
+  assert.ok(arc.length > 6, `the arc drawn as ${arc.length} points`);
+  const seg = arc.slice(0, -1);
+  assert.ok(seg.every((q) => Math.abs(Math.hypot(q[0] - 5, q[1]) - 5) < 0.05), `bulge 1 gives a half circle of radius 5: ${JSON.stringify(arc)}`);
+  assert.ok(Math.abs(Math.min(...seg.map((q) => q[1])) + 5) < 0.1, JSON.stringify(arc));
+  // the spline: from (20, 0) through (30, 10) to (40, 0)
+  const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
+  assert.ok(near(spl[0], [20, 0]) && near(spl[spl.length - 1], [40, 0]) && spl.some((q) => near(q, [30, 10])), JSON.stringify(spl));
+});
+t('MTEXT from R2000: its line spacing style and factor read after its text, and written as 73 and 44 (r113 R2-F2)', () => {
+  // (p, ext, xdir; width 0; h 2.5; attach 1, dir 1; two BDs; "AB"; style 1, factor 1.5)
+  const s = `10 10 10  10 10 01  01 10 10  10  00${rd(2.5)}  01${b8(1)} 01${b8(1)}  10 10  ${tv('AB')}  01${b8(1)} 00${rd(1.5)}`;
+  const d = decodeData('MTEXT', 15, s);
+  assert.deepEqual([d.h, d.text, d.lsStyle, d.lsFactor], [2.5, 'AB', 1, 1.5]);
+  const objects = new Map([
+    [1, { handle: 1, name: 'BLOCK_RECORD', decoded: true, d: { name: '*Model_Space', base: [0, 0, 0], entities: [3] } }],
+    [2, { handle: 2, name: 'LAYER', decoded: true, d: { name: '0', colour: { aci: 7 }, on: true, lw: -3 } }],
+    [3, { handle: 3, name: 'MTEXT', decoded: true, e: { entmode: 2, owner: 1, layer: 2, colour: { aci: 256 }, ltscale: 1, ltflags: 0, lw: -1, invisible: 0 }, d: { ...d, ext: [0, 0, 1], style: 0 } }],
+  ]);
+  const pairs = dwgToPairs({ objects, header: {}, v: 15, version: 'AC1015', encoding: 'windows-1252', codepage: 30 }).filter(([k]) => k === 73 || k === 44).map((p) => p.join('='));
+  assert.deepEqual(pairs, ['73=1', '44=1.5']);
+});
 t('T (to R2004): \\U+XXXX decoded, but not after an escaped backslash (a typed "\\\\U+00B0" stays text, as its DXF keeps it)', () => {
   assert.equal(new Bits(bits(tv('45\\U+00B0')), 15).T(), '45°');
   assert.equal(new Bits(bits(tv('C:\\\\U+00B0')), 15).T(), 'C:\\\\U+00B0');

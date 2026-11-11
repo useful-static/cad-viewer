@@ -111,5 +111,66 @@ await test('a hit marks its entry used now, so eviction follows reads (r112 M me
     Date.now = now;
   }
 });
+// (r113 M2 mesh-cache-R18) "Clear saved conversions" empties both stores: nothing listed, nothing read
+await test('cacheClear drops every saved conversion: the list is empty and each key a miss (r113 M2 mesh-cache-R18)', async () => {
+  assert.equal(mc.cacheAvailable(), true, 'the stand-in is in');
+  const a = `v${CACHE_VERSION}|board`, b = `v${CACHE_VERSION}|case`;
+  await mc.cachePut(a, new Uint8Array([1]).buffer, 'board.step');
+  await mc.cachePut(b, new Uint8Array([2]).buffer, 'case.step');
+  assert.deepEqual((await mc.cacheList()).map((e) => e.name).filter((n) => n === 'board.step' || n === 'case.step').sort(), ['board.step', 'case.step']);
+  await mc.cacheClear();
+  assert.deepEqual(await mc.cacheList(), []);
+  assert.equal(await mc.cacheGet(a), null);
+  assert.equal(await mc.cacheGet(b), null);
+});
+// (r113 M2 mesh-cache-R4) a fresh profile: the database is new and its stores exist only once
+// onupgradeneeded makes them (a transaction over a store not made throws, as IndexedDB's does). A
+// module instance of its own (the query string), so its database handle is opened here
+await test('a fresh profile: the stores are made on upgrade, so a put is read back and listed (r113 M2 mesh-cache-R4)', async () => {
+  const fresh = () => {
+    const stores = new Map();
+    let version = 0;
+    const later = (f) => setTimeout(f, 0);
+    const store = (m) => ({
+      get: (k) => { const r = new FakeRequest(m.get(k)); later(() => r.onsuccess && r.onsuccess()); return r; },
+      put: (v) => { m.set(v.key, v); return new FakeRequest(v.key); },
+      delete: (k) => { m.delete(k); return new FakeRequest(undefined); },
+      getAll: () => new FakeRequest([...m.values()]),
+      clear: () => { m.clear(); return new FakeRequest(undefined); },
+    });
+    const d = {
+      createObjectStore: (n) => { stores.set(n, new Map()); },
+      transaction: (names) => {
+        for (const n of names) if (!stores.has(n)) throw new Error(`NotFoundError: no object store "${n}"`);
+        const t = { objectStore: (n) => store(stores.get(n)) };
+        later(() => t.oncomplete && t.oncomplete());
+        return t;
+      },
+    };
+    return {
+      stores,
+      open: (name, v) => {
+        const r = { result: d };
+        later(() => { if (v > version) { version = v; if (r.onupgradeneeded) r.onupgradeneeded(); } if (r.onsuccess) r.onsuccess(); });
+        return r;
+      },
+    };
+  };
+  const was = globalThis.indexedDB;
+  const idb = fresh();
+  globalThis.indexedDB = idb;
+  try {
+    const m = await import('../js/mesh-cache.js?r113-fresh-profile');
+    const key = `v${CACHE_VERSION}|fresh`;
+    assert.equal(await m.cachePut(key, new Uint8Array([4, 5]).buffer, 'board.step'), true, 'the put stored');
+    assert.deepEqual([...idb.stores.keys()].sort(), ['data', 'meta']);
+    const got = await m.cacheGet(key);
+    assert.ok(got, 'read back from the cache');
+    assert.deepEqual([...new Uint8Array(got)], [4, 5]);
+    assert.deepEqual((await m.cacheList()).map((e) => e.name), ['board.step']);
+  } finally {
+    globalThis.indexedDB = was;
+  }
+});
 
 done();

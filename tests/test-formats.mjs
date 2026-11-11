@@ -24,6 +24,16 @@ await test('the short "what opens" names every format but the cadmesh, by kind',
   const t = opensShort();
   for (const f of FORMATS.filter((x) => x.kind !== 'cadmesh')) assert.ok(t.includes(f.label), `${f.label} in "${t}"`);
 });
+// (r113 M2 formats-C56) each kind's list holds that kind's labels and no other's: the line every
+// visitor reads first, pinned to its words
+await test('the short "what opens" lists each kind\'s own formats only, in the table\'s order (r113 M2 formats-C56)', () => {
+  const t = opensShort();
+  assert.equal(t, 'a CAD file (STEP, IGES, BREP), a mesh (STL, OBJ, PLY, OFF, 3MF, GLB, glTF), a 2D DXF or DWG, or a zip of one');
+  const m = /^a CAD file \(([^)]*)\), a mesh \(([^)]*)\), a 2D (.*), or a zip of one$/.exec(t);
+  assert.ok(m, t);
+  const want = (kind) => FORMATS.filter((f) => f.kind === kind).map((f) => f.label);
+  assert.deepEqual([m[1].split(', '), m[2].split(', '), m[3].split(' or ')], [want('cad'), want('mesh'), want('2d')]);
+});
 await test('index.html carries no accept list of its own (main.js sets them from the table)', () => {
   const html = readFileSync(join(here, '..', 'index.html'), 'utf8');
   for (const id of ['open', 'addmodel']) {
@@ -71,7 +81,7 @@ await test('first bytes say the format, for each that has a signature', () => {
     ['ISO-10303-21;\nHEADER;', 'STEP'], ['﻿ISO-10303-21;', 'STEP'], ['DBRep_DrawableShape\n', 'BREP'],
     ['CADM\x01\x00', 'cadmesh'], ['glTF\x02\x00\x00\x00', 'GLB'], ['{ "asset": { "version": "2.0" } }', 'glTF'],
     ['PK\x03\x04', 'zip'], ['ply\nformat ascii 1.0\n', 'PLY'], ['solid cube\n facet normal 0 0 1\n', 'STL'],
-    ['OFF\n8 6 0\n', 'OFF'], ['# made by hand\nv 0 0 0\n', 'OBJ'], ['  0\nSECTION\n  2\nHEADER\n', 'DXF'],
+    ['OFF\n8 6 0\n', 'OFF'], ['OFF8 6 0\n', 'OFF'], ['STCNOFF\n8 6 0\n', 'OFF'], ['# made by hand\nv 0 0 0\n', 'OBJ'], ['  0\nSECTION\n  2\nHEADER\n', 'DXF'],
     ['AutoCAD Binary DXF\r\n\x1a\x00', 'DXF'], ['AC1032\x00\x00', 'DWG'], ['AC1009', 'DWG'],
     [`${' '.repeat(72)}S      1\n`, 'IGES'],
   ];

@@ -1172,7 +1172,9 @@ const DECODE = {
     if (v >= 21) r.BD();
     d.h = r.BD(); d.attach = r.BS(); d.dir = r.BS(); r.BD(); r.BD();
     d.text = r.TV();
-    // the rest (line spacing, background, columns) is not drawn
+    // from R2000 its line spacing: a style (BS 73) and a factor (BD 44) -- its lines drawn the
+    // factor's 5/3 heights apart (r113 R2-F2); the rest (background, columns) is not drawn
+    if (v >= 15) { d.lsStyle = r.BS(); d.lsFactor = r.BD(); }
     this.entityHandles(o);
     d.style = o.h.Ha(o.handle);
   },
@@ -1702,6 +1704,7 @@ export function dwgToPairs(dwg) {
         for (let k = 0; k + 250 < mt.length; k += 250) put(3, mt.slice(k, k + 250));
         put(1, mt.slice(Math.floor(Math.max(0, mt.length - 1) / 250) * 250));
         ext(d.ext); put(11, d.xdir[0]); put(21, d.xdir[1]); put(31, d.xdir[2]);
+        if (d.lsFactor !== undefined && Number.isFinite(d.lsFactor)) { put(73, d.lsStyle); put(44, d.lsFactor); }
         break;
       }
       case 'LWPOLYLINE': {

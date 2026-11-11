@@ -421,7 +421,7 @@ export function sniffFormat(bytes) {
   if (looksLikeDxf(text) || text.startsWith(BINARY_DXF_SENTINEL)) return f('dxf');
   if (/^\s*solid[\s\S]*facet/.test(text)) return f('stl');
   if (/^\s*\{\s*"(asset|scenes|nodes|meshes)"/.test(text)) return f('gltf');
-  if (/^\s*[CN]?OFF\s/.test(text)) return f('off');
+  if (/^\s*(?:ST)?C?N?OFF[\s\d]/.test(text)) return f('off'); // ("OFF490 518 0": ModelNet's, r113)
   // (a line's own space is spaces and tabs: by \s, which takes line ends too, the lines before its
   // first word could be split every way there is -- 18 blank CRLF lines took 5.8 s, three times as
   // long a line more: r108 D5)

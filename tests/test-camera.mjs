@@ -447,6 +447,34 @@ test('levelOrbitBy: no roll, tilts as orbitBy does, stops short of the pole', ()
   assert.ok(dot(camDir(lvl), up) < Math.sin(Math.PI / 2 - 0.019) && dot(camDir(lvl), up) > 0.99);
 });
 
+// (r113 M2 camera-B8) from the Top / Bottom view (looking exactly along up, no horizontal heading
+// left in the view direction) a level-orbit drag takes its heading from the screen's right: the
+// view turns about up by dx * rate from where it stood, not to a heading normalised out of a 1e-17
+// remainder
+test('levelOrbitBy from straight along up turns the view about up by dx * rate, heading from the screen\'s right (r113 M2 camera-B8)', () => {
+  // (the probe's camera: a y-up view at the pole, so its direction is the axis to 1e-17, the
+  // remainder pointing nowhere in particular; the model's up taken as that direction)
+  const want = {
+    top: [-0.6999654764486475, -0.0071413047379001735, -0.006999888095645219, 0.7141066692821927],
+    bottom: [0.6801017584412544, 0.21354119077347303, -0.21785529948059604, 0.6666339524029513],
+  };
+  const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  for (const [pole, pitch] of [['top', Math.PI / 2], ['bottom', -Math.PI / 2]]) {
+    const c = cam({ yaw: 0.3, pitch, up: [0, 0, 1], q: quatFromView(0.3, pitch, [0, 0, 1]) });
+    const d0 = camDir(c);
+    const up = d0.map((x) => Math.round(x));
+    assert.ok(Math.abs(dot(d0, up) - 1) < 1e-12, `${pole}: looks along up ${d0}`);
+    const u0 = camUp(c);
+    levelOrbitBy(c, up, 40, 0);
+    const u1 = camUp(c);
+    // the screen-up's heading about up turned by 40 px * 0.008 rad/px
+    const p = (v) => v.map((x, k) => x - up[k] * dot(v, up));
+    const turn = Math.atan2(dot(up, cr(p(u0), p(u1))), dot(p(u0), p(u1)));
+    assert.ok(Math.abs(Math.abs(turn) - 0.32) < 1e-3, `${pole}: turned ${turn} rad, want 0.32`);
+    c.q.forEach((v, k) => assert.ok(Math.abs(v - want[pole][k]) < 1e-9, `${pole}: q ${c.q} vs ${want[pole]}`));
+  }
+});
+
 // (r112 M camera-O124) a y-up camera off the poles has the unit +y up (a camera fitted by it sees
 // the box at its true distance)
 test('a y-up camera off the poles has up [0, 1, 0], a unit vector (r112 M camera-O124)', () => {

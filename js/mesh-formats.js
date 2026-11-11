@@ -758,10 +758,12 @@ function parseOFF(s, base) {
   let li = 0;
   const lineEnd = (q) => { while (lineAt[li + 1] <= q) li++; return lineAt[li + 1]; };
   let p = 0;
-  const hm = /^(ST)?(C)?(N)?OFF$/.exec(toks[0] || '');
+  // (the header may run into the vertex count, "OFF490 518 0", as ModelNet's files are written: it
+  // was refused, "no vertex and face counts" -- r113 R1-M1)
+  const hm = /^(ST)?(C)?(N)?OFF(\d+)?$/.exec(toks[0] || '');
   if (hm) p++;
   const hasST = !!(hm && hm[1]), hasC = !!(hm && hm[2]), hasN = !!(hm && hm[3]);
-  const nv = +toks[p++], nf = +toks[p++];
+  const nv = hm && hm[4] !== undefined ? +hm[4] : +toks[p++], nf = +toks[p++];
   p++; // edges
   // the values each vertex holds before a colour (all of them without one)
   const fixed = 3 + (hasN ? 3 : 0) + (hasC ? 0 : hasST ? 2 : 0);

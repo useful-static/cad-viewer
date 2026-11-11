@@ -55,6 +55,23 @@ test('by assembly: a subassembly is one colour, the next another, a loose body i
   assert.notEqual(key(c[4]), key(c[0])); // the base, on the branching node
   assert.notEqual(key(c[4]), key(c[3]));
 });
+// (r113 M2 palettes-C7) more assemblies than PALETTE has colours (the rack, the A311D board): the
+// group numbered PALETTE.length takes distinct(), every body gets an [r, g, b], and the page's
+// schemeColours does not throw
+test('by assembly with PALETTE.length + 2 assemblies: every body coloured, the first past the palette by distinct() (r113 M2 palettes-C7)', () => {
+  const n = PALETTE.length + 2;
+  const meshes = Array.from({ length: n }, (_, i) => ({ name: `a${i}`, vtxStart: i, vtxCount: 1 }));
+  const big = { meshes, root: { name: '', meshes: [], children: meshes.map((m, i) => ({ name: m.name, meshes: [i], children: [] })) } };
+  const c = bodyColours(big, 'assembly');
+  assert.equal(c.length, n);
+  c.forEach((x, i) => assert.ok(Array.isArray(x) && x.length === 3 && x.every((v) => Number.isFinite(v)), `body ${i}: ${x}`));
+  for (let k = 0; k < PALETTE.length; k++) assert.equal(key(c[k]), key(PALETTE[k]));
+  assert.equal(key(c[PALETTE.length]), key(distinct(PALETTE.length)));
+  assert.equal(key(c[PALETTE.length + 1]), key(distinct(PALETTE.length + 1)));
+  const out = schemeColours({ header: big, color: new Uint8Array(n * 4) }, 'assembly');
+  assert.equal(out.length, n * 4);
+  assert.ok([...out].every((v, i) => i % 4 !== 3 || v === 255), 'every vertex opaque');
+});
 test('by body: every body differs', () => {
   const c = bodyColours(header, 'body').map(key);
   assert.equal(new Set(c).size, c.length);

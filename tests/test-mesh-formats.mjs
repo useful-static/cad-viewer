@@ -478,6 +478,11 @@ await test('PLY: its header ends at the line that is end_header -- a space after
   cube(await parseMesh('ply', plyBinary(h('comment the line after these is end_header\n', 'end_header')), 'cube.ply'));
 });
 await test('OFF', async () => { cube(await parseMesh('off', off(), 'cube.off')); });
+await test('OFF: the header run into the vertex count ("OFF8 12 0", as ModelNet writes it) opens; a count after a word does not (r113 R1-M1)', async () => {
+  cube(await parseMesh('off', enc(new TextDecoder().decode(off()).replace('OFF\n8', 'OFF8')), 'cube.off'));
+  cube(await parseMesh('off', enc(new TextDecoder().decode(off()).replace('OFF\n8', 'COFF8').replace(/^(-?[\d.]+ -?[\d.]+ -?[\d.]+)$/gm, '$1 255 0 0')), 'cube.off'));
+  await assert.rejects(parseMesh('off', enc('OFFX8 12 0\n'), 'x.off'), /not an OFF file/);
+});
 await test('3MF: unit cm, a component moved, a base material colour, the tree', async () => {
   const z = zipStored([['_rels/.rels', rels()], ['3D/3dmodel.model', model3mf()]]);
   assert.equal(meshFormatOf('cube.3mf', z), '3mf');

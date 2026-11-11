@@ -521,7 +521,7 @@ test(`the BVH (bodies over ${BVH_MIN} triangles) answers as the scan does`, () =
 
 // createMeasure at the viewer's opening camera (the r108 M1 arm's): bodies, the hidden set; the page's
 // elements stubs, made elements recorded, what is told recorded. -> { meas, $, toScreen, made, told }
-const measureAt = async (bodies, hidden = new Set()) => {
+const measureAt = async (bodies, hidden = new Set(), extra = {}) => {
   const { createMeasure } = await import('../js/measure-ui.js');
   const { perspective, lookAt, multiply } = await import('../js/mat4.js');
   const stub = () => new Proxy(function () {}, {
@@ -538,12 +538,12 @@ const measureAt = async (bodies, hidden = new Set()) => {
   const told = [];
   const meas = createMeasure({ $, view: () => ({ ...v }), sectionPlane: () => null, closed: () => true,
     scene: { mesh: m, header: m.header, hidden, sphere: { center: centre, radius: 61 } },
-    lenText: (x) => `${x.toFixed(2)} mm`, num: (x) => x.toFixed(2), unit: () => 'mm', announce() {}, tell: (s) => told.push(s), queueFrame() {}, syncOptbar() {}, coarse: () => false, showsHidden: () => false });
+    lenText: (x) => `${x.toFixed(2)} mm`, num: (x) => x.toFixed(2), unit: () => 'mm', announce() {}, tell: (s) => told.push(s), queueFrame() {}, syncOptbar() {}, coarse: () => false, showsHidden: () => false, ...extra });
   const toScreen = (p) => {
     const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
     return [((x / w + 1) * W) / 2, ((1 - y / w) * H) / 2];
   };
-  return { meas, $, toScreen, told };
+  return { meas, $, els, toScreen, told };
 };
 // a canvas context that records what is drawn: texts (fillText) and arcs' start/end angles
 const recordingCtx = () => {
@@ -628,6 +628,92 @@ await test('while a note\'s text is typed, a click on the model places nothing m
   assert.equal(meas.place(...toScreen([20, 20, 1.6])), true);
   assert.equal(JSON.stringify([meas.pending.length, meas.results.length]), before);
   assert.equal(meas.pending.length, 1, 'the note\'s point kept, waiting for its text');
+});
+
+// a stand-in document for the hole table's rows, put back after f
+const withDocument = async (f) => {
+  const had = globalThis.document;
+  globalThis.document = { createElement: (tag) => ({ tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }), createElementNS: () => ({ setAttribute() {}, append() {} }) };
+  try { return await f(); } finally { if (had === undefined) delete globalThis.document; else globalThis.document = had; }
+};
+const WASHER_BOARD = (th = 1.6) => [{ name: 'board', faces: box([0, 0, 0], [100, 70, th]) }, { name: 'washer', faces: washer(1.6, 4, th, 48, 20, 30) }];
+// (r113 M2 measure-ui-B76) a hole table shown: the picture numbers each hole as its row
+await test('the hole table\'s holes are numbered on a painted picture, "1" for the washer\'s one hole; none without a table (r113 M2 measure-ui-B76)', async () => {
+  await withDocument(async () => {
+    const { meas } = await measureAt(WASHER_BOARD());
+    const before = recordingCtx();
+    meas.paint(before.ctx, 1);
+    assert.deepEqual(before.texts, [], 'no table, no numbers');
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    const { ctx, texts } = recordingCtx();
+    meas.paint(ctx, 1);
+    assert.deepEqual(texts, ['1']);
+  });
+});
+// (r113 M2 measure-ui-C65) each mode's instruction under Measure
+await test('Measure\'s instruction for each mode: "point 1 of 2", "point 1 of 3", "pick a flat face", "click where the note goes" (r113 M2 measure-ui-C65)', async () => {
+  const { meas, $ } = await measureAt([BOARD()]);
+  meas.setOn(true);
+  const hints = {};
+  for (const mode of ['distance', 'angle', 'face', 'note']) { meas.setMode(mode); hints[mode] = $('measnote').textContent; }
+  assert.deepEqual(hints, { distance: 'point 1 of 2', angle: 'point 1 of 3', face: 'pick a flat face', note: 'click where the note goes' });
+});
+// (r113 M2 measure-ui-O131) Face to face of the board's top (z 1.6) and a washer's top (z 5)
+await test('Face to face: the board\'s top then a 5 mm washer\'s top read "3.40 mm" (r113 M2 measure-ui-O131)', async () => {
+  await withDocument(async () => {
+    const { meas, toScreen } = await measureAt([{ name: 'board', faces: box([0, 0, 0], [100, 70, 1.6]) }, { name: 'washer', faces: washer(1.6, 4, 5, 48, 20, 30) }]);
+    meas.setOn(true);
+    meas.setMode('face');
+    meas.place(...toScreen([60, 40, 1.6]));
+    assert.equal(meas.results.length, 0, 'one face picked, no result yet');
+    meas.place(...toScreen([23, 30, 5]));
+    assert.deepEqual(meas.results.map((r) => `${r.main} (${r.sub})`), ['3.40 mm (face to face)']);
+  });
+});
+// (r113 M2 measure-ui-R27) a finger held on the view: the magnifier is shown and drawn into
+await test('loupe(x, y) then draw(): the magnifier #measloupe is shown, filled and the view copied into it (r113 M2 measure-ui-R27)', async () => {
+  const hadWin = globalThis.window;
+  globalThis.window = { devicePixelRatio: 1 };
+  try {
+    await withDocument(async () => {
+      const { meas, els } = await measureAt(WASHER_BOARD(), new Set(), { coarse: () => true });
+      const calls = [];
+      const rec = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => calls.push(String(k))), set: (t, k, x) => { t[k] = x; return true; } });
+      const box = { hidden: true, width: 0, height: 0, style: {}, getContext: () => rec };
+      els.set('measloupe', box);
+      els.set('view', { width: 1280, height: 800 });
+      els.set('stage', { dataset: { bg: 'dark' } });
+      meas.setOn(true);
+      meas.draw();
+      assert.equal(box.hidden, true, 'no finger, no magnifier');
+      assert.deepEqual(calls, []);
+      meas.loupe(640, 400);
+      meas.draw();
+      assert.equal(box.hidden, false, 'the magnifier is shown');
+      assert.ok(calls.includes('fillRect') && calls.includes('drawImage') && calls.includes('stroke'), calls.join(' '));
+    });
+  } finally {
+    if (hadWin === undefined) delete globalThis.window; else globalThis.window = hadWin;
+  }
+});
+// (r113 M2 measure-ui-R50) the hole table's Copy as CSV
+await test('the hole table\'s "Copy as CSV" puts the header and the hole\'s row on the clipboard and tells "hole table copied" (r113 M2 measure-ui-R50)', async () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const clip = [];
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText: async (s) => { clip.push(s); } } }, configurable: true, writable: true });
+  try {
+    await withDocument(async () => {
+      const { meas, $, told } = await measureAt(WASHER_BOARD());
+      meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+      const n0 = told.length;
+      $('holescsv').onclick();
+      await new Promise((r) => setTimeout(r, 5));
+      assert.deepEqual(clip, ['n,diameter (mm),"X, Y (mm)",depth (mm),rim diameter (mm)\n1,3.20,"20.00, 30.00",1.60,']);
+      assert.deepEqual(told.slice(n0), ['hole table copied']);
+    });
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'navigator', had); else delete globalThis.navigator;
+  }
 });
 
 // (r112 M measure-geom-C50) a box wound inward with its normals out (a mirrored placement): every

@@ -141,6 +141,18 @@ await test('notes: by a point or a part, trimmed; a wrong one refuses the list',
     assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: n } }), L), /its notes must be/);
   }
 });
+// (r113 M2 model-list-C56) the limit is inclusive: NOTES_MAX notes (as many as Measure lets a view
+// hold) are accepted, all kept; one more refuses the list
+await test('notes: exactly NOTES_MAX (100) accepted with all kept, NOTES_MAX + 1 refused (r113 M2 model-list-C56)', async () => {
+  const { NOTES_MAX } = await import('../js/view-link.js');
+  assert.equal(NOTES_MAX, 100);
+  const of = (n) => Array.from({ length: n }, (_, i) => ({ text: `hole ${i + 1}`, at: [i, 0, 0] }));
+  for (const n of [NOTES_MAX - 1, NOTES_MAX]) {
+    const [e] = parseModelList(JSON.stringify({ a: { name: 'A', notes: of(n) } }), L);
+    assert.equal(e.notes.length, n);
+  }
+  assert.throws(() => parseModelList(JSON.stringify({ a: { name: 'A', notes: of(NOTES_MAX + 1) } }), L), /its notes must be a list \(at most 100\)/);
+});
 await test('id and aliases: a model found by either; a bad or doubled one refuses the list', () => {
   const es = parseModelList(JSON.stringify({ a: { name: 'A', id: 'le-potato', aliases: ['aml-s905x-cc', 'le-potato'] }, b: { name: 'B', id: 'tritium' } }), L);
   assert.equal(es[0].id, 'le-potato');

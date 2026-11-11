@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { MITER_LIMIT, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, ptSegDist2, textCorners, wrapLines } from './dxf.js';
+import { MITER_LIMIT, TEXT_CAP, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, pitchOf, ptSegDist2, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, itemsAt, itemsIn, nearestItem } from './box-tree.js';
@@ -506,12 +506,24 @@ export function snapPoints(paths, o) {
     const shown = p.clipPoly ? (x, y) => inOutline(p.clipPoly, x, y) : () => true;
     const at = (x, y, k) => { if (shown(x, y)) put(x, y, k, pi); };
     const mid = (i, j) => at((q[i * 2] + q[j * 2]) / 2, (q[i * 2 + 1] + q[j * 2 + 1]) / 2, 1);
-    for (let i = 0; i < n2; i++) {
-      at(q[i * 2], q[i * 2 + 1], 0);
-      if (i + 1 < n2) mid(i, i + 1);
-    }
     const m = n2 > 1 && same(q[0], q[(n2 - 1) * 2]) && same(q[1], q[(n2 - 1) * 2 + 1]) ? n2 - 1 : n2;
-    if (p.closed && m === n2 && n2 > 2) mid(n2 - 1, 0);
+    if (p.own) {
+      // a curve's maker marked its own points (js/dxf.js arcPts, bulgePts): its ends and vertices,
+      // a straight span's middle, an arc's middle on the arc -- every chord's end and middle of its
+      // drawing were offered, inside the curve, "middle" 0.95 off a radius-1000 arc (r113 R2-F3)
+      const own = p.own;
+      for (let k = 0; k < own.length; k++) {
+        if (k > 0 && own[k] === own[k - 1] + 1) mid(own[k - 1], own[k]);
+        if (own[k] < m || !p.closed) at(q[own[k] * 2], q[own[k] * 2 + 1], 0); // (a closed one's repeated first point once)
+      }
+      for (const i of p.mids) at(q[i * 2], q[i * 2 + 1], 1);
+    } else {
+      for (let i = 0; i < n2; i++) {
+        at(q[i * 2], q[i * 2 + 1], 0);
+        if (i + 1 < n2) mid(i, i + 1);
+      }
+      if (p.closed && m === n2 && n2 > 2) mid(n2 - 1, 0);
+    }
     // (a centre with its Ø only for what the reader drew from a circle: a 12-gon or a 16-gon hovered
     // as "centre (Ø 20.000)", an ellipse 10 x 9.85 as Ø 19.850 -- r70 Q6)
     // (the mark alone decides: the old 1 % roundness test and its 12 points stayed after r70 Q6 made
@@ -628,12 +640,25 @@ export function createDxfView(canvas, drawing, cb = {}) {
   // text -- 2.5 mm in a metre drawing -- had no ink at any zoom, the canvas keeping no font that
   // small, a 0.1-unit one measured 6% narrow, and fonts stop at 10,000 px: r64 Q2)
   const wrapped = new WeakMap();
+  // a text's em in drawing units, so the font's own capitals are its height: their share of the em
+  // measured once in this canvas's font (sans-serif differs by platform: 0.69 to 0.73), js/dxf.js's
+  // TEXT_CAP where the canvas cannot say (r113 R2-F1)
+  let capShare = 0;
+  const emView = (t) => {
+    if (!capShare) {
+      ctx.save(); ctx.font = FONT;
+      const m = ctx.measureText('H');
+      ctx.restore();
+      capShare = m && m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent / FONT_PX : TEXT_CAP;
+    }
+    return t.h / capShare;
+  };
   const linesOf = (t) => {
     if (!(t.mtext && t.wrap > 0)) return t.text.split('\n');
     let w = wrapped.get(t);
     if (!w) {
       ctx.save(); ctx.font = FONT;
-      w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (t.h / FONT_PX) * (t.widthFactor || 1), t.wrap);
+      w = wrapLines(t.text.split('\n'), (l) => ctx.measureText(l).width * (emView(t) / FONT_PX) * (t.widthFactor || 1), t.wrap);
       ctx.restore();
       wrapped.set(t, w);
     }
@@ -646,7 +671,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     if (w === undefined) {
       ctx.save(); ctx.font = FONT;
       w = 0;
-      for (const l of linesOf(t)) w = Math.max(w, ctx.measureText(l).width * (t.h / FONT_PX) * (t.widthFactor || 1));
+      for (const l of linesOf(t)) w = Math.max(w, ctx.measureText(l).width * (emView(t) / FONT_PX) * (t.widthFactor || 1));
       ctx.restore();
       widths.set(t, w);
     }
@@ -783,8 +808,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
       ctx.save();
       ctx.translate(t.x - o[0], t.y - o[1]);
       ctx.rotate(t.rot);
-      // (in the font's own px from here, scaled to the text's height: FONT_PX)
-      const k0 = t.h / FONT_PX;
+      // (in the font's own px from here, scaled so its capitals are the text's height: emView --
+      // the em set to the height drew every text 31 % small, r113 R2-F1)
+      const k0 = emView(t) / FONT_PX;
       ctx.scale(k0, -k0);
       ctx.fillStyle = isOf(t, sel) ? SELECTED : sel && !isOf(t, st.hover) ? FADED : onPaper(t.colour);
       ctx.font = FONT;
@@ -793,7 +819,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
       // made once per text, as the font's width does not change with the zoom; kept here, not in
       // the drawing)
       const lines = linesOf(t);
-      const lh = FONT_PX * 1.4;
+      const lh = pitchOf(t) / k0; // (5/3 of its height, times its 44: js/dxf.js pitchOf -- r113 R2-F2)
       // aligned / fit (js/dxf.js): the text fitted to its baseline's length -- aligned in both
       // directions, fit in width only
       if (t.fit > 0) {

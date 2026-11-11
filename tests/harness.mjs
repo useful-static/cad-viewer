@@ -12,6 +12,10 @@
 let passed = 0;
 let failed = 0;
 let skipped = 0;
+// async arms started and not yet settled: done() with one still open fails the file -- an arm
+// written `test(..., async ...)` without `await` never ran before done() exited, and the file read
+// as passed (r112's trap; r113 b)
+const pending = new Set();
 const ONLY = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : '';
 
 // a synchronous arm is counted at once; an async one when it settles (await it before done())
@@ -21,7 +25,10 @@ export function test(name, fn) {
   const fail = (e) => { failed++; console.log(`FAIL ${name}: ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e}`); };
   let r;
   try { r = fn(); } catch (e) { fail(e); return undefined; }
-  if (r && typeof r.then === 'function') return r.then(pass, fail);
+  if (r && typeof r.then === 'function') {
+    pending.add(name);
+    return r.then(pass, fail).finally(() => pending.delete(name));
+  }
   pass();
   return undefined;
 }
@@ -32,6 +39,7 @@ export function skip(name, why) {
 }
 
 export function done() {
+  for (const name of pending) { failed++; console.log(`FAIL ${name}: an async arm still running at done() -- write it \`await test(...)\`, or it never runs`); }
   console.log(`RESULT: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
   process.exit(failed ? 1 : 0);
 }

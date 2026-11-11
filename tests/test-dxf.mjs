@@ -6,7 +6,7 @@
 //   node tests/test-dxf.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts, insidePieces, bandPolys, outlineIndex } from '../js/dxf.js';
+import { UNITS, blockKey, parseDXF, inOutline, insideFlat, edgeOverlaps, layersOf, drawsNothing, sheetsOf, bulgePts, mtextPlain, textCodes, textCorners, unescapeDxf, wrapLines, valueKind, aciColour, onPaper, caret, uncaret, openCounts, insidePieces, bandPolys, outlineIndex, TEXT_CAP, emOf, pitchOf } from '../js/dxf.js';
 import { unescapeDxf as dwgCompareUnescape } from './dwg-compare.mjs';
 import { sniffFormat } from '../js/formats.js';
 import { addedReversed, measureText, nearestPoint, nearestSegment, pickAt, pointTree, segmentIndex, sizeRow, snapPoints, textIndex } from '../js/dxf-view.js';
@@ -270,6 +270,44 @@ test('a binary DXF with 310 binary chunks and 160 int64 values between drawn ent
   assert.equal(d.paths.length, 2, 'both lines, the chunks and the int64 read past as their own lengths');
   assert.deepEqual([...d.paths[0].pts], [0, 0, 3, 4]);
   assert.deepEqual([...d.paths[1].pts], [1, 1, 2, 2]);
+});
+// (r113 M2 dxf-C47) the value-kind table against the DXF reference's "group code value types",
+// written out here (binaryDXF above takes the reader's own table, so it cannot see a change to it),
+// and a binary DXF whose bytes are spelled out: every value's width typed by hand
+test('valueKind matches the DXF reference\'s group-code ranges, and a hand-spelled binary DXF reads (r113 M2 dxf-C47)', () => {
+  const REF = [
+    [0, 9, 's'], [10, 39, 'd'], [40, 59, 'd'], [60, 79, 'i16'], [90, 99, 'i32'], [100, 100, 's'], [102, 102, 's'], [105, 105, 's'],
+    [110, 149, 'd'], [160, 169, 'i64'], [170, 179, 'i16'], [210, 239, 'd'], [270, 289, 'i16'], [290, 299, 'b'],
+    [300, 309, 's'], [310, 319, 'bin'], [320, 369, 's'], [370, 389, 'i16'], [390, 399, 's'], [400, 409, 'i16'],
+    [410, 419, 's'], [420, 429, 'i32'], [430, 439, 's'], [440, 459, 'i32'], [460, 469, 'd'], [470, 481, 's'],
+    [999, 999, 's'], [1000, 1003, 's'], [1004, 1004, 'bin'], [1005, 1009, 's'], [1010, 1059, 'd'], [1060, 1070, 'i16'], [1071, 1071, 'i32'],
+  ];
+  const wrong = [];
+  for (const [a, b, k] of REF) for (let c = a; c <= b; c++) if (valueKind(c) !== k) wrong.push(`${c}: ${valueKind(c)} (want ${k})`);
+  assert.deepEqual(wrong, []);
+  // the groups, code then value, as hex bytes little-endian (a string's bytes then its 00)
+  const str = (s) => [...s].map((ch) => ch.charCodeAt(0).toString(16).padStart(2, '0')).join('') + '00';
+  const hex = [
+    '0000', str('SECTION'), '0200', str('HEADER'), '0900', str('$INSUNITS'), '4600', '0400', '0000', str('ENDSEC'),
+    '0000', str('SECTION'), '0200', str('ENTITIES'),
+    '0000', str('LINE'), '0800', str('0'),
+    '3e00', '0100', // 62 (int16): colour 1
+    '5a00', '07000000', // 90 (int32)
+    'a000', '0807060504030201', // 160 (int64)
+    '2201', '01', // 290 (bool, one byte)
+    '0a00', '0000000000000000', '1400', '0000000000000000', // 10, 20: 0.0
+    '0b00', '0000000000000840', '1500', '0000000000001040', // 11: 3.0, 21: 4.0
+    '0000', str('ENDSEC'), '0000', str('EOF'),
+  ].join('');
+  const sentinel = new TextEncoder().encode('AutoCAD Binary DXF\r\n\x1a\x00');
+  const body = Uint8Array.from(hex.match(/../g), (h) => parseInt(h, 16));
+  const buf = new Uint8Array(sentinel.length + body.length);
+  buf.set(sentinel); buf.set(body, sentinel.length);
+  const d = parseDXF(buf.buffer);
+  assert.equal(d.units, parseDXF(dxf([[0, 'SECTION'], [2, 'HEADER'], [9, '$INSUNITS'], [70, 4], [0, 'ENDSEC'], [0, 'SECTION'], [2, 'ENTITIES'], [0, 'LINE'], [8, '0'], [10, 0], [20, 0], [11, 3], [21, 4], [0, 'ENDSEC'], [0, 'EOF']])).units);
+  assert.ok(d.units, 'the header\'s $INSUNITS 4 read');
+  assert.equal(d.paths.length, 1);
+  assert.deepEqual([...d.paths[0].pts], [0, 0, 3, 4]);
 });
 test('paper space is not drawn in the model: a 67 = 1 entity is left out and counted', () => {
   const ents = [[0, 'SECTION'], [2, 'ENTITIES'],
@@ -1441,7 +1479,7 @@ test('round 15: an escaped stack, a byte-order mark under a named code page, a l
   const c = textCorners({ x: 0, y: 0, h: 1, rot: 0, text: 'X', align: 'left', valign: 'baseline', oblique: Math.PI / 6 });
   assert.ok(Math.max(...c.map((q) => q[0])) > 0.6 + 0.5, 'the top right corner moved along by tan 30° per unit height');
   const c2 = textCorners({ x: 0, y: 0, h: 1, rot: 0, text: 'X', align: 'left', valign: 'baseline', oblique: Math.PI / 4, widthFactor: 2 });
-  assert.ok(Math.abs(Math.max(...c2.map((q) => q[0])) - (1.2 + 2)) < 1e-9, `${JSON.stringify(c2)}`);
+  assert.ok(Math.abs(Math.max(...c2.map((q) => q[0])) - (1.2 / TEXT_CAP + 2)) < 1e-9, `${JSON.stringify(c2)}`);
   // CJK breaks between characters (it has no spaces); spaces at a break are dropped
   assert.deepEqual(wrapLines(['平面図配置図'], (l) => l.length, 4), ['平面図配', '置図']);
   assert.deepEqual(wrapLines(['ab  cd'], (l) => l.length, 3), ['ab', 'cd']);
@@ -1740,6 +1778,26 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.ok(v.snapAt(400, 300));
     v.destroy();
     fail = false;
+  });
+  // (r113 M2 dxf-view-R77) the wheel over a 2D drawing zooms it about the cursor and holds the page's
+  // scroll: a handler returning first left the view still and the page scrolling under it
+  await test('2D wheel: one notch over the drawing holds the page scroll, redraws, and zooms about the cursor by exp(0.15) (r113 M2 dxf-view-R77)', async () => {
+    const on = {};
+    let draws = 0;
+    const cv = { ...canvas, addEventListener(k, f) { on[k] = f; } };
+    const v = createDxfView(cv, drawingOf(lines(10)), { onDraw: () => { draws++; } });
+    await later();
+    const a0 = v.toPx(2, 0.5), c0 = [400, 300];
+    const d0 = draws;
+    let held = 0;
+    on.wheel({ deltaY: -100, deltaMode: 0, clientX: c0[0], clientY: c0[1], preventDefault: () => { held++; } });
+    await later();
+    assert.equal(held, 1, 'the page scroll held');
+    assert.ok(draws > d0, 'redrawn after the wheel');
+    const a1 = v.toPx(2, 0.5);
+    const k = Math.hypot(a1[0] - c0[0], a1[1] - c0[1]) / Math.hypot(a0[0] - c0[0], a0[1] - c0[1]);
+    assert.ok(Math.abs(k - Math.exp(0.15)) < 1e-9, `zoomed by ${k}, want ${Math.exp(0.15)}`);
+    v.destroy();
   });
   // (r91 A1: the hover, driven by the view's own pointermove listener -- a deleted formatter threw
   // "fmt is not defined" at every circle's centre and the label kept "end")
@@ -2270,10 +2328,49 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.equal(run({ fill: true, closed: true, pts: Float64Array.of(10, 0, 50, 0, 50, 20, 10, 20) }), 0, 'a fill\'s border on the edge');
     assert.ok(fills.length >= 1 && fills.every((f) => f.clipped), `the fill drawn, clipped: ${JSON.stringify(fills)}`);
   });
+  test('a text is drawn with its capitals its height, and an MTEXT\'s lines 5/3 heights apart times its 44 (r113 R2-F1, F2)', () => {
+    const draw = (t) => {
+      const scales = [], texts = [];
+      const rec = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'scale' ? (a, b) => scales.push([a, b]) : k === 'fillText' ? (s, x, y) => texts.push([s, x, y]) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (o, k, v) => { o[k] = v; return true; } });
+      const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: 'T', on: true }], paths: [], texts: [{ layer: 'T', colour: col, x: 0, y: 0, rot: 0, align: 'left', valign: 'top', ...t }], extents: { min: [0, -40], max: [60, 20] } }, {});
+      scales.length = 0; texts.length = 0;
+      v.draw();
+      v.destroy();
+      return { k: scales.find(([a, b]) => b === -a), texts };
+    };
+    // (the em set so its capitals, TEXT_CAP of it, are the height: 10 / 0.72; it was the height)
+    const one = draw({ text: 'HHH', h: 10 });
+    assert.ok(Math.abs(one.k[0] * 100 * TEXT_CAP - 10) < 1e-9, `scale ${one.k}`);
+    // (three lines of a 44 of 2: 10 * 5/3 * 2 apart, in drawing units)
+    const three = draw({ text: 'A\nB\nC', h: 10, mtext: true, lineSpacing: 2 });
+    const dy = (three.texts[1][2] - three.texts[0][2]) * three.k[0];
+    assert.ok(Math.abs(dy - 10 * 5 / 3 * 2) < 1e-9, `pitch ${dy}`);
+    // and the reader takes 44, clamped to 0.25..4; without it 1
+    const mt = (g) => parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 10], ...g, [1, 'A\\PB']])).texts[0];
+    assert.equal(mt([[44, 2]]).lineSpacing, 2);
+    assert.equal(mt([[44, 9]]).lineSpacing, 4);
+    assert.equal(mt([]).lineSpacing, undefined);
+    assert.equal(pitchOf(mt([[44, 2]])), 10 * 5 / 3 * 2);
+    assert.equal(emOf({ h: 7.2 }), 10);
+  });
   Object.assign(globalThis, saved);
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete globalThis[k];
 }
 // (r70 Q6: 2D Measure's centre, with its Ø, only for what the reader drew from a circle)
+test('2D Measure snaps to a curve\'s own points: an arc\'s ends and its middle on the arc, a bulged polyline\'s vertices, straight middles and arc middle -- never a chord\'s (r113 R2-F3)', () => {
+  const snaps = (g) => { const d = parseDXF(ents(g)); const sp = snapPoints(d.paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) if (sp.kind[i] < 2) s.push(`${sp.kind[i] ? 'mid' : 'end'} ${sp.xy[2 * i].toFixed(4)} ${sp.xy[2 * i + 1].toFixed(4)}`); return s.sort(); };
+  // (an arc of r 1000, 0 to 85 degrees -- 17 steps of 5 degrees, made 18: three snaps, the middle at
+  // 42.5 degrees on the arc)
+  const at = (deg) => [1000 * Math.cos((deg * Math.PI) / 180), 1000 * Math.sin((deg * Math.PI) / 180)].map((v) => (Math.abs(v) < 5e-5 ? 0 : v).toFixed(4)).join(' ');
+  assert.deepEqual(snaps([[0, 'ARC'], [8, '0'], [10, 0], [20, 0], [40, 1000], [50, 0], [51, 85]]),
+    [`end ${at(0)}`, `end ${at(85)}`, `mid ${at(42.5)}`].sort());
+  // (a circle: no end and no middle -- its centre, kind 2, is its snap)
+  assert.deepEqual(snaps([[0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 5]]), []);
+  // (an open polyline (0,0)-(10,0) then a half circle bulge to (10,10): three vertices, the straight
+  // segment's middle, the arc's middle at (15, 5) on it)
+  assert.deepEqual(snaps([[0, 'LWPOLYLINE'], [8, '0'], [90, 3], [70, 0], [10, 0], [20, 0], [10, 10], [20, 0], [42, 1], [10, 10], [20, 10]]),
+    ['end 0.0000 0.0000', 'end 10.0000 0.0000', 'end 10.0000 10.0000', 'mid 15.0000 5.0000', 'mid 5.0000 0.0000']);
+});
 test('a centre snap with its Ø only for a CIRCLE drawn as one: none for a 12-gon, an ellipse, or a circle inserted at 1 x 0.985 (r70 Q6)', () => {
   const lw = (pts) => [[0, 'LWPOLYLINE'], [8, '0'], [90, pts.length], [70, 1], ...pts.flatMap(([x, y]) => [[10, x], [20, y]])];
   const ngon = (n, r) => Array.from({ length: n }, (_, i) => [r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n)]);
@@ -2366,8 +2463,9 @@ test('a frozen reference holds its ATTRIBs and every frozen layer above it; the 
     [0, 'INSERT'], [8, 'F1'], [2, 'IN'], [10, 500], [20, 500], [66, 1],
     [0, 'ATTRIB'], [8, 'T'], [10, 500], [20, 500], [40, 2], [1, 'SHEET-7'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
     // (a thawed reference after it: its ATTRIB is held by nothing)
-    [0, 'INSERT'], [8, 'T'], [2, 'IN'], [10, 5], [20, 5], [66, 1],
-    [0, 'ATTRIB'], [8, 'T'], [10, 5], [20, 5], [40, 2], [1, 'FREE'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
+    // (at 2, 2: its box, 6.7 wide since its capitals are its height -- r113 -- inside the line's)
+    [0, 'INSERT'], [8, 'T'], [2, 'IN'], [10, 2], [20, 2], [66, 1],
+    [0, 'ATTRIB'], [8, 'T'], [10, 2], [20, 2], [40, 2], [1, 'FREE'], [2, 'NO'], [70, 0], [0, 'SEQEND'],
     [0, 'ENDSEC'], [0, 'EOF']]));
   const text = (s) => d2.texts.find((t) => t.text === s);
   assert.deepEqual(layersOf(text('SHEET-7')), ['T', 'F1']);
