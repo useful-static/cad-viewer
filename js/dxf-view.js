@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { MITER_LIMIT, TEXT_CAP, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, pitchOf, ptSegDist2, textCorners, wrapLines } from './dxf.js';
+import { MITER_LIMIT, TEXT_CAP, circleThrough, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, pitchOf, ptSegDist2, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, itemsAt, itemsIn, nearestItem } from './box-tree.js';
@@ -74,10 +74,22 @@ export function pointTree(pts) {
 }
 // (a drawing of this many points or more has its tree built in js/snap-worker.js: r67)
 export const SNAP_WORKER_MIN = 200000;
+// (of snaps within a thousandth of r of the nearest -- one point, to rounding -- the first kind in
+// SNAP_KINDS' order names it (of one kind, the nearest still): a CIRCLE's quadrant on a LINE's end was named by
+// whichever the pointer was nearer by a hair -- r131: r122 L3)
+const SAME_SNAP = 1e-3;
 export function nearestPoint(index, x, y, r, accept = () => true) {
   const { xy, at } = index;
   const i = nearestItem([index.tree], [x, y], r, (k) => (xy[2 * k] - x) ** 2 + (xy[2 * k + 1] - y) ** 2, (k) => accept(at(k)));
-  return i < 0 ? null : at(i);
+  if (i < 0) return null;
+  const bx = xy[2 * i], by = xy[2 * i + 1], tol = SAME_SNAP * r;
+  let best = i, rank = SNAP_KINDS.indexOf(at(i)[2]);
+  itemsIn(index.tree, [bx - tol, by - tol], [bx + tol, by + tol], (k) => {
+    if (k === best || (xy[2 * k] - bx) ** 2 + (xy[2 * k + 1] - by) ** 2 > tol * tol) return;
+    const kr = SNAP_KINDS.indexOf(at(k)[2]);
+    if (kr < rank && accept(at(k))) { best = k; rank = kr; }
+  });
+  return at(best);
 }
 
 // The hover's texts: the first text (in the drawing's order) whose drawn quad holds (x, y) and
@@ -468,30 +480,19 @@ export function addedReversed(p) {
 // polyline or hatch boundary of arcs about one centre, a ratio-1 ELLIPSE). -> a typed set { n, xy, kind, path, r, at(i) -> [x, y, kind, layer, radius?] }
 // (a JS array a snap held 808 MB for 9 M of them, built at every open: the view builds the set
 // when Measure is first turned on)
-const SNAP_KINDS = ['end', 'middle', 'centre', 'quadrant'];
-// The circle through m points of q (x, y pairs), least squares (Kåsa), taken about their mean; null
-// when they lie on a line. Exact for points on a circle, however unevenly they are spaced.
-export function circleThrough(q, m) {
-  let mx = 0, my = 0;
-  for (let i = 0; i < m; i++) { mx += q[i * 2]; my += q[i * 2 + 1]; }
-  mx /= m; my /= m;
-  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
-  for (let i = 0; i < m; i++) {
-    const u = q[i * 2] - mx, v = q[i * 2 + 1] - my;
-    suu += u * u; svv += v * v; suv += u * v;
-    suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
-  }
-  const det = suu * svv - suv * suv;
-  if (!(Math.abs(det) > 1e-18 * (suu + svv) ** 2)) return null;
-  const a = (suuu + suvv) / 2, b = (svvv + svuu) / 2;
-  const uc = (a * svv - b * suv) / det, vc = (b * suu - a * suv) / det;
-  let r = 0;
-  for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - mx - uc, q[i * 2 + 1] - my - vc);
-  return { x: mx + uc, y: my + vc, r: r / m };
-}
+// (in this order of precedence where two meet: the nearer by a hair named a CIRCLE's quadrant on a
+// LINE's end -- nearestPoint; "extreme": a closed curve's x or y extreme, no quadrant of a circle --
+// r131: r119 L4, r122 L3)
+const SNAP_KINDS = ['end', 'middle', 'centre', 'quadrant', 'extreme'];
+// (the circle fit, js/dxf.js circleThrough: the reader's polyline circles take theirs from it too --
+// r131: r121 L1)
+export { circleThrough };
 export function snapPoints(paths, o) {
+  // (sized from what each path can put: a path of own points two a point, its own middles, four
+  // quadrants or extremes and a centre; else an end and a middle a point and a centre -- by its
+  // points alone it held only because curves sample more points than they have snaps: r131, r121 L3)
   let cap = 0;
-  for (const p of paths) if (!p.outline) cap += p.pts.length + 6; // (at most 2 a point, a centre and four quadrants)
+  for (const p of paths) if (!p.outline) cap += p.own ? 2 * p.own.length + (p.mids ? p.mids.length : 0) + 5 : p.pts.length + 1;
   // (a radius only for a centre, a few of them: kept aside, not a number a snap)
   const xy = new Float64Array(2 * cap), kind = new Uint8Array(cap), path = new Uint32Array(cap), rad = new Map();
   let n = 0;
@@ -536,6 +537,8 @@ export function snapPoints(paths, o) {
       // twin four -- r120 M3; a CAD quadrant snap takes a polyline's arcs as well)
       // (an ellipse's quadrants its axis ends, as its reader found them -- its samples' x and y
       // extremes were offered, 19.2043 across an isometric hole of major axis 20: r118 M2)
+      // (a closed spline's, a spline-fit polyline's, extremes are "extreme"s: no circle's quadrants --
+      // r131, r119 L4)
       if (quadPts.length) {
         for (const [x, y] of quadPts) at(x, y, 3);
       } else if (p.closed && !own.length && m >= 4) {
@@ -546,7 +549,7 @@ export function snapPoints(paths, o) {
           if (q[i * 2 + 1] < q[c * 2 + 1]) c = i;
           if (q[i * 2 + 1] > q[d * 2 + 1]) d = i;
         }
-        for (const i of new Set([a, b, c, d])) at(q[i * 2], q[i * 2 + 1], 3);
+        for (const i of new Set([a, b, c, d])) at(q[i * 2], q[i * 2 + 1], 4);
       }
     } else {
       for (let i = 0; i < n2; i++) {
@@ -873,8 +876,12 @@ export function createDxfView(canvas, drawing, cb = {}) {
         lines.forEach((l, i) => ctx.fillText(l, 0, y0 + i * lh));
       } else {
         // a TEXT's vertical alignment: its baseline, bottom, middle or top on the point
-        ctx.textBaseline = { bottom: 'bottom', middle: 'middle', top: 'top' }[t.valign] || 'alphabetic';
-        lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1)) * lh));
+        // (top and middle: its capitals' top or middle, on the baseline a capital's height or half of
+        // it below, where textCorners places them -- the canvas's em box was about 0.1 em off: r131,
+        // r118 L3; t.h / k0 is the capitals' height in the font's px)
+        const cap = t.valign === 'top' ? t.h / k0 : t.valign === 'middle' ? t.h / k0 / 2 : 0;
+        ctx.textBaseline = t.valign === 'bottom' ? 'bottom' : 'alphabetic';
+        lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1)) * lh + cap));
       }
       ctx.restore();
     }

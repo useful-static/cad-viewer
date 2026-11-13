@@ -221,3 +221,25 @@ export function modelRanges(models) {
 // clearance run and its line each had a copy -- r94 A5)
 export const modelOfBody = (ranges, id) => ranges.findIndex((r) => id >= r.first && id < r.first + r.count);
 
+// The copies of body `id` among meshes (1-based ids, itself included): the same name, the same
+// triangle count and the same size, the sizes compared sorted (a copy turned is still the same size
+// on some axis order). Same within 1e-3 of a unit (1 µm: the readers write mm), or 2e-6 of the
+// model's extent or the bodies' farthest coordinate where that is more, the float32 positions'
+// rounding there. (Rounded to 1e-3 and keyed, two copies either side of a rounding step split --
+// r122 L4, r123 L4)
+export function copiesOf(meshes, id, bbox = null) {
+  const ext = bbox ? Math.max(...[0, 1, 2].map((k) => bbox.max[k] - bbox.min[k])) : 0;
+  const size = (m) => (m.bbox ? [0, 1, 2].map((k) => m.bbox.max[k] - m.bbox.min[k]).sort((a, b) => a - b) : null);
+  const far = (m) => (m.bbox ? Math.max(...[0, 1, 2].flatMap((k) => [Math.abs(m.bbox.min[k]), Math.abs(m.bbox.max[k])])) : 0);
+  const me = meshes[id - 1], s = size(me), f = far(me);
+  const out = [];
+  meshes.forEach((m, i) => {
+    if (m.name !== me.name || m.idxCount !== me.idxCount) return;
+    const t = size(m);
+    if (!s || !t) { if (!s && !t) out.push(i + 1); return; }
+    const tol = Math.max(1e-3, 2e-6 * Math.max(ext, f, far(m)));
+    if (s.every((v, k) => Math.abs(v - t[k]) <= tol)) out.push(i + 1);
+  });
+  return out;
+}
+

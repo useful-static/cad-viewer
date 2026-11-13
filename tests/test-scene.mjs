@@ -110,6 +110,17 @@ test('merge: models in different units are refused in words, either order; mm by
   const { sceneUnitsRefusal } = SCENE;
   assert.equal(sceneUnitsRefusal([{ base: inch }, { base: inch }]), null);
 });
+test('copies: two parts either side of a 1 µm rounding step are copies; one 5 µm larger is not (r122 L4, r123 L4)', () => {
+  const b = (x) => ({ name: 'R1', idxCount: 36, bbox: { min: [0, 0, 0], max: [x, 2, 3] } });
+  const meshes = [b(1.0004999), b(1.0005001), b(1.006), { name: 'R2', idxCount: 36, bbox: { min: [0, 0, 0], max: [1.0005, 2, 3] } }];
+  // (must fire: rounded to 1e-3 and keyed, the first two split, 1000 against 1001)
+  assert.deepEqual(SCENE.copiesOf(meshes, 1), [1, 2]);
+  assert.deepEqual(SCENE.copiesOf(meshes, 3), [3]);
+  const oldKey = (m) => [0, 1, 2].map((k) => Math.round((m.bbox.max[k] - m.bbox.min[k]) * 1000)).sort((x, y) => x - y).join(',');
+  assert.notEqual(oldKey(meshes[0]), oldKey(meshes[1]), 'the control: the old key split them');
+  // (turned: the sizes compared sorted)
+  assert.deepEqual(SCENE.copiesOf([b(1), { name: 'R1', idxCount: 36, bbox: { min: [0, 0, 0], max: [3, 1, 2] } }], 1), [1, 2]);
+});
 test('merge: counts, ids, tree, moved bodies', () => {
   const s = mergeModels([{ base: board, name: 'board.stp' }, { base: lid, name: 'case.stp', offset: [0, 0, 1] }]);
   const h = s.header;

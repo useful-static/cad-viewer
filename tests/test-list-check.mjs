@@ -1481,6 +1481,9 @@ await test('a binary part.stl.gz sent with Content-Encoding: gzip arrives unpack
   const r = await checkFile('https://example.org/m/part.stl.gz', { fetchFn: served({ 'content-encoding': 'gzip' }), sniff: true });
   assert.equal(r.level, 'ok', r.detail);
   assert.match(r.detail, /arrives unpacked \(sent with Content-Encoding: gzip\), which the viewer opens/);
+  // (a br one is said as br: it read "gzip" -- r118 L4)
+  const br = await checkFile('https://example.org/m/part.stl.gz', { fetchFn: served({ 'content-encoding': 'br' }), sniff: true });
+  assert.match(br.detail, /arrives unpacked \(sent with Content-Encoding: br\), which the viewer opens/);
   // (must fire: with no encoding the check can read -- another site's, unexposed -- a binary STL's
   // start cannot say whether it was compressed, a warning as before)
   const bare = await checkFile('https://example.org/m/part.stl.gz', { fetchFn: served({}), sniff: true });

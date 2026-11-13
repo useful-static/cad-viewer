@@ -835,6 +835,25 @@ await test('faceAt on the board\'s bottom seen from below returns face 0; on its
     assert.ok(above && above.face === 1, `top: ${above && above.face}`);
   });
 });
+await test('Face to face with a curved first face says so and lists no result (r124 L2)', async () => {
+  await withRecordingDocument(async () => {
+    // (a washer about the opening view's centre: its outer wall, curved, turned toward the eye)
+    const { meas, toScreen, told } = await measureAt([{ name: 'washer', faces: washer(3, 10, 4, 48, 50, 35) }]);
+    meas.setOn(true);
+    meas.setMode('face');
+    const out = [0.64, -0.77];
+    const wall = [50 + 10 * out[0], 35 + 10 * out[1], 2], top = [50 + 6 * out[0], 35 + 6 * out[1], 4];
+    assert.ok(meas.faceAt(...toScreen(wall)), 'the wall is picked');
+    meas.place(...toScreen(wall));
+    meas.place(...toScreen(top));
+    assert.equal(meas.results.length, 0, `must fire: listed ${JSON.stringify(meas.results.map((r) => r.main))}`);
+    assert.match(told.join(' | '), /the first face is not flat: pick a flat face first/);
+    // (the control: flat then flat is a result)
+    meas.place(...toScreen(top));
+    meas.place(...toScreen([50 - 6 * out[0], 35 - 6 * out[1], 4]));
+    assert.equal(meas.results.length, 1);
+  });
+});
 // (r114 M3 measure-ui-B68) the hole table shown and the eye zoomed in past a hole: the hole behind
 // the eye is not drawn, and draw() does not throw
 await test('with the hole table shown and the eye past the washer\'s hole, draw() does not throw and draws no hole; from the opening view it draws the hole (r114 M3 measure-ui-B68)', async () => {
@@ -889,6 +908,11 @@ test('the hole table orders holes of one Ø by position, whatever the fit\'s noi
   assert.deepEqual(order(inch, 25.4, 1e-7), want);
   // (holes of different Ø still by Ø first)
   assert.deepEqual(orderHoles([{ diameter: 6, centre: [0, 0, 0] }, { diameter: 3, centre: [9, 9, 0] }]).map((h) => h.diameter), [3, 6]);
+  // (300,000 holes ordered, not a RangeError: Math.max(...) over them threw -- r123 L1)
+  const many = Array.from({ length: 300000 }, (_, i) => ({ diameter: 3 + (i % 3), centre: [i % 1000, Math.floor(i / 1000), 0] }));
+  const sorted = orderHoles(many);
+  assert.equal(sorted.length, 300000);
+  assert.deepEqual([sorted[0].diameter, sorted[0].centre], [3, [0, 0, 0]]);
   // (a float32 board's header holes, Ø 0.80 fitted as 0.799999, 0.8 and 0.800001 -- must fire: Ø to 6
   // digits split them into three runs, each in its own position order: r122 M1)
   const hdr = orderHoles([[0.800001, 1.66, 41.37], [0.8, 1.66, 8.35], [0.799999, 4.2, 36.29], [0.8, 4.2, 8.35], [0.799999, 1.66, 36.29], [0.800001, 4.2, 41.37]]
@@ -981,6 +1005,18 @@ await test('a point on a section whose walk grazes a ridge from outside is not i
   assert.equal(meas.insideAt([55, 35, 6], pl), false, 'beside it: outside');
 });
 
+await test('Measure on a mesh with no b-rep faces says its points snap to the surface only (r121 L2)', async () => {
+  const { faces, ...plain } = model([BOARD()]);
+  assert.ok(faces);
+  const scene = { mesh: plain, header: plain.header, hidden: new Set(), sphere: { center: [50, 35, 0.8], radius: 61 } };
+  const a = await measureAt([BOARD()], new Set(), { scene });
+  a.meas.setOn(true);
+  assert.match(a.told.join(' | '), /triangles only, no CAD faces: points snap to the surface/, 'must fire: nothing said');
+  const b = await measureAt([BOARD()]);
+  b.meas.setOn(true);
+  assert.doesNotMatch(b.told.join(' | '), /triangles only/, 'a file with its faces: not said');
+});
+
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
   const lines = [];
   const had = globalThis.document;
@@ -993,6 +1029,43 @@ await test('one hole size is one summary line, though its Ø falls either side o
     const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
     assert.equal(sizes.length, 1, sizes.join(' | '));
     assert.match(sizes[0], /× 2/);
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
+});
+
+await test('snap candidates are ordered the same whatever order they arrive in (r122 L2)', async () => {
+  const { snapOrder } = await import('../js/measure-ui.js');
+  // (A, B, C 0.8 px apart, nearer the eye in turn C, B, A: "within a pixel, the nearer; else the
+  // nearer on screen" ranked A < C, C < B and B < A by pairs -- must fire: the first differed by
+  // input order)
+  const pts = [{ id: 'A', dd: 0, p: [0, 0, 0] }, { id: 'B', dd: 0.8, p: [0, 0, 1] }, { id: 'C', dd: 1.6, p: [0, 0, 2] }];
+  const firsts = new Set();
+  for (const perm of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]) {
+    firsts.add(snapOrder(perm.map((i) => ({ ...pts[i] })), [0, 0, 1]).map((q) => q.id).join(''));
+  }
+  assert.equal(firsts.size, 1, [...firsts].join(' | '));
+  assert.equal([...firsts][0], 'BAC');
+  // (the control: the old pairwise comparator on the same three gives more than one order)
+  const old = (a, b) => (Math.abs(a.dd - b.dd) > 1 ? a.dd - b.dd : b.p[2] - a.p[2]);
+  const olds = new Set([[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]].map((perm) => perm.map((i) => pts[i]).sort(old).map((q) => q.id).join('')));
+  assert.ok(olds.size > 1, `the old rule gave ${[...olds]}`);
+});
+
+await test('one hole size in a top face and a side wall spans its centres in all three axes (r124 L4)', async () => {
+  const lines = [];
+  const had = globalThis.document;
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }; if (tag === 'li') lines.push(e); return e; } };
+  try {
+    // (a Ø3 washer lying flat at (20, 30, 0), and the same turned about X to stand in a wall at
+    // (60, 10, 30): (x, y, z) -> (x, -z, y), a rotation)
+    const turned = washer(1.5, 4, 1.6, 48, 60, 30).map((f) => f.map((t) => t.map(([x, y, z]) => P(x, -z + 10, y))));
+    const { meas } = await measureAt([{ name: 'flat', faces: washer(1.5, 4, 1.6, 48, 20, 30) }, { name: 'wall', faces: turned }]);
+    meas.showHoles([1, 2], { min: [0, 0, 0], name: 'both' }, 'both');
+    const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
+    assert.equal(sizes.length, 1, sizes.join(' | '));
+    // (must fire: two spans, the flat hole's X and Y, left the wall's Z out)
+    assert.equal((sizes[0].match(/×/g) || []).length, 1 + 2, sizes[0]);
   } finally {
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }

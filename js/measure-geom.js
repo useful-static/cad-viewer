@@ -664,7 +664,11 @@ const ranks = (v, tol) => {
 export function orderHoles(list) {
   // (and Z: holes in a wall one above another kept their noise-set order -- r123 M1)
   const c = [0, 1, 2].map((j) => list.map((h) => h.centre[j]));
-  const s = 1e-6 * Math.max(...c.map((v) => Math.max(...v) - Math.min(...v)), ...list.map((h) => h.diameter)), t = () => s;
+  // (by a loop, not Math.max(...): a spread of 100k-odd arguments throws -- r123 L1)
+  let big = 0;
+  for (const v of c) { let lo = Infinity, hi = -Infinity; for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; } if (hi - lo > big) big = hi - lo; }
+  for (const h of list) if (h.diameter > big) big = h.diameter;
+  const s = 1e-6 * big, t = () => s;
   const r = [ranks(list.map((h) => h.diameter), (v) => 1e-4 * v), ...c.map((v) => ranks(v, t))];
   const k = new Map(list.map((h, i) => [h, r.map((x) => x[i])]));
   return list.sort((a, b) => { const p = k.get(a), q = k.get(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3]; });

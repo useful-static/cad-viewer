@@ -273,11 +273,15 @@ export function parseDXF(s, opts = {}) {
   // header: $INSUNITS, $LTSCALE
   // ($DWGCODEPAGE too: a %%nnn above 127 is a character of the drawing's code page)
   let insunits = 0, ltscale = 1, codepage = 'windows-1252';
+  const dimHeader = { $DIMTXT: NaN, $DIMSCALE: NaN, $DIMDEC: NaN, $DIMZIN: NaN, $DIMLFAC: NaN, $DIMSTYLE: 'STANDARD' };
   if (sec.HEADER) {
     for (let i = sec.HEADER[0]; i < sec.HEADER[1]; i++) {
       if (ps[i][0] !== 9 || !ps[i + 1]) continue;
       if (ps[i][1].trim() === '$INSUNITS') insunits = Number(ps[i + 1][1]);
       if (ps[i][1].trim() === '$LTSCALE') ltscale = Number(ps[i + 1][1]) || 1;
+      // (the dimension variables a DIMENSION's own text is made by when its block is missing --
+      // r131: r125 L3)
+      { const k = ps[i][1].trim(); if (k in dimHeader) dimHeader[k] = k === '$DIMSTYLE' ? nameKey(ps[i + 1][1]) : Number(ps[i + 1][1]); }
       if (ps[i][1].trim() === '$DWGCODEPAGE') {
         const c = String(ps[i + 1][1]).trim().toUpperCase();
         codepage = codePageLabel(c) || codepage;
@@ -289,8 +293,15 @@ export function parseDXF(s, opts = {}) {
   // (a LAYER's handle -> its name: a viewport names the layers frozen in it by handle, 341)
   const layerByHandle = new Map();
   const ltypes = new Map(); // upper-case name -> [dash, gap, ...] in drawing units, or null (continuous)
+  // (upper-case name -> its text height, overall scale, decimals, zero suppression, length factor:
+  // 140, 40, 271, 78, 144 -- r131: r125 L3)
+  const dimStyles = new Map();
   if (sec.TABLES) {
     for (const r of records(ps, ...sec.TABLES)) {
+      if (r.type === 'DIMSTYLE') {
+        dimStyles.set(nameKey(get(r, 2, '')), { $DIMTXT: num(r, 140, NaN), $DIMSCALE: num(r, 40, NaN), $DIMDEC: num(r, 271, NaN), $DIMZIN: num(r, 78, NaN), $DIMLFAC: num(r, 144, NaN) });
+        continue;
+      }
       if (r.type === 'LTYPE') {
         // 49: each element's length (+ dash, - gap, 0 dot); shapes and text in a
         // pattern are not drawn (their space is kept)
@@ -368,7 +379,7 @@ export function parseDXF(s, opts = {}) {
     return holdCache.get(via);
   };
   const ctxOf = (o) => {
-    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, via: null };
+    const c = { layers, layerName, blocks, out: o, ltypes, ltscale, codepage, budget, notDrawn, count: countOnce, walked, via: null, dimHeader, dimStyles };
     const mark = (it) => {
       if (it.via === undefined && c.via !== null) it.via = c.via;
       const h = holdOf(it.via);
@@ -1294,23 +1305,26 @@ function emit(recs, M, byBlock, depth, ctx) {
         if (t1 - t0 > 2 * Math.PI) t1 = t0 + 2 * Math.PI; // (at most one turn)
         const minor = cross3(extrusionOf(r), [mx, my, mz]).map((v) => v * ratio);
         let n = Math.max(8, Math.ceil((t1 - t0) / SEG_RAD));
-        n += n & 1; // (even: its mid-parameter point one of its points, a snap -- r113 R2-F3)
+        n += n & 1; // (even: its middle one of its points, a snap -- r113 R2-F3)
+        const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
+        const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
+        // (a part one's middle its middle by length as drawn, each half n / 2 samples: its parameter's
+        // middle was 0.53 off it on a quarter of a 10 x 5 -- r131, r119 L3)
+        const tm = whole ? (t0 + t1) / 2 : ellipseMidParam(t0, t1, ux, uy, vx, vy);
         const pts = [], own3 = [];
         for (let k = 0; k <= n; k++) {
-          const t = t0 + ((t1 - t0) * k) / n;
+          const t = 2 * k <= n ? t0 + ((tm - t0) * 2 * k) / n : tm + ((t1 - tm) * (2 * k - n)) / n;
           const c = Math.cos(t), s = Math.sin(t);
           const q = [cx + mx * c + minor[0] * s, cy + my * c + minor[1] * s, cz + mz * c + minor[2] * s];
           const [x, y] = ap(M, q[0], q[1], q[2]);
           pts.push(x, y);
           own3.push(...q);
         }
-        const whole = Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9;
         // (one of ratio 1, a full turn, is a circle, some exporters' way to write one: marked as a
         // CIRCLE is -- 677 at hand had no centre since r70 -- r71 A7, Q2)
         // (by the one rule a CIRCLE is marked by, conformalOf, on its own plane as the view projects
         // it -- its major and minor axes' images: an exact |N.z| test beside it lost a circle's centre
         // tilted 1e-4 rad that a CIRCLE kept -- r96 A2; one seen tilted is not round in the view)
-        const [ux, uy] = lin(M, [mx, my, mz]), [vx, vy] = lin(M, minor);
         const round = whole && Math.abs(Math.abs(ratio) - 1) <= CIRCLE_ROUNDING && (ux || uy) && conformalOf([ux, uy, vx, vy, 0, 0]);
         ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}),
           own: Uint32Array.from(whole ? [] : [0, n]), mids: Uint32Array.from(whole ? [] : [n / 2]),
@@ -1346,7 +1360,7 @@ function emit(recs, M, byBlock, depth, ctx) {
       case 'POLYLINE': {
         // its VERTEX records follow it to SEQEND
         // (a 2D polyline's widths: each vertex's start / end (40 / 41), else the polyline's)
-        const xs = [], ys = [], zs = [], bul = [], w0 = [], w1 = [];
+        const xs = [], ys = [], zs = [], bul = [], w0 = [], w1 = [], vf = [];
         const d0 = num(r, 40, 0) || 0, d1 = num(r, 41, 0) || 0;
         let j = i + 1;
         // (its vertices are the VERTEX records right after it, to its SEQEND -- walked to the next
@@ -1354,7 +1368,7 @@ function emit(recs, M, byBlock, depth, ctx) {
         // later one's SEQEND with it, undrawn and uncounted)
         for (; j < recs.length && recs[j].type === 'VERTEX'; j++) {
           if (num(recs[j], 70) & 16) continue; // a spline frame control point
-          xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); zs.push(num(recs[j], 30, 0) || 0); bul.push(num(recs[j], 42));
+          xs.push(num(recs[j], 10)); ys.push(num(recs[j], 20)); zs.push(num(recs[j], 30, 0) || 0); bul.push(num(recs[j], 42)); vf.push(num(recs[j], 70));
           w0.push(num(recs[j], 40, d0) || 0); w1.push(num(recs[j], 41, d1) || 0);
         }
         i = j < recs.length && recs[j].type === 'SEQEND' ? j : j - 1;
@@ -1373,7 +1387,12 @@ function emit(recs, M, byBlock, depth, ctx) {
           const bp = bulgePts(xs, ys, bul, closed);
           // (a curve- or spline-fit one, 70 bit 2 / 4: its vertices are its fit curve's samples, so
           // its snaps are its ends, as a SPLINE's -- every sample was an "end", r114 R4-M2)
-          if (flags & 6) { bp.own = closed ? [] : [0, bp.length / 2 - 1]; bp.mids = []; }
+          // (a curve-fit one's, 70 bit 2 alone: its defining vertices -- VERTEX 70 without bit 1, the
+          // fit's extra vertex -- lie on its curve, and are its snaps; a closed one offered its samples'
+          // x / y extremes as "quadrant"s and none of them: r131, r119 L4. bp.own: one a vertex, then
+          // a closed one's closing point)
+          if ((flags & 6) === 2) { bp.own = bp.own.filter((_, k) => (closed && k === bp.own.length - 1) || !(vf[k] & 1)); bp.mids = []; }
+          else if (flags & 6) { bp.own = closed ? [] : [0, bp.length / 2 - 1]; bp.mids = []; }
           drawWide({ pts: bp, closed, circle: bulgeCircle(xs, ys, bul, closed), ...widthsOf(xs, ys, bul, w0, w1, closed) });
         }
         break;
@@ -1582,7 +1601,22 @@ function emit(recs, M, byBlock, depth, ctx) {
         // (a reference to a block not in the file draws nothing: counted, as a table's was alone --
         // and its ATTRIBs, which do draw, held to its frozen layer still: the hold was set after this,
         // and they drew at open -- r66 A7)
-        if (!b) { attVia = holdUnder(ctx.via, layer); ctx.count(r, r.type); break; }
+        // (a DIMENSION's text then from its own groups: a DXF without the anonymous *D blocks showed
+        // none -- its lines are still not drawn, and counted: r131, r125 L3)
+        if (!b) {
+          attVia = holdUnder(ctx.via, layer);
+          ctx.count(r, r.type);
+          if (r.type === 'DIMENSION') {
+            const t = dimensionText(r, ctx);
+            if (t) {
+              const [x, y] = ap(O, num(r, 11), num(r, 21), num(r, 31, 0) || 0);
+              const k = Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) || 1;
+              const a = Math.min(9, Math.max(1, num(r, 71, 5) | 0));
+              ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(a), valign: ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)], rot: dirThrough(O, Math.cos(t.rot), Math.sin(t.rot)) });
+            }
+          }
+          break;
+        }
         const isDim = q.type !== 'INSERT';
         const sx = isDim ? 1 : num(q, 41, 1), sy = isDim ? 1 : num(q, 42, 1), sz = isDim ? 1 : num(q, 43, 1);
         const rot = isDim ? 0 : (num(q, 50) * Math.PI) / 180;
@@ -1638,6 +1672,43 @@ function emit(recs, M, byBlock, depth, ctx) {
     }
   }
 }
+// A DIMENSION's text from its own groups, for one whose block is not in the file (r131: r125 L3):
+// its 1 ("" or "<>" the measurement, "<>" inside it replaced by it, " " none), the measurement its 42
+// times its style's length factor, to its style's decimals (271) with its zero suppression (78: 4 the
+// leading zero, 8 the trailing ones), Ø before a diameter's and R before a radius's; the text height
+// its style's 140 times its 40 -- its style (3) from the DIMSTYLE table, else the header's $DIM...,
+// else AutoCAD's own defaults. An angular or ordinate one's 42 is no length: only a text it writes
+// out in full. Its direction (OCS radians): a rotated one's 50, an aligned one's 13 -> 14, else
+// along x, turned by its 53 and kept reading from below or the left. -> { text, h, rot } or null
+function dimensionText(r, ctx) {
+  const st = ctx.dimStyles.get(nameKey(get(r, 3, ctx.dimHeader.$DIMSTYLE))) || {};
+  const v = (k, d) => (Number.isFinite(st[k]) ? st[k] : Number.isFinite(ctx.dimHeader[k]) ? ctx.dimHeader[k] : d);
+  const type = num(r, 70, 0) & 7;
+  const given = firstOf(r).get(1);
+  let text = given === undefined || given === '' ? '<>' : given;
+  if (text === ' ') return null;
+  if (text.includes('<>')) {
+    const m = num(r, 42, NaN);
+    if (!Number.isFinite(m) || ![0, 1, 3, 4].includes(type)) return null;
+    const dec = Math.min(8, Math.max(0, v('$DIMDEC', 4) | 0)), zin = v('$DIMZIN', 0) | 0;
+    let s = (m * v('$DIMLFAC', 1)).toFixed(dec);
+    if (zin & 8 && s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    if (zin & 4) s = s.replace(/^(-?)0\./, '$1.');
+    text = text.split('<>').join(`${type === 3 ? 'Ø' : type === 4 ? 'R' : ''}${s}`);
+  }
+  text = mtextPlain(text, ctx.codepage);
+  if (!text.trim()) return null;
+  const scale = v('$DIMSCALE', 1);
+  const h = v('$DIMTXT', 0.18) * (scale > 0 ? scale : 1);
+  let rot = type === 0 ? (num(r, 50, 0) * Math.PI) / 180 : type === 1 ? Math.atan2(num(r, 24) - num(r, 23), num(r, 14) - num(r, 13)) : 0;
+  if (!Number.isFinite(rot)) rot = 0;
+  rot += (num(r, 53, 0) * Math.PI) / 180;
+  // (read from below or the left: within (-90, 90] degrees)
+  rot = Math.atan2(Math.sin(rot), Math.cos(rot));
+  if (rot > Math.PI / 2 + 1e-9) rot -= Math.PI; else if (rot <= -Math.PI / 2 + 1e-9) rot += Math.PI;
+  return { text, h, rot };
+}
+
 // entity records that are structure, not something drawn (never counted as "not drawn"). The one
 // list: js/dwg.js passes on every other entity kind it does not decode, by name
 export const STRUCTURE = new Set(['VERTEX', 'SEQEND', 'ATTDEF', 'VIEWPORT', 'BLOCK', 'ENDBLK']);
@@ -1659,6 +1730,25 @@ function arcPts(cx, cy, r, a0, a1) {
   return out;
 }
 
+// The parameter of an elliptic arc's middle by length: the arc u cos t + v sin t from t0 to t1 (u, v
+// its half-axes' vectors, as drawn) -- its parameter's middle is its middle only on a circle (r131:
+// r119 L3). Simpson's rule over 256 steps for the length, then Newton's on the speed.
+function ellipseMidParam(t0, t1, ux, uy, vx, vy) {
+  const N = 256, h = (t1 - t0) / N;
+  const sp = (t) => Math.hypot(-ux * Math.sin(t) + vx * Math.cos(t), -uy * Math.sin(t) + vy * Math.cos(t));
+  const seg = (a, b) => ((b - a) / 6) * (sp(a) + 4 * sp((a + b) / 2) + sp(b));
+  const cum = new Float64Array(N + 1);
+  for (let k = 0; k < N; k++) cum[k + 1] = cum[k] + seg(t0 + k * h, t0 + (k + 1) * h);
+  const half = cum[N] / 2;
+  if (!(half > 0)) return (t0 + t1) / 2;
+  let k = 0;
+  while (k < N - 1 && cum[k + 1] < half) k++;
+  const a = t0 + k * h;
+  let t = a + (h * (half - cum[k])) / ((cum[k + 1] - cum[k]) || 1);
+  for (let it = 0; it < 4; it++) { const s = sp(t); if (!(s > 0)) break; t = Math.min(a + h, Math.max(a, t - (cum[k] + seg(a, t) - half) / s)); }
+  return t;
+}
+
 // A polyline's widths, per segment start (w0) and end (w1): { width } when every segment has the
 // one width (0: none), else { outlines } (taperOutlines)
 // A polyline that is a full circle: closed, and every segment an arc the same way about one centre at
@@ -1675,6 +1765,27 @@ const BULGE_ROUNDING = 1e-4;
 function conformalOf(O) {
   const ax2 = O[0] * O[0] + O[1] * O[1], ay2 = O[2] * O[2] + O[3] * O[3];
   return Math.abs(ax2 - ay2) <= CIRCLE_ROUNDING * (ax2 + ay2) && Math.abs(O[0] * O[2] + O[1] * O[3]) <= CIRCLE_ROUNDING * (ax2 + ay2);
+}
+// The circle through m points of q (x, y pairs), least squares (Kåsa), taken about their mean; null
+// when they lie on a line. Exact for points on a circle, however unevenly they are spaced. (2D
+// Measure's circle centre and quadrants, js/dxf-view.js snapPoints, and bulgeCircle's: one fit)
+export function circleThrough(q, m) {
+  let mx = 0, my = 0;
+  for (let i = 0; i < m; i++) { mx += q[i * 2]; my += q[i * 2 + 1]; }
+  mx /= m; my /= m;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (let i = 0; i < m; i++) {
+    const u = q[i * 2] - mx, v = q[i * 2 + 1] - my;
+    suu += u * u; svv += v * v; suv += u * v;
+    suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+  }
+  const det = suu * svv - suv * suv;
+  if (!(Math.abs(det) > 1e-18 * (suu + svv) ** 2)) return null;
+  const a = (suuu + suvv) / 2, b = (svvv + svuu) / 2;
+  const uc = (a * svv - b * suv) / det, vc = (b * suu - a * suv) / det;
+  let r = 0;
+  for (let i = 0; i < m; i++) r += Math.hypot(q[i * 2] - mx - uc, q[i * 2 + 1] - my - vc);
+  return { x: mx + uc, y: my + vc, r: r / m };
 }
 function bulgeCircle(xs, ys, bul, closed) {
   if (!closed || xs.length < 2) return false;
@@ -1697,7 +1808,12 @@ function bulgeCircle(xs, ys, bul, closed) {
   }
   // (-> its centre and radius, which a stretching insert's centre and axis ends are taken from -- the
   // mean of its points was 0.21 off on a 45 + 315 degree circle stepped unevenly: r120 M1 -- else false)
-  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < BULGE_ROUNDING * 2 * Math.PI ? { cx: cx0, cy: cy0, r: r0 } : false;
+  if (!(Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < BULGE_ROUNDING * 2 * Math.PI)) return false;
+  // (the circle fitted through its drawn points, as the conformal path's centre and quadrants are
+  // (js/dxf-view.js snapPoints): its first arc's, with bulges written to 5 digits, was 1e-4 of r off
+  // it -- r131: r121 L1)
+  const q = bulgePts(xs, ys, bul, true), c = circleThrough(q, q.length / 2 - 1);
+  return c && c.r > 0 ? { cx: c.x, cy: c.y, r: c.r } : { cx: cx0, cy: cy0, r: r0 };
 }
 // A circle's marks through a transform that does not keep it round: its centre and the drawn
 // ellipse's axis ends, as a CIRCLE's (axisEnds) -- c: { cx, cy, r }
@@ -1748,7 +1864,10 @@ export function bulgePts(xs, ys, bul, closed) {
   const out = [];
   // (its own vertices' indices, and each arc's middle point's: 2D Measure's snaps -- r113 R2-F3)
   const own = [], mids = [];
-  const n = xs.length;
+  // (a closed one whose last vertex repeats its first: that vertex is its closing point, once -- its
+  // first corner had a second "end" and a "middle" of no length: r131, r119 L1)
+  let n = xs.length;
+  if (closed && n > 2 && xs[n - 1] === xs[0] && ys[n - 1] === ys[0]) n--;
   for (let k = 0; k < n; k++) {
     own.push(out.length / 2);
     out.push(xs[k], ys[k]);
@@ -1796,6 +1915,12 @@ function evalSpline(r) {
     const fx = all(r, 11), fy = all(r, 21), fz = all(r, 31);
     return fx.flatMap((x, k) => [x, fy[k], fz[k] || 0]);
   }
+  return deBoorPts(deg, knots, cx, cy, cz, w);
+}
+// A B-spline's points (x, y, z in threes) from its degree, knots, control points and weights (w: one
+// a control point, else none): SPLINE's and a hatch's spline edge's, one evaluation (an edge was
+// drawn as its control polygon -- r131: r119 L5)
+function deBoorPts(deg, knots, cx, cy, cz, w) {
   const n = cx.length;
   // a degree that is not a whole number from 1 to n - 1 (de Boor would read slots that do not
   // exist), or over MAX_SPLINE_DEGREE (evaluation costs points x degree^2: a 300-point spline of
@@ -1882,15 +2007,23 @@ function hatchLoops(r) {
       // not a span of no length with a "middle" on the corner. One curved edge cleared every snap
       // of the loop, a slot of two lines and two arcs left with no corner: r118 M1)
       const own = [], mids = [];
-      // (the same corner to its digits' rounding: an arc's first sample is its cos and sin, 6e-16 off
+      // (the same point to its digits' rounding: an arc's first sample is its cos and sin, 6e-16 off
       // the line's end it starts at)
       const near = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
-      const add = (x, y) => { const n = pts.length; if (n < 2 || !near(pts[n - 2], x) || !near(pts[n - 1], y)) pts.push(x, y); };
+      // (and one edge's start on the last one's end, or the last edge's end on the first's start, by
+      // the loop's size: edges written to 6 decimals meet 4e-8 apart, past 1e-9, and a corner kept a
+      // second "end" and a "middle" -- r131, r119 L2. Only where edges join, where a boundary has no
+      // gap: an edge's own points, a small fillet's samples, keep the 1e-9 match)
+      let join = 0;
+      const meets = (a, b) => near(a, b) || Math.abs(a - b) <= join;
+      const add = (x, y, at = near) => { const n = pts.length; if (n < 2 || !at(pts[n - 2], x) || !at(pts[n - 1], y)) pts.push(x, y); };
       const mark = () => { const i = pts.length / 2 - 1; if (i >= 0 && own[own.length - 1] !== i) own.push(i); };
       // a run of points along one edge: its ends marked, and its middle sample when it is the curve's
-      const run = (q, middle) => {
-        if (q.length < 2) return;
-        add(q[0], q[1]); const i0 = pts.length / 2 - 1; mark();
+      // (kept until every edge is read, the loop's size known: put, below)
+      const runs = [];
+      const run = (q, middle) => { if (q.length >= 2) runs.push([q, middle]); };
+      const put = (q, middle) => {
+        add(q[0], q[1], meets); const i0 = pts.length / 2 - 1; mark();
         for (let k = 2; k < q.length; k += 2) add(q[k], q[k + 1]);
         mark();
         if (middle) { const i1 = pts.length / 2 - 1; if (i1 - i0 >= 2 && !((i1 - i0) & 1)) mids.push((i0 + i1) / 2); }
@@ -1930,19 +2063,41 @@ function hatchLoops(r) {
           if (t1 <= t0) t1 += 2 * Math.PI;
           // (a whole one: its centre and half-axes, for its quadrants and centre as an ELLIPSE's -- r119 F1)
           if (Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9) wholeEll = [cx, cy, mx, my, -my * ratio, mx * ratio];
-          const ell = [];
-          for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; ell.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
+          // (a part one's middle sample its middle by length, each half 16 samples: by its parameter
+          // it was off the middle on any but a circle -- r131, r119 L3)
+          const ell = [], tm = wholeEll ? (t0 + t1) / 2 : ellipseMidParam(t0, t1, mx, my, -my * ratio, mx * ratio);
+          for (let k = 0; k <= 32; k++) { const t = k <= 16 ? t0 + ((tm - t0) * k) / 16 : tm + ((t1 - tm) * (k - 16)) / 16; ell.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
           if (ccw) run(ell, true);
           else { const rev = []; for (let k = ell.length - 2; k >= 0; k -= 2) rev.push(ell[k], ell[k + 1]); run(rev, true); }
         } else if (et === 4) {
-          // a spline edge: its control points (its ends on the curve, as a clamped spline's are)
-          at(94); const nk = count(at(95)), nc = count(at(96));
-          for (let k = 0; k < nk; k++) at(40);
-          const ctrl = [];
-          for (let k = 0; k < nc; k++) ctrl.push(at(10), at(20));
-          run(ctrl, false);
+          // a spline edge: its curve, by the SPLINE's own evaluation (deBoorPts) -- its ends on the
+          // curve, as a clamped spline's are; drawn and snapped as its control polygon, r131: r119 L5
+          // (94 its degree, 73 rational, 74 periodic, 95 / 96 its knot and control point counts, each
+          // control point's 10 / 20 and, rational, its 42)
+          const deg = at(94); const nk = count(at(95)), nc = count(at(96));
+          const knots = [];
+          for (let k = 0; k < nk; k++) knots.push(at(40));
+          const ctrl = [], wts = [];
+          for (let k = 0; k < nc; k++) { ctrl.push(at(10), at(20)); if (i < g.length && g[i][0] === 42) wts.push(Number(g[i++][1])); }
+          // (or the weights after every control point, as some writers put them)
+          while (wts.length < nc && i < g.length && g[i][0] === 42) wts.push(Number(g[i++][1]));
+          const xs = [], ys = [];
+          for (let k = 0; k < ctrl.length; k += 2) { xs.push(ctrl[k]); ys.push(ctrl[k + 1]); }
+          const p3 = deBoorPts(deg, knots, xs, ys, xs.map(() => 0), wts);
+          const q = [];
+          for (let k = 0; k < p3.length; k += 3) q.push(p3[k], p3[k + 1]);
+          run(q.every(Number.isFinite) ? q : ctrl, false);
         }
       }
+      // (the edges joined: by a millionth of the loop's size where one meets the next -- r131, r119 L2)
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const [q] of runs) for (let k = 0; k < q.length; k += 2) { x0 = Math.min(x0, q[k]); x1 = Math.max(x1, q[k]); y0 = Math.min(y0, q[k + 1]); y1 = Math.max(y1, q[k + 1]); }
+      join = Number.isFinite(x1 - x0 + y1 - y0) ? 1e-6 * Math.max(x1 - x0, y1 - y0) : 0;
+      for (const [q, middle] of runs) put(q, middle);
+      // (and the last edge's end on the first's start: the loop's repeated first point, once, as the
+      // view reads it -- js/dxf-view.js snapPoints)
+      const n2 = pts.length;
+      if (n2 >= 6 && meets(pts[n2 - 2], pts[0]) && meets(pts[n2 - 1], pts[1])) { pts[n2 - 2] = pts[0]; pts[n2 - 1] = pts[1]; }
       // (a boundary of arc edges alone, one centre, one radius, one way round, a full turn in all: a
       // circle, marked as a polyline's is -- one edge of a full turn, or two halves or four quarters,
       // which some exporters write: r71 Q2, r72 A5)
@@ -2002,6 +2157,13 @@ export function mtextPlain(s, codepage = 'windows-1252') {
     if (k === 'P' || k === 'N') { out += '\n'; i++; continue; }
     if (k === '~') { out += ' '; i++; continue; } // (non-breaking: the wrap does not break there)
     if ('LlOoKk'.includes(k)) { i++; continue; }
+    // (\A's value is one digit, 0 1 2: written without its ";" -- "\A400", old-14/024-C-2 -- the code
+    // and a digit not followed by another are dropped, the text after kept; it was drawn as written,
+    // and a ";" later on would have taken the text up to it -- r131: r125 L4)
+    if (k === 'A' && s[i + 3] !== ';') {
+      i += '012'.includes(s[i + 2]) && !/[0-9.]/.test(s[i + 3] || '') ? 2 : 1;
+      continue;
+    }
     if ('ACcFfHhQTWp'.includes(k)) {
       const e = endOf(i + 2);
       if (e >= 0) { i = e; continue; }

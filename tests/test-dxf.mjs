@@ -1837,7 +1837,8 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     const sp = snapPoints([{ closed: true, own: [], mids: [], pts: Float64Array.of(0, 0, -5, 1, 0, 5, 5, 1, 0, 0) }], [0, 0]);
     const q = [];
     for (let i = 0; i < sp.n; i++) { const a = sp.at(i); q.push(`${a[2]} ${a[0]} ${a[1]}`); }
-    assert.deepEqual(q.sort(), ['quadrant -5 1', 'quadrant 0 0', 'quadrant 0 5', 'quadrant 5 1']);
+    // (its x / y extremes, "extreme"s: a closed curve's are no quadrants -- r131: r119 L4)
+    assert.deepEqual(q.sort(), ['extreme -5 1', 'extreme 0 0', 'extreme 0 5', 'extreme 5 1']);
   });
   // (r102 A1: a text through a clip outline is clipped by the even-odd rule the outline's lines,
   // fills and hover keep -- canvas's nonzero default painted it in a star's middle)
@@ -2394,6 +2395,24 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.ok(Math.abs(bottom[0] + H) < 1e-9, `bottom ${bottom} (H ${H})`);
     for (const r of [middle, bottom]) assert.ok(Math.abs(r[1] - r[0] - lh) < 1e-9, 'one pitch');
   });
+  // (r118 L3) a TEXT aligned top / middle puts its capitals' top / middle on its point, where
+  // textCorners boxes it -- not the canvas em box's, about 0.1 em off: on the alphabetic baseline,
+  // the capitals' height (TEXT_CAP of the 100 px font) or half of it below the point
+  test('a TEXT aligned top / middle / baseline stands its capitals on its point as textCorners places them (r131: r118 L3)', () => {
+    const at = (valign) => {
+      const got = [];
+      const rec = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'fillText' ? (s, x, y) => got.push([o.textBaseline, y]) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (o, k, v) => { o[k] = v; return true; } });
+      const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: 'T', on: true }], paths: [], texts: [{ layer: 'T', colour: col, x: 0, y: 0, rot: 0, align: 'left', valign, text: 'H', h: 10 }], extents: { min: [0, -40], max: [60, 20] } }, {});
+      got.length = 0;
+      v.draw();
+      v.destroy();
+      return got[0];
+    };
+    // (must fire: 'top' and 'middle' baselines, the em box's, at 0)
+    assert.deepEqual(at('top'), ['alphabetic', 100 * TEXT_CAP]);
+    assert.deepEqual(at('middle'), ['alphabetic', 100 * TEXT_CAP / 2]);
+    assert.deepEqual(at('baseline'), ['alphabetic', 0]);
+  });
   // (r114 M3 dxf-view-B139) one pointer pressed and moved pans the 2D view by the move: pressed at
   // (400, 300) and moved to (500, 350), the drawing's corner moves (100, 50) px on the canvas
   test('a one-pointer drag on the 2D view from (400, 300) to (500, 350) moves toPx(0, 0) by (100, 50) (r114 M3 dxf-view-B139)', () => {
@@ -2684,6 +2703,137 @@ test('a DONUT -- two vertices, bulges 1, with a width and without -- has its CIR
   // (must fire: two "end"s and two "middle"s at the quadrants, nine snaps)
   assert.deepEqual(all(d.paths.filter((p) => p.layer === 'P')), c);
   assert.deepEqual(all(d.paths.filter((p) => p.layer === 'W' && !p.outline)), c);
+});
+
+// --- round 131: the 2D lows of rounds 118-125 ---
+const KIND131 = ['end', 'middle', 'centre', 'quadrant', 'extreme'];
+const f4_131 = (v) => (Math.abs(v) < 5e-5 ? 0 : v).toFixed(4);
+const snaps131 = (paths) => { const sp = snapPoints(paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${KIND131[sp.kind[i]]} ${f4_131(sp.xy[2 * i])} ${f4_131(sp.xy[2 * i + 1])}`); return s.sort(); };
+test('an MTEXT \\A written without its ";" is a code, not text: "\\A400" reads 400 (r131: r125 L4, old-14/024-C-2)', () => {
+  // (must fire: "\A400" drawn as written)
+  assert.equal(mtextPlain('\\A400'), '400');
+  assert.equal(mtextPlain('\\A1Hello'), 'Hello');
+  assert.equal(mtextPlain('\\A1;75'), '75');
+  assert.equal(mtextPlain('a\\A'), 'a');
+  assert.equal(parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 30], [71, 5], [1, '\\A400']])).texts[0].text, '400');
+});
+test('a closed LWPOLYLINE whose last vertex repeats its first has the snaps of the one that does not: no second "end", no "middle" of no length (r131: r119 L1)', () => {
+  const sq = [[0, 0], [40, 0], [40, 10], [0, 10]];
+  const lw = (pts, layer) => [[0, 'LWPOLYLINE'], [8, layer], [90, pts.length], [70, 1], ...pts.flatMap(([x, y]) => [[10, x], [20, y]])];
+  const d = parseDXF(ents(lw(sq, 'A'), lw([...sq, [0, 0]], 'B')));
+  const a = snaps131(d.paths.filter((p) => p.layer === 'A'));
+  assert.equal(a.length, 8);
+  assert.deepEqual(snaps131(d.paths.filter((p) => p.layer === 'B')), a);
+});
+test('a hatch boundary written to 6 decimals joins its edges at their corners: no second "end", no "middle" on a corner (r131: r119 L2)', () => {
+  // (an arc 30 to 150 degrees of r 10 closed by the chord, its ends written to 6 decimals: 3.8e-8 off
+  // the arc's own, past the 1e-9 match -- must fire: 4 ends and 3 middles)
+  const hatch = [[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 2],
+    [72, 2], [10, 0], [20, 0], [40, 10], [50, 30], [51, 150], [73, 1],
+    [72, 1], [10, -8.660254], [20, 5], [11, 8.660254], [21, 5], [97, 0]];
+  assert.deepEqual(snaps131(parseDXF(ents(hatch)).paths), ['end -8.6603 5.0000', 'end 8.6603 5.0000', 'middle 0.0000 10.0000', 'middle 0.0000 5.0000']);
+  // (must accept: an edge starting 1e-3 of the loop from where the last one ended keeps both points)
+  const gap = [[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 3],
+    [72, 1], [10, 0], [20, 0], [11, 20], [21, 0], [72, 1], [10, 20], [20, 0.02], [11, 0], [21, 10],
+    [72, 2], [10, 0], [20, 5], [40, 5], [50, 90], [51, 270], [73, 1], [97, 0]];
+  const g = snaps131(parseDXF(ents(gap)).paths).filter((s) => s.startsWith('end'));
+  assert.deepEqual(g, ['end 0.0000 0.0000', 'end 0.0000 10.0000', 'end 20.0000 0.0000', 'end 20.0000 0.0200']);
+});
+test('a partial ellipse\'s, and an elliptic hatch edge\'s, "middle" is its arc-length middle, not its parameter one (r131: r119 L3)', () => {
+  // (a quarter of the ellipse 10 x 5 from its major end: its middle by length, found here by 200,000 steps)
+  const steps = 200000, xy = (t) => [10 * Math.cos(t), 5 * Math.sin(t)];
+  let L = 0; const cum = [0];
+  for (let k = 1; k <= steps; k++) { const a = xy((Math.PI / 2) * (k - 1) / steps), b = xy((Math.PI / 2) * k / steps); L += Math.hypot(b[0] - a[0], b[1] - a[1]); cum.push(L); }
+  const k = cum.findIndex((c) => c >= L / 2), want = xy((Math.PI / 2) * k / steps);
+  const midOf = (paths) => { const sp = snapPoints(paths, [0, 0]); for (let i = 0; i < sp.n; i++) if (sp.kind[i] === 1 && sp.xy[2 * i] > 1 && sp.xy[2 * i + 1] > 1) return [sp.xy[2 * i], sp.xy[2 * i + 1]]; return null; };
+  const e = midOf(parseDXF(ents([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0], [40, 0.5], [41, 0], [42, Math.PI / 2]])).paths);
+  // (must fire: the parameter's middle, (7.0711, 3.5355), 0.53 off)
+  assert.ok(e && Math.hypot(e[0] - want[0], e[1] - want[1]) < 1e-4, `ELLIPSE middle ${e} want ${want}`);
+  const h = midOf(parseDXF(ents([[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 3],
+    [72, 3], [10, 0], [20, 0], [11, 10], [21, 0], [40, 0.5], [50, 0], [51, 90], [73, 1],
+    [72, 1], [10, 0], [20, 5], [11, 0], [21, 0], [72, 1], [10, 0], [20, 0], [11, 10], [21, 0], [97, 0]])).paths);
+  assert.ok(h && Math.hypot(h[0] - want[0], h[1] - want[1]) < 1e-4, `hatch edge middle ${h} want ${want}`);
+});
+test('a closed SPLINE\'s x / y extremes are "extreme"s, not "quadrant"s; a curve-fit POLYLINE offers its defining vertices (r131: r119 L4)', () => {
+  const sp = parseDXF(ents([[0, 'SPLINE'], [8, '0'], [70, 1], [71, 3], [74, 5], ...[[0, 0], [10, -2], [12, 8], [2, 10], [0, 0]].flatMap(([x, y]) => [[11, x], [21, y]])])).paths;
+  const kinds = new Set(snaps131(sp).map((s) => s.split(' ')[0]));
+  // (must fire: "quadrant")
+  assert.deepEqual([...kinds], ['extreme']);
+  // (a closed curve-fit polyline, 70 bits 1 and 2: its defining vertices -- VERTEX 70 0 -- each an
+  // "end"; the fit's extra vertices -- 70 bit 1 -- none; must fire: its sample extremes as "quadrant"s)
+  const V = [[10, 0, 0], [6, 5, 1], [0, 10, 0], [-5, 6, 1], [-10, 0, 0], [-6, -5, 1], [0, -10, 0], [5, -6, 1]];
+  const fit = parseDXF(ents([[0, 'POLYLINE'], [8, '0'], [66, 1], [70, 3], [10, 0], [20, 0], ...V.flatMap(([x, y, f]) => [[0, 'VERTEX'], [8, '0'], [10, x], [20, y], [70, f]]), [0, 'SEQEND']])).paths;
+  assert.deepEqual(snaps131(fit), ['end -10.0000 0.0000', 'end 0.0000 -10.0000', 'end 0.0000 10.0000', 'end 10.0000 0.0000']);
+});
+test('a hatch spline edge is drawn and snapped as its curve, not its control polygon (r131: r119 L5)', () => {
+  // (degree 2 through (0, 0), (10, 20), (20, 0): its top (10, 10); its control polygon's (10, 20))
+  const d = parseDXF(ents([[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 2],
+    [72, 4], [94, 2], [73, 0], [74, 0], [95, 6], [96, 3], ...[0, 0, 0, 1, 1, 1].map((k) => [40, k]), [10, 0], [20, 0], [10, 10], [20, 20], [10, 20], [20, 0],
+    [72, 1], [10, 20], [20, 0], [11, 0], [21, 0], [97, 0]]));
+  const p = d.paths[0].pts;
+  let top = -Infinity;
+  for (let i = 1; i < p.length; i += 2) top = Math.max(top, p[i]);
+  // (must fire: 20)
+  assert.ok(Math.abs(top - 10) < 1e-9, `top ${top}`);
+  assert.deepEqual(snaps131(d.paths), ['end 0.0000 0.0000', 'end 20.0000 0.0000', 'middle 10.0000 0.0000']);
+  // (a rational one: its weights read, the middle control point weighted 2 -- a quarter of the way
+  // nearer it, (10, 13.3333) at its middle)
+  const w = parseDXF(ents([[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 2],
+    [72, 4], [94, 2], [73, 1], [74, 0], [95, 6], [96, 3], ...[0, 0, 0, 1, 1, 1].map((k) => [40, k]), [10, 0], [20, 0], [42, 1], [10, 10], [20, 20], [42, 2], [10, 20], [20, 0], [42, 1],
+    [72, 1], [10, 20], [20, 0], [11, 0], [21, 0], [97, 0]])).paths[0].pts;
+  let wt = -Infinity;
+  for (let i = 1; i < w.length; i += 2) wt = Math.max(wt, w[i]);
+  assert.ok(Math.abs(wt - 40 / 3) < 1e-9, `rational top ${wt}`);
+});
+test('a polyline circle\'s centre through a stretching insert is the fitted circle\'s, as the conformal path\'s is -- not its first arc\'s (r131: r121 L1)', () => {
+  // (two half circles written as bulges 0.99999, five digits: their centres 1e-4 either side of the fit)
+  const blk = [[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'P'], [10, 0], [20, 0],
+    [0, 'LWPOLYLINE'], [8, '0'], [90, 2], [70, 1], [10, 10], [20, 0], [42, 0.99999], [10, -10], [20, 0], [42, 0.99999], [0, 'ENDBLK'], [0, 'ENDSEC']];
+  for (const [sx, sy] of [[1, 1], [2, 1]]) {
+    const d = parseDXF(dxf([...blk, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'P'], [10, 100], [20, 0], [41, sx], [42, sy], [0, 'ENDSEC'], [0, 'EOF']]));
+    const sp = snapPoints(d.paths, [0, 0]);
+    const c = [];
+    for (let i = 0; i < sp.n; i++) if (sp.kind[i] === 2) c.push([sp.xy[2 * i], sp.xy[2 * i + 1]]);
+    // (must fire at 2 x 1: (100, -1e-4))
+    assert.equal(c.length, 1, `${sx} x ${sy}`);
+    assert.ok(Math.abs(c[0][0] - 100) < 1e-9 && Math.abs(c[0][1]) < 1e-9, `${sx} x ${sy}: centre ${c[0]}`);
+  }
+});
+test('snapPoints\' buffer holds every snap a path\'s own points make, however few its points (r131: r121 L3)', () => {
+  // (two points marked as own four times over: 8 ends and 4 middles -- must fire: 12 counted, 10 held)
+  const sp = snapPoints([{ layer: '0', closed: false, pts: Float64Array.of(0, 0, 10, 0), own: Uint32Array.of(0, 1, 0, 1, 0, 1, 0, 1), mids: new Uint32Array(0) }], [0, 0]);
+  assert.equal(sp.n, 12);
+  assert.equal(sp.xy.length, 24);
+  assert.equal(sp.kind.length, 12);
+});
+test('where a CIRCLE\'s quadrant and a LINE\'s end meet, the snap is the "end" whichever is nearer by a hair (r131: r122 L3)', () => {
+  const at = (ents, x, y) => { const d = parseDXF(ents); const s = nearestPoint(pointTree(snapPoints(d.paths, [0, 0])), x, y, 5); return s && `${s[2]} ${f4_131(s[0])} ${f4_131(s[1])}`; };
+  const C = [[0, 'CIRCLE'], [8, '0'], [10, 20], [20, 0], [40, 10]];
+  const Lh = [[0, 'LINE'], [8, '0'], [10, 0], [20, 5], [11, 10], [21, 1e-9]];
+  // (must fire: the quadrant, 1e-9 nearer from below)
+  assert.equal(at(ents(C, Lh), 10, -1), 'end 10.0000 0.0000');
+  assert.equal(at(ents(Lh, C), 10, -1), 'end 10.0000 0.0000');
+  // (must accept: a point the other kind's 0.5 away is no tie -- the nearer names it)
+  const Lfar = [[0, 'LINE'], [8, '0'], [10, 0], [20, 5], [11, 10], [21, 0.5]];
+  assert.equal(at(ents(C, Lfar), 10, -1), 'quadrant 10.0000 0.0000');
+});
+test('a DIMENSION whose block is not in the file draws its text from its own groups: its 1, else its 42 by its style (r131: r125 L3)', () => {
+  const tables = [[0, 'SECTION'], [2, 'TABLES'], [0, 'TABLE'], [2, 'DIMSTYLE'], [0, 'DIMSTYLE'], [2, 'ISO'], [70, 0], [40, 2], [140, 2.5], [271, 2], [78, 8], [0, 'ENDTAB'], [0, 'ENDSEC']];
+  const dim = (g) => parseDXF(dxf([...tables, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'DIMENSION'], [8, 'D'], [2, '*D9'], [3, 'ISO'], [10, 0], [20, 10], [11, 50], [21, 12], [13, 0], [23, 0], [14, 100], [24, 0], ...g, [0, 'ENDSEC'], [0, 'EOF']]));
+  // (must fire: no text, only the count)
+  const d = dim([[70, 1], [42, 100.5]]);
+  assert.equal(d.texts.length, 1);
+  const t = d.texts[0];
+  assert.deepEqual([t.text, t.x, t.y, t.h, t.align, t.valign, t.rot], ['100.5', 50, 12, 5, 'center', 'middle', 0]);
+  assert.deepEqual(d.notDrawn, { DIMENSION: 1 }, 'its lines still not drawn');
+  assert.equal(dim([[70, 1], [42, 100.5], [1, '<> mm']]).texts[0].text, '100.5 mm');
+  assert.equal(dim([[70, 1], [42, 100.5], [1, 'TYP']]).texts[0].text, 'TYP');
+  assert.equal(dim([[70, 1], [42, 100.5], [1, ' ']]).texts.length, 0, 'a text of one space: none');
+  assert.equal(dim([[70, 3], [42, 12]]).texts[0].text, 'Ø12');
+  // (a vertical one reads along its line, from below)
+  assert.ok(Math.abs(dim([[70, 0], [50, 90], [42, 10]]).texts[0].rot - Math.PI / 2) < 1e-12);
+  // (an angular one's 42 is not a length: only a text it writes out)
+  assert.equal(dim([[70, 2], [42, 0.5]]).texts.length, 0);
 });
 
 done();

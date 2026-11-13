@@ -34,6 +34,15 @@ export const untoldText = (n, holes = 0) => {
   const more = holes ? `${plural(holes, 'through-hole', 'through-holes')} whose other rim is ${n === 1 ? 'that one' : 'one of them'}` : '';
   return rims || more ? `${[rims, more].filter(Boolean).join(', and ')}: not listed` : '';
 };
+// Snap candidates [{ p, dd }] in place in the order snapAt takes them: by screen distance dd, in
+// runs of points within a pixel of the run's first, a run's nearest the eye (along dir) first
+export function snapOrder(list, dir) {
+  list.sort((a, b) => a.dd - b.dd);
+  let r = 0;
+  for (let i = 0; i < list.length; i++) { if (list[i].dd - list[r].dd > 1) r = i; list[i].run = r; }
+  const near = (q) => q.p[0] * dir[0] + q.p[1] * dir[1] + q.p[2] * dir[2];
+  return list.sort((a, b) => a.run - b.run || near(b) - near(a) || a.dd - b.dd);
+}
 import { edgeNearness, faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
@@ -273,9 +282,11 @@ export function createMeasure(deps) {
     // nearest on screen; within a pixel, the one nearer the eye: a
     // through-hole's two rims share a centre on screen, and the front one wins
     // (the back one is seen through the hole, so the visibility test passes it)
-    const order = (a, b) => (Math.abs(a.dd - b.dd) > 1 ? a.dd - b.dd : dot(b.p, v.dir) - dot(a.p, v.dir));
-    pts.sort(order);
-    edgePts.sort(order);
+    // (by runs: sorted by distance, each run the points within a pixel of its first, a run's points
+    // nearest the eye first -- one comparator "within a pixel, else nearer" was not transitive, so
+    // the order could depend on the input's -- r122 L2)
+    snapOrder(pts, v.dir);
+    snapOrder(edgePts, v.dir);
     // a corner, midpoint or centre before a point on an edge; the nearest
     // visible one of each
     const vis = (c) => visible(v, c.p, bodiesNear(v, ...v.toScreen(c.p), 0), skip);
@@ -361,8 +372,16 @@ export function createMeasure(deps) {
       r = pointResult(st.mode, pts.map((q) => q.p));
     } else {
       const g = faceGap(pts[0].face, pts[1].face);
-      const main = g.notPlanar ? 'the first face is not flat: pick a flat face first'
-        : g.notParallel !== undefined ? `not parallel (${g.notParallel.toFixed(1)}°)` : deps.lenText(g.gap);
+      // (a first face that is not flat is no result: said, not listed -- it counted in the results
+      // chip and got a Copy button: r124 L2)
+      if (g.notPlanar) {
+        st.pending = [];
+        deps.tell('the first face is not flat: pick a flat face first', 4000);
+        syncRow();
+        deps.queueFrame();
+        return;
+      }
+      const main = g.notParallel !== undefined ? `not parallel (${g.notParallel.toFixed(1)}°)` : deps.lenText(g.gap);
       r = { mode: 'face', pts: pts.map((q) => q.p), main, sub: 'face to face', value: g.gap ?? null };
     }
     st.results.push(r);
@@ -707,7 +726,10 @@ export function createMeasure(deps) {
     if (!on) { st.pending = []; st.snap = null; st.loupe = null; setList(false); }
     syncRow();
     deps.queueFrame();
-    deps.tell(on ? 'Measure: click points on the model (Esc to stop)' : '', 3000, on ? 'measure on' : 'measure off');
+    // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
+    // corners, edges or circles to snap to, which nothing said: r121 L2)
+    const plain = on && scene.mesh && !scene.mesh.faces;
+    deps.tell(on ? `Measure: click points on the model (Esc to stop)${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
     if (focus) (on ? $('measoff') : $('measure')).focus();
   }
 
@@ -792,6 +814,9 @@ export function createMeasure(deps) {
       if (!groups.has(key)) groups.set(key, { d: h.diameter, head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;
+      // (the axis each hole runs along: one size in a top face and a side wall spans all three)
+      const na = h.normal.map(Math.abs);
+      (g.axes ||= new Set()).add(na.indexOf(Math.max(na[0], na[1], na[2])));
       for (let j = 0; j < 3; j++) { g.lo[j] = Math.min(g.lo[j], h.centre[j]); g.hi[j] = Math.max(g.hi[j], h.centre[j]); }
     }
     return { list, rows, groups: [...groups.values()], posHead, untold, unpaired };
@@ -807,13 +832,17 @@ export function createMeasure(deps) {
     for (const g of t.groups) {
       const ax = g.normal.map(Math.abs);
       const k = ax.indexOf(Math.max(...ax));
-      const spread = [0, 1, 2].filter((j) => j !== k).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
+      // (holes along different axes -- a top face's and a side wall's -- spread in all three: the
+      // first hole's two cross axes left the third out, r124 L4)
+      const mixed = g.axes && g.axes.size > 1;
+      const spread = [0, 1, 2].filter((j) => mixed || j !== k).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
       const li = document.createElement('li');
       li.textContent = `Ø ${holeDia(g, deps.lenText)} × ${g.n}${g.n > 1 ? ` · centres span ${spread}` : ''}`;
       sum.append(li);
     }
     $('holesdia').textContent = `Ø (${deps.unit()})`;
     $('holespos').textContent = t.posHead;
+    $('holesdepth').textContent = `depth (${deps.unit()})`; // (its numbers had no unit: r124 L1)
     const from = document.createElement('li');
     from.textContent = `positions from the corner of ${ref.name || 'the whole model'}`;
     sum.prepend(from);

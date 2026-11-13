@@ -804,7 +804,9 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       // (a start that names no format -- a binary STL -- sent with a Content-Encoding the check can
       // read: unpacked on the way, as the header says, not "not compressed at all": a binary
       // part.stl.gz so served was "to look at" where the page opens it -- r117)
-      if ((got && got === want) || (!got && want && !sure(want) && encoded)) bits.push('arrives unpacked (sent with Content-Encoding: gzip), which the viewer opens');
+      // (the encoding named as the header names it, when it can be read; else not guessed -- "gzip" was
+      // said of a br or deflate one, and of a file stored uncompressed under a .gz name -- r118 L4)
+      if ((got && got === want) || (!got && want && !sure(want) && encoded)) bits.push(`arrives unpacked (${encoded ? `sent with Content-Encoding: ${enc}` : 'unpacked on the way, or stored so'}), which the viewer opens`);
       else if (!got && want && !sure(want)) {
         bits.push('not gzip as it arrives: sent unpacked (Content-Encoding), or not compressed at all; its start does not say which');
         if (level === 'ok') level = 'warn';

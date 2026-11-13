@@ -62,8 +62,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // in 42 at r129, code: main.js's tour cut on the tour's own model (sectionTOf), the export's
   // "uncut" -- no new import; 968.6 KB in 42 at r130, code: measure-ui.js's tilted parity walks,
   // raycast.js's edgeNearness, export-mesh.js's 6 decimals, the tour maker's kept-at-edge note -- no
-  // new import)
-  assert.ok(bytes < 970e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // new import; 972.2 KB in 42 at r131, code: main.js's and measure-ui.js's review lows, scene.js's
+  // copiesOf -- no new import)
+  assert.ok(bytes < 975e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

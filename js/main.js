@@ -26,7 +26,7 @@ import { aboveBelow, pastWords, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure } from './measure-ui.js';
-import { mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
+import { copiesOf, mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -1595,19 +1595,9 @@ async function renderPicture(opts = app.pic) {
   return { canvas: out, scale: s, cssW: cw, cssH: ch, tiles, capped };
 }
 
-// The copies of body `id` (1-based ids, itself included): the same name, the
-// same triangle count and the same size to 1 µm (a copy turned is still the
-// same size on some axis order: the sizes are compared sorted)
+// The copies of body `id` (1-based ids, itself included): js/scene.js copiesOf
 function sameParts(id) {
-  const ms = app.header.meshes;
-  const key = (m) => {
-    const s = m.bbox ? [0, 1, 2].map((k) => Math.round((m.bbox.max[k] - m.bbox.min[k]) * 1000)).sort((a, b) => a - b).join(',') : '';
-    return `${m.name}\u0000${m.idxCount}\u0000${s}`;
-  };
-  const want = key(ms[id - 1]);
-  const out = [];
-  ms.forEach((m, i) => { if (key(m) === want) out.push(i + 1); });
-  return out;
+  return copiesOf(app.header.meshes, id, app.header.bbox);
 }
 const instancesOf = (id) => sameParts(id).length;
 app.sameParts = sameParts; // (for tests)
@@ -2398,7 +2388,8 @@ async function tourPictures(tour) {
       files.push([`${String(i + 1).padStart(2, '0')}-${slugOf(s.title || `step ${i + 1}`)}.png`, new Uint8Array(await png.arrayBuffer())]);
     }
   } finally {
-    endTour();
+    // (its own tour only: one the visitor started meanwhile is theirs to leave -- r118 L2)
+    if (app.tour === t) endTour();
   }
   if (!files.length) return 0;
   const { zip } = await import('./export-mesh.js');
@@ -2452,7 +2443,7 @@ async function tourVideo(tour) {
   cancelAnimationFrame(raf);
   rec.stop();
   await stopped;
-  endTour();
+  if (app.tour === t) endTour(); // (its own only, as tourPictures: r118 L2)
   const blob = new Blob(chunks, { type: 'video/webm' });
   if (!blob.size) return 'the recording came out empty';
   downloadBlob(blob, `${slugOf(tour.title)}.webm`);
@@ -3860,6 +3851,7 @@ function secEdit() {
   inp.step = 'any';
   inp.id = 'secin';
   inp.value = lenNum(p[3] * (app.section.flip ? -1 : 1), 'section');
+  inp.defaultValue = inp.value;
   inp.setAttribute('aria-label', `Cut position along ${app.section.axis.toUpperCase()}, in ${lenUnit()} (Enter puts the cut there)`);
   app.secEditing = true;
   $('secval').replaceChildren(inp);
@@ -3871,7 +3863,9 @@ function secEdit() {
     over = true;
     app.secEditing = false;
     const v = Number(inp.value);
-    if (apply && inp.value.trim() && Number.isFinite(v)) setSectionAt(lenBack(v));
+    // (Enter on the readout as it was filled in keeps the cut: the rounded readout put it up to its
+    // rounding away -- r126 L3)
+    if (apply && inp.value.trim() && Number.isFinite(v) && inp.value !== inp.defaultValue) setSectionAt(lenBack(v));
     else updateButtons();
     $('secval').focus();
   };
@@ -4706,6 +4700,9 @@ async function moveModel(i, k, v) {
   const mine = ++moveSeq;
   try {
     if (!(await showScene(models)) || mine !== moveSeq) return;
+    // (a move that took the GPU from an Add still uploading shows the added model too, and ends the
+    // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
+    if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
     announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
