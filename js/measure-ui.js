@@ -722,9 +722,17 @@ export function createMeasure(deps) {
     // per diameter as shown: how many, and how far apart their centres spread
     // (keyed on the printed value: 0.508 and 0.511 mm read as two "0.51" lines)
     // (and its countersink: a countersunk Ø3 and a plain one read "Ø 3.00 mm × 2" -- r68 A8, Q11)
-    const groups = new Map();
+    // (one size one line whatever it prints as: a Ø on a rounding half-step, 0.0215 in, read
+    // "0.021 in × 2" + "0.022 in × 3" -- r123 M2. A size: a Ø within 1e-4 of the one before it, as
+    // the list is ordered)
+    const groups = new Map(), sizeOf = new Map();
+    let sid = -1, prev = -Infinity;
     for (const h of list) {
-      const key = `${deps.num(h.diameter)}|${h.head ? deps.num(h.head) : ''}`;
+      if (!(Math.abs(h.diameter - prev) <= 1e-4 * h.diameter)) sid++;
+      prev = h.diameter;
+      const p = deps.num(h.diameter);
+      if (!sizeOf.has(p)) sizeOf.set(p, sid);
+      const key = `${sizeOf.get(p)}|${h.head ? deps.num(h.head) : ''}`;
       if (!groups.has(key)) groups.set(key, { d: h.diameter, head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;

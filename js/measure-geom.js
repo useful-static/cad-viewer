@@ -634,11 +634,12 @@ const ranks = (v, tol) => {
   return r;
 };
 export function orderHoles(list) {
-  const xs = list.map((h) => h.centre[0]), ys = list.map((h) => h.centre[1]);
-  const s = 1e-6 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), ...list.map((h) => h.diameter)), t = () => s;
-  const d = ranks(list.map((h) => h.diameter), (v) => 1e-4 * v), x = ranks(xs, t), y = ranks(ys, t);
-  const k = new Map(list.map((h, i) => [h, [d[i], x[i], y[i]]]));
-  return list.sort((a, b) => { const p = k.get(a), q = k.get(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2]; });
+  // (and Z: holes in a wall one above another kept their noise-set order -- r123 M1)
+  const c = [0, 1, 2].map((j) => list.map((h) => h.centre[j]));
+  const s = 1e-6 * Math.max(...c.map((v) => Math.max(...v) - Math.min(...v)), ...list.map((h) => h.diameter)), t = () => s;
+  const r = [ranks(list.map((h) => h.diameter), (v) => 1e-4 * v), ...c.map((v) => ranks(v, t))];
+  const k = new Map(list.map((h, i) => [h, r.map((x) => x[i])]));
+  return list.sort((a, b) => { const p = k.get(a), q = k.get(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3]; });
 }
 export function holesOf(geom) {
   // a planar face's circle is a hole rim when it is not the face's outer

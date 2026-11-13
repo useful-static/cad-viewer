@@ -894,6 +894,28 @@ test('the hole table orders holes of one Ø by position, whatever the fit\'s noi
   const hdr = orderHoles([[0.800001, 1.66, 41.37], [0.8, 1.66, 8.35], [0.799999, 4.2, 36.29], [0.8, 4.2, 8.35], [0.799999, 1.66, 36.29], [0.800001, 4.2, 41.37]]
     .map(([d, x, y]) => ({ diameter: d, centre: [x, y, 0] }))).map((h) => `${h.centre[0]},${h.centre[1]}`);
   assert.deepEqual(hdr, ['1.66,8.35', '1.66,36.29', '1.66,41.37', '4.2,8.35', '4.2,36.29', '4.2,41.37']);
+  // (holes one above another in a wall, their Z alone apart -- must fire: they kept the order the
+  // fit's noise gave, 1082, 982, 1032 in one copy of a rack's wall and 1082, 1032, 982 in another: r123 M1)
+  const wall = (zs) => orderHoles(zs.map((z) => ({ diameter: 3, centre: [-146.763, -122.954, z] }))).map((h) => h.centre[2]);
+  assert.deepEqual(wall([1082.171, 982.171, 1032.171]), [982.171, 1032.171, 1082.171]);
+  assert.deepEqual(wall([1032.171, 1082.171, 982.171]), [982.171, 1032.171, 1082.171]);
+});
+
+await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
+  const lines = [];
+  const had = globalThis.document;
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }; if (tag === 'li') lines.push(e); return e; } };
+  try {
+    // (two washers whose hole is the same Ø 3.0005, fitted 1e-7 either side, shown to 3 decimals)
+    const { meas } = await measureAt([{ name: 'a', faces: washer(1.50025 - 5e-8, 4, 1.6, 48, 20, 30) }, { name: 'b', faces: washer(1.50025 + 5e-8, 4, 1.6, 48, 60, 30) }], new Set(),
+      { num: (x) => x.toFixed(3), lenText: (x) => `${x.toFixed(3)} mm` });
+    meas.showHoles([1, 2], { min: [0, 0, 0], name: 'both' }, 'both');
+    const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
+    assert.equal(sizes.length, 1, sizes.join(' | '));
+    assert.match(sizes[0], /× 2/);
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
 });
 
 done();
