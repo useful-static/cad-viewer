@@ -2672,4 +2672,18 @@ test('a circle drawn as a CIRCLE, a polyline of a 45 and a 315 degree arc, and h
   }
 });
 
+test('a DONUT -- two vertices, bulges 1, with a width and without -- has its CIRCLE twin\'s snaps: no "end" or "middle" on a quadrant, which the hover found first (r121 M1)', () => {
+  const KIND = ['end', 'middle', 'centre', 'quadrant'];
+  const f4 = (v) => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(4);
+  const all = (paths) => { const sp = snapPoints(paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${KIND[sp.kind[i]]} ${f4(sp.xy[2 * i])} ${f4(sp.xy[2 * i + 1])}`); return s.sort(); };
+  const d = parseDXF(ents([[0, 'CIRCLE'], [8, 'C'], [10, 0], [20, 0], [40, 10]],
+    [[0, 'LWPOLYLINE'], [8, 'P'], [90, 2], [70, 1], [10, 10], [20, 0], [42, 1], [10, -10], [20, 0], [42, 1]],
+    [[0, 'LWPOLYLINE'], [8, 'W'], [90, 2], [70, 1], [43, 2], [10, 10], [20, 0], [42, 1], [10, -10], [20, 0], [42, 1]]));
+  const c = all(d.paths.filter((p) => p.layer === 'C'));
+  assert.equal(c.length, 5);
+  // (must fire: two "end"s and two "middle"s at the quadrants, nine snaps)
+  assert.deepEqual(all(d.paths.filter((p) => p.layer === 'P')), c);
+  assert.deepEqual(all(d.paths.filter((p) => p.layer === 'W' && !p.outline)), c);
+});
+
 done();

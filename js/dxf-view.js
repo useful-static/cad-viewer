@@ -512,11 +512,20 @@ export function snapPoints(paths, o) {
       // a straight span's middle, an arc's middle on the arc -- every chord's end and middle of its
       // drawing were offered, inside the curve, "middle" 0.95 off a radius-1000 arc (r113 R2-F3)
       const own = p.own;
+      // (a circle's or an ellipse's quadrants first, so that an own point on one -- a DONUT's two
+      // vertices and its arcs' middles, a PCB pad's -- is not a second snap there, an "end" or a
+      // "middle" the hover found before the quadrant its CIRCLE twin reads: r121 M1)
+      const round = p.closed && p.circle && m >= 3 ? circleThrough(q, m) : null;
+      const quadPts = round && round.r > 0 ? [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => [round.x + dx * round.r, round.y + dy * round.r])
+        : p.closed && p.quads && p.quads.length === 8 ? [0, 2, 4, 6].map((k) => [p.quads[k], p.quads[k + 1]]) : [];
+      const qTol = quadPts.length ? 1e-6 * Math.max(...quadPts.map(([x, y]) => Math.hypot(x - quadPts[0][0], y - quadPts[0][1]))) : 0;
+      const onQuad = (x, y) => quadPts.some(([u, v]) => Math.abs(u - x) <= qTol && Math.abs(v - y) <= qTol);
+      const ownAt = (x, y, k) => { if (!onQuad(x, y)) at(x, y, k); };
       for (let k = 0; k < own.length; k++) {
-        if (k > 0 && own[k] === own[k - 1] + 1) mid(own[k - 1], own[k]);
-        if (own[k] < m || !p.closed) at(q[own[k] * 2], q[own[k] * 2 + 1], 0); // (a closed one's repeated first point once)
+        if (k > 0 && own[k] === own[k - 1] + 1) ownAt((q[own[k - 1] * 2] + q[own[k] * 2]) / 2, (q[own[k - 1] * 2 + 1] + q[own[k] * 2 + 1]) / 2, 1);
+        if (own[k] < m || !p.closed) ownAt(q[own[k] * 2], q[own[k] * 2 + 1], 0); // (a closed one's repeated first point once)
       }
-      for (const i of p.mids) at(q[i * 2], q[i * 2 + 1], 1);
+      for (const i of p.mids) ownAt(q[i * 2], q[i * 2 + 1], 1);
       // a closed curve of no own point (a whole ellipse, a closed spline, a circle, a hatch loop of
       // arcs): its four extreme points, on the curve -- r113's marks left it no snap at all, 690 of
       // one drawing's closed paths (r114 R4-M1)
@@ -525,13 +534,10 @@ export function snapPoints(paths, o) {
       // (a circle's or an ellipse's quadrants beside its own points too: a polyline circle of 45 and
       // 315 degree arcs offered its two vertices and its arcs' middles and no quadrant, its CIRCLE
       // twin four -- r120 M3; a CAD quadrant snap takes a polyline's arcs as well)
-      const round = p.closed && p.circle && m >= 3 ? circleThrough(q, m) : null;
-      if (round && round.r > 0) {
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) at(round.x + dx * round.r, round.y + dy * round.r, 3);
-      } else if (p.closed && p.quads && p.quads.length === 8) {
-        // (an ellipse's: its axis ends, as its reader found them -- its samples' x and y extremes
-        // were offered, 19.2043 across an isometric hole of major axis 20: r118 M2)
-        for (let k = 0; k < 8; k += 2) at(p.quads[k], p.quads[k + 1], 3);
+      // (an ellipse's quadrants its axis ends, as its reader found them -- its samples' x and y
+      // extremes were offered, 19.2043 across an isometric hole of major axis 20: r118 M2)
+      if (quadPts.length) {
+        for (const [x, y] of quadPts) at(x, y, 3);
       } else if (p.closed && !own.length && m >= 4) {
         let a = 0, b = 0, c = 0, d = 0;
         for (let i = 1; i < m; i++) {

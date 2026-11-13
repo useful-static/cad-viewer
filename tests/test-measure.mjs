@@ -5,7 +5,7 @@
 //   node tests/test-measure.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, polyMid, untoldAt } from '../js/measure-geom.js';
+import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holeOrder, holesOf, polyMid, untoldAt } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
 import { KIND_NAME, MARK, SNAP_KINDS, holeDia, nearestOnRay, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
@@ -875,6 +875,20 @@ await test('with Measure off and no results, the hole table\'s markers are drawn
     meas.draw();
     assert.equal(drawn(svg), 'circle.mhole text.mholetext');
   });
+});
+
+test('the hole table orders holes of one Ø by position, whatever the fit\'s noise in their Ø and centres -- the same plate in mm and in inches numbers its holes alike (r121 M2)', () => {
+  // (four Ø 4 holes of a 20 mm plate, their fitted Ø and centres as the reader gave them: 1e-7 apart,
+  // and two in one column 127.0000001 and 126.9999999 -- must fire: by the raw Ø, then x, the mm copy
+  // read (5,5) (15,5) (5,15) (15,15) and the inch copy (5,15) (5,5) (15,15) (15,5))
+  const mm = [[3.9999999876, 5, 5], [4.0000000025, 15, 5], [4.0000001242, 5, 15], [4.0000001392, 15, 15]];
+  const inch = [[3.9999999248, 5, 15], [4.0000000136, 5, 5], [4.0000000961, 15, 15], [4.0000001848, 15, 5]];
+  const order = (rows, s, jitter) => rows.map(([d, x, y], i) => ({ diameter: d * s, centre: [x * s + (i & 1 ? jitter : -jitter), y * s, 2 * s] })).sort(holeOrder).map((h) => `${Math.round(h.centre[0] / s)},${Math.round(h.centre[1] / s)}`);
+  const want = ['5,5', '5,15', '15,5', '15,15'];
+  assert.deepEqual(order(mm, 1, 0), want);
+  assert.deepEqual(order(inch, 25.4, 1e-7), want);
+  // (holes of different Ø still by Ø first)
+  assert.deepEqual([{ diameter: 6, centre: [0, 0, 0] }, { diameter: 3, centre: [9, 9, 0] }].sort(holeOrder).map((h) => h.diameter), [3, 6]);
 });
 
 done();
