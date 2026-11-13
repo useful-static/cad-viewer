@@ -922,6 +922,14 @@ test('an edge that is an arc is measured on the arc: a Ø 3.50 rim\'s half reads
   // (a straight edge, and a curve that is no circle: no arc, their chords as before)
   assert.equal(arcOf([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]), null);
   assert.equal(arcOf(Array.from({ length: 9 }, (_, i) => [i, (i * i) / 4, 0])), null);
+  // (a pad's outline, its corners on one circle, and right-angle jogs: no arc, whatever three of their
+  // points fit -- must fire: a 0.5 x 0.23 pad read its circumcircle, 1.729 for its 1.460, and a jog
+  // a semicircle, 55 % long: r125 F1, F2)
+  assert.equal(arcOf([[32.863, 14.145, 0], [32.363, 14.145, 0], [32.363, 13.915, 0], [32.863, 13.915, 0], [32.863, 14.145, 0]], 0.5), null);
+  assert.equal(arcOf([[0, 0, 0], [0, 0.1, 0], [1.2, 0.1, 0], [1.2, 0, 0]], 0.5), null);
+  assert.equal(arcOf([[0, 0, 0], [1.2, 0, 0], [1.2, 0.02, 0]], 0.5), null);
+  // (a real arc stepped within the deflection still is one)
+  assert.ok(arcOf(arc(1.75, 0, Math.PI, 13), 0.5));
 });
 
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {

@@ -378,11 +378,17 @@ export function polyMid(line) {
   return line[0];
 }
 
-// A b-rep edge that is an arc (every point on the circle through three of its points, to 5e-4 of r)
-// -> { length, mid } on the arc, else null -- its chords read short (r124 M1)
-export function arcOf(line) {
+// A b-rep edge that is an arc (every point on the circle through three of its points, to 5e-4 of r,
+// and no turn between its chords past the tessellation's angular deflection) -> { length, mid } on
+// the arc, else null -- its chords read short (r124 M1). (A rectangle's corners lie on one circle: a
+// pad's outline read as its circumcircle, and a 90° jog as a semicircle -- r125 F1, F2)
+export function arcOf(line, defl = 0.5) {
   const n = line.length;
   if (n < 3) return null;
+  for (let i = 2; i < n; i++) {
+    const p = sub(line[i - 1], line[i - 2]), q = sub(line[i], line[i - 1]);
+    if (len(p) && len(q) && Math.acos(Math.min(1, dot(p, q) / (len(p) * len(q)))) > defl * 1.05) return null;
+  }
   // (a closed one -- its last point its first: through the points a third and two thirds along)
   const shut = len(sub(line[n - 1], line[0])) <= 1e-9 * len(sub(line[n >> 1], line[0]));
   const a = line[0], b = line[shut ? (n / 3) | 0 : n >> 1], c = line[shut ? ((2 * n) / 3) | 0 : n - 1];

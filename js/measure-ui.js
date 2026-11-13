@@ -101,7 +101,8 @@ export function createMeasure(deps) {
     if (performance.now() > deadline) return null;
     const g = bodyGeometry(st.model, mi);
     // the b-rep edges' lengths and midpoints, once
-    g.mids = g.edges.map((e, i) => { const a = arcOf(e); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
+    const dfl = st.model.header.angularDeflection;
+    g.mids = g.edges.map((e, i) => { const a = arcOf(e, dfl > 0 ? dfl : 0.5); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
     st.geom.set(mi, g);
     return g;
   }
