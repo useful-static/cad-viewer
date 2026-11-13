@@ -34,8 +34,8 @@ export const untoldText = (n, holes = 0) => {
   const more = holes ? `${plural(holes, 'through-hole', 'through-holes')} whose other rim is ${n === 1 ? 'that one' : 'one of them'}` : '';
   return rims || more ? `${[rims, more].filter(Boolean).join(', and ')}: not listed` : '';
 };
-import { faceOfTri, makeCaster, seesInside } from './raycast.js';
-import { add, dot, len, mul, sub } from './vec3.js';
+import { edgeNearness, faceOfTri, makeCaster, seesInside } from './raycast.js';
+import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
 
@@ -183,18 +183,43 @@ export function createMeasure(deps) {
   // the section's kept side (its normal reversed) -- each body walked on its own: walked together, a
   // part's bottom in the plane of the board's top was stepped past uncounted, the part read as solid
   // there and its visible edges as hidden (r127 H1)
+  // A walk whose ray meets a triangle on its border (an edge, a corner) cannot tell a crossing from
+  // a graze -- a ridge touched from outside counted once, the point read as inside -- so the body is
+  // walked again along two rays tilted by about 1/100 rad, the first walk without a border hit
+  // deciding, else the three by majority (r127 L1, r128 L3)
   function insideClosed(q, bodies, pl, skip) {
     const dir = [-pl[0], -pl[1], -pl[2]], step = Math.max(1e-6, scene.sphere.radius * 1e-7);
+    const P = st.model.position, I = st.model.index;
+    const walk = (m, d) => {
+      let o = q, c = 0, graze = false;
+      for (let k = 0; k < 256; k++) {
+        const h = st.caster.cast([m], o, d, Infinity, skip);
+        if (!h) break;
+        if (edgeNearness(P, I, h.tri, o, d) < 1e-6) graze = true;
+        c++;
+        o = add(o, mul(d, h.t + step));
+      }
+      return { odd: (c & 1) === 1, graze };
+    };
+    let tilts = null;
+    const tilted = () => {
+      if (tilts) return tilts;
+      const a0 = Math.abs(dir[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      const a = cross(dir, a0), al = len(a), b = cross(dir, a);
+      const ua = mul(a, 1 / al), ub = mul(b, 1 / len(b));
+      tilts = [add(dir, add(mul(ua, 0.0123), mul(ub, 0.0071))), add(dir, add(mul(ua, -0.0089), mul(ub, 0.0117)))];
+      return tilts;
+    };
     for (const m of bodies) {
       if (deps.closed && !deps.closed(m)) continue;
-      let o = q, c = 0;
-      for (let k = 0; k < 256; k++) {
-        const h = st.caster.cast([m], o, dir, Infinity, skip);
-        if (!h) break;
-        c++;
-        o = add(o, mul(dir, h.t + step));
+      const w0 = walk(m, dir);
+      let odd = w0.odd;
+      if (w0.graze) {
+        const ws = [w0, ...tilted().map((d) => walk(m, d))];
+        const clear = ws.find((w) => !w.graze);
+        odd = clear ? clear.odd : ws.filter((w) => w.odd).length >= 2;
       }
-      if (c & 1) return true;
+      if (odd) return true;
     }
     return false;
   }
@@ -873,6 +898,8 @@ export function createMeasure(deps) {
     get holes() { return st.holes; },
     // a body's measured geometry (mesh index), built once (js/drawing-svg.js)
     geometry: (mi) => { model(); return geomOf(mi, Infinity); },
+    // (for tests: whether q is inside a closed body, walked into the plane pl's kept side)
+    insideAt: (q, pl) => { model(); return insideClosed(q, scene.header.meshes.map((_, i) => i), pl, null); },
     get loupeShown() { return !!st.loupe; },
     setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
     // the results that are not notes (distances, angles...), taken off the view and given back:

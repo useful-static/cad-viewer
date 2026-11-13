@@ -307,6 +307,15 @@ await test('EXPORTS: each row writes its own format through the one call shape',
   assert.deepEqual(Object.keys(EXPORTS).sort(), Object.keys(magic).sort());
 });
 
+await test('3MF: a sliver triangle with two corners 3 µm apart is read back, as from STL (5 decimals made them one -- r128 L1)', async () => {
+  const sl = {
+    position: new Float32Array([1, 0, 0, 1.000003, 0, 0, 1, 1, 0]), normal: new Int16Array(12), color: new Uint8Array(12).fill(255), index: new Uint32Array([0, 1, 2]),
+    header: { meshes: [{ name: 'sliver', vtxStart: 0, vtxCount: 3, idxStart: 0, idxCount: 3 }] },
+  };
+  const tris = async (fmt, b) => (await parseMesh(fmt, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), `s.${fmt}`)).meshes.reduce((n, b) => n + b.indices.length / 3, 0);
+  assert.equal(await tris('stl', await toSTL(sl, [1], IDENT)), 1, 'STL keeps it (the control)');
+  assert.equal(await tris('3mf', await to3MF(sl, [1], IDENT)), 1, 'must fire at 5 decimals: x 1.000003 written as 1, the two corners one');
+});
 await test('an empty body is left out of the GLB and the 3MF (it made a count-0 accessor with null bounds)', async () => {
   const m3 = { ...model, header: { meshes: [...model.header.meshes, { name: 'empty', vtxStart: 7, vtxCount: 0, idxStart: 9, idxCount: 0 }] } };
   const g = await toGLB(m3, [1, 2, 3], YUP, ['plate', 'tri', 'empty']);

@@ -60,8 +60,10 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // the arc (arcOf) -- no new import; 961.9 KB in 42 at r126, code: measure-ui.js's snaps under a
   // section, the cut-away and the hidden behind a cut face (insideClosed) -- no new import; 964.9 KB
   // in 42 at r129, code: main.js's tour cut on the tour's own model (sectionTOf), the export's
-  // "uncut" -- no new import)
-  assert.ok(bytes < 966e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // "uncut" -- no new import; 968.6 KB in 42 at r130, code: measure-ui.js's tilted parity walks,
+  // raycast.js's edgeNearness, export-mesh.js's 6 decimals, the tour maker's kept-at-edge note -- no
+  // new import)
+  assert.ok(bytes < 970e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

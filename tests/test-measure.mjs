@@ -963,6 +963,24 @@ await test('a chip on a board, its bottom in the board\'s top plane, under a sec
   }
 });
 
+await test('a point on a section whose walk grazes a ridge from outside is not inside: the walk tilts (r127 L1, r128 L3)', async () => {
+  // (a wedge, closed: its cross-section the triangle x 40..50, z 1..5 with its ridge at x 50, z 3,
+  // y 20..50; points on the plane z 6, walked down -z. Over the ridge the walk only touches it --
+  // must fire: one hit counted, the point read as inside)
+  const W = (x, z, y) => P(x, y, z);
+  const tri = (a, b, c) => [a, b, c];
+  const ys = [20, 50];
+  const [b0, t0, r0] = [W(40, 1, ys[0]), W(40, 5, ys[0]), W(50, 3, ys[0])];
+  const [b1, t1, r1] = [W(40, 1, ys[1]), W(40, 5, ys[1]), W(50, 3, ys[1])];
+  const wedge = [[tri(b0, r0, t0)], [tri(b1, t1, r1)], [tri(b0, b1, r1), tri(b0, r1, r0)], [tri(t0, r0, r1), tri(t0, r1, t1)], [tri(b0, t0, t1), tri(b0, t1, b1)]];
+  const { meas } = await measureAt([{ name: 'wedge', faces: wedge }]);
+  const pl = [0, 0, 1, 6];
+  assert.equal(meas.insideAt([50, 35, 6], pl), false, 'over the ridge: a graze, outside');
+  assert.equal(meas.insideAt([45, 35, 6], pl), false, 'over the wedge: in and out, outside');
+  assert.equal(meas.insideAt([45, 35, 3], pl), true, 'within it: inside (the control)');
+  assert.equal(meas.insideAt([55, 35, 6], pl), false, 'beside it: outside');
+});
+
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
   const lines = [];
   const had = globalThis.document;

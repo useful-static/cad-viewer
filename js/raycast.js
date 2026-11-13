@@ -30,6 +30,23 @@ function hitTri(P, I, t, o, d) {
   return tt > 0 ? tt : Infinity;
 }
 
+// How near the ray o + t d meets triangle t to the triangle's border: the least of its three
+// barycentric weights at the hit (0 on an edge or a corner), or -1 when it misses. A parity walk
+// whose ray meets a triangle there cannot tell a crossing from a graze (js/measure-ui.js)
+export function edgeNearness(P, I, t, o, d) {
+  const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
+  const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]];
+  const e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+  const p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+  const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+  if (Math.abs(det) < 1e-20) return -1;
+  const s = [o[0] - P[a], o[1] - P[a + 1], o[2] - P[a + 2]];
+  const u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) / det;
+  const q = [s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0]];
+  const v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / det;
+  return Math.min(u, v, 1 - u - v);
+}
+
 // Whether the ray o + t d meets triangle t on its inside -- the view's own cut test: the vertex
 // normals (N, snorm16 x4) interpolated at the hit, as each fragment's is (js/renderer-webgl.js
 // FS_SHADE: dot(vNrm, v) < 0 is the cut face), looking along d. The three normals' sum, the

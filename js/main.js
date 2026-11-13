@@ -2222,7 +2222,10 @@ function endTour(restore = true) {
 // (exactly, or the selected parts framed from this side), the part colours,
 // what is hidden, explode, section, style, and Measure's notes as callouts.
 // Parts are named by namesFor: the fewest names that cover exactly them.
+// captureNote: what the last capture had to change, for the tour maker to say ('' none)
+let captureNote = '';
 function captureStep({ camera = 'exact' } = {}) {
+  captureNote = '';
   if (!app.header) return null;
   const c = app.cam;
   const n = app.header.meshes.length;
@@ -2280,6 +2283,10 @@ function captureStep({ camera = 'exact' } = {}) {
   }
   // (t of the tour's own model, the scene's first, as a step plays it: sectionBox)
   s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: roundFraction(sectionTOf('first')), flip: !!app.section.flip } : { axis: 'off' };
+  // (a cut past the tour's own model -- through an added one only -- is kept at that model's edge,
+  // which the tour maker says: it moved there unsaid, r129 L1)
+  const raw = app.section.axis !== 'off' ? sectionTOf('first', false) : 0.5;
+  captureNote = raw < -1e-9 || raw > 1 + 1e-9 ? `its cut is past ${app.scene && app.scene[0] ? app.scene[0].name : 'the model'}, the tour's own model: kept at its edge` : '';
   s.style = currentStyle().id;
   // (the visitor's own notes: a model list's are the page's, shown again whatever the tour says)
   const notes = app.measure ? app.measure.notes().filter((nt) => nt.own) : [];
@@ -6385,7 +6392,7 @@ function sectionBox() {
 
 // A cut's position along its axis -> its fraction of the box `of` names (null: the scene's, the
 // view's own), for a tour step to keep (captureStep) or a view to keep (currentView)
-function sectionTOf(of) {
+function sectionTOf(of, clamp = true) {
   const s = app.section;
   if (s.axis === 'off' || !app.header || (s.of || null) === of) return s.t;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
@@ -6395,7 +6402,8 @@ function sectionTOf(of) {
   s.of = of;
   const b = sectionBox();
   s.of = was;
-  return b.max[k] > b.min[k] ? Math.min(1, Math.max(0, (pos - b.min[k]) / (b.max[k] - b.min[k]))) : 0.5;
+  const t = b.max[k] > b.min[k] ? (pos - b.min[k]) / (b.max[k] - b.min[k]) : 0.5;
+  return clamp ? Math.min(1, Math.max(0, t)) : t;
 }
 
 app.sectionBox = () => sectionBox(); // (for tests: the section's range)
@@ -7331,6 +7339,7 @@ function wireInput() {
   // the tour maker: File > Make a tour… (a tour playing is opened in it)
   app.recorder = createTourRecorder({
     capture: captureStep,
+    captureNote: () => captureNote,
     preview: (tour, from, play) => { endTour(); if (!startTourIn(tour, null)) return; if (from) showTourStep(from); setTourPlaying(play); },
     stopPreview: () => endTour(),
     modelUrl: () => {

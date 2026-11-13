@@ -181,7 +181,10 @@ export const xmlEsc = (s) => String(s)
   .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '�')
   .replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const hex2 = (v) => v.toString(16).padStart(2, '0').toUpperCase();
-const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(5).replace(/0+$/, '').replace(/\.$/, ''));
+// (6 decimals, a micrometre's thousandth: 5 collapsed 65 more of the rack's sliver triangles than
+// STL's float32 does, read back 1,084,285 of 1,085,051 against STL's 1,084,350; 6 reads back
+// 1,084,350, the file 1.45 % larger -- r128 L1)
+const num = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(6).replace(/0+$/, '').replace(/\.$/, ''));
 
 // The bodies an export writes: those with a triangle (an empty one became a glTF accessor of count
 // 0 with min / max [null, null, null], invalid glTF 2.0, and a 3MF object with an empty mesh),

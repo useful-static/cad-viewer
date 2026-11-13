@@ -7,6 +7,7 @@
 //
 // The panel owns only the draft; main.js does what touches the viewer:
 //   capture(opts)          the view as a step (camera 'exact' | 'frame')
+//   captureNote()          what that capture had to change ('' nothing), said with the step
 //   preview(tour, from, play)  show the draft from step `from`, playing or paused
 //   stopPreview()          leave the preview
 //   modelUrl()             the model's URL, when it was opened from one
@@ -172,8 +173,11 @@ export function createTourRecorder(api) {
   function take(keep = {}) {
     const cam = el.sCam.value === 'frame' ? 'frame' : 'exact';
     const s = api.capture({ camera: cam });
+    taken = api.captureNote ? api.captureNote() : '';
     return s ? stepFromView(s, keep) : null;
   }
+  let taken = ''; // (the last take's captureNote)
+  const andTaken = () => (taken ? `; ${taken}` : '');
 
   // A step taken now, at this reading's size, written at the draft's (the visitor changed "this file
   // is in" since the first step: js/tour.js tourAt)
@@ -202,7 +206,7 @@ export function createTourRecorder(api) {
     if (!stepOk(next, 'not added')) return;
     draft.steps.splice(draft.sel + 1, 0, s);
     select(draft.sel + 1);
-    note(`step ${draft.sel + 1} added: give it a title and a text`);
+    note(`step ${draft.sel + 1} added: give it a title and a text${andTaken()}`);
     el.sTitle.focus();
   };
   el.sUpdate.onclick = () => {
@@ -217,7 +221,7 @@ export function createTourRecorder(api) {
     if (!stepOk(next, 'not updated')) return;
     draft.steps[draft.sel] = s;
     renderList();
-    note(`step ${draft.sel + 1} now shows the view as it is`);
+    note(`step ${draft.sel + 1} now shows the view as it is${andTaken()}`);
   };
   const field = (input, key, conv = (v) => v) => {
     input.addEventListener('input', () => {
