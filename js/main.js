@@ -702,7 +702,31 @@ function syncExplodeSphere() {
   app.sphere = x.on ? { center: base.center, radius: base.radius + x.t * x.len } : base;
 }
 
+// The visitor's cut kept where it is in the model across a change of Explode (fn): its t is a
+// fraction of the drawn box, which Explode grows and shrinks, so Explode off -- Measure turning on
+// turns it off -- moved the cut (r126 L3). A tour's step keeps its fraction: it is the step's.
+function keepingCut(fn) {
+  const s = app.section;
+  const k = { x: 0, y: 1, z: 2 }[s.axis];
+  const keep = k !== undefined && !app.tour && app.header && app.header.bbox;
+  let at = null;
+  if (keep) { const { min, max } = sectionBox(); at = min[k] + (max[k] - min[k]) * s.t; }
+  const out = fn();
+  // (not clamped to the box: a cut among the exploded parts, past the gathered model, stays there,
+  // cutting nothing, where clamped it cut the model's end off)
+  if (at !== null && app.section.axis === s.axis) {
+    const { min, max } = sectionBox();
+    s.t = max[k] > min[k] ? (at - min[k]) / (max[k] - min[k]) : 0.5;
+    updateButtons();
+    viewChanged();
+  }
+  return out;
+}
+
 function setExplodeMode(mode) {
+  return keepingCut(() => setExplodeModeNow(mode));
+}
+function setExplodeModeNow(mode) {
   const x = app.explode;
   const fitted = x.on && atLastFit();
   x.mode = mode;
@@ -718,9 +742,12 @@ function setExplodeMode(mode) {
 }
 
 function setExplode(on, focus = false) {
+  if (on === app.explode.on) return;
+  return keepingCut(() => setExplodeNow(on, focus));
+}
+function setExplodeNow(on, focus) {
   const x = app.explode;
   if (on && (!app.header || !app.renderer)) return;
-  if (on === x.on) return;
   // Measure and Explode exclude each other: Measure's points are where the
   // bodies are, not where Explode draws them
   // (told, not kept on the ready line, which stayed with Measure back on: r47 A6; read out too -- its
@@ -3895,7 +3922,7 @@ function wireOptbar() {
   $('xpoff').onclick = () => setExplode(false, true);
   for (const b of $('xpmode').querySelectorAll('button')) b.onclick = () => setExplodeMode(b.dataset.mode);
   $('xppos').addEventListener('input', () => {
-    app.explode.t = Number($('xppos').value) / 100;
+    keepingCut(() => { app.explode.t = Number($('xppos').value) / 100; }); // (the cut stays put: r126 L3)
     syncExplodeSphere();
     $('xpval').textContent = `${$('xppos').value} %`;
     $('xppos').setAttribute('aria-valuetext', `${$('xppos').value} %`);
