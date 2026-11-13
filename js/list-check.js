@@ -801,7 +801,10 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // unpack it on the way, and the viewer opens what arrives (main.js loadAny) -- so it is a
     // fault only when what arrived is not the file its name says
     if (fileNameOfUrl(url).toLowerCase().endsWith('.gz') && !gz) {
-      if (got && got === want) bits.push('arrives unpacked (sent with Content-Encoding: gzip), which the viewer opens');
+      // (a start that names no format -- a binary STL -- sent with a Content-Encoding the check can
+      // read: unpacked on the way, as the header says, not "not compressed at all": a binary
+      // part.stl.gz so served was "to look at" where the page opens it -- r117)
+      if ((got && got === want) || (!got && want && !sure(want) && encoded)) bits.push('arrives unpacked (sent with Content-Encoding: gzip), which the viewer opens');
       else if (!got && want && !sure(want)) {
         bits.push('not gzip as it arrives: sent unpacked (Content-Encoding), or not compressed at all; its start does not say which');
         if (level === 'ok') level = 'warn';

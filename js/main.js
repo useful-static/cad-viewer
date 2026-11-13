@@ -2360,17 +2360,23 @@ async function tourPictures(tour) {
   if (!app.tour) return 0;
   setTourPlaying(false);
   app.tour.cut = true;
+  // (the tour the pictures are of: ended meanwhile -- the maker closed, Esc, ✕, another model -- the
+  // pictures stop there and those taken are kept, as tourVideo stops; showTourStep on a tour that had
+  // ended threw, and nothing was saved: r117 M1)
+  const t = app.tour;
   const files = [];
   try {
     for (let i = 0; i < tour.steps.length; i++) {
+      if (app.tour !== t) break;
       showTourStep(i);
       for (let k = 0; k < 100 && app.tourRaf; k++) await nextFrame();
       await gpuSync().catch(() => {});
       await nextFrame();
       await nextFrame();
+      if (app.tour !== t) break;
       // (the tour's pictures keep their own settings, not Save picture's)
       const pic = await renderPicture({ scale: 2, bg: 'view', sel: false });
-      if (!pic) break;
+      if (!pic || app.tour !== t) break;
       const s = tour.steps[i];
       paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, s.title || (i === 0 ? tour.title : ''), s.text);
       const png = await new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
@@ -4176,7 +4182,10 @@ function checkFits(r, mesh) {
 // conversion (a conversion only): { unmeshedFaces, threads } -- the faces the
 // converter returned without triangles, named in the info panel and read out
 // with the ready line, and whether it ran on the multi-core converter.
-async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
+// (reading: a unit-less mesh's { unit, unitless }, set on the scene as it is made -- set after the
+// load, as it was, everything the load runs (its list entry's notes, syncUnitParam) saw no reading:
+// a list's notes on an STL read in inches sat 25.4 times off their parts -- r117 M3)
+async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, reading = null) {
   const unmeshedFaces = conversion?.unmeshedFaces || 0;
   // Each step names itself (the loading card) and lets that paint first:
   // on a phone, inflate + decode + upload of a big model is a second or more
@@ -4208,7 +4217,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   const none = noSurfaces(base.header.indexCount, name, conversion && conversion.unmeshedFaces);
   if (none) throw new Error(none);
   // File > Add model… (or ?add=): merged into the scene beside the shown model
-  if (app.adding && app.adding.seq === seq) return addToScene(base, name, seq);
+  if (app.adding && app.adding.seq === seq) return addToScene(base, name, seq, unmeshedFaces);
   // one holder, shared by every palette copy made from base (they spread it)
   base.edgeInfo = { value: null, ready: null };
   // part colours belong to the model they were picked on: this model's own
@@ -4259,7 +4268,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null) {
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   // the models in the view: this one alone (Add model… appends)
-  app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0] }];
+  app.scene = [{ base, name, url: app.sourceUrl, offset: [0, 0, 0], unmeshed: unmeshedFaces, ...(reading ? { unit: reading.unitless ? reading.unit : undefined, unitless: reading.unitless } : {}) }];
   app.sceneAsked = null;
   app.meshSource = null; // (a unit-less mesh file sets it again after: meshFromSource)
   syncUnitParam(); // (another model's ?unit= is not this one's)
@@ -4364,13 +4373,16 @@ function askBigConversion(buf, name, seq) {
 // added model merges again (its ids stay the same).
 
 // Start a load whose model joins the scene instead of replacing it
-function startAdd(fn) {
+// (offset: where the address's ?addat= puts it -- the add's own, ended with it: kept on the app, an
+// address add that never arrived (404, Cancel, refused) put the visitor's next Add model… there:
+// r117 M2)
+function startAdd(fn, offset = null) {
   if (!app.scene) return Promise.resolve();
   const p = startLoad(() => {
     app.startingAdd = true; // (loadUrl, run by fn: an added model's load keeps the first's list keys)
     let q;
     try { q = fn(); } finally { app.startingAdd = false; }
-    app.adding = { seq: app.loadSeq }; // (fn's beginLoad numbered it; loadBuffer reads this later)
+    app.adding = { seq: app.loadSeq, offset }; // (fn's beginLoad numbered it; loadBuffer reads this later)
     return q;
   });
   // (held while it loads, for an entry's tour to wait for: entryTourWait)
@@ -4380,15 +4392,15 @@ function startAdd(fn) {
 
 // the scene a move or add builds on: the last asked for (r114 R4-M3)
 const sceneNow = () => app.sceneAsked || app.scene;
-async function addToScene(base, name, seq) {
+async function addToScene(base, name, seq, unmeshed = 0) {
+  const offset = app.adding && app.adding.seq === seq ? app.adding.offset : null;
   app.adding = null;
   if (!app.scene || stale(seq)) return;
   const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   // (named as its model list entry names it, when one does)
   if (url && listEntry(url)?.name) name = listEntry(url).name;
   if (app.scene.length === 1 && app.scene[0].url && listEntry(app.scene[0].url)?.name) app.scene[0].name = listEntry(app.scene[0].url).name;
-  const models = [...sceneNow(), { base, name, url, offset: app.addOffset ? app.addOffset.slice() : [0, 0, 0] }];
-  app.addOffset = null;
+  const models = [...sceneNow(), { base, name, url, offset: offset ? offset.slice() : [0, 0, 0], unmeshed }];
   // (one unit to a scene: refused before anything is shown, as a 2D drawing is -- r85 A1)
   const unitsClash = sceneUnitsRefusal(models);
   if (unitsClash) throw new Error(unitsClash);
@@ -4434,6 +4446,9 @@ async function showScene(models, { newTree = false } = {}) {
   if (app.clearanceRun) app.clearanceRun.stop();
   app.scene = models;
   if (app.sceneAsked === models) app.sceneAsked = null;
+  // (the faces the converter could not mesh, of every model in it: an added STEP's were never told,
+  // its holes shown under a "ready" and a "missing faces" row of the first model's alone -- r117 M4)
+  app.unmeshedFaces = models.reduce((s, m) => s + (m.unmeshed || 0), 0);
   // (a clearance read is of the scene before: cleared here, where every scene change passes --
   // Add model kept "1.65 mm" for a scene whose new case touched)
   forgetClearance();
@@ -5138,12 +5153,11 @@ async function meshFromSource(src, unit, seq) {
   // them -- edgesOf's rule, r43 A4)
   const { raw, unitless } = got || await (await fileReaders()).readMeshFile({ ...src, unit, edges: false });
   if (stale(seq)) return;
-  await loadBuffer(raw, src.name, seq, raw);
-  // (a model added to a scene keeps the scene's units: no choice there)
+  // (its reading goes in with it: it HAS one -- tours and notes scale to it -- even in a scene, where
+  // it cannot be re-read; a model added to a scene keeps the scene's units: no choice there)
+  await loadBuffer(raw, src.name, seq, raw, null, { unit, unitless });
   if (app.baseMesh && !stale(seq) && app.scene && app.scene.length === 1) {
     app.meshSource = unitless ? { ...src, unit } : null;
-    app.scene[0].unit = unitless ? unit : undefined;
-    app.scene[0].unitless = unitless; // (it HAS a reading -- tours scale to it -- even in a scene, where it cannot be re-read)
     syncUnitParam();
     showInfo();
   }
@@ -7661,8 +7675,7 @@ function openStart(src) {
       if (!app.scene || !untouched() || app.startChain !== chain) break;
       const u = (lists.length && listedUrlFrom(raw, lists, app.listEntries, location.href)) || raw;
       const at = (ats[i] || '').split(',').map(Number);
-      app.addOffset = at.length === 3 && at.every(Number.isFinite) ? at : null;
-      const p = startAdd(() => loadUrl(u));
+      const p = startAdd(() => loadUrl(u), at.length === 3 && at.every(Number.isFinite) ? at : null);
       app.startSeq = app.loadSeq;
       await p;
     }

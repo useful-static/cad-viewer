@@ -97,7 +97,9 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
   // re-read stood in for: the same file loaded again, the load's rules run, then read in the unit)
   + 'function endTour() { app.tour = null; tourEnded(); }\n'
   + 'async function meshFromSource(s, unit, seq) { return fakeReread(s, unit, seq, { stale, setStatus, readyText, loadShown, entryShown, setUnitRead, unitRow }); }\n'
-  + 'function loadShown() {\n  const asked = addressUnit(app.sourceUrl);\n  forgetAddressModel();\n  unitRead = \'mm\';\n  syncUnitParam();\n  unitRead = asked;\n  syncUnitParam();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {', true) || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {', true)) + '}\n'
+  // (the reading is on the scene as loadBuffer makes it, so its one syncUnitParam keeps the asked
+  // unit in place -- it dropped ?unit= and put it back after, at the address's end: r117 M3)
+  + 'function loadShown() {\n  const asked = addressUnit(app.sourceUrl);\n  forgetAddressModel();\n  unitRead = asked;\n  syncUnitParam();\n' + (src.includes('function landPendingView() {') ? '  landPendingView();\n' : block('  if (!app.addsPending && pendingViewIsFor()) {', true) || block('  if (app.pendingView && !app.addsPending && viewIsFor(app.pendingView.src)) {', true)) + '}\n'
   + 'function entryShown() {\n  const e = app.header ? listEntry(app.sourceUrl) : null;\n' + block('  if (app.header && app.autoTourFor !== autoTourKey()) {')
   // (and its hidden parts, held back as its tour is: r59 Q4)
   + block('  if (app.header && e && e.hide && app.listHideFor !== autoTourKey()') + '}\n';
@@ -109,7 +111,7 @@ const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [s
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
   'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {', 'function syncUnitParam() {', 'function addressUnit(url) {',
   src.includes('async function unwindPick(c) {') ? 'async function unwindPick(c) {' : 'async function unwindPick(n, before) {',
-  'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn) {', 'function pickModelFile(files) {',
+  'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn, offset = null) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', src.includes('async function addressTourEnds(r, ownFailed) {') ? 'async function addressTourEnds(r, ownFailed) {' : 'function addressTourEnds(r, ownFailed) {',
   'function viewIsFor(search) {', 'function linkViewOf(hash) {', 'function setModelParam(u, url) {', 'function setMeshUnit(u) {',
@@ -339,7 +341,10 @@ export async function runStart(c) {
     app.tour = null;
     if (adding) {
       app.meshSource = null;
-      app.scene.push({ url, at: app.addOffset ? app.addOffset.join(',') : null });
+      // (the add's own offset, ended with it, as addToScene reads and clears it: r117 M2)
+      const off = app.adding && app.adding.offset;
+      app.adding = null;
+      app.scene.push({ url, at: off ? off.join(',') : null });
       app.header = { meshes: app.scene.map(() => ({})) };
       o.events.push('added');
       k.addShown(); // (addToScene's end: a view waiting lands on the scene -- r60 A3)

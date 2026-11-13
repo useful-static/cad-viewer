@@ -1291,7 +1291,12 @@ await test('the edges worker itself says it has started, then a failed build as 
     globalThis.onmessage(body(2 ** 53));
     assert.deepEqual([posted[2].ok, posted[2].transient], [false, undefined], posted[2].error);
     globalThis.onmessage(body(2 ** 40));
-    assert.deepEqual([posted[3].ok, posted[3].transient, posted[3].error], [false, true, 'Array buffer allocation failed']);
+    // (which of the two a body of 2^40 meets is the engine's: Node 22 refuses the allocation, the
+    // moment's; Node 20 is past its typed-array length, the model's -- the arm read Node 22's words
+    // alone and failed on every Node 20 host: r117)
+    assert.equal(posted[3].ok, false);
+    assert.equal(typeof posted[3].error, 'string');
+    assert.equal(posted[3].transient, /allocation failed|out of memory/i.test(posted[3].error) ? true : undefined, posted[3].error);
     // (the rule it says by: every failure but a size limit met at every try, in each engine's words
     // -- Safari's "Out of memory" the moment's, not the model's: r41 A1)
     assert.deepEqual([new RangeError('Array buffer allocation failed'), new RangeError('Out of memory'), new Error('out of memory'),

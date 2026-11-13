@@ -1473,4 +1473,19 @@ await test('a ranged GLB whose JSON is its 65th chunk: "more than 64 chunks", a 
   assert.deepEqual([r.level, r.detail], ['warn', '0.07 MB · GLB · many.glb has more than 64 chunks: its JSON was not read here']);
 });
 
+await test('a binary part.stl.gz sent with Content-Encoding: gzip arrives unpacked, which the page opens: ok, not "to look at" (r117)', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const stl = stlOf(3);
+  // (the browser hands the page the unpacked bytes; Content-Length is the packed size)
+  const served = (headers) => async () => new Response(stl, { status: 200, headers: { 'content-length': String(gzipSync(stl).length), ...headers } });
+  const r = await checkFile('https://example.org/m/part.stl.gz', { fetchFn: served({ 'content-encoding': 'gzip' }), sniff: true });
+  assert.equal(r.level, 'ok', r.detail);
+  assert.match(r.detail, /arrives unpacked \(sent with Content-Encoding: gzip\), which the viewer opens/);
+  // (must fire: with no encoding the check can read -- another site's, unexposed -- a binary STL's
+  // start cannot say whether it was compressed, a warning as before)
+  const bare = await checkFile('https://example.org/m/part.stl.gz', { fetchFn: served({}), sniff: true });
+  assert.equal(bare.level, 'warn', bare.detail);
+  assert.match(bare.detail, /its start does not say which/);
+});
+
 done();
