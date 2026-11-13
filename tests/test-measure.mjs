@@ -932,6 +932,25 @@ test('an edge that is an arc is measured on the arc: a Ø 3.50 rim\'s half reads
   assert.ok(arcOf(arc(1.75, 0, Math.PI, 13), 0.5));
 });
 
+await test('with a section on, Measure snaps nothing the section cut away, and a cut face is measured on the cut, not at a corner behind it (r126 M1, M2)', async () => {
+  // (a block 20 x 20 x 4 cut at z = 2: its top half cut away, its cut face drawn at z = 2)
+  const plane = [0, 0, 1, 2];
+  const { meas, toScreen } = await measureAt([{ name: 'block', faces: box([40, 25, 0], [60, 45, 4]) }], new Set(), { sectionPlane: () => plane });
+  // (the pointer over the block's top edge, which the cut took: no snap on it -- must fire: its edge at
+  // z = 4 was snapped, the view drawing the cut face there)
+  for (const q of [[50, 25, 4], [60, 35, 4], [45, 45, 4]]) {
+    const s = meas.snapAt(...toScreen(q));
+    assert.ok(!s || !s.p || s.p[2] <= 2 + 1e-6, `${q}: snapped ${s && s.kind} at ${s && s.p}, past the cut`);
+  }
+  // (the pointer over the cut face: the point on the cut -- must fire: a corner or an edge of the far
+  // wall behind it, nearer on screen, was snapped)
+  for (const q of [[50, 35, 2], [44, 30, 2], [57, 41, 2]]) {
+    const s = meas.snapAt(...toScreen(q));
+    assert.equal(s && s.kind, 'cut', `${q}: ${s && s.kind} at ${s && s.p}`);
+    assert.ok(Math.hypot(...s.p.map((x, k) => x - q[k])) < 1e-6, `${q}: cut at ${s.p}`);
+  }
+});
+
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
   const lines = [];
   const had = globalThis.document;

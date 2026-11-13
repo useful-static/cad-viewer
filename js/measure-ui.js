@@ -101,8 +101,8 @@ export function createMeasure(deps) {
     if (performance.now() > deadline) return null;
     const g = bodyGeometry(st.model, mi);
     // the b-rep edges' lengths and midpoints, once
-    const dfl = st.model.header.angularDeflection;
-    g.mids = g.edges.map((e, i) => { const a = arcOf(e, dfl > 0 ? dfl : 0.5); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
+    // (each body's own angle, g.a: a scene of added models has no one header value -- r126 L1)
+    g.mids = g.edges.map((e, i) => { const a = arcOf(e, g.a > 0 ? g.a : 0.5); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
     st.geom.set(mi, g);
     return g;
   }
@@ -169,8 +169,29 @@ export function createMeasure(deps) {
     const L = len(d);
     if (!L) return true;
     const eps = Math.max(1e-5, (scene.sphere.radius * 2e-4) / L);
-    const h = st.caster.cast(bodies, o, d, 1 - eps, skip);
-    return !h;
+    if (st.caster.cast(bodies, o, d, 1 - eps, skip)) return false;
+    // (nor a cut face in front of it: where the ray crosses the section's plane before p, inside a
+    // closed body, the view draws the cut -- corners and edges behind an RJ45's cut face beat the cut
+    // point under the pointer: r126 M2)
+    const pl = skip && deps.sectionPlane();
+    if (!pl) return true;
+    const den = dot(pl, d);
+    const tp = den ? (pl[3] - dot(pl, o)) / den : -1;
+    return !(tp > 0 && tp < 1 - eps && insideClosed(add(o, mul(d, tp)), bodies, pl, skip));
+  }
+  // a point inside a closed body among these, by the parity of the walls a ray from it crosses, into
+  // the section's kept side (its normal reversed)
+  function insideClosed(q, bodies, pl, skip) {
+    const dir = [-pl[0], -pl[1], -pl[2]], step = Math.max(1e-6, scene.sphere.radius * 1e-7), n = new Map();
+    let o = q;
+    for (let k = 0; k < 256; k++) {
+      const h = st.caster.cast(bodies, o, dir, Infinity, skip);
+      if (!h) break;
+      n.set(h.mesh, (n.get(h.mesh) || 0) + 1);
+      o = add(o, mul(dir, h.t + step));
+    }
+    for (const [m, c] of n) if (c & 1 && (!deps.closed || deps.closed(m))) return true;
+    return false;
   }
 
   // The snap under CSS point (x, y): { p, kind, mesh, info, face? } | null
@@ -214,6 +235,7 @@ export function createMeasure(deps) {
           // along it in perspective, and a straight b-rep edge is one segment however long -- a
           // 100 mm board edge snapped 3.6 to 7.1 mm from the point under the cursor (r108 M1)
           const p = nearestOnRay(line[i - 1], line[i], pray, t);
+          if (skip && skip(p)) continue; // (an edge the section cut away, as consider's: r126 M1)
           edgePts.push({ p, kind: 'edge', mesh: mi, info: { length: g.mids[e].len, diameter: null }, dd });
         }
       }
@@ -250,11 +272,14 @@ export function createMeasure(deps) {
     // (its outside: a surface, not the cut -- by the vertex normals interpolated at the hit, the
     // view's own per-fragment test (js/raycast.js seesInside); the winding, turned by the body's
     // signed volume, was a second rule, and the centroid's normal a third near an outline)
-    if (!seesInside(st.model.position, st.model.normal, st.model.index, hit.tri, ray.o, ray.d)) return null;
     const den = dot(pl, ray.d);
     if (Math.abs(den) < 1e-12) return null;
     const tp = (pl[3] - dot(pl, ray.o)) / den;
-    return tp > 0 && tp <= hit.t ? add(ray.o, mul(ray.d, tp)) : null;
+    if (!(tp > 0 && tp <= hit.t)) return null;
+    const q = add(ray.o, mul(ray.d, tp));
+    // (or, where the hit is on a seam the normals cannot say, its plane point inside the body by
+    // parity -- the hit on a box's far bottom edge read "surface" under its cut face: r126 M2)
+    return seesInside(st.model.position, st.model.normal, st.model.index, hit.tri, ray.o, ray.d) || insideClosed(q, [hit.mesh], pl, skipCut()) ? q : null;
   }
 
   // the b-rep face under (x, y): { plane, points, mesh, face, p } | null

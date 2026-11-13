@@ -57,8 +57,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // -- the tour's pictures, the add's own offset, a unit-less mesh's reading, every model's missing
   // faces -- no new import; 958.0 KB in 42 at r122, code: measure-geom.js's hole order by rank
   // (orderHoles) -- no new import; 959.9 KB in 42 at r124, code: measure-geom.js's arcs measured on
-  // the arc (arcOf) -- no new import)
-  assert.ok(bytes < 961e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // the arc (arcOf) -- no new import; 961.9 KB in 42 at r126, code: measure-ui.js's snaps under a
+  // section, the cut-away and the hidden behind a cut face (insideClosed) -- no new import)
+  assert.ok(bytes < 963e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

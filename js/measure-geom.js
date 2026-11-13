@@ -387,7 +387,7 @@ export function arcOf(line, defl = 0.5) {
   if (n < 3) return null;
   for (let i = 2; i < n; i++) {
     const p = sub(line[i - 1], line[i - 2]), q = sub(line[i], line[i - 1]);
-    if (len(p) && len(q) && Math.acos(Math.min(1, dot(p, q) / (len(p) * len(q)))) > defl * 1.05) return null;
+    if (len(p) && len(q) && Math.acos(Math.max(-1, Math.min(1, dot(p, q) / (len(p) * len(q))))) > defl * 1.05) return null;
   }
   // (a closed one -- its last point its first: through the points a third and two thirds along)
   const shut = len(sub(line[n - 1], line[0])) <= 1e-9 * len(sub(line[n >> 1], line[0]));
