@@ -951,6 +951,18 @@ await test('with a section on, Measure snaps nothing the section cut away, and a
   }
 });
 
+await test('a chip on a board, its bottom in the board\'s top plane, under a section above both: its corners still snap (r127 H1)', async () => {
+  // (the section at z = 5 keeps both whole; the chip's top corner is in plain view -- must fire: the
+  // walls a ray from the plane crosses, counted over both bodies at once, missed the chip's bottom at
+  // the board's top, read the chip as solid there, and its corner as hidden behind a cut face)
+  const { meas, toScreen } = await measureAt([BOARD(), { name: 'chip', faces: box([40, 25, 1.6], [60, 45, 3]) }], new Set(), { sectionPlane: () => [0, 0, 1, 5] });
+  for (const q of [[40, 25, 3], [60, 25, 3], [40, 45, 3]]) {
+    const s = meas.snapAt(...toScreen(q));
+    assert.equal(s && s.kind, 'vertex', `${q}: ${s && s.kind} at ${s && s.p}`);
+    assert.ok(Math.hypot(...s.p.map((x, k) => x - q[k])) < 1e-6, `${q}: at ${s.p}`);
+  }
+});
+
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
   const lines = [];
   const had = globalThis.document;

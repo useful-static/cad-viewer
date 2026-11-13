@@ -180,17 +180,22 @@ export function createMeasure(deps) {
     return !(tp > 0 && tp < 1 - eps && insideClosed(add(o, mul(d, tp)), bodies, pl, skip));
   }
   // a point inside a closed body among these, by the parity of the walls a ray from it crosses, into
-  // the section's kept side (its normal reversed)
+  // the section's kept side (its normal reversed) -- each body walked on its own: walked together, a
+  // part's bottom in the plane of the board's top was stepped past uncounted, the part read as solid
+  // there and its visible edges as hidden (r127 H1)
   function insideClosed(q, bodies, pl, skip) {
-    const dir = [-pl[0], -pl[1], -pl[2]], step = Math.max(1e-6, scene.sphere.radius * 1e-7), n = new Map();
-    let o = q;
-    for (let k = 0; k < 256; k++) {
-      const h = st.caster.cast(bodies, o, dir, Infinity, skip);
-      if (!h) break;
-      n.set(h.mesh, (n.get(h.mesh) || 0) + 1);
-      o = add(o, mul(dir, h.t + step));
+    const dir = [-pl[0], -pl[1], -pl[2]], step = Math.max(1e-6, scene.sphere.radius * 1e-7);
+    for (const m of bodies) {
+      if (deps.closed && !deps.closed(m)) continue;
+      let o = q, c = 0;
+      for (let k = 0; k < 256; k++) {
+        const h = st.caster.cast([m], o, dir, Infinity, skip);
+        if (!h) break;
+        c++;
+        o = add(o, mul(dir, h.t + step));
+      }
+      if (c & 1) return true;
     }
-    for (const [m, c] of n) if (c & 1 && (!deps.closed || deps.closed(m))) return true;
     return false;
   }
 
