@@ -2623,4 +2623,30 @@ test('2D Measure on a whole ellipse: its quadrants are its axis ends -- an isome
   assert.deepEqual(r, ['10.0000', '10.0000', '20.0000', '20.0000']);
 });
 
+test('2D Measure on a hatch that is one whole ellipse, and on a hatch circle through a stretching insert: the ELLIPSE\'s and the CIRCLE\'s snaps (r119 F1, F2)', () => {
+  const KIND = ['end', 'middle', 'centre', 'quadrant'];
+  const f4 = (v) => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(4);
+  const snaps = (paths) => { const sp = snapPoints(paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${KIND[sp.kind[i]]} ${f4(sp.xy[2 * i])} ${f4(sp.xy[2 * i + 1])}`); return s.sort(); };
+  // (an isometric hole solid-hatched: one elliptic edge, 0 to 360 -- must fire: "end" at one major
+  // end, "middle" at the other, no minor ends, no centre)
+  const iso = [[0, 'ELLIPSE'], [8, 'E'], [10, 0], [20, 0], [11, 8.660254], [21, 5], [40, 0.57735], [41, 0], [42, 2 * Math.PI]];
+  const isoHatch = [[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1],
+    [72, 3], [10, 0], [20, 0], [11, 8.660254], [21, 5], [40, 0.57735], [50, 0], [51, 360], [73, 1], [97, 0]];
+  const d = parseDXF(ents(iso, isoHatch));
+  const e = snaps(d.paths.filter((p) => p.layer === 'E')), h = snaps(d.paths.filter((p) => p.layer === 'H'));
+  assert.equal(e.length, 5);
+  assert.deepEqual(h, e);
+  // (a filled dot in a block -- its HATCH one 360 arc edge beside its CIRCLE -- inserted 2 x 1 at 30:
+  // must fire: the hatch had no centre and its sample extremes, 38.98 and 33.23 across, as quadrants)
+  const blk = dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'DOT'], [10, 0], [20, 0],
+    [0, 'CIRCLE'], [8, 'C'], [10, 0], [20, 0], [40, 10],
+    [0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, 0], [20, 0], [40, 10], [50, 0], [51, 360], [73, 1], [97, 0],
+    [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'DOT'], [10, 0], [20, 0], [41, 2], [42, 1], [50, 30], [0, 'ENDSEC'], [0, 'EOF']]);
+  const b = parseDXF(blk);
+  const c = snaps(b.paths.filter((p) => p.layer === 'C')), hh = snaps(b.paths.filter((p) => p.layer === 'H'));
+  assert.equal(c.length, 5);
+  assert.deepEqual(hh, c);
+});
+
 done();

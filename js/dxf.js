@@ -1397,6 +1397,26 @@ function emit(recs, M, byBlock, depth, ctx) {
         const solid = num(r, 70) === 1;
         // (its loops made once per entity, as a polyline's points are)
         if (!r.loops) r.loops = hatchLoops(r);
+        // (a loop that is one circle or one whole ellipse: drawn a circle, marked one; else its centre
+        // and its axis ends as drawn through the insert, as a CIRCLE's and an ELLIPSE's are -- a
+        // filled dot in a stretched block, and a solid-hatched isometric hole, had sample extremes
+        // or an "end" and a "middle": r119 F1, F2)
+        const marks = (loop) => {
+          if (loop.circle && conformal) return { circle: true };
+          let e = loop.ell;
+          if (!e && loop.circle) {
+            // (a polyline boundary that is a circle: its evenly stepped points' mean, their distance)
+            const n = loop.length / 2 - (loop[0] === loop[loop.length - 2] && loop[1] === loop[loop.length - 1] ? 1 : 0);
+            let sx = 0, sy = 0;
+            for (let i = 0; i < n; i++) { sx += loop[2 * i]; sy += loop[2 * i + 1]; }
+            const cx = sx / n, cy = sy / n, rr = Math.hypot(loop[0] - cx, loop[1] - cy);
+            e = [cx, cy, rr, 0, 0, rr];
+          }
+          if (!e) return null;
+          const c = ap(O, e[0], e[1]);
+          const q = axisEnds(c, ...lin(O, [e[2], e[3], 0]), ...lin(O, [e[4], e[5], 0]));
+          return { centre: c, ...(q ? { quads: q } : {}) };
+        };
         // A solid fill of several loops is filled as one, even-odd: its islands left empty (filled
         // with the drawing's other fills, non-zero, an island wound as its outer loop was filled --
         // 82 of 901 at hand). Style "ignore islands" (75 = 2) fills every loop, with the others
@@ -1404,8 +1424,8 @@ function emit(recs, M, byBlock, depth, ctx) {
           // (one counter for the drawing -- model space and every layout: counted per sheet, a model
           // hatch seen through a viewport and the sheet's own shared an id, and cancelled)
           const id = (ctx.budget.hatches = (ctx.budget.hatches || 0) + 1);
-          for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id, ...(loop.circle && conformal ? { circle: true } : {}) });
-        } else for (const loop of r.loops) path(loop, true, solid, 0, loop.circle && conformal ? { circle: true } : null);
+          for (const loop of r.loops) path(loop, true, true, 0, { evenodd: id, ...marks(loop) });
+        } else for (const loop of r.loops) path(loop, true, solid, 0, marks(loop));
         break;
       }
       case '3DFACE': {
@@ -1852,7 +1872,7 @@ function hatchLoops(r) {
     } else {
       const ne = count(at(93));
       const arcs = [];
-      let others = 0, curved = false;
+      let others = 0, curved = false, wholeEll = null;
       // (its own points, for 2D Measure's snaps, as a polyline's: each edge's ends, an arc's middle
       // on the arc -- an edge's samples are none. A corner two edges share is one point, so it is
       // not a span of no length with a "middle" on the corner. One curved edge cleared every snap
@@ -1904,6 +1924,8 @@ function hatchLoops(r) {
           const t0 = ccw ? a0 : -a1;
           let t1 = ccw ? a1 : -a0;
           if (t1 <= t0) t1 += 2 * Math.PI;
+          // (a whole one: its centre and half-axes, for its quadrants and centre as an ELLIPSE's -- r119 F1)
+          if (Math.abs(t1 - t0 - 2 * Math.PI) < 1e-9) wholeEll = [cx, cy, mx, my, -my * ratio, mx * ratio];
           const ell = [];
           for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; ell.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
           if (ccw) run(ell, true);
@@ -1923,7 +1945,13 @@ function hatchLoops(r) {
       if (!others && hatchCircle(arcs)) pts.circle = true;
       // (a boundary with curved edges: its samples are no snap, its edges' own points are -- r113
       // R2-F3, r118 M1; a circle's are its quadrants and centre, the view's, so none of its own)
-      if (curved) { pts.own = pts.circle ? [] : own; pts.mids = pts.circle ? [] : mids; }
+      // (one whole ellipse, or a circle: no end and no middle -- its quadrants and centre are its
+      // snaps, as an ELLIPSE's and a CIRCLE's are; its centre and half-axes kept for them, ell, which
+      // the view needs where an insert stretches it: r119 F1, F2)
+      const one = ne === 1 && wholeEll;
+      if (curved) { pts.own = pts.circle || one ? [] : own; pts.mids = pts.circle || one ? [] : mids; }
+      if (one) pts.ell = wholeEll;
+      else if (pts.circle) { const [cx, cy, rr] = arcs[0]; pts.ell = [cx, cy, rr, 0, 0, rr]; }
     }
     if (pts.length >= 6) loops.push(pts);
   }
