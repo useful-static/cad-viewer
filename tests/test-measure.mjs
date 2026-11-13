@@ -5,7 +5,7 @@
 //   node tests/test-measure.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holeOrder, holesOf, polyMid, untoldAt } from '../js/measure-geom.js';
+import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, orderHoles, polyMid, untoldAt } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
 import { KIND_NAME, MARK, SNAP_KINDS, holeDia, nearestOnRay, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
@@ -883,12 +883,17 @@ test('the hole table orders holes of one Ø by position, whatever the fit\'s noi
   // read (5,5) (15,5) (5,15) (15,15) and the inch copy (5,15) (5,5) (15,15) (15,5))
   const mm = [[3.9999999876, 5, 5], [4.0000000025, 15, 5], [4.0000001242, 5, 15], [4.0000001392, 15, 15]];
   const inch = [[3.9999999248, 5, 15], [4.0000000136, 5, 5], [4.0000000961, 15, 15], [4.0000001848, 15, 5]];
-  const order = (rows, s, jitter) => rows.map(([d, x, y], i) => ({ diameter: d * s, centre: [x * s + (i & 1 ? jitter : -jitter), y * s, 2 * s] })).sort(holeOrder).map((h) => `${Math.round(h.centre[0] / s)},${Math.round(h.centre[1] / s)}`);
+  const order = (rows, s, jitter) => orderHoles(rows.map(([d, x, y], i) => ({ diameter: d * s, centre: [x * s + (i & 1 ? jitter : -jitter), y * s, 2 * s] }))).map((h) => `${Math.round(h.centre[0] / s)},${Math.round(h.centre[1] / s)}`);
   const want = ['5,5', '5,15', '15,5', '15,15'];
   assert.deepEqual(order(mm, 1, 0), want);
   assert.deepEqual(order(inch, 25.4, 1e-7), want);
   // (holes of different Ø still by Ø first)
-  assert.deepEqual([{ diameter: 6, centre: [0, 0, 0] }, { diameter: 3, centre: [9, 9, 0] }].sort(holeOrder).map((h) => h.diameter), [3, 6]);
+  assert.deepEqual(orderHoles([{ diameter: 6, centre: [0, 0, 0] }, { diameter: 3, centre: [9, 9, 0] }]).map((h) => h.diameter), [3, 6]);
+  // (a float32 board's header holes, Ø 0.80 fitted as 0.799999, 0.8 and 0.800001 -- must fire: Ø to 6
+  // digits split them into three runs, each in its own position order: r122 M1)
+  const hdr = orderHoles([[0.800001, 1.66, 41.37], [0.8, 1.66, 8.35], [0.799999, 4.2, 36.29], [0.8, 4.2, 8.35], [0.799999, 1.66, 36.29], [0.800001, 4.2, 41.37]]
+    .map(([d, x, y]) => ({ diameter: d, centre: [x, y, 0] }))).map((h) => `${h.centre[0]},${h.centre[1]}`);
+  assert.deepEqual(hdr, ['1.66,8.35', '1.66,36.29', '1.66,41.37', '4.2,8.35', '4.2,36.29', '4.2,41.37']);
 });
 
 done();

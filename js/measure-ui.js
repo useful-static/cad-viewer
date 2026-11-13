@@ -15,7 +15,7 @@
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
 // escape() first.
 
-import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holeOrder, holesOf, polyLength, polyMid } from './measure-geom.js';
+import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
 // A hole row's diameter as the table, its summary and the picked row's words write it -- with its
 // countersink, one text (the summary grouped a countersunk Ø3 with plain ones, and the announcement
 // left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer.
@@ -702,7 +702,7 @@ export function createMeasure(deps) {
     // (and the through-holes left out as their other rim is one of those: r69 Q7)
     let untold = 0, unpaired = 0;
     for (const id of ids) { const hs = holesFor(geomOf(id - 1, Infinity)); untold += hs.untold || 0; unpaired += hs.unpaired || 0; for (const h of hs) list.push({ ...h, mesh: id - 1 }); }
-    list.sort(holeOrder); // (Ø to its digits, then position: js/measure-geom.js holeOrder, r121 M2)
+    orderHoles(list); // (js/measure-geom.js)
     // the axes across each hole: the same for all (a board's X, Y) puts them
     // in the column's head, numbers only in the cells (the 300 px panel
     // wrapped "Ø 4.00 mm" and "X 5.00 mm · Y 5.00 mm")

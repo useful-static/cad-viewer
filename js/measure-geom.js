@@ -624,12 +624,22 @@ function holeWall(geom, a, faceN) {
 // wider rim's Ø).
 // A row's centre and normal are a rim's: the wider one's, past the radius test, else the one met
 // first in the body's face order
-// The hole table's order: by Ø, then by position. Ø to 6 significant digits, past which a fit's noise
-// lies: four Ø 4 holes fitted 1e-7 apart were numbered by that noise, so the same plate in mm and in
-// inches numbered its holes differently, and by no position (r121 M2). Its position too, on a grid of
-// 1e-4 of its Ø: two holes in one column fitted 127.0000001 and 126.9999999 were ordered by x
-const holeKey = (h) => { const g = (h.diameter || 1) * 1e-4; return [Number(h.diameter.toPrecision(6)), Math.round(h.centre[0] / g), Math.round(h.centre[1] / g)]; };
-export const holeOrder = (a, b) => { const p = holeKey(a), q = holeKey(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2]; };
+// The hole table's order, in place: by Ø, then position, each by rank -- a value within tol of the one
+// before it shares its rank (Ø 1e-4 of it, position 1e-6 of the spread), so fit noise and units do not
+// renumber holes (r121 M2, r122 M1)
+const ranks = (v, tol) => {
+  const r = [];
+  let k = -1, prev = -Infinity;
+  for (const i of v.map((_, i) => i).sort((a, b) => v[a] - v[b])) { if (!(v[i] - prev <= tol(v[i]))) k++; r[i] = k; prev = v[i]; }
+  return r;
+};
+export function orderHoles(list) {
+  const xs = list.map((h) => h.centre[0]), ys = list.map((h) => h.centre[1]);
+  const s = 1e-6 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), ...list.map((h) => h.diameter)), t = () => s;
+  const d = ranks(list.map((h) => h.diameter), (v) => 1e-4 * v), x = ranks(xs, t), y = ranks(ys, t);
+  const k = new Map(list.map((h, i) => [h, [d[i], x[i], y[i]]]));
+  return list.sort((a, b) => { const p = k.get(a), q = k.get(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2]; });
+}
 export function holesOf(geom) {
   // a planar face's circle is a hole rim when it is not the face's outer
   // loop: the face lies outside it. A boss's top (a disc, the circle its
@@ -795,7 +805,7 @@ export function holesOf(geom) {
     out[row] = { centre: top.centre, normal: top.normal, diameter: 2 * w.bore, depth: bestAlong, rims: 2, ...(wider(top.radius) ? { head: 2 * top.radius } : {}) };
   }
   if (drop.size) { const kept = out.filter((_, q) => !drop.has(q)); out.length = 0; out.push(...kept); }
-  out.sort(holeOrder);
+  orderHoles(out);
   // (and how many rims of flat faces the stored positions cannot tell, so far from the origin, and
   // where: the table says so -- r66 --; apart from them the holes left out as their other end is one,
   // whose own rim is told -- counted among the untold, it was a rim too small to tell that was not:
