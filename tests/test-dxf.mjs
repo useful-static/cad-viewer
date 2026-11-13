@@ -2649,4 +2649,27 @@ test('2D Measure on a hatch that is one whole ellipse, and on a hatch circle thr
   assert.deepEqual(hh, c);
 });
 
+test('a circle drawn as a CIRCLE, a polyline of a 45 and a 315 degree arc, and hatches of both: the same centre and quadrants, in a block at 1 x 1 and stretched 2 x 1 (r120 M1, M2, M3)', () => {
+  const f4 = (v) => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(4);
+  // (a circle's centre and quadrants, kinds 2 and 3, the snaps every way of drawing it must share)
+  const marks = (paths) => { const sp = snapPoints(paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) if (sp.kind[i] >= 2) s.push(`${sp.kind[i] === 2 ? 'centre' : 'quadrant'} ${f4(sp.xy[2 * i])} ${f4(sp.xy[2 * i + 1])}`); return s.sort(); };
+  // (a polyline circle as exporters write one: two vertices, their bulges tan(45/4) and tan(315/4))
+  const b1 = Math.tan((45 * Math.PI) / 180 / 4), b2 = Math.tan((315 * Math.PI) / 180 / 4);
+  const v2 = [10 * Math.cos(Math.PI / 4), 10 * Math.sin(Math.PI / 4)];
+  const block = [[0, 'CIRCLE'], [8, 'C'], [10, 0], [20, 0], [40, 10],
+    [0, 'LWPOLYLINE'], [8, 'L'], [90, 2], [70, 1], [10, 10], [20, 0], [42, b1], [10, v2[0]], [20, v2[1]], [42, b2],
+    [0, 'HATCH'], [8, 'HP'], [2, 'SOLID'], [70, 1], [91, 1], [92, 3], [72, 1], [73, 1], [93, 2], [10, 10], [20, 0], [42, b1], [10, v2[0]], [20, v2[1]], [42, b2], [97, 0],
+    [0, 'HATCH'], [8, 'HA'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 1], [72, 2], [10, 0], [20, 0], [40, 10], [50, 0], [51, 360], [73, 1], [97, 0]];
+  for (const [sx, sy] of [[1, 1], [2, 1]]) {
+    const d = parseDXF(dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'P'], [10, 0], [20, 0], ...block, [0, 'ENDBLK'], [0, 'ENDSEC'],
+      [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'P'], [10, 100], [20, 0], [41, sx], [42, sy], [0, 'ENDSEC'], [0, 'EOF']]));
+    const of = (layer) => marks(d.paths.filter((p) => p.layer === layer));
+    const want = of('C');
+    assert.equal(want.length, 5, `${sx} x ${sy}: ${want}`);
+    // (must fire: the polyline had no quadrant at 1 x 1 and nothing but its vertices and middles at
+    // 2 x 1, and its hatch a centre 0.21 off at 2 x 1, its points' mean)
+    for (const layer of ['L', 'HP', 'HA']) assert.deepEqual(of(layer), want, `${layer} at ${sx} x ${sy}`);
+  }
+});
+
 done();

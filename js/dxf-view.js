@@ -522,10 +522,13 @@ export function snapPoints(paths, o) {
       // one drawing's closed paths (r114 R4-M1)
       // (a circle's exact: its fitted centre plus and minus its radius -- the nearest 5° sample was
       // up to 4.4 % of the radius off on a circle an insert turned: r115 R5-M2)
-      const round = p.closed && !own.length && p.circle && m >= 3 ? circleThrough(q, m) : null;
+      // (a circle's or an ellipse's quadrants beside its own points too: a polyline circle of 45 and
+      // 315 degree arcs offered its two vertices and its arcs' middles and no quadrant, its CIRCLE
+      // twin four -- r120 M3; a CAD quadrant snap takes a polyline's arcs as well)
+      const round = p.closed && p.circle && m >= 3 ? circleThrough(q, m) : null;
       if (round && round.r > 0) {
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) at(round.x + dx * round.r, round.y + dy * round.r, 3);
-      } else if (p.closed && !own.length && p.quads && p.quads.length === 8) {
+      } else if (p.closed && p.quads && p.quads.length === 8) {
         // (an ellipse's: its axis ends, as its reader found them -- its samples' x and y extremes
         // were offered, 19.2043 across an isometric hole of major axis 20: r118 M2)
         for (let k = 0; k < 8; k += 2) at(p.quads[k], p.quads[k + 1], 3);

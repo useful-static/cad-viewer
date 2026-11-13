@@ -1242,7 +1242,9 @@ function emit(recs, M, byBlock, depth, ctx) {
       }
       // (its centreline and its outlines one `band`: a viewport keeps or drops them together, r105 A3)
       const band = outlines && outlines.length ? { band: (ctx.budget.bands = (ctx.budget.bands || 0) + 1) } : null;
-      path(sh.pts, sh.closed, false, width, sh.circle && conformal ? { circle: true, ...band } : band);
+      // (a polyline circle through a stretching insert: its centre and axis ends, as a CIRCLE's -- it had
+      // two ends and two middles, its hatch twin and the CIRCLE a centre and quadrants: r120 M2)
+      path(sh.pts, sh.closed, false, width, sh.circle && conformal ? { circle: true, ...band } : sh.circle ? { ...stretchedCircle(O, sh.circle), ...band } : band);
       if (outlines) for (const o of outlines) if (o.every(Number.isFinite)) path(o, true, true, 0, { outline: true, ...band });
     };
     switch (r.type) {
@@ -1403,15 +1405,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         // or an "end" and a "middle": r119 F1, F2)
         const marks = (loop) => {
           if (loop.circle && conformal) return { circle: true };
-          let e = loop.ell;
-          if (!e && loop.circle) {
-            // (a polyline boundary that is a circle: its evenly stepped points' mean, their distance)
-            const n = loop.length / 2 - (loop[0] === loop[loop.length - 2] && loop[1] === loop[loop.length - 1] ? 1 : 0);
-            let sx = 0, sy = 0;
-            for (let i = 0; i < n; i++) { sx += loop[2 * i]; sy += loop[2 * i + 1]; }
-            const cx = sx / n, cy = sy / n, rr = Math.hypot(loop[0] - cx, loop[1] - cy);
-            e = [cx, cy, rr, 0, 0, rr];
-          }
+          // (a polyline boundary's circle by its bulges' own centre, bulgeCircle -- r120 M1)
+          const e = loop.ell;
           if (!e) return null;
           const c = ap(O, e[0], e[1]);
           const q = axisEnds(c, ...lin(O, [e[2], e[3], 0]), ...lin(O, [e[4], e[5], 0]));
@@ -1700,8 +1695,16 @@ function bulgeCircle(xs, ys, bul, closed) {
     if (Number.isNaN(r0)) { cx0 = cx; cy0 = cy; r0 = r; } else if (Math.hypot(cx - cx0, cy - cy0) > BULGE_ROUNDING * r0 || Math.abs(r - r0) > BULGE_ROUNDING * r0 || Math.sign(th) !== Math.sign(sweep)) return false;
     sweep += th;
   }
-  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < BULGE_ROUNDING * 2 * Math.PI;
+  // (-> its centre and radius, which a stretching insert's centre and axis ends are taken from -- the
+  // mean of its points was 0.21 off on a 45 + 315 degree circle stepped unevenly: r120 M1 -- else false)
+  return Number.isFinite(r0) && r0 > 0 && Math.abs(Math.abs(sweep) - 2 * Math.PI) < BULGE_ROUNDING * 2 * Math.PI ? { cx: cx0, cy: cy0, r: r0 } : false;
 }
+// A circle's marks through a transform that does not keep it round: its centre and the drawn
+// ellipse's axis ends, as a CIRCLE's (axisEnds) -- c: { cx, cy, r }
+const stretchedCircle = (O, c) => {
+  const oc = ap(O, c.cx, c.cy), q = axisEnds(oc, ...lin(O, [c.r, 0, 0]), ...lin(O, [0, c.r, 0]));
+  return { centre: oc, ...(q ? { quads: q } : {}) };
+};
 function widthsOf(xs, ys, bul, w0, w1, closed) {
   const segs = closed ? xs.length : xs.length - 1;
   let one = segs > 0 ? w0[0] : 0, same = true;
@@ -1868,7 +1871,8 @@ function hatchLoops(r) {
       pts.own = bp.own; pts.mids = bp.mids; // (its points from 0: the same indices)
       // (a boundary that is a circle marked one, as a polyline's is: 590 hatch circles at hand had
       // no centre since r70 -- r71 Q2)
-      if (hasB && bulgeCircle(xs, ys, bs, true)) pts.circle = true;
+      const bc = hasB && bulgeCircle(xs, ys, bs, true);
+      if (bc) { pts.circle = true; pts.ell = [bc.cx, bc.cy, bc.r, 0, 0, bc.r]; }
     } else {
       const ne = count(at(93));
       const arcs = [];
