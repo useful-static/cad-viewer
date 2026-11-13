@@ -2404,8 +2404,10 @@ export function textCorners(t, drawn = null, width = null) {
     top = y0; bottom = y0 - hBlock;
   } else {
     // the last line's baseline (or its bottom / middle / top) on the point, the lines above it
-    const base = t.valign === 'top' ? -t.h : t.valign === 'middle' ? -t.h / 2 : 0;
-    bottom = base - (t.valign === 'bottom' ? 0 : em * 0.25);
+    // (bottom: the descenders' bottom on the point, the baseline a descent, 0.25 em, above it -- as
+    // the view draws it; it put the baseline there, and the view the canvas's em box: r131 new L1)
+    const base = t.valign === 'top' ? -t.h : t.valign === 'middle' ? -t.h / 2 : t.valign === 'bottom' ? em * 0.25 : 0;
+    bottom = base - em * 0.25;
     top = base + t.h + (lines.length - 1) * lh;
   }
   const c = Math.cos(t.rot || 0), s = Math.sin(t.rot || 0);

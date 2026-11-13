@@ -2412,6 +2412,12 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     assert.deepEqual(at('top'), ['alphabetic', 100 * TEXT_CAP]);
     assert.deepEqual(at('middle'), ['alphabetic', 100 * TEXT_CAP / 2]);
     assert.deepEqual(at('baseline'), ['alphabetic', 0]);
+    // (bottom: the descenders' bottom on the point, the baseline a descent -- 0.25 em, 25 px of the
+    // font's 100 -- above it; and textCorners' box from the point up -- must fire: the canvas's
+    // 'bottom' em box, and corners with the baseline on the point: r131 new L1)
+    assert.deepEqual(at('bottom'), ['alphabetic', -25]);
+    const em = 10 / TEXT_CAP, ys = textCorners({ x: 0, y: 0, rot: 0, align: 'left', valign: 'bottom', text: 'H', h: 10 }).map((p) => p[1]);
+    assert.ok(Math.abs(Math.min(...ys)) < 1e-9 && Math.abs(Math.max(...ys) - (0.25 * em + 10)) < 1e-9, `${ys}`);
   });
   // (r114 M3 dxf-view-B139) one pointer pressed and moved pans the 2D view by the move: pressed at
   // (400, 300) and moved to (500, 350), the drawing's corner moves (100, 50) px on the canvas

@@ -879,8 +879,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
         // (top and middle: its capitals' top or middle, on the baseline a capital's height or half of
         // it below, where textCorners places them -- the canvas's em box was about 0.1 em off: r131,
         // r118 L3; t.h / k0 is the capitals' height in the font's px)
-        const cap = t.valign === 'top' ? t.h / k0 : t.valign === 'middle' ? t.h / k0 / 2 : 0;
-        ctx.textBaseline = t.valign === 'bottom' ? 'bottom' : 'alphabetic';
+        // (bottom: the baseline a descent, 0.25 em, above the point, the descenders' bottom on it, as
+        // textCorners has it -- the canvas's 'bottom' em box was neither: r131 new L1)
+        const cap = t.valign === 'top' ? t.h / k0 : t.valign === 'middle' ? t.h / k0 / 2 : t.valign === 'bottom' ? -0.25 * emView(t) / k0 : 0;
+        ctx.textBaseline = 'alphabetic';
         lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1)) * lh + cap));
       }
       ctx.restore();
