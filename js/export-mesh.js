@@ -239,7 +239,11 @@ export async function to3MF(model, ids0, basis, names0 = [], maxText = MAX_TEXT_
   const put = async (s) => { batch.push(s); if (batch.length >= BATCH) { flush(); await turn(); } };
   for (const [j, id] of ids.entries()) {
     const { m, pos, idx } = await bodyOfInTurns(model, id, basis, 1, pace);
-    await put(`<object id="${j + 2}" type="model" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>`);
+    // (pid and pindex on the object too, its first triangle's colour: "If this object contains any
+    // triangles with assigned properties, the object MUST specify pid and pindex", 3MF core spec
+    // ch. 4 -- the triangles alone carried them, r128's unverified point)
+    const pindex = colourOf(m.vtxStart + idx[0]);
+    await put(`<object id="${j + 2}" type="model" pid="1" pindex="${pindex}" name="${xmlEsc(names[j] || m.name || `body ${id}`)}"><mesh><vertices>`);
     for (let v = 0; v < m.vtxCount; v++) {
       batch.push(`<vertex x="${num(pos[3 * v])}" y="${num(pos[3 * v + 1])}" z="${num(pos[3 * v + 2])}"/>`);
       if (batch.length >= BATCH) { flush(); await turn(); }

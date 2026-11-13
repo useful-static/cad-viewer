@@ -74,6 +74,17 @@ await test('3MF: a zip with the three parts; mm; one object per body; a colour p
   assert.match(x, /displaycolor="#0000FF"/);
   assert.match(x, /name="Tri &amp; &lt;co&gt;"/);
   assert.match(x, /<vertex x="10" y="20" z="0"\/>/);
+  // each object names its default property, its first triangle's colour: "If this object contains
+  // any triangles with assigned properties, the object MUST specify pid and pindex" (3MF core
+  // spec ch. 4; the objects carried none -- r129)
+  const objs = [...x.matchAll(/<object [^>]*>.*?<\/object>/g)].map((m) => m[0]);
+  assert.equal(objs.length, 2);
+  for (const o of objs) {
+    const head = o.match(/^<object [^>]*>/)[0];
+    assert.match(head, / pid="1" pindex="\d+"/, head);
+    const first = o.match(/<triangle [^>]* p1="(\d+)"/)[1];
+    assert.equal(head.match(/pindex="(\d+)"/)[1], first, 'the object default is its first triangle\'s colour');
+  }
 });
 await test('a long non-ASCII name: the STL header is at most 80 bytes, cut at a whole character (r64 A1)', async () => {
   for (const name of ['板'.repeat(21), 'é'.repeat(70), '😀'.repeat(30), 'a'.repeat(200)]) {

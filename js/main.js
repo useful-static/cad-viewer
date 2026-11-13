@@ -1251,7 +1251,8 @@ function currentView() {
     // the recipient's remembered style, not the view that was shared
     style: currentStyle().id,
     aspect: stageAspectNow(), // (a link opened on another shape is reframed)
-    section: { ...app.section }, hidden: [...app.hidden], selected: [...app.selected],
+    // (a view's t is the scene's, whatever box a tour's step measured it in: a link copied mid-tour)
+    section: { ...app.section, t: sectionTOf(null), of: null }, hidden: [...app.hidden], selected: [...app.selected],
     // Explode: how far and how, while it is on for this model
     explode: app.explode.on && app.explode.for === app.header ? { t: app.explode.t, mode: app.explode.mode } : null,
     keys: app.bodyKeys,
@@ -1286,7 +1287,7 @@ function applyView(v, link = false) {
   // tab keeps that tab's cut and hidden parts
   // (the Section button's axis -- last -- is only ever a real axis: set to "off" it turned the
   // button into one that does nothing)
-  if (v.section) Object.assign(app.section, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
+  if (v.section) Object.assign(app.section, { of: null }, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   // Explode as the link has it (a whole link without it: off), how far
@@ -1343,8 +1344,9 @@ app.playTourIn = app.playTour;
 app.captureStep = (o) => captureStep(o);
 app.openUrl = (u) => loadUrl(u);
 // Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
-// in their drawn colours, turned the way the model opens: Z up for STL and
-// 3MF (a printer's convention), Y up for GLB (glTF's)
+// in their drawn colours, turned by the orientation shown (app.cam.orient: the Z up toggle as set
+// now, a playing tour's): Z up for STL and 3MF (a printer's convention), Y up for GLB (glTF's).
+// Whole and in place: the section and Explode are the view's, not the parts' (said when on)
 // A saved file's name from the model's: its .gz, then its extension, off ("board.stp.gz" ->
 // "board"). The one rule for exports and Save .cadmesh (which named it "board.stp.cadmesh")
 // (a scene of several models, "a.stp + b.stl": each name's base, joined -- "a.stp + b" before)
@@ -1401,8 +1403,12 @@ async function exportMesh(fmt) {
   }
   const name = `${base}.${fmt}`;
   downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
-  app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name }; // (for tests)
-  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB`, 3000);
+  // (the cut and the explode are the view's: the parts are written whole and in place, which the
+  // saved line says when either is on -- nothing said it, r128 L2)
+  const viewOnly = [sectionPlane() ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
+  const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: the section and Explode change the view, not the file)` : '';
+  app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name, whole }; // (for tests)
+  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB${whole}`, whole ? 6000 : 3000);
 }
 
 // Save picture (P): the view as a PNG at the picture options' size and
@@ -1876,8 +1882,9 @@ function applyStepState(s) {
   const same = overrides.size === app.overrides.size && [...overrides].every(([k, v]) => app.overrides.get(k)?.every((x, j) => x === v[j]));
   if (!same) { app.overrides = overrides; recolour(); }
   setStyle(s.style || base.view.style, false);
-  if (s.section) Object.assign(app.section, s.section, s.section.axis !== 'off' ? { last: s.section.axis } : {});
-  else Object.assign(app.section, base.view.section);
+  // (a step's t is a fraction of the tour's own model, the scene's first: sectionBox)
+  if (s.section) Object.assign(app.section, s.section, { of: 'first' }, s.section.axis !== 'off' ? { last: s.section.axis } : {});
+  else Object.assign(app.section, { of: null }, base.view.section);
   // (a step's own callouts are pinned by showTourStep, where the parts will be)
   // (the visitor's own notes shown as the page's while the tour plays: they
   // do not open Measure's bar over it; leaving gives them back as theirs)
@@ -2271,7 +2278,8 @@ function captureStep({ camera = 'exact' } = {}) {
     s.explode = roundFraction(app.explode.t); // (as a link keeps it: js/view-link.js)
     if (app.explode.mode) s.explodeAlong = app.explode.mode;
   }
-  s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: roundFraction(app.section.t), flip: !!app.section.flip } : { axis: 'off' };
+  // (t of the tour's own model, the scene's first, as a step plays it: sectionBox)
+  s.section = app.section.axis !== 'off' ? { axis: app.section.axis, t: roundFraction(sectionTOf('first')), flip: !!app.section.flip } : { axis: 'off' };
   s.style = currentStyle().id;
   // (the visitor's own notes: a model list's are the page's, shown again whatever the tour says)
   const notes = app.measure ? app.measure.notes().filter((nt) => nt.own) : [];
@@ -6357,16 +6365,42 @@ function drawnBox(ids) {
 
 // The section's range: the model's box, or while exploded the drawn one (so
 // the cut reaches every moved body), kept until the explode changes
+// -- or, for a cut a tour's step put there (app.section.of 'first'), the box of the scene's first
+// model, the one the tour was made on: Add model made the scene's box larger and a step's "t 0.5"
+// cut the V2C at z 5.095, not where it was recorded, z 7.395 (r127 M1; the first is never moved)
 let secBoxKey = null, secBox = null;
 function sectionBox() {
   const x = app.explode;
-  if (!(x.on && x.t && x.for === app.header)) return app.header.bbox;
-  const key = `${x.mode}:${x.t}`;
-  if (secBoxKey !== key || secBox?.h !== app.header) { secBox = { ...drawnBox(null), h: app.header }; secBoxKey = key; }
+  const first = app.section.of === 'first' && app.scene && app.scene.length > 1 && app.scene[0].base.header.bbox ? app.scene[0] : null;
+  const exploded = x.on && x.t && x.for === app.header;
+  if (!exploded) return first ? first.base.header.bbox : app.header.bbox;
+  const key = `${x.mode}:${x.t}:${first ? 'first' : 'all'}`;
+  if (secBoxKey !== key || secBox?.h !== app.header) {
+    const ids = first ? Array.from({ length: first.base.header.meshes.length }, (_, j) => j + 1) : null;
+    secBox = { ...drawnBox(ids), h: app.header };
+    secBoxKey = key;
+  }
   return secBox;
 }
 
+// A cut's position along its axis -> its fraction of the box `of` names (null: the scene's, the
+// view's own), for a tour step to keep (captureStep) or a view to keep (currentView)
+function sectionTOf(of) {
+  const s = app.section;
+  if (s.axis === 'off' || !app.header || (s.of || null) === of) return s.t;
+  const k = { x: 0, y: 1, z: 2 }[s.axis];
+  const a = sectionBox();
+  const pos = a.min[k] + (a.max[k] - a.min[k]) * s.t;
+  const was = s.of;
+  s.of = of;
+  const b = sectionBox();
+  s.of = was;
+  return b.max[k] > b.min[k] ? Math.min(1, Math.max(0, (pos - b.min[k]) / (b.max[k] - b.min[k]))) : 0.5;
+}
+
 app.sectionBox = () => sectionBox(); // (for tests: the section's range)
+app.sectionPlane = () => sectionPlane(); // (for tests: the plane drawn)
+app.currentView = () => currentView(); // (for tests: the view a link or a tour's start keeps)
 
 // name: the tree node's name when a tree row was chosen on its own, so the
 // info panel can show it in full (the row truncates it); any other selection

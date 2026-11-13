@@ -1577,7 +1577,9 @@ await test('the note contract: each page state against each writer of a note or 
     + line('const listNote = ') + line('const posterUp = ')
     + `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n` // (main.js imports it: r72 A8)
     + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const ownHidden = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
-    + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`;
+    + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`
+    // (exportMesh says a cut or an explode leaves the file whole: no cut in these states -- r129)
+    + 'const sectionPlane = () => null;\n';
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
     for (const [col, want] of Object.entries(NOTE_CONTRACT)) {
@@ -1585,7 +1587,7 @@ await test('the note contract: each page state against each writer of a note or 
       if (!cell) continue;
       const app = { status: s.status, statusMsg: s.msg, mesh: s.shows === 'model' ? {} : null, dxf: s.shows === 'drawing' ? { drawing: { units: 'mm' } } : null,
         header: s.shows === 'model' ? { meshes: [{}] } : null, baseMesh: {}, hidden: new Set(), cam: { orient: 'z' }, sourceName: 'm.stl',
-        unmeshedFaces: 0, listNote: '', noFacts: null, backend: 'webgl2', embed: !!(s.poster || s.embed), readingList: !!s.readingList, error: 'too big' };
+        unmeshedFaces: 0, listNote: '', noFacts: null, backend: 'webgl2', explode: { on: false }, embed: !!(s.poster || s.embed), readingList: !!s.readingList, error: 'too big' };
       if (s.gpuLacks) app.gpuLacks = { mesh: app.mesh, msg: s.gpuLacks };
       const shown = [], heard = [], frames = [];
       const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
