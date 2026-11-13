@@ -2580,4 +2580,47 @@ test('a constant ATTDEF (70 bit 2) is drawn in every insert of its block; a plai
   assert.deepEqual(t.notDrawn || {}, {});
 });
 
+test('2D Measure on a hatch slot of two lines and two arcs: the polyline slot\'s snaps -- four corner ends, every side\'s middle, no "quadrant" (r118 M1)', () => {
+  const KIND = ['end', 'middle', 'centre', 'quadrant'];
+  const snaps = (layer, g) => { const d = parseDXF(ents(g)); const sp = snapPoints(d.paths.filter((p) => p.layer === layer), [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${KIND[sp.kind[i]]} ${sp.xy[2 * i].toFixed(4)} ${sp.xy[2 * i + 1].toFixed(4)}`); return s.sort(); };
+  // (a solid-filled slot as exporters write a filled cut-out: an edge boundary, line, arc, line, arc)
+  const hatch = [[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 4],
+    [72, 1], [10, 0], [20, 0], [11, 40], [21, 0],
+    [72, 2], [10, 40], [20, 5], [40, 5], [50, 270], [51, 90], [73, 1],
+    [72, 1], [10, 40], [20, 10], [11, 0], [21, 10],
+    [72, 2], [10, 0], [20, 5], [40, 5], [50, 90], [51, 270], [73, 1],
+    [97, 0]];
+  const poly = [[0, 'LWPOLYLINE'], [8, 'P'], [90, 4], [70, 1], [10, 0], [20, 0], [10, 40], [20, 0], [42, 1], [10, 40], [20, 10], [10, 0], [20, 10], [42, 1]];
+  const want = ['end 0.0000 0.0000', 'end 40.0000 0.0000', 'end 40.0000 10.0000', 'end 0.0000 10.0000', 'middle 20.0000 0.0000', 'middle 20.0000 10.0000', 'middle 45.0000 5.0000', 'middle -5.0000 5.0000'].sort();
+  assert.deepEqual(snaps('P', poly), want);
+  // (must fire: one arc edge cleared the loop's own points, and its sample extremes were offered as
+  // four "quadrant"s, two of them corners, two corners with no snap)
+  assert.deepEqual(snaps('H', hatch), want);
+});
+
+test('2D Measure on a whole ellipse: its quadrants are its axis ends -- an isometric hole measures its axes, 20 and 11.547 (r118 M2)', () => {
+  const quads = (g) => { const d = parseDXF(ents(g)); const sp = snapPoints(d.paths, [0, 0]); const q = []; for (let i = 0; i < sp.n; i++) if (sp.kind[i] === 3) q.push([sp.xy[2 * i], sp.xy[2 * i + 1]]); return q; };
+  const span = (q) => { const d = []; for (let i = 0; i < q.length; i++) for (let j = i + 1; j < q.length; j++) d.push(Math.hypot(q[i][0] - q[j][0], q[i][1] - q[j][1])); return d.sort((a, b) => b - a)[0].toFixed(4); };
+  // (an isometric hole: major 10 at 30 degrees, ratio 0.57735; must fire: its samples' x and y
+  // extremes read 19.2043 and 16.3299)
+  const iso = quads([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 8.660254], [21, 5], [40, 0.57735], [41, 0], [42, 2 * Math.PI]]);
+  assert.equal(iso.length, 4);
+  assert.equal(span(iso), '20.0000');
+  const across = [Math.hypot(iso[0][0] - iso[2][0], iso[0][1] - iso[2][1]), Math.hypot(iso[1][0] - iso[3][0], iso[1][1] - iso[3][1])].map((v) => v.toFixed(3)).sort();
+  assert.deepEqual(across, ['11.547', '20.000']);
+  // (a whole one written from parameter 0.1: still its axis ends, not 0.13 off them)
+  const off = quads([[0, 'ELLIPSE'], [8, '0'], [10, 0], [20, 0], [11, 10], [21, 0], [40, 0.5], [41, 0.1], [42, 0.1 + 2 * Math.PI]]);
+  const f4 = (v) => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(4);
+  assert.deepEqual(off.map(([x, y]) => `${f4(x)} ${f4(y)}`).sort(), ['-10.0000 0.0000', '0.0000 -5.0000', '0.0000 5.0000', '10.0000 0.0000'].sort());
+  // (a circle through a stretching insert -- 2 x 1 -- the same: its quadrants (+-20, 0) and (0, +-10))
+  const blk = dxf([[0, 'SECTION'], [2, 'BLOCKS'], [0, 'BLOCK'], [2, 'C'], [10, 0], [20, 0], [0, 'CIRCLE'], [8, '0'], [10, 0], [20, 0], [40, 10], [0, 'ENDBLK'], [0, 'ENDSEC'],
+    [0, 'SECTION'], [2, 'ENTITIES'], [0, 'INSERT'], [8, '0'], [2, 'C'], [10, 0], [20, 0], [41, 2], [42, 1], [50, 30], [0, 'ENDSEC'], [0, 'EOF']]);
+  const d = parseDXF(blk), sp = snapPoints(d.paths, [0, 0]);
+  const q = []; for (let i = 0; i < sp.n; i++) if (sp.kind[i] === 3) q.push([sp.xy[2 * i], sp.xy[2 * i + 1]]);
+  assert.equal(q.length, 4);
+  assert.equal(span(q), '40.0000');
+  const r = q.map(([x, y]) => Math.hypot(x, y).toFixed(4)).sort();
+  assert.deepEqual(r, ['10.0000', '10.0000', '20.0000', '20.0000']);
+});
+
 done();

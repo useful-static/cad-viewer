@@ -938,7 +938,10 @@ function boxMeetsOutline(box, c, poly) {
 // ellipse's centre snap seen through a viewport was offered where nothing is: r115 R5-M1)
 function seenThrough(p, pts, s, clip, M) {
   return { ...p, dash: p.dash ? p.dash.map((x) => x * s) : null, ...(p.width ? { width: p.width * s } : {}), pts, clipPoly: clip.poly, clip: clip.box,
-    ...(p.centre ? { centre: ap(M, p.centre[0], p.centre[1]) } : {}) };
+    ...(p.centre ? { centre: ap(M, p.centre[0], p.centre[1]) } : {}),
+    // (its quadrants through the viewport with it: a viewport turns and scales alike, so the axis
+    // ends' images are the seen ellipse's -- r118 M2)
+    ...(p.quads ? { quads: p.quads.map((v, i) => ap(M, p.quads[i & ~1], p.quads[i | 1])[i & 1]) } : {}) };
 }
 // a model path's points through a viewport (M, model to paper)
 function seenPts(p, M) {
@@ -985,6 +988,19 @@ const IDENT = [1, 0, 0, 1, 0, 0, 0, 0];
 const ap = (m, x, y, z = 0) => [m[0] * x + m[2] * y + (m[6] || 0) * z + m[4], m[1] * x + m[3] * y + (m[7] || 0) * z + m[5]];
 // a direction (3D) through the projection's linear part
 const lin = (m, v) => [m[0] * v[0] + m[2] * v[1] + (m[6] || 0) * v[2], m[1] * v[0] + m[3] * v[1] + (m[7] || 0) * v[2]];
+// An ellipse's four axis ends as drawn -- c + u cos t + v sin t, u and v its conjugate half-axes in
+// the drawing (any two: the images of a CIRCLE's or an ELLIPSE's axes through any transform): the t
+// where the distance from c is greatest or least, tan 2t = 2 u.v / (|u|^2 - |v|^2), and the three a
+// quarter turn on. -> [x0, y0, ..., x3, y3]. 2D Measure's quadrants of an ellipse: its samples' x and
+// y extremes were offered, 19.2043 and 16.3299 across an isometric hole of axes 20 and 11.547 (r118 M2)
+// (null for one seen edge-on, a line: its "quadrants" were its centre twice)
+const axisEnds = ([cx, cy], ux, uy, vx, vy) => {
+  const t = Math.atan2(2 * (ux * vx + uy * vy), ux * ux + uy * uy - vx * vx - vy * vy) / 2;
+  const out = [];
+  for (let k = 0; k < 4; k++) { const a = t + (k * Math.PI) / 2, c = Math.cos(a), s = Math.sin(a); out.push(cx + ux * c + vx * s, cy + uy * c + vy * s); }
+  const half = (k) => Math.hypot(out[2 * k] - cx, out[2 * k + 1] - cy);
+  return Math.min(half(0), half(1)) > 1e-9 * Math.max(half(0), half(1)) ? out : null;
+};
 // A projection m after a 3D affine A -- its axes' images X, Y, Z (3D) and its origin's T: m∘A
 const compose = (m, { X, Y, Z, T }) => {
   const [ax, ay] = lin(m, X), [bx, by] = lin(m, Y), [cx, cy] = lin(m, Z), [tx, ty] = ap(m, T[0], T[1], T[2]);
@@ -1250,7 +1266,9 @@ function emit(recs, M, byBlock, depth, ctx) {
         const c = arcPts(num(r, 10), num(r, 20), num(r, 40), 0, 2 * Math.PI);
         c.own = []; c.mids = []; // (no ends, no middle: its centre and quadrants are its snaps)
         // (through a stretching insert no circle, but its centre still a snap -- r114 R4-M1)
-        path(c, true, false, 0, conformal ? { circle: true } : { centre: ap(O, num(r, 10), num(r, 20)) });
+        // (and its quadrants the drawn ellipse's axis ends, its radius' images through the insert: r118 M2)
+        const R = num(r, 40), oc = ap(O, num(r, 10), num(r, 20));
+        path(c, true, false, 0, conformal ? { circle: true } : { centre: oc, quads: axisEnds(oc, ...lin(O, [R, 0, 0]), ...lin(O, [0, R, 0])) });
         break;
       }
       case 'ARC': {
@@ -1295,7 +1313,8 @@ function emit(recs, M, byBlock, depth, ctx) {
         ctx.add({ layer, colour, ...sty, dash: dashFor(lenOf(own3, 3, false), pts, false, M, flatOf(own3)), pts: Float64Array.from(pts), closed: whole, fill: false, ...(round ? { circle: true } : {}),
           own: Uint32Array.from(whole ? [] : [0, n]), mids: Uint32Array.from(whole ? [] : [n / 2]),
           // (a whole one's centre a snap, as a circle's -- r114 R4-M1)
-          ...(whole && !round ? { centre: ap(M, cx, cy, cz) } : {}) });
+          // (and its quadrants its axis ends: r118 M2)
+          ...(whole && !round ? { centre: ap(M, cx, cy, cz), quads: axisEnds(ap(M, cx, cy, cz), ux, uy, vx, vy) } : {}) });
         break;
       }
       case 'LWPOLYLINE': {
@@ -1834,25 +1853,45 @@ function hatchLoops(r) {
       const ne = count(at(93));
       const arcs = [];
       let others = 0, curved = false;
+      // (its own points, for 2D Measure's snaps, as a polyline's: each edge's ends, an arc's middle
+      // on the arc -- an edge's samples are none. A corner two edges share is one point, so it is
+      // not a span of no length with a "middle" on the corner. One curved edge cleared every snap
+      // of the loop, a slot of two lines and two arcs left with no corner: r118 M1)
+      const own = [], mids = [];
+      // (the same corner to its digits' rounding: an arc's first sample is its cos and sin, 6e-16 off
+      // the line's end it starts at)
+      const near = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+      const add = (x, y) => { const n = pts.length; if (n < 2 || !near(pts[n - 2], x) || !near(pts[n - 1], y)) pts.push(x, y); };
+      const mark = () => { const i = pts.length / 2 - 1; if (i >= 0 && own[own.length - 1] !== i) own.push(i); };
+      // a run of points along one edge: its ends marked, and its middle sample when it is the curve's
+      const run = (q, middle) => {
+        if (q.length < 2) return;
+        add(q[0], q[1]); const i0 = pts.length / 2 - 1; mark();
+        for (let k = 2; k < q.length; k += 2) add(q[k], q[k + 1]);
+        mark();
+        if (middle) { const i1 = pts.length / 2 - 1; if (i1 - i0 >= 2 && !((i1 - i0) & 1)) mids.push((i0 + i1) / 2); }
+      };
       for (let e = 0; e < ne; e++) {
         const et = at(72);
         if (et !== 2) others++;
         if (et !== 1) curved = true;
-        if (et === 1) { pts.push(at(10), at(20), at(11), at(21)); } else if (et === 2) {
+        if (et === 1) { run([at(10), at(20), at(11), at(21)], false); } else if (et === 2) {
           const cx = at(10), cy = at(20), rr = at(40), a0 = (at(50) * Math.PI) / 180, a1 = (at(51) * Math.PI) / 180;
           const ccwArc = at(73);
           // (each arc kept, its sweep within one turn, to mark the boundary a circle: hatchCircle)
           arcs.push([cx, cy, rr, ((a1 - a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI, !!ccwArc]);
           if (ccwArc) {
             // counter-clockwise from a0 to a1
-            append(pts, arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1));
+            run(arcPts(cx, cy, rr, a0, a1 <= a0 ? a1 + 2 * Math.PI : a1), true);
           } else {
             // clockwise: the angles are stored mirrored, so the edge runs from -a0 clockwise to
             // -a1 (0° to 90° stored is the quarter from 360° down to 270°): the same arc taken
             // counter-clockwise from -a1 to -a0, its points reversed so the loop keeps its order
             const s = -a1, e = -a0;
             const ccwPts = arcPts(cx, cy, rr, s, e <= s ? e + 2 * Math.PI : e);
-            for (let k = ccwPts.length - 2; k >= 0; k -= 2) pts.push(ccwPts[k], ccwPts[k + 1]);
+            const rev = [];
+            for (let k = ccwPts.length - 2; k >= 0; k -= 2) rev.push(ccwPts[k], ccwPts[k + 1]);
+            run(rev, true);
           }
         } else if (et === 3) {
           const cx = at(10), cy = at(20), mx = at(11), my = at(21), ratio = at(40);
@@ -1865,23 +1904,26 @@ function hatchLoops(r) {
           const t0 = ccw ? a0 : -a1;
           let t1 = ccw ? a1 : -a0;
           if (t1 <= t0) t1 += 2 * Math.PI;
-          const run = [];
-          for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; run.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
-          if (ccw) append(pts, run);
-          else for (let k = run.length - 2; k >= 0; k -= 2) pts.push(run[k], run[k + 1]);
+          const ell = [];
+          for (let k = 0; k <= 32; k++) { const t = t0 + ((t1 - t0) * k) / 32; ell.push(cx + mx * Math.cos(t) - my * ratio * Math.sin(t), cy + my * Math.cos(t) + mx * ratio * Math.sin(t)); }
+          if (ccw) run(ell, true);
+          else { const rev = []; for (let k = ell.length - 2; k >= 0; k -= 2) rev.push(ell[k], ell[k + 1]); run(rev, true); }
         } else if (et === 4) {
-          // a spline edge: its control points
+          // a spline edge: its control points (its ends on the curve, as a clamped spline's are)
           at(94); const nk = count(at(95)), nc = count(at(96));
           for (let k = 0; k < nk; k++) at(40);
-          for (let k = 0; k < nc; k++) pts.push(at(10), at(20));
+          const ctrl = [];
+          for (let k = 0; k < nc; k++) ctrl.push(at(10), at(20));
+          run(ctrl, false);
         }
       }
       // (a boundary of arc edges alone, one centre, one radius, one way round, a full turn in all: a
       // circle, marked as a polyline's is -- one edge of a full turn, or two halves or four quarters,
       // which some exporters write: r71 Q2, r72 A5)
       if (!others && hatchCircle(arcs)) pts.circle = true;
-      // (a boundary with curved edges: its points are their samples, none a snap -- r113 R2-F3)
-      if (curved) { pts.own = []; pts.mids = []; }
+      // (a boundary with curved edges: its samples are no snap, its edges' own points are -- r113
+      // R2-F3, r118 M1; a circle's are its quadrants and centre, the view's, so none of its own)
+      if (curved) { pts.own = pts.circle ? [] : own; pts.mids = pts.circle ? [] : mids; }
     }
     if (pts.length >= 6) loops.push(pts);
   }

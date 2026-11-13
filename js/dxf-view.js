@@ -525,6 +525,10 @@ export function snapPoints(paths, o) {
       const round = p.closed && !own.length && p.circle && m >= 3 ? circleThrough(q, m) : null;
       if (round && round.r > 0) {
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) at(round.x + dx * round.r, round.y + dy * round.r, 3);
+      } else if (p.closed && !own.length && p.quads && p.quads.length === 8) {
+        // (an ellipse's: its axis ends, as its reader found them -- its samples' x and y extremes
+        // were offered, 19.2043 across an isometric hole of major axis 20: r118 M2)
+        for (let k = 0; k < 8; k += 2) at(p.quads[k], p.quads[k + 1], 3);
       } else if (p.closed && !own.length && m >= 4) {
         let a = 0, b = 0, c = 0, d = 0;
         for (let i = 1; i < m; i++) {
