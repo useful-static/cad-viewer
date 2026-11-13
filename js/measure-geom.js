@@ -378,6 +378,28 @@ export function polyMid(line) {
   return line[0];
 }
 
+// A b-rep edge that is an arc (every point on the circle through three of its points, to 5e-4 of r)
+// -> { length, mid } on the arc, else null -- its chords read short (r124 M1)
+export function arcOf(line) {
+  const n = line.length;
+  if (n < 3) return null;
+  // (a closed one -- its last point its first: through the points a third and two thirds along)
+  const shut = len(sub(line[n - 1], line[0])) <= 1e-9 * len(sub(line[n >> 1], line[0]));
+  const a = line[0], b = line[shut ? (n / 3) | 0 : n >> 1], c = line[shut ? ((2 * n) / 3) | 0 : n - 1];
+  const ab = sub(b, a), ac = sub(c, a), w = cross(ab, ac), w2 = dot(w, w);
+  if (!(w2 > 0)) return null;
+  const o = [0, 1, 2].map((k) => a[k] + (cross(w, ab)[k] * dot(ac, ac) + cross(ac, w)[k] * dot(ab, ab)) / (2 * w2));
+  const r = len(sub(a, o)), nz = unit(w);
+  let sweep = 0;
+  for (let i = 0; i < n; i++) {
+    const d = sub(line[i], o);
+    if (Math.abs(len(d) - r) > 5e-4 * r || Math.abs(dot(d, nz)) > 5e-4 * r) return null;
+    if (i) { const p = sub(line[i - 1], o); sweep += Math.atan2(dot(cross(p, d), nz), dot(p, d)); }
+  }
+  const u = unit(sub(a, o)), v = cross(nz, u), t = sweep / 2;
+  return { length: Math.abs(sweep) * r, mid: [0, 1, 2].map((k) => o[k] + r * (Math.cos(t) * u[k] + Math.sin(t) * v[k])) };
+}
+
 export const polyLength = (line) => {
   let total = 0;
   for (let i = 1; i < line.length; i++) total += len(sub(line[i], line[i - 1]));

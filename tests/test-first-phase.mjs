@@ -56,8 +56,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // formats.js's OFF sniff -- no new import; 957.1 KB in 42 at r117, code: main.js's four review fixes
   // -- the tour's pictures, the add's own offset, a unit-less mesh's reading, every model's missing
   // faces -- no new import; 958.0 KB in 42 at r122, code: measure-geom.js's hole order by rank
-  // (orderHoles) -- no new import)
-  assert.ok(bytes < 959e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // (orderHoles) -- no new import; 959.9 KB in 42 at r124, code: measure-geom.js's arcs measured on
+  // the arc (arcOf) -- no new import)
+  assert.ok(bytes < 961e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

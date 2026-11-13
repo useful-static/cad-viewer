@@ -15,7 +15,7 @@
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
 // escape() first.
 
-import { UNTOLD_SHARE, angleAt, bodyGeometry, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
+import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometry, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
 // A hole row's diameter as the table, its summary and the picked row's words write it -- with its
 // countersink, one text (the summary grouped a countersunk Ø3 with plain ones, and the announcement
 // left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer.
@@ -101,7 +101,7 @@ export function createMeasure(deps) {
     if (performance.now() > deadline) return null;
     const g = bodyGeometry(st.model, mi);
     // the b-rep edges' lengths and midpoints, once
-    g.mids = g.edges.map((e, i) => ({ p: polyMid(e), len: polyLength(e), closed: g.edgeClosed[i] }));
+    g.mids = g.edges.map((e, i) => { const a = arcOf(e); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
     st.geom.set(mi, g);
     return g;
   }

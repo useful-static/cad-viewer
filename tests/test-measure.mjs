@@ -5,7 +5,7 @@
 //   node tests/test-measure.mjs   (exit 0 = all pass)
 
 import assert from 'node:assert/strict';
-import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, orderHoles, polyMid, untoldAt } from '../js/measure-geom.js';
+import { angleAt, bodyGeometry, circleMinPoints, circleOf, distance, faceGap, holesOf, orderHoles, polyMid, arcOf, polyLength, untoldAt } from '../js/measure-geom.js';
 import { BVH_MIN, faceOfTri, makeCaster, seesInside } from '../js/raycast.js';
 import { KIND_NAME, MARK, SNAP_KINDS, holeDia, nearestOnRay, untoldText } from '../js/measure-ui.js';
 import { readFileSync } from 'node:fs';
@@ -899,6 +899,29 @@ test('the hole table orders holes of one Ø by position, whatever the fit\'s noi
   const wall = (zs) => orderHoles(zs.map((z) => ({ diameter: 3, centre: [-146.763, -122.954, z] }))).map((h) => h.centre[2]);
   assert.deepEqual(wall([1082.171, 982.171, 1032.171]), [982.171, 1032.171, 1082.171]);
   assert.deepEqual(wall([1032.171, 1082.171, 982.171]), [982.171, 1032.171, 1082.171]);
+});
+
+test('an edge that is an arc is measured on the arc: a Ø 3.50 rim\'s half reads 5.50, its midpoint on the arc -- not its chords\' 5.48, 0.013 inside (r124 M1)', () => {
+  // (a hole's rim as a b-rep edge: 180 degrees in 13 chords, off the origin and tilted)
+  const arc = (r, a0, a1, n, o = [12, -7, 3], u = [1, 0, 0], v = [0, 0.6, 0.8]) => Array.from({ length: n + 1 }, (_, i) => {
+    const t = a0 + ((a1 - a0) * i) / n;
+    return [0, 1, 2].map((k) => o[k] + r * (Math.cos(t) * u[k] + Math.sin(t) * v[k]));
+  });
+  const half = arc(1.75, 0, Math.PI, 13);
+  const a = arcOf(half);
+  assert.ok(a, 'a half rim is an arc');
+  assert.ok(Math.abs(a.length - 1.75 * Math.PI) < 1e-9, `${a.length}`);
+  // (must fire: the chords read 5.48)
+  assert.equal(a.length.toFixed(2), '5.50');
+  assert.equal(polyLength(half).toFixed(2), '5.48');
+  const mid = [12 + 0, -7 + 1.75 * 0.6, 3 + 1.75 * 0.8];
+  assert.ok(Math.hypot(...a.mid.map((x, k) => x - mid[k])) < 1e-9, `${a.mid} for ${mid}`);
+  assert.ok(Math.hypot(...polyMid(half).map((x, k) => x - mid[k])) > 0.01, 'the chords\' midpoint is inside the arc');
+  // (a whole rim, its last point its first: a full turn)
+  assert.ok(Math.abs(arcOf(arc(2, 0, 2 * Math.PI, 24)).length - 4 * Math.PI) < 1e-9);
+  // (a straight edge, and a curve that is no circle: no arc, their chords as before)
+  assert.equal(arcOf([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]), null);
+  assert.equal(arcOf(Array.from({ length: 9 }, (_, i) => [i, (i * i) / 4, 0])), null);
 });
 
 await test('one hole size is one summary line, though its Ø falls either side of a rounding half-step -- 0.0215 in read "0.021 in × 2" + "0.022 in × 3" (r123 M2)', async () => {
