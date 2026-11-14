@@ -285,13 +285,19 @@ export function createMeasure(deps) {
     // (by runs: sorted by distance, each run the points within a pixel of its first, a run's points
     // nearest the eye first -- one comparator "within a pixel, else nearer" was not transitive, so
     // the order could depend on the input's -- r122 L2)
-    snapOrder(pts, v.dir);
-    snapOrder(edgePts, v.dir);
     // a corner, midpoint or centre before a point on an edge; the nearest
-    // visible one of each
+    // visible one of each: the 24 nearest on screen tried, and past them more while the snap's 40 ms
+    // last. (On V2C, a part's hidden pins under the board, nearer on screen, were 24 and more, and a
+    // corner the view draws 3.4 px away read "surface": the order of the 24 alone had found it, by an
+    // unstable sort's luck; 96 was not enough either, ten hidden pins giving 200 -- r134 M3.)
+    // snapOrder orders each run of them.
+    const nearest = (list) => snapOrder(list, v.dir);
     const vis = (c) => visible(v, c.p, bodiesNear(v, ...v.toScreen(c.p), 0), skip);
-    for (const list of [pts, edgePts]) {
-      for (const c of list.slice(0, 24)) if (vis(c)) return { ...c, pending };
+    for (const list of [nearest(pts), nearest(edgePts)]) {
+      for (let i = 0; i < list.length; i++) {
+        if (i >= 24 && performance.now() > deadline) break;
+        if (vis(list[i])) return { ...list[i], pending };
+      }
     }
     // the surface under the pointer
     const ray = v.rayAt(x, y);

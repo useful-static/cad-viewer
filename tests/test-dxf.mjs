@@ -2715,12 +2715,34 @@ test('a DONUT -- two vertices, bulges 1, with a width and without -- has its CIR
 const KIND131 = ['end', 'middle', 'centre', 'quadrant', 'extreme'];
 const f4_131 = (v) => (Math.abs(v) < 5e-5 ? 0 : v).toFixed(4);
 const snaps131 = (paths) => { const sp = snapPoints(paths, [0, 0]); const s = []; for (let i = 0; i < sp.n; i++) s.push(`${KIND131[sp.kind[i]]} ${f4_131(sp.xy[2 * i])} ${f4_131(sp.xy[2 * i + 1])}`); return s.sort(); };
+test('nearestPoint on 50,000 snaps on one spot builds a handful of them, not each (r134 2D M1, 062-B.dxf)', () => {
+  // (a LINE's end, then 50,000 middles on the same spot: must fire -- every one built by at(), a query
+  // 141 ms on 062-B.dxf's 48,091)
+  const n = 50001, xy = new Float64Array(2 * n).fill(5), kind = new Uint8Array(n).fill(1);
+  kind[0] = 0;
+  let built = 0;
+  const at = (i) => { built++; return [xy[2 * i], xy[2 * i + 1], ['end', 'middle', 'centre', 'quadrant', 'extreme'][kind[i]], 'L']; };
+  const idx = pointTree({ n, xy, kind, at });
+  const got = nearestPoint(idx, 5.001, 5, 1);
+  assert.equal(got[2], 'end');
+  assert.ok(built < 20, `${built} built`);
+});
+test('a hatch spline edge whose knots decrease keeps its hatch, drawn by the control polygon (r134 2D L2)', () => {
+  const knots = [1, 1, 1, 0, 0, 0], C3 = [[0, 0], [10, 20], [20, 0]];
+  const d = parseDXF(ents([[0, 'HATCH'], [8, 'H'], [2, 'SOLID'], [70, 1], [91, 1], [92, 1], [93, 2], [72, 4], [94, 2], [73, 0], [74, 0], [95, knots.length], [96, C3.length], ...knots.map((k) => [40, k]),
+    ...C3.flatMap(([x, y]) => [[10, x], [20, y]]), [72, 1], [10, 20], [20, 0], [11, 0], [21, 0], [97, 0]]));
+  // (must fire: its edge one point repeated, the hatch gone with nothing said)
+  const h = d.paths.filter((p) => p.layer === 'H');
+  assert.equal(h.length, 1);
+  assert.deepEqual([...h[0].pts].slice(0, 6), [0, 0, 10, 20, 20, 0]);
+});
 test('an MTEXT \\A written without its ";" is a code, not text: "\\A400" reads 400 (r131: r125 L4, old-14/024-C-2)', () => {
   // (must fire: "\A400" drawn as written)
   assert.equal(mtextPlain('\\A400'), '400');
   assert.equal(mtextPlain('\\A1Hello'), 'Hello');
   assert.equal(mtextPlain('\\A1;75'), '75');
   assert.equal(mtextPlain('a\\A'), 'a');
+  assert.equal(mtextPlain('\\A;Hello'), 'Hello', 'an empty \\A; (must fire: ";Hello" -- r134 2D L1)');
   assert.equal(parseDXF(ents([[0, 'MTEXT'], [8, '0'], [10, 0], [20, 0], [40, 30], [71, 5], [1, '\\A400']])).texts[0].text, '400');
 });
 test('a closed LWPOLYLINE whose last vertex repeats its first has the snaps of the one that does not: no second "end", no "middle" of no length (r131: r119 L1)', () => {

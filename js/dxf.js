@@ -1925,7 +1925,10 @@ function deBoorPts(deg, knots, cx, cy, cz, w) {
   // a degree that is not a whole number from 1 to n - 1 (de Boor would read slots that do not
   // exist), or over MAX_SPLINE_DEGREE (evaluation costs points x degree^2: a 300-point spline of
   // degree 299 took 12 s), or knots that do not fit it: the control polygon
-  if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1) return cx.flatMap((x, k) => [x, cy[k], cz[k]]);
+  // (and knots that ever decrease, or span nothing: one point repeated, which took a hatch whose edge
+  // it was away unsaid -- r134 2D L2)
+  const ordered = knots.every((x, k) => Number.isFinite(x) && (k === 0 || x >= knots[k - 1])) && knots[n] > knots[deg];
+  if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1 || !ordered) return cx.flatMap((x, k) => [x, cy[k], cz[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);
   const t0 = knots[deg], t1 = knots[n];
   const steps = Math.max(16, n * 8);
@@ -2160,7 +2163,8 @@ export function mtextPlain(s, codepage = 'windows-1252') {
     // (\A's value is one digit, 0 1 2: written without its ";" -- "\A400", old-14/024-C-2 -- the code
     // and a digit not followed by another are dropped, the text after kept; it was drawn as written,
     // and a ";" later on would have taken the text up to it -- r131: r125 L4)
-    if (k === 'A' && s[i + 3] !== ';') {
+    // (an empty "\A;" is the code with its ";", by the branch below: it printed the ";" -- r134 2D L1)
+    if (k === 'A' && s[i + 2] !== ';' && s[i + 3] !== ';') {
       i += '012'.includes(s[i + 2]) && !/[0-9.]/.test(s[i + 3] || '') ? 2 : 1;
       continue;
     }

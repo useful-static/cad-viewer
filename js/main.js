@@ -712,14 +712,9 @@ function keepingCut(fn) {
   let at = null;
   if (keep) { const { min, max } = sectionBox(); at = min[k] + (max[k] - min[k]) * s.t; }
   const out = fn();
-  // (not clamped to the box: a cut among the exploded parts, past the gathered model, stays there,
-  // cutting nothing, where clamped it cut the model's end off)
-  if (at !== null && app.section.axis === s.axis) {
-    const { min, max } = sectionBox();
-    s.t = max[k] > min[k] ? (at - min[k]) / (max[k] - min[k]) : 0.5;
-    updateButtons();
-    viewChanged();
-  }
+  // (clamped to the box, as the slider is: a cut kept past the gathered model, below it, cut the whole
+  // model away and its link -- t out of 0..1 -- opened uncut: r134 M1)
+  if (at !== null && app.section.axis === s.axis) setSectionAt(at);
   return out;
 }
 
@@ -4173,6 +4168,7 @@ function clearModel() {
   // lands; a view link sets the section again after this). Turntable and the
   // Display looks are preferences and stay.
   app.section.axis = 'off';
+  app.section.of = null; // (a tour step's box with it: r134 M2)
   explodeOffForModel();
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   if (app.paintFaces) setPaint(false);
@@ -4298,7 +4294,10 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   explodeOffForModel(); // a new model opens together
   // nor with the last one's cut or Walk viewpoint (a view link sets the
   // section again below; updateButtons syncs the section's controls)
+  // (and the cut's box the scene's: a tour ended unrestored here left a step's 'first', so after
+  // Add model the visitor's cut could not reach past the first model -- r134 M2)
   app.section.axis = 'off';
+  app.section.of = null;
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)

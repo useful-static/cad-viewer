@@ -69,8 +69,8 @@ export function finitePointIds(xy, n) {
   return ids.slice(0, m);
 }
 export function pointTree(pts) {
-  const { n, xy, at } = pts;
-  return { xy, at, tree: boxTree(xy, finitePointIds(xy, n), 2, true) };
+  const { n, xy, at, kind } = pts;
+  return { xy, at, kind, tree: boxTree(xy, finitePointIds(xy, n), 2, true) };
 }
 // (a drawing of this many points or more has its tree built in js/snap-worker.js: r67)
 export const SNAP_WORKER_MIN = 200000;
@@ -82,12 +82,18 @@ export function nearestPoint(index, x, y, r, accept = () => true) {
   const { xy, at } = index;
   const i = nearestItem([index.tree], [x, y], r, (k) => (xy[2 * k] - x) ** 2 + (xy[2 * k + 1] - y) ** 2, (k) => accept(at(k)));
   if (i < 0) return null;
-  const bx = xy[2 * i], by = xy[2 * i + 1], tol = SAME_SNAP * r;
+  // (an end -- the first kind -- needs no look around; else by the kind codes, at(k) and accept only
+  // for a better kind: 48,091 snaps on one spot of 062-B.dxf took each query to 141 ms built one by
+  // one -- r134 2D M1)
   let best = i, rank = SNAP_KINDS.indexOf(at(i)[2]);
+  if (rank === 0) return at(i);
+  const kind = index.kind;
+  const bx = xy[2 * i], by = xy[2 * i + 1], tol = SAME_SNAP * r;
   itemsIn(index.tree, [bx - tol, by - tol], [bx + tol, by + tol], (k) => {
-    if (k === best || (xy[2 * k] - bx) ** 2 + (xy[2 * k + 1] - by) ** 2 > tol * tol) return;
-    const kr = SNAP_KINDS.indexOf(at(k)[2]);
-    if (kr < rank && accept(at(k))) { best = k; rank = kr; }
+    if (rank === 0 || k === best) return;
+    const kr = kind ? kind[k] : SNAP_KINDS.indexOf(at(k)[2]);
+    if (kr >= rank || (xy[2 * k] - bx) ** 2 + (xy[2 * k + 1] - by) ** 2 > tol * tol) return;
+    if (accept(at(k))) { best = k; rank = kr; }
   });
   return at(best);
 }
@@ -944,7 +950,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     building = true;
     worker = w;
     const done = (t) => { if (gone) return; building = false; worker = null; tree = t; w.terminate(); if (st.measure) draw(); };
-    w.onmessage = (e) => done({ xy: pts.xy, at: pts.at, tree: e.data });
+    w.onmessage = (e) => done({ xy: pts.xy, at: pts.at, kind: pts.kind, tree: e.data });
     w.onerror = () => done(pointTree(pts));
     const ids = finitePointIds(pts.xy, pts.n);
     w.postMessage({ xy: pts.xy, ids }, [ids.buffer]);

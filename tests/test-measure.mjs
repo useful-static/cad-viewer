@@ -1034,6 +1034,25 @@ await test('one hole size is one summary line, though its Ø falls either side o
   }
 });
 
+await test('a visible corner is snapped past more than 24 hidden corners nearer the pointer (r134 M3)', async () => {
+  // (ten small boxes behind the board's top face, on the sight line through a point just inside its
+  // corner: 80 corners within a few px of the pointer, every one hidden by the board -- must fire: the
+  // 24 nearest were tried, all hidden, and the board's own corner 4-6 px away read "surface")
+  const { perspective, lookAt, multiply } = await import('../js/mat4.js');
+  const W = 1280, H = 800, fov = Math.PI / 4, centre = [50, 35, 0.8], dist = 160, yaw = 0.7, pitch = 0.45;
+  const eye = [centre[0] + dist * Math.cos(pitch) * Math.sin(yaw), centre[1] - dist * Math.cos(pitch) * Math.cos(yaw), centre[2] + dist * Math.sin(pitch)];
+  const q = [99.2, 0.8, 1.6], d = q.map((x, k) => x - eye[k]), L = Math.hypot(...d), u = d.map((x) => x / L);
+  const small = Array.from({ length: 10 }, (_, i) => { const c = q.map((x, k) => x + u[k] * (4 + 1.5 * i)); return { name: `pin${i}`, faces: box(c.map((x) => x - 0.05), c.map((x) => x + 0.05)) }; });
+  const { meas, toScreen } = await measureAt([BOARD(), ...small]);
+  meas.setOn(true);
+  let s;
+  for (let i = 0; i < 50 && (!s || s.pending); i++) s = meas.snapAt(...toScreen(q));
+  const corner = [100, 0, 1.6];
+  const px = (a, b) => Math.hypot(...toScreen(a).map((x, k) => x - toScreen(b)[k]));
+  assert.equal(s && s.kind, 'vertex', `${s && s.kind} at ${s && s.p}; the corner ${px(corner, q).toFixed(2)} px from the pointer`);
+  assert.ok(Math.hypot(...s.p.map((x, k) => x - corner[k])) < 1e-4, `${s.p}`);
+});
+
 await test('snap candidates are ordered the same whatever order they arrive in (r122 L2)', async () => {
   const { snapOrder } = await import('../js/measure-ui.js');
   // (A, B, C 0.8 px apart, nearer the eye in turn C, B, A: "within a pixel, the nearer; else the
