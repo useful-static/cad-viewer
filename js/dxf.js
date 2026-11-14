@@ -1927,7 +1927,9 @@ function deBoorPts(deg, knots, cx, cy, cz, w) {
   // degree 299 took 12 s), or knots that do not fit it: the control polygon
   // (and knots that ever decrease, or span nothing: one point repeated, which took a hatch whose edge
   // it was away unsaid -- r134 2D L2)
-  const ordered = knots.every((x, k) => Number.isFinite(x) && (k === 0 || x >= knots[k - 1])) && knots[n] > knots[deg];
+  // (a dip of a rounding step -- 0.30000000000000004 then 0.3 -- is no decrease: r135 L1)
+  const span = Math.abs(knots[knots.length - 1] - knots[0]) || 1;
+  const ordered = knots.every((x, k) => Number.isFinite(x) && (k === 0 || x >= knots[k - 1] - 1e-12 * span)) && knots[n] > knots[deg];
   if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1 || !ordered) return cx.flatMap((x, k) => [x, cy[k], cz[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);
   const t0 = knots[deg], t1 = knots[n];

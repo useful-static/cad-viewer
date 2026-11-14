@@ -705,16 +705,27 @@ function syncExplodeSphere() {
 // The visitor's cut kept where it is in the model across a change of Explode (fn): its t is a
 // fraction of the drawn box, which Explode grows and shrinks, so Explode off -- Measure turning on
 // turns it off -- moved the cut (r126 L3). A tour's step keeps its fraction: it is the step's.
+// (the position it keeps is the visitor's: held while t is still the one keepingCut wrote, so a
+// drag of the Explode slider down and back gives the cut back where it was -- each step clamped it
+// anew, and it ended on another part: r135 M1. A view link landing sets its own cut: viewLanding)
+let viewLanding = false;
 function keepingCut(fn) {
   const s = app.section;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
-  const keep = k !== undefined && !app.tour && app.header && app.header.bbox;
+  const keep = k !== undefined && !app.tour && !viewLanding && app.header && app.header.bbox;
   let at = null;
-  if (keep) { const { min, max } = sectionBox(); at = min[k] + (max[k] - min[k]) * s.t; }
+  if (keep) {
+    const h = s.held;
+    if (h && h.axis === s.axis && h.t === s.t) at = h.at;
+    else { const { min, max } = sectionBox(); at = min[k] + (max[k] - min[k]) * s.t; }
+  }
   const out = fn();
   // (clamped to the box, as the slider is: a cut kept past the gathered model, below it, cut the whole
   // model away and its link -- t out of 0..1 -- opened uncut: r134 M1)
-  if (at !== null && app.section.axis === s.axis) setSectionAt(at);
+  if (at !== null && app.section.axis === s.axis) {
+    setSectionAt(at);
+    s.held = { axis: s.axis, t: s.t, at };
+  }
   return out;
 }
 
@@ -1314,14 +1325,19 @@ function applyView(v, link = false) {
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   // Explode as the link has it (a whole link without it: off), how far
   // first, then on, then how
-  if (v.explode && app.renderer) {
-    app.explode.t = v.explode.t;
-    setExplode(true);
-    if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
-    // (the sphere grown by the link's amount, which neither call above does when on in that mode: r111 H2-M2)
-    syncExplodeSphere();
-    syncExplodeRow();
-  } else if (v.cam && app.explode.on) setExplode(false);
+  // (the link's cut is the link's, a fraction of the box its Explode draws: not kept through the
+  // Explode it lands -- read against the gathered box, it opened moved: r135)
+  viewLanding = true;
+  try {
+    if (v.explode && app.renderer) {
+      app.explode.t = v.explode.t;
+      setExplode(true);
+      if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
+      // (the sphere grown by the link's amount, which neither call above does when on in that mode: r111 H2-M2)
+      syncExplodeSphere();
+      syncExplodeRow();
+    } else if (v.cam && app.explode.on) setExplode(false);
+  } finally { viewLanding = false; }
   select(bodies.selected, false);
   // A view made on another shape (a desktop link opened on a phone): its
   // selected parts framed afresh from the same side, with room around them,

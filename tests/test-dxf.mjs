@@ -2735,6 +2735,12 @@ test('a hatch spline edge whose knots decrease keeps its hatch, drawn by the con
   const h = d.paths.filter((p) => p.layer === 'H');
   assert.equal(h.length, 1);
   assert.deepEqual([...h[0].pts].slice(0, 6), [0, 0, 10, 20, 20, 0]);
+  // (a SPLINE whose knots dip by a rounding step is still evaluated -- must fire: drawn as its
+  // control polygon, 3 points -- r135 L1)
+  const k2 = [0, 0, 0, 0.30000000000000004, 0.3, 1, 1, 1];
+  const sp = parseDXF(ents([[0, 'SPLINE'], [8, 'S'], [70, 0], [71, 2], [72, k2.length], [73, 5], ...k2.map((x) => [40, x]),
+    ...[[0, 0], [5, 10], [10, 0], [15, 10], [20, 0]].flatMap(([x, y]) => [[10, x], [20, y], [30, 0]])])).paths[0];
+  assert.ok(sp.pts.length / 2 > 10, `${sp.pts.length / 2} points`);
 });
 test('an MTEXT \\A written without its ";" is a code, not text: "\\A400" reads 400 (r131: r125 L4, old-14/024-C-2)', () => {
   // (must fire: "\A400" drawn as written)
