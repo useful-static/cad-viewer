@@ -131,6 +131,9 @@ test('the 2D info\'s size row by 2D Measure\'s unit and span: a drawing in metre
   assert.deepEqual(sizeRow(ext(5, 2), 'm'), ['size (m)', '5.000 × 2.000']);
   assert.deepEqual(sizeRow(ext(100, 50), 'mm'), ['size (mm)', '100.0 × 50.0']);
   assert.deepEqual(sizeRow(ext(3, 1), null), ['size (units)', '3 × 1']);
+  // (a drawing 1 m across reads one unit whatever its extents' float noise -- must fire: mm at
+  // 0.9999999999999, m at 1.0000000000001, r123 L5)
+  assert.equal(sizeRow(ext(1 - 1e-13, 0.5), 'm')[0], sizeRow(ext(1 + 1e-13, 0.5), 'm')[0]);
 });
 test('texts: %%c, MTEXT formatting stripped; extents', () => {
   // (a column break is a new line, as a paragraph is -- drawn as the two characters: r85 Q5)
@@ -2399,9 +2402,9 @@ test('a block reference on a frozen layer: every item it draws is held to that l
   // textCorners boxes it -- not the canvas em box's, about 0.1 em off: on the alphabetic baseline,
   // the capitals' height (TEXT_CAP of the 100 px font) or half of it below the point
   test('a TEXT aligned top / middle / baseline stands its capitals on its point as textCorners places them (r131: r118 L3)', () => {
-    const at = (valign) => {
+    const at = (valign, ascent = undefined) => {
       const got = [];
-      const rec = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'fillText' ? (s, x, y) => got.push([o.textBaseline, y]) : k === 'measureText' ? () => ({ width: 0 }) : () => {}), set: (o, k, v) => { o[k] = v; return true; } });
+      const rec = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'fillText' ? (s, x, y) => got.push([o.textBaseline, y]) : k === 'measureText' ? () => ({ width: 0, actualBoundingBoxAscent: ascent }) : () => {}), set: (o, k, v) => { o[k] = v; return true; } });
       const v = createDxfView({ ...canvas, getContext: () => rec }, { layers: [{ name: 'T', on: true }], paths: [], texts: [{ layer: 'T', colour: col, x: 0, y: 0, rot: 0, align: 'left', valign, text: 'H', h: 10 }], extents: { min: [0, -40], max: [60, 20] } }, {});
       got.length = 0;
       v.draw();
@@ -2416,6 +2419,10 @@ test('a block reference on a frozen layer: every item it draws is held to that l
     // font's 100 -- above it; and textCorners' box from the point up -- must fire: the canvas's
     // 'bottom' em box, and corners with the baseline on the point: r131 new L1)
     assert.deepEqual(at('bottom'), ['alphabetic', -25]);
+    // (a font whose capitals are 0.69 of its em: the descent textCorners gives, 0.25 of h / TEXT_CAP,
+    // in the font's px -- must fire: 0.25 of the font's own em, 25 px, 1.5 % of h off the box -- r134 2D L4)
+    const [, y69] = at('bottom', 69);
+    assert.ok(Math.abs(y69 - (-25 * 0.69) / TEXT_CAP) < 1e-9, `${y69}`);
     const em = 10 / TEXT_CAP, ys = textCorners({ x: 0, y: 0, rot: 0, align: 'left', valign: 'bottom', text: 'H', h: 10 }).map((p) => p[1]);
     assert.ok(Math.abs(Math.min(...ys)) < 1e-9 && Math.abs(Math.max(...ys) - (0.25 * em + 10)) < 1e-9, `${ys}`);
   });
@@ -2878,6 +2885,20 @@ test('a DIMENSION whose block is not in the file draws its text from its own gro
   assert.ok(Math.abs(dim([[70, 0], [50, 90], [42, 10]]).texts[0].rot - Math.PI / 2) < 1e-12);
   // (an angular one's 42 is not a length: only a text it writes out)
   assert.equal(dim([[70, 2], [42, 0.5]]).texts.length, 0);
+});
+
+test('a DIMENSION drawn without its block, on odd groups: \\X a new line, a negative height its size, no 11/21 at its line\'s middle, along -Z read from below, -0 as 0 (r134 2D L3)', () => {
+  const ents2 = (g, head = []) => parseDXF(dxf([...head, [0, 'SECTION'], [2, 'ENTITIES'], [0, 'DIMENSION'], [8, 'D'], [2, '*D9'], [10, 0], [20, 10], [13, 0], [23, 0], [14, 100], [24, 0], ...g, [0, 'ENDSEC'], [0, 'EOF']]));
+  // (must fire, each: "3.3\X+0.1" as written; h -2; (0, 0); rot 150; "-0")
+  assert.equal(ents2([[11, 50], [21, 12], [70, 1], [42, 3.3], [1, '<>\\X+0.1']]).texts[0].text, '3.3000\n+0.1');
+  const neg = ents2([[11, 50], [21, 12], [70, 1], [42, 3]], [[0, 'SECTION'], [2, 'HEADER'], [9, '$DIMTXT'], [40, -2], [0, 'ENDSEC']]).texts[0];
+  assert.equal(neg.h, 2);
+  const at = ents2([[70, 1], [42, 100]]).texts[0];
+  assert.deepEqual([at.x, at.y], [50, 0]);
+  const flip = ents2([[11, 50], [21, 12], [70, 0], [50, 30], [42, 10], [210, 0], [220, 0], [230, -1]]).texts[0];
+  assert.ok(flip.rot > -Math.PI / 2 && flip.rot <= Math.PI / 2 + 1e-9, `${(flip.rot * 180) / Math.PI}`);
+  const zero = ents2([[11, 50], [21, 12], [70, 1], [42, -0.0001]], [[0, 'SECTION'], [2, 'HEADER'], [9, '$DIMDEC'], [70, 0], [9, '$DIMZIN'], [70, 12], [0, 'ENDSEC']]).texts[0];
+  assert.equal(zero.text, '0');
 });
 
 done();

@@ -127,6 +127,20 @@ export function createMeasure(deps) {
       if (w <= 1e-9) return null;
       return [(x / w + 1) * v.w / 2, (1 - y / w) * v.h / 2];
     };
+    // whether a sphere (centre c, radius rad) can reach within r CSS px of (x, y): its centre's
+    // screen point, and its radius in px at its nearest depth -- true when that cannot be told (it
+    // reaches the eye's plane)
+    v.sphereNear = (c, rad, x, y, r) => {
+      const s = v.toScreen(c);
+      if (!s) return true;
+      const depth = v.ortho ? v.dist : (c[0] - v.eye[0]) * -v.dir[0] + (c[1] - v.eye[1]) * -v.dir[1] + (c[2] - v.eye[2]) * -v.dir[2];
+      const near = v.ortho ? depth : depth - rad;
+      if (!(near > 1e-9)) return true;
+      // (grown by the view's widest slope: off its axis a sphere's image is stretched past its
+      // centre's scale)
+      const px = ((rad * v.h) / (2 * v.tanV * near)) * (1 + v.tanV * Math.max(1, v.w / v.h));
+      return Math.hypot(s[0] - x, s[1] - y) <= r + px + 1;
+    };
     // the ray under a CSS point: { o, d } with |d| arbitrary
     v.rayAt = (sx, sy) => {
       const nx = (sx / v.w) * 2 - 1, ny = 1 - (sy / v.h) * 2;
@@ -139,6 +153,20 @@ export function createMeasure(deps) {
       return { o: v.eye, d: add(add(mul(v.dir, -1), mul(v.right, nx * hh)), mul(v.up, ny * hv)) };
     };
     return v;
+  }
+
+  // A body's edges' bounding spheres ({ c, r }: their boxes' centres and half-diagonals), built once
+  const edgeSphereOf = new WeakMap();
+  function edgeSpheres(g) {
+    let s = edgeSphereOf.get(g);
+    if (s) return s;
+    s = g.edges.map((line) => {
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of line) for (let k = 0; k < 3; k++) { if (p[k] < lo[k]) lo[k] = p[k]; if (p[k] > hi[k]) hi[k] = p[k]; }
+      return { c: [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2), r: Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 };
+    });
+    edgeSphereOf.set(g, s);
+    return s;
   }
 
   // the bodies whose projected box covers (x, y) +- r, not hidden
@@ -259,8 +287,13 @@ export function createMeasure(deps) {
       for (const m of g.mids) if (!m.closed) consider(m.p, 'mid', { length: m.len });
       for (const c of g.circles) consider(c.centre, 'centre', { diameter: 2 * c.radius });
       // the nearest point of each edge, in screen space, lifted back to 3D
+      // (each edge's bounding sphere, once a body: an edge whose sphere cannot reach the pointer's
+      // radius is passed over whole -- every segment of the rack's long edges projected took a warm
+      // snap to 50-97 ms before any visibility test: r135 L2)
+      const sph = edgeSpheres(g);
       for (let e = 0; e < g.edges.length; e++) {
         const line = g.edges[e];
+        if (!v.sphereNear(sph[e].c, sph[e].r, x, y, r)) continue;
         for (let i = 1; i < line.length; i++) {
           const a = v.toScreen(line[i - 1]), b = v.toScreen(line[i]);
           if (!a || !b) continue;
@@ -809,14 +842,26 @@ export function createMeasure(deps) {
     // (one size one line whatever it prints as: a Ø on a rounding half-step, 0.0215 in, read
     // "0.021 in × 2" + "0.022 in × 3" -- r123 M2. A size: a Ø within 1e-4 of the one before it, as
     // the list is ordered)
-    const groups = new Map(), sizeOf = new Map();
+    // (sizes and printed values joined as one, a union: a size whose holes print either side of a
+    // rounding step, one side as a smaller size prints, was split across that size's line and its own
+    // -- r124 L3. Far out, where fit noise passes 1e-4 of the Ø -- the stored positions' rounding, at
+    // the centre's distance -- the chain's step is that noise: it broke the chain, r124 L5)
+    const groups = new Map(), sizeOf = new Map(), up = [];
+    const root = (a) => { while (up[a] !== a) { up[a] = up[up[a]]; a = up[a]; } return a; };
+    const sized = [];
     let sid = -1, prev = -Infinity;
     for (const h of list) {
-      if (!(Math.abs(h.diameter - prev) <= 1e-4 * h.diameter)) sid++;
+      const far = Math.max(...h.centre.map(Math.abs));
+      const noise = far > 0 ? 2 * 2 ** (Math.floor(Math.log2(far)) - 23) : 0; // (two float32 steps there)
+      if (!(Math.abs(h.diameter - prev) <= Math.max(1e-4 * h.diameter, noise))) { sid++; up[sid] = sid; }
       prev = h.diameter;
       const p = deps.num(h.diameter);
       if (!sizeOf.has(p)) sizeOf.set(p, sid);
-      const key = `${sizeOf.get(p)}|${h.head ? deps.num(h.head) : ''}`;
+      else { const a = root(sizeOf.get(p)), b = root(sid); if (a !== b) up[Math.max(a, b)] = Math.min(a, b); }
+      sized.push([h, sid]);
+    }
+    for (const [h, s] of sized) {
+      const key = `${root(s)}|${h.head ? deps.num(h.head) : ''}`;
       if (!groups.has(key)) groups.set(key, { d: h.diameter, head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;

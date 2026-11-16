@@ -908,6 +908,14 @@ test('the hole table orders holes of one Ø by position, whatever the fit\'s noi
   assert.deepEqual(order(inch, 25.4, 1e-7), want);
   // (holes of different Ø still by Ø first)
   assert.deepEqual(orderHoles([{ diameter: 6, centre: [0, 0, 0] }, { diameter: 3, centre: [9, 9, 0] }]).map((h) => h.diameter), [3, 6]);
+  // (16 sizes stepping 0.0002 from Ø3.000, their x falling: a chain made them one rank, ordered by x
+  // alone, the first Ø3.003 -- must fire; bounded at 4 tol, the first rank ends by Ø3.0012 -- r123 L3)
+  const steps = orderHoles(Array.from({ length: 16 }, (_, i) => ({ diameter: 3 + 0.0002 * i, centre: [100 - i, 0, 0] })));
+  assert.ok(steps[0].diameter < 3.0015, `${steps[0].diameter}`);
+  // (a Ø that is no number ranks last, whatever the input's order -- r123 L2)
+  const odd = (l) => orderHoles(l.map((d, i) => ({ diameter: d, centre: [i, 0, 0] }))).map((h) => h.diameter);
+  assert.deepEqual(odd([NaN, 3, 2]).slice(0, 2), [2, 3]);
+  assert.deepEqual(odd([3, NaN, 2]).slice(0, 2), [2, 3]);
   // (300,000 holes ordered, not a RangeError: Math.max(...) over them threw -- r123 L1)
   const many = Array.from({ length: 300000 }, (_, i) => ({ diameter: 3 + (i % 3), centre: [i % 1000, Math.floor(i / 1000), 0] }));
   const sorted = orderHoles(many);
@@ -1069,6 +1077,24 @@ await test('snap candidates are ordered the same whatever order they arrive in (
   const old = (a, b) => (Math.abs(a.dd - b.dd) > 1 ? a.dd - b.dd : b.p[2] - a.p[2]);
   const olds = new Set([[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]].map((perm) => perm.map((i) => pts[i]).sort(old).map((q) => q.id).join('')));
   assert.ok(olds.size > 1, `the old rule gave ${[...olds]}`);
+});
+
+await test('a size printed either side of a rounding step joins the size printed as its smaller side: one line, not split (r124 L3)', async () => {
+  const lines = [];
+  const had = globalThis.document;
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }; if (tag === 'li') lines.push(e); return e; } };
+  try {
+    // (Ø 2.999 prints "3.00"; Ø 3.0049 and 3.0051, one chained size, print "3.00" and "3.01" -- must
+    // fire: "3.00 × 2" and "3.01 × 1", the chained size split)
+    const w = (d, x) => ({ name: `w${x}`, faces: washer(d / 2, 4, 1.6, 48, x, 30) });
+    const { meas } = await measureAt([w(2.999, 15), w(3.0049, 45), w(3.0051, 75)], new Set(), { num: (x) => x.toFixed(2), lenText: (x) => `${x.toFixed(2)} mm` });
+    meas.showHoles([1, 2, 3], { min: [0, 0, 0], name: 'all' }, 'all');
+    const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
+    assert.equal(sizes.length, 1, sizes.join(' | '));
+    assert.match(sizes[0], /× 3/);
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
 });
 
 await test('one hole size in a top face and a side wall spans its centres in all three axes (r124 L4)', async () => {

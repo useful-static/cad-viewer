@@ -11,7 +11,7 @@
 // drawing at 10^6 units would jitter when zoomed in), stroked under the view
 // transform with lineWidth = 1 / scale. Uses the DOM (a canvas); no 3D renderer.
 
-import { MITER_LIMIT, TEXT_CAP, circleThrough, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, pitchOf, ptSegDist2, textCorners, wrapLines } from './dxf.js';
+import { MITER_LIMIT, TEXT_CAP, circleThrough, emOf, distinctPts, edgeOverlaps, inOutline, insideFlat, insidePieces, isBand, isWide, itemsBox, joinWedge, layersOf, onPaper, outlineIndex, pitchOf, ptSegDist2, textCorners, wrapLines } from './dxf.js';
 import { PAPER, PAPER_EDGES } from './styles.js';
 import { unconvertedNum, unconvertedWord } from './units.js';
 import { boxTree, itemsAt, itemsIn, nearestItem } from './box-tree.js';
@@ -48,7 +48,9 @@ export function lengthText(v, unit, span) {
   return `${measureNum(v, unit, span)} ${unconvertedWord(unit, span)}`;
 }
 // A drawing's size in its own units, from its extents: the one span 2D Measure and the 2D info read
-export const drawingSpan = (ext) => (ext ? Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) : 0) || 1;
+// (to 9 significant digits: a drawing 1 m across -- where Auto's unit changes -- read one unit or the
+// other by its extents' float noise, 999.9999999999 or 1000.0000000001: r123 L5)
+export const drawingSpan = (ext) => Number((ext ? Math.max(ext.max[0] - ext.min[0], ext.max[1] - ext.min[1]) : 0).toPrecision(9)) || 1;
 // The 2D info panel's size row of a drawing of these extents and unit: [its label, its value], by
 // 2D Measure's unit and span (pure, so a test reaches it: taking the span out passed every test --
 // r91 Q3)
@@ -887,7 +889,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
         // r118 L3; t.h / k0 is the capitals' height in the font's px)
         // (bottom: the baseline a descent, 0.25 em, above the point, the descenders' bottom on it, as
         // textCorners has it -- the canvas's 'bottom' em box was neither: r131 new L1)
-        const cap = t.valign === 'top' ? t.h / k0 : t.valign === 'middle' ? t.h / k0 / 2 : t.valign === 'bottom' ? -0.25 * emView(t) / k0 : 0;
+        // (the descent textCorners gives, 0.25 of its em, h / TEXT_CAP: of the font's measured em it
+        // was 1.5 % of h apart where the browser's capitals are 0.69 of it -- r134 2D L4)
+        const cap = t.valign === 'top' ? t.h / k0 : t.valign === 'middle' ? t.h / k0 / 2 : t.valign === 'bottom' ? -0.25 * emOf(t) / k0 : 0;
         ctx.textBaseline = 'alphabetic';
         lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1)) * lh + cap));
       }

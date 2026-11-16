@@ -1609,10 +1609,20 @@ function emit(recs, M, byBlock, depth, ctx) {
           if (r.type === 'DIMENSION') {
             const t = dimensionText(r, ctx);
             if (t) {
-              const [x, y] = ap(O, num(r, 11), num(r, 21), num(r, 31, 0) || 0);
+              // (at its text point 11/21; one without, at the middle of its definition points 13/23 and
+              // 14/24, else its 10/20 -- it was put at (0, 0): r134 2D L3)
+              const tx = num(r, 11, NaN), ty = num(r, 21, NaN);
+              const mid = (a, b) => [(num(r, a, NaN) + num(r, b, NaN)) / 2];
+              const [px, py] = Number.isFinite(tx) && Number.isFinite(ty) ? [tx, ty]
+                : Number.isFinite(mid(13, 14)[0]) && Number.isFinite(mid(23, 24)[0]) ? [mid(13, 14)[0], mid(23, 24)[0]] : [num(r, 10), num(r, 20)];
+              const [x, y] = ap(O, px, py, num(r, 31, 0) || 0);
               const k = Math.sqrt(Math.abs(O[0] * O[3] - O[1] * O[2])) || 1;
               const a = Math.min(9, Math.max(1, num(r, 71, 5) | 0));
-              ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(a), valign: ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)], rot: dirThrough(O, Math.cos(t.rot), Math.sin(t.rot)) });
+              // (read from below or the left as drawn, after its extrusion: one along -Z read upside
+              // down, its angle kept readable before the mirror -- r134 2D L3)
+              let rw = dirThrough(O, Math.cos(t.rot), Math.sin(t.rot));
+              if (rw > Math.PI / 2 + 1e-9) rw -= Math.PI; else if (rw <= -Math.PI / 2 + 1e-9) rw += Math.PI;
+              ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(a), valign: ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)], rot: rw });
             }
           }
           break;
@@ -1694,12 +1704,15 @@ function dimensionText(r, ctx) {
     let s = (m * v('$DIMLFAC', 1)).toFixed(dec);
     if (zin & 8 && s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
     if (zin & 4) s = s.replace(/^(-?)0\./, '$1.');
+    // (a value that rounds to zero is "0", no sign: -0.0001 at 0 decimals read "-0" -- r134 2D L3)
+    if (/^-[0.]*$/.test(s)) s = s.slice(1);
     text = text.split('<>').join(`${type === 3 ? 'Ø' : type === 4 ? 'R' : ''}${s}`);
   }
   text = mtextPlain(text, ctx.codepage);
   if (!text.trim()) return null;
   const scale = v('$DIMSCALE', 1);
-  const h = v('$DIMTXT', 0.18) * (scale > 0 ? scale : 1);
+  // (a height of its size: a negative DIMTXT gave a negative one -- r134 2D L3)
+  const h = (Math.abs(v('$DIMTXT', 0.18)) || 0.18) * (scale > 0 ? scale : 1);
   let rot = type === 0 ? (num(r, 50, 0) * Math.PI) / 180 : type === 1 ? Math.atan2(num(r, 24) - num(r, 23), num(r, 14) - num(r, 13)) : 0;
   if (!Number.isFinite(rot)) rot = 0;
   rot += (num(r, 53, 0) * Math.PI) / 180;
@@ -2160,7 +2173,9 @@ export function mtextPlain(s, codepage = 'windows-1252') {
     if (k === '\\' || k === '{' || k === '}') { out += k; i++; continue; }
     // (\P a paragraph, \N a column break: each a new line here -- \N was drawn as the two
     // characters: r85 Q5)
-    if (k === 'P' || k === 'N') { out += '\n'; i++; continue; }
+    // (\X: a dimension's text above the line from the text below it, a new line too -- shown as
+    // written: r134 2D L3)
+    if (k === 'P' || k === 'N' || k === 'X') { out += '\n'; i++; continue; }
     if (k === '~') { out += ' '; i++; continue; } // (non-breaking: the wrap does not break there)
     if ('LlOoKk'.includes(k)) { i++; continue; }
     // (\A's value is one digit, 0 1 2: written without its ";" -- "\A400", old-14/024-C-2 -- the code

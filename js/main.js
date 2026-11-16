@@ -1329,8 +1329,11 @@ function applyView(v, link = false) {
   // first, then on, then how
   // (the link's cut is the link's, a fraction of the box its Explode draws: not kept through the
   // Explode it lands -- read against the gathered box, it opened moved: r135)
-  viewLanding = true;
-  try {
+  // (only a link that sets its own cut: one without keeps the tab's, which its Explode keeps -- skipped,
+  // the cut moved, and the next Explode nudge put it back at the held place: r136 L2, r137 L1)
+  // (the amount set straight, before setExplode -- which, Explode on already, does nothing -- is kept
+  // through as a whole: set outside keepingCut, it moved the tab's cut -- r137 L1)
+  const landExplode = () => {
     if (v.explode && app.renderer) {
       app.explode.t = v.explode.t;
       setExplode(true);
@@ -1339,6 +1342,10 @@ function applyView(v, link = false) {
       syncExplodeSphere();
       syncExplodeRow();
     } else if (v.cam && app.explode.on) setExplode(false);
+  };
+  viewLanding = !!v.section;
+  try {
+    if (v.section) landExplode(); else keepingCut(landExplode);
   } finally { viewLanding = false; }
   select(bodies.selected, false);
   // A view made on another shape (a desktop link opened on a phone): its
@@ -1445,7 +1452,11 @@ async function exportMesh(fmt) {
   downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
   // (the cut and the explode are the view's: the parts are written whole and in place, which the
   // saved line says when either is on -- nothing said it, r128 L2)
-  const viewOnly = [sectionPlane() ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
+  // (a cut that removes something: a cut at the model's end, nothing on its cut side, is no cut --
+  // "uncut" was said of it: r134 3D L2)
+  const pl = sectionPlane(), sb = pl && sectionBox();
+  const cuts = !!pl && [0, 1, 2].reduce((m, k) => m + Math.max(pl[k] * sb.min[k], pl[k] * sb.max[k]), 0) > pl[3] + 1e-9 * (1 + Math.abs(pl[3]));
+  const viewOnly = [cuts ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
   const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: the section and Explode change the view, not the file)` : '';
   app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name, whole }; // (for tests)
   tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB${whole}`, whole ? 6000 : 3000);

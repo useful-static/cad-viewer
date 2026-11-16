@@ -655,10 +655,18 @@ function holeWall(geom, a, faceN) {
 // The hole table's order, in place: by Ø, then position, each by rank -- a value within tol of the one
 // before it shares its rank (Ø 1e-4 of it, position 1e-6 of the spread), so fit noise and units do not
 // renumber holes (r121 M2, r122 M1)
+// (a chain, bounded: within tol of the one before and within 4 tol of its rank's first -- 16 sizes
+// stepping 0.0002 from Ø3.000 were one rank, chained: r123 L3. A value that is no number -- no
+// holesOf row has one -- ranks last, each its own: a NaN made the sort's order its input's, r123 L2)
 const ranks = (v, tol) => {
   const r = [];
-  let k = -1, prev = -Infinity;
-  for (const i of v.map((_, i) => i).sort((a, b) => v[a] - v[b])) { if (!(v[i] - prev <= tol(v[i]))) k++; r[i] = k; prev = v[i]; }
+  const key = (i) => (Number.isFinite(v[i]) ? v[i] : Infinity);
+  let k = -1, prev = -Infinity, first = -Infinity;
+  for (const i of v.map((_, i) => i).sort((a, b) => key(a) - key(b) || a - b)) {
+    const x = key(i);
+    if (!(x - prev <= tol(x) && x - first <= 4 * tol(x)) || x === Infinity) { k++; first = x; }
+    r[i] = k; prev = x;
+  }
   return r;
 };
 export function orderHoles(list) {
