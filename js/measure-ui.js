@@ -862,13 +862,19 @@ export function createMeasure(deps) {
     const meanOf = (s) => sums[s] / counts[s];
     // (a size's printed Ø: what most of its holes print, its mean's on a tie -- a mean just under a
     // rounding half-step put V2C's Ø3.25 ×2, whose rows print 3.3, on Ø3.20's line at 1 decimal: r139 L3)
+    // (on a tie, the value no smaller size took, else its mean's: V2C's Ø3.25 pair prints 3.3 and 3.2,
+    // a tie its mean broke to 3.2, onto Ø3.20's line -- r140 L1)
     const votes = [];
     for (const [h, s] of sized) { const p = deps.num(h.diameter); (votes[s] ||= new Map()).set(p, (votes[s].get(p) || 0) + 1); }
-    const printed = (s) => {
-      let best = deps.num(meanOf(s)), n = votes[s].get(best) || 0;
-      for (const [p, c] of votes[s]) if (c > n) { best = p; n = c; }
-      return best;
-    };
+    const label = [], taken = new Set();
+    for (let s = 0; s <= sid; s++) {
+      const top = Math.max(...votes[s].values());
+      const tied = [...votes[s]].filter(([, c]) => c === top).map(([p]) => p);
+      const m = deps.num(meanOf(s));
+      label[s] = tied.length === 1 ? tied[0] : tied.includes(m) && !taken.has(m) ? m : tied.find((p) => !taken.has(p)) ?? (tied.includes(m) ? m : tied[0]);
+      taken.add(label[s]);
+    }
+    const printed = (s) => label[s];
     // (the line's Ø shown: the mean where it prints the line's value, else a hole that does)
     const shownOf = (s) => {
       const p = printed(s);
