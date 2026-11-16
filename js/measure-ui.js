@@ -920,12 +920,14 @@ export function createMeasure(deps) {
     // out of sight as it opened: UI design round 3 F-08, F-14)
     $('holesfrom').textContent = `Positions from the corner of ${ref.name || 'the whole model'}`;
     $('holessumhead').textContent = `${t.groups.length} ${t.groups.length === 1 ? 'size' : 'sizes'}`;
-    $('holessumbox').open = t.groups.length <= 6;
-    if (t.untold || t.unpaired) {
-      const un = document.createElement('li');
-      un.textContent = untoldText(t.untold, t.unpaired);
-      sum.append(un);
-    }
+    // (6 sizes or fewer: a plain list, no "N sizes" heading over it)
+    const flat = t.groups.length <= 6;
+    $('holessumbox').open = flat;
+    $('holessumbox').classList.toggle('flat', flat);
+    // the holes left out, said outside the fold, so a closed one never hides it (round 4 F-6)
+    const note = $('holesnote');
+    note.hidden = !(t.untold || t.unpaired);
+    note.textContent = note.hidden ? '' : untoldText(t.untold, t.unpaired);
     const tb = $('holesrows');
     tb.replaceChildren();
     for (const r of t.rows) {

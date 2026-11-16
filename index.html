@@ -109,7 +109,8 @@
   html.light button[aria-pressed=true] { background:#ffe9d4; border-color:#b35a00; color:#7a3d00; }
   html.light :is(button, label.btn, a.btn):hover { border-color:#9aa3af; }
   html.light :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(255,255,255,.9); }
-  html.light #helpbtn[aria-expanded=true] { background:#dfe3e8; border-color:#9aa3af; }
+  html.light #helpbtn[aria-expanded=true], html.light #stage > #hdend #helpbtn[aria-expanded=true] { background:#dfe3e8; border-color:#9aa3af; }
+  html.light button[aria-pressed=true]:focus-visible { outline-offset:2px; } /* (the ring is the pressed edge's colour) */
   html.light #helppop kbd { background:#eef0f3; border-color:#b8bfc8; }
   html.light #tourcard { background:rgba(255,255,255,.96); box-shadow:0 8px 24px rgba(15,23,42,.18); }
   html.light #embedhint { background:rgba(255,255,255,.92); box-shadow:0 0 0 1px var(--line); }
@@ -164,7 +165,9 @@
      in cad.place): one translucent style and height (a near miss starts a drag) */
   :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(37,42,50,.85); min-width:32px; min-height:32px; }
   #helpbtn { font-weight:600; }
-  #helpbtn[aria-expanded=true] { background:#3a4250; border-color:#566173; }
+  /* open: the open-menu grey, over the view too (an embed's overlay fill has two ids) */
+  #helpbtn[aria-expanded=true], #stage > #hdend #helpbtn[aria-expanded=true] { background:#3a4250; border-color:#566173; }
+  html.dark #stage > #hdend #helpbtn[aria-expanded=true] { background:#334155; border-color:#64748b; }
   /* the box: under ?, at its right edge (main.js sets top and right) */
   #helppop { position:fixed; z-index:10; width:min(560px, calc(100vw - 16px)); max-height:calc(100dvh - 64px); overflow:auto;
     padding:10px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45);
@@ -214,7 +217,14 @@
      buttons 224 px each, over the top of the model (UI organization review
      rank 10) */
   #viewmenu.folded.open > .menu-panel { max-width:min(420px, calc(100vw - 16px)); }
-  :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel { flex-direction:column; align-items:stretch; }
+  /* one column that scrolls down where main.js caps its height (a short
+     window): wrapping made a second column, File's Save as heading the
+     other column from its SAVE (844 x 390) */
+  :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel { flex-direction:column; align-items:stretch; flex-wrap:nowrap; }
+  :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel > * { flex-shrink:0; }
+  /* wide enough for the picture options' rows on one line each (a 186 px
+     column wrapped "Transparent" alone) */
+  #filemenu.folded > .menu-panel { min-width:256px; } /* (240 wrapped the last row once a short window's scrollbar took 15 px) */
   .skip { position:fixed; left:8px; top:-80px; z-index:100; }
   .skip:focus { top:8px; }
   /* File's group headings, and Export's three formats on one line */
@@ -230,7 +240,7 @@
      opening the options never widens File's panel past them */
   /* sized to File's column, never widening it (width 0, min 100 %); each row's
      label on a line of its own above its buttons, so the buttons line up */
-  #picopts { width:0; min-width:100%; }
+  #picopts { width:0; min-width:100%; } /* (File's column is at least 240 px: each row fits a line) */
   #picopts .optrow { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
   #picopts .optlab { color:var(--dim); font-size:11px; flex-basis:100%; }
   #picopts button { padding:1px 7px; font-size:12px; }
@@ -414,6 +424,9 @@
   #holessum { margin:2px 0; padding-left:16px; }
   #holesfrom { margin:2px 0; color:var(--dim); }
   #holessumhead { cursor:pointer; color:var(--dim); }
+  #holessumbox.flat > summary { display:none; } /* (6 sizes or fewer: a plain list, no heading over it) */
+  #holesnote { margin:2px 0; color:var(--dim); }
+  #holesnote[hidden] { display:none; }
   #holes table { border-collapse:collapse; width:100%; font-size:11px; }
   /* a board's 30-odd holes scroll in a box of their own, so the table never
      pushes the parts list out of the panel (UI organization review rank 1) */
@@ -528,6 +541,7 @@
   /* a chip under the words wherever they stand (over a lime part a tour's
      touch hint was 2.5:1) */
   #hover:not(:empty) { background:rgba(29,33,39,.8); padding:1px 6px; border-radius:4px; }
+  html.dark #hover:not(:empty) { background:rgba(15,23,42,.8); } /* (the slate frame's own) */
   #stage[data-bg="paper"] #hover { color:#222; text-shadow:none; }
   #stage[data-bg="paper"] #hover:not(:empty) { background:rgba(255,255,255,0.9); padding:1px 6px; border-radius:4px; box-shadow:0 0 0 1px #d0d0cc; }
   /* status and the model name stay in the document for the live region and
@@ -583,7 +597,9 @@
        part colour swatch (32 x 24) and the help's summary line (17 px tall) */
     .seg button, #panelbtn, #helpbtn { min-width:40px; justify-content:center; }
     #colours input[type=color] { width:44px; height:40px; }
-    #infomore summary { line-height:40px; margin-bottom:0; }
+    #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
+    button.mini, #testeps li button:not(.tename) { min-width:40px; }
+    #touredit :is(input[type=text], input[type=number]), #scenelist input { min-height:40px; }
   }
   /* iOS Safari zooms the page into a focused control under 16 px: on a
      touch-PRIMARY device only (a touchscreen laptop's selects stayed 3 px
@@ -591,7 +607,8 @@
   @media (pointer: coarse) {
     select, #treefilter { font-size:16px; }
     /* (ids: the panel's 12 px selects and the small fields would beat the line above) */
-    #unitsel, #material, #density, #secin, #measnotetext { font-size:16px; }
+    #unitsel, #material, #density, #secin, #measnotetext, #scenelist input,
+    #touredit :is(input[type=text], input[type=number], textarea) { font-size:16px; }
   }
   /* the buttons over an embed's view, on a touch screen: the finger's 40 px
      (two ids, so the header's touch rule did not reach them) */
@@ -776,7 +793,7 @@
            lines left the table 1.5 rows under two nested scrollbars -->
       <!-- where the positions are measured from, a caption; the sizes fold
            (closed past 6) so the table's first rows show as it opens -->
-      <div class="holesscroll"><p id="holesfrom"></p><details id="holessumbox"><summary id="holessumhead"></summary><ul id="holessum"></ul></details><table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th id="holesdepth">depth</th></tr></thead><tbody id="holesrows"></tbody></table></div></div>
+      <div class="holesscroll"><p id="holesfrom"></p><details id="holessumbox"><summary id="holessumhead"></summary><ul id="holessum"></ul></details><p id="holesnote" hidden></p><table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th id="holesdepth">depth</th></tr></thead><tbody id="holesrows"></tbody></table></div></div>
     <!-- more than one model in the view (File > Add model…): each added one
          moved by an offset, and the clearance between the models -->
     <div id="scene" hidden><div class="holeshead"><b>Models</b>
