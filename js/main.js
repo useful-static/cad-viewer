@@ -2529,7 +2529,7 @@ function setupEmbed() {
   $('embedbar').hidden = false;
   $('embedhint').hidden = app.embedActive;
   // (a touch-only device taps: UI design round 5 V-3)
-  if (tapWord() === 'tap') $('embedhint').textContent = 'Tap to turn and zoom the model';
+  embedHint();
   $('embedfit').onclick = () => fitTo(drawnBox(null));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
   // &maximize=1 (a product page's inline viewer): "Open in cad.place" is a
@@ -2936,6 +2936,7 @@ function refold(keep = focusNow()) {
   // select after it (File holds it where the row is short)
   placeMeasure(false);
   if ($('sheet').parentElement !== tb) $('tools').after($('sheet'));
+  $('fhsheet').hidden = true;
   tb.classList.add('measuring');
   // the model list is a step of its own, after View and before Show: it
   // folds into File's panel (it stood outside every group, so the wide row
@@ -2958,7 +2959,8 @@ function refold(keep = focusNow()) {
     if (id === 'sheet') {
       // a drawing's sheet select, last: into File's panel, first there (2D has no View or Show to
       // fold, and a 320 px phone's row ran past the edge with it: UI design round 8 R8-1)
-      if (!$('sheet').hidden) $('filepanel').prepend($('sheet'));
+      // (under a "Sheet" heading: in File, a bare "Model ▾" read as a model picker -- round 9 R9-6)
+      if (!$('sheet').hidden) { $('fhsheet').hidden = false; $('fhsheet').after($('sheet')); }
       continue;
     }
     if (id === 'tools') {
@@ -5487,6 +5489,19 @@ function dropAddressModel(u) {
   u.hash = '';
 }
 
+// The tooltips a drawing gives the controls it keeps (the 3D ones are put back on leaving it)
+const TITLES_2D = [
+  ['measure', 'Measure the drawing: two points, which snap to line ends, middles and circle centres (M)'],
+  ['savepic', 'Save the drawing as a PNG picture, as it is shown (P)'],
+];
+
+// An embed's hint, for what is shown: a drawing pans, a model turns. One place sets it, so a 3D
+// model shown after a drawing no longer said "the drawing" (UI design round 9 R9-1)
+function embedHint() {
+  const verb = tapWord() === 'tap' ? 'Tap' : 'Click';
+  $('embedhint').textContent = app.dxf ? `${verb} to pan and zoom the drawing` : `${verb} to turn and zoom the model`;
+}
+
 function show2D(drawing, name, url) {
   leave2D();
   clearModel();
@@ -5505,8 +5520,12 @@ function show2D(drawing, name, url) {
     const o = document.createElement('option'); o.value = v; o.textContent = t; return o;
   }));
   sel.hidden = !sheets.length;
-  // (an embedded drawing pans; nothing turns: UI design round 8 R8-4)
-  $('embedhint').textContent = `${tapWord() === 'tap' ? 'Tap' : 'Click'} to pan and zoom the drawing`;
+  embedHint();
+  // (an embed's overlay buttons and hint lie over the view's edges: the drawing fits inside them)
+  $('view2d').dataset.fitInset = app.embed ? '44' : '0';
+  // the kept controls' tooltips in a drawing's words (Measure's named faces and hole centres,
+  // Save picture the options ▾ that 2D hides: UI design round 9 R9-9)
+  for (const [id, t] of TITLES_2D) { const b = $(id); b.dataset.title3d ??= b.title; b.title = t; }
   // (the row changed -- View out, the 2D badge and the sheet select in -- and the header's size
   // may not have: after the select is shown, so the fold counts it, UI design round 8 R8-1)
   refold();
@@ -5546,6 +5565,8 @@ function leave2D() {
   $('view2d').hidden = true;
   $('sheet').hidden = true;
   clearHover();
+  for (const [id] of TITLES_2D) { const b = $(id); if (b.dataset.title3d !== undefined) b.title = b.dataset.title3d; }
+  embedHint();
   refold();
 }
 
@@ -5629,7 +5650,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? '; the "Model" menu beside Fit lists the layouts' : ''})`); // (named as it reads on screen: nothing shows "Sheet")
+    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? '; the "Model" menu lists the layouts' : ''})`); // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;

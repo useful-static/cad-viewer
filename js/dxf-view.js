@@ -741,7 +741,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const [w, h] = css();
     const e = frame();
     const dx = e.max[0] - e.min[0] || 1, dy = e.max[1] - e.min[1] || 1;
-    st.s = Math.min(w / dx, h / dy) * 0.92;
+    // (an inset in px the page asks for: an embed's overlay buttons and hint lie over the view's
+    // edges, and a 4 % margin ran the drawing under them -- UI design round 9 R9-8)
+    const pad = Math.max(0, Number(canvas.dataset?.fitInset) || 0); // (a test's canvas has no dataset)
+    st.s = Math.min(Math.max(1, w - 2 * pad) / dx, Math.max(1, h - 2 * pad) / dy) * 0.92;
     st.c = [(e.min[0] + e.max[0]) / 2 - o[0], (e.min[1] + e.max[1]) / 2 - o[1]];
     draw();
   }

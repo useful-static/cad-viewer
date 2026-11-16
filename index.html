@@ -233,7 +233,11 @@
   .skip:focus { top:8px; }
   /* File's group headings, and Export's three formats on one line */
   .mhead { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
-  .mhead:first-child { margin-top:0; }
+  .mhead:first-child, #fhsheet[hidden] + .mhead { margin-top:0; }
+  .mhead[hidden] { display:none; }
+  /* a drawing at a wide size: nothing under Open (Add model is 3D's; Open… is in the row), so no
+     empty heading (UI design round 9 R9-5) */
+  body.mode2d #fhopen:has(+ #gallerybtn[hidden] + #tourlinks:empty + #addmodelbtn) { display:none; }
   /* Save picture and its options (▾): one row; the options a small group */
   .split { display:inline-flex; gap:2px; }
   .split > #savepic { flex:1; }
@@ -666,7 +670,8 @@
     header.more-right::after { content:''; position:absolute; top:0; right:var(--endw, 0px); bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    body.mode2d #badge2d { display:none; } /* (the drawing on screen says it is 2D; a phone's row has no room: a stray "2" under the fade) */
+    /* (a phone's row has no room for the 2D badge: a stray "2" under the fade; at 800-844 px it has) */
+    @media (max-width: 420px) { body.mode2d #badge2d { display:none; } }
     header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
     #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
@@ -735,6 +740,8 @@
          check, a tour), Save (every file written: picture, print, .cadmesh,
          drawing, mesh) -->
     <div class="menu-panel" id="filepanel" aria-label="File">
+      <!-- a drawing's sheet select, where the row is short (main.js refold) -->
+      <span class="mhead" id="fhsheet" aria-hidden="true" hidden>Sheet</span>
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
       <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
@@ -887,12 +894,23 @@
          does. Mouse or Touch by the device (a hybrid shows both) -->
     <div class="hcols">
       <!-- a 2D drawing's own controls, in place of the 3D groups (UI design round 8 R8-2) -->
+      <!-- (each line by the device, as the 3D groups are: round 9 R9-2) -->
       <section class="help-2d"><h3>Drawing</h3><dl>
-        <dt>Drag, one finger</dt><dd>Pan</dd>
-        <dt>Wheel, pinch</dt><dd>Zoom</dd>
-        <dt>Double-click, double-tap</dt><dd>Fit the drawing</dd>
-        <dt>Click, tap a line</dt><dd>Select its layer</dd>
+        <dt class="help-mouse">Drag</dt><dd class="help-mouse">Pan</dd>
+        <dt class="help-mouse">Wheel</dt><dd class="help-mouse">Zoom toward the pointer</dd>
+        <dt class="help-mouse">Double-click</dt><dd class="help-mouse">Fit the drawing</dd>
+        <dt class="help-mouse">Click a line</dt><dd class="help-mouse">Select its layer</dd>
+        <dt class="help-touch">One finger</dt><dd class="help-touch">Pan</dd>
+        <dt class="help-touch">Two fingers</dt><dd class="help-touch">Pinch to zoom</dd>
+        <dt class="help-touch">Double-tap</dt><dd class="help-touch">Fit the drawing</dd>
+        <dt class="help-touch">Tap a line</dt><dd class="help-touch">Select its layer</dd>
         <dt>Measure</dt><dd>Two points; they snap to line ends, middles and circle centres</dd></dl></section>
+      <section class="keys help-2d"><h3>Keys</h3><dl>
+        <dt><kbd>F</kbd></dt><dd>Fit the drawing</dd>
+        <dt><kbd>M</kbd></dt><dd>Measure</dd>
+        <dt><kbd>P</kbd></dt><dd>Save a picture</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Drop a half-taken measurement, then stop measuring</dd>
+        <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
       <section class="keys help-mouse"><h3>Mouse</h3><dl>
         <dt>Drag</dt><dd>Orbit</dd>
         <dt>Right-drag, Shift+drag</dt><dd>Pan</dd>

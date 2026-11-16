@@ -67,8 +67,10 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // viewLanding) and measure-ui.js's snap budget -- no new import; 979.0 KB in 42 after r137, code:
   // measure-ui.js's edge spheres and hole-size union, main.js's export note -- no new import; 982.5 KB
   // in 42 after UI design round 5, code: measure-ui.js's hole fold, caption, note and empty table, the
-  // touch-only words, main.js's reference line and 2D plurals -- no new import)
-  assert.ok(bytes < 985e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // touch-only words, main.js's reference line and 2D plurals -- no new import; 985.6 KB in 42 after
+  // UI design round 9, code: main.js's 2D fold step, embed hint, 2D tooltips and the tap word -- no
+  // new import)
+  assert.ok(bytes < 988e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {
