@@ -2530,7 +2530,8 @@ function setupEmbed() {
   $('embedhint').hidden = app.embedActive;
   // (a touch-only device taps: UI design round 5 V-3)
   embedHint();
-  $('embedfit').onclick = () => fitTo(drawnBox(null));
+  // (a drawing fits by its own view: drawnBox is the 3D model's, null in 2D -- round 10 R10-1)
+  $('embedfit').onclick = () => (app.dxf ? $('fit').click() : fitTo(drawnBox(null)));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
   // &maximize=1 (a product page's inline viewer): "Open in cad.place" is a
   // maximize icon in the top right, beside ?, in place of Full screen -- the
@@ -2954,8 +2955,13 @@ function refold(keep = focusNow()) {
   // Show folds before the model list: its four buttons do nothing until a
   // part is selected, while the list is how a visitor reaches the other
   // models (UI organization review rank 6)
-  for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist', 'sheet']) {
+  tb.classList.remove('nobadge');
+  for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist', 'badge', 'sheet']) {
     if (toolbarFits(tb)) break;
+    if (id === 'badge') {
+      tb.classList.add('nobadge');
+      continue;
+    }
     if (id === 'sheet') {
       // a drawing's sheet select, last: into File's panel, first there (2D has no View or Show to
       // fold, and a 320 px phone's row ran past the edge with it: UI design round 8 R8-1)
@@ -2997,7 +3003,7 @@ function refold(keep = focusNow()) {
     // the tooltip names what the panel holds
     const holds = [narrow ? 'open a file' : null,
       $('filepanel').contains($('modellist')) && !$('modellist').hidden ? 'open a model from the list' : null,
-      'save the converted model', 'copy a link to this view'].filter(Boolean);
+      app.dxf ? 'save a picture of the drawing' : 'save the converted model', 'copy a link to this view'].filter(Boolean);
     const t = holds.join(', ').replace(/, ([^,]*)$/, ', or $1');
     $('filemenu').querySelector('.menu-btn').title = t[0].toUpperCase() + t.slice(1);
   }
@@ -5493,6 +5499,10 @@ function dropAddressModel(u) {
 const TITLES_2D = [
   ['measure', 'Measure the drawing: two points, which snap to line ends, middles and circle centres (M)'],
   ['savepic', 'Save the drawing as a PNG picture, as it is shown (P)'],
+  // (round 10 R10-4: Fit's "selection, or the whole model", an embed's "model")
+  ['fit', 'Fit the drawing in view (F)'],
+  ['embedfit', 'Fit the drawing in view'],
+  ['embedopen', 'Open this drawing in the full viewer, at this view, in a new tab'],
 ];
 
 // An embed's hint, for what is shown: a drawing pans, a model turns. One place sets it, so a 3D
@@ -5525,7 +5535,7 @@ function show2D(drawing, name, url) {
   $('view2d').dataset.fitInset = app.embed ? '44' : '0';
   // the kept controls' tooltips in a drawing's words (Measure's named faces and hole centres,
   // Save picture the options ▾ that 2D hides: UI design round 9 R9-9)
-  for (const [id, t] of TITLES_2D) { const b = $(id); b.dataset.title3d ??= b.title; b.title = t; }
+  for (const [id, t] of TITLES_2D) { const b = $(id); if (b) { b.dataset.title3d ??= b.title; b.title = t; } } // (?noopen=1 removes embedopen)
   // (the row changed -- View out, the 2D badge and the sheet select in -- and the header's size
   // may not have: after the select is shown, so the fold counts it, UI design round 8 R8-1)
   refold();
@@ -5565,7 +5575,7 @@ function leave2D() {
   $('view2d').hidden = true;
   $('sheet').hidden = true;
   clearHover();
-  for (const [id] of TITLES_2D) { const b = $(id); if (b.dataset.title3d !== undefined) b.title = b.dataset.title3d; }
+  for (const [id] of TITLES_2D) { const b = $(id); if (b && b.dataset.title3d !== undefined) b.title = b.dataset.title3d; }
   embedHint();
   refold();
 }
@@ -7642,7 +7652,9 @@ function wireInput() {
     // Section (each a mode the view is in), then the selection
     const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? (app.dxf.view.escapeMeasure() || (app.dxf.view.measuring ? (toggle2DMeasure(), true) : app.dxf.view.select(null))) : app.measure.escape()
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? (app.dxf.view.escapeMeasure() || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
+        // (then a selected layer, then an active embed lets the page have the wheel back, as in 3D: round 10 R10-2)
+        : app.dxf.view.selected ? app.dxf.view.select(null) : app.embed && app.embedActive ? (setEmbedActive(false), true) : false)) : app.measure.escape()
         || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },

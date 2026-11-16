@@ -328,6 +328,12 @@
   :is(html.embed, body.embed) :is(header, #parts, #scrim) { display:none !important; }
   :is(html.embed, body.embed) #stage { grid-column:1 / -1; grid-row:1 / -1; }
   body.embed:not(.active) #stage { touch-action:pan-x pan-y pinch-zoom; cursor:pointer; }
+  /* (a drawing's canvas took the wheel and the press itself, so an inactive embedded drawing
+     zoomed at once and a click never made it active: the stage's own handlers have them until
+     then, as over a 3D model -- UI design round 10 R10-2) */
+  body.embed:not(.active) #view2d { pointer-events:none; }
+  /* a tour's card has the view's foot: the hint would sit half under it (round 10 R10-5) */
+  #stage:has(#tourcard:not([hidden])) #embedhint { display:none; }
   /* a tour's caption card: bottom left, above the options bar; frames keep
      the strip it covers clear (main.js tourCover) */
   #tourcard { position:absolute; left:12px; bottom:calc(12px + var(--optbar-h, 0px)); z-index:2;
@@ -496,6 +502,9 @@
   #badge2d { display:none; align-self:center; padding:1px 6px; border:1px solid var(--line); border-radius:4px;
     color:var(--dim); font-size:11px; font-weight:600; letter-spacing:.04em; }
   body.mode2d #badge2d { display:inline-block; }
+  /* a fold step of its own, before the sheet select (main.js refold): it goes where the row is
+     short, at whatever width (a 428 px phone folded the select and kept it: round 10 R10-3) */
+  body.mode2d #tb.nobadge #badge2d { display:none; }
   #sheet[hidden] { display:none; }
   #sheet { margin-left:4px; }
   body.mode2d :is(#viewmenu, #viewmenu + .sep, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
@@ -670,8 +679,6 @@
     header.more-right::after { content:''; position:absolute; top:0; right:var(--endw, 0px); bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    /* (a phone's row has no room for the 2D badge: a stray "2" under the fade; at 800-844 px it has) */
-    @media (max-width: 420px) { body.mode2d #badge2d { display:none; } }
     header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
     #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
