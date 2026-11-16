@@ -582,6 +582,8 @@
   @media (any-pointer: coarse) and (not (any-pointer: fine)) {
     /* (Walk moves by W A S D: not offered without keys) */
     .help-mouse, #helppop section.keys:not(.help-touch), #helppop .kbonly, #walk { display:none; }
+    /* (no "Drop … here, or": a phone has nothing to drop; Choose a file… is the way) */
+    #empty .drop-hint { display:none; }
     /* (one group left: a box its width, not 560 px with one 257 px column) */
     #helppop { width:min(360px, calc(100vw - 16px)); }
     #helppop .hcols { columns:auto; }
@@ -609,6 +611,8 @@
     #colours input[type=color] { width:44px; height:40px; }
     #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
     button.mini, #testeps li button:not(.tename), #picopts button, #teclose { min-width:40px; }
+    button.mini { font-size:13px; } /* (11 px on a 40 px button) */
+    #measnotetext, #secin { min-height:40px; } /* (30 px beside the options bar's 40 px buttons) */
     #picopts button { min-height:40px; font-size:13px; }
     #touredit button { font-size:13px; } /* (12 px on a 40 px button; 13 everywhere else) */
     #touredit input[type=checkbox] { width:20px; height:20px; }

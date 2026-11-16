@@ -273,7 +273,7 @@ export function createTourRecorder(api) {
     try { tour = api.validate(text()); } catch (e) { note(`not ready: ${e.message}`); return; }
     busy = true;
     renderList();
-    note(kind === 'video' ? 'recording the tour: it plays once through (a drag or a key stops it)…' : 'taking a picture of each step…');
+    note(kind === 'video' ? `recording the tour: it plays once through (a drag${typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse) and (not (any-pointer: fine))').matches ? '' : ' or a key'} stops it)…` /* (no keys on a touch-only device) */ : 'taking a picture of each step…');
     try {
       const r = kind === 'video' ? await api.video(tour) : await api.pictures(tour);
       if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved the video, ${(r / 1048576).toFixed(1)} MB` : `saved ${r} pictures`);

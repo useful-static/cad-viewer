@@ -25,7 +25,7 @@ import { MAX_NOTES, bodyKeys, decodeView, encodeView, resolveBodies, roundCamera
 import { aboveBelow, pastWords, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
-import { createMeasure } from './measure-ui.js';
+import { createMeasure, TOUCH_ONLY } from './measure-ui.js';
 import { copiesOf, mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
@@ -1675,7 +1675,7 @@ function setPaint(on) {
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) tell('this model has no b-rep faces to paint', 3000);
-  else if (on) tell(`Paint: ${coarseOnly() ? 'tap' : 'click'} a face to paint it in the swatch's colour`, 3000);
+  else if (on) tell(`Paint: ${tapWord()} a face to paint it in the swatch's colour`, 3000);
   updateButtons();
 }
 function paintFace(f) {
@@ -2529,7 +2529,7 @@ function setupEmbed() {
   $('embedbar').hidden = false;
   $('embedhint').hidden = app.embedActive;
   // (a touch-only device taps: UI design round 5 V-3)
-  if (!matchMedia('(any-pointer: fine)').matches) $('embedhint').textContent = 'Tap to turn and zoom the model';
+  if (tapWord() === 'tap') $('embedhint').textContent = 'Tap to turn and zoom the model';
   $('embedfit').onclick = () => fitTo(drawnBox(null));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
   // &maximize=1 (a product page's inline viewer): "Open in cad.place" is a
@@ -2973,7 +2973,9 @@ function refold(keep = focusNow()) {
   // the last step: a row that still does not fit (a 320 px phone with touch
   // targets: 348 px) takes Measure into View's panel, as its first item (M
   // still reaches it)
-  if (!toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
+  // (never in 2D: View is hidden there, so Measure went with it -- a phone's drawing had no
+  // Measure at all: UI design round 7 R7-1)
+  if (!document.body.classList.contains('mode2d') && !toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
   // a folded View holds the presets as its panel's grid, and Display's items,
   // not menus in a menu
   if ($('viewmenu').classList.contains('folded')) for (const id of ['presetmenu', 'displaymenu']) $(id).classList.remove('folded');
@@ -4928,6 +4930,8 @@ function sayClearance(lc) {
 // a tablet) leaves them out; js/edges.js's SILHOUETTE_CAP elsewhere
 const COARSE_SILHOUETTE_CAP = 500_000;
 const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+// the words a device is told ("tap" or "click"): the stylesheet's own touch-only test, as measure-ui.js asks
+const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
 
 // The edge list and body facts of a loaded model: from the file when it
 // carries them, else built by a worker from copies of its arrays. Resolves
@@ -5479,6 +5483,7 @@ function show2D(drawing, name, url) {
   leave2D();
   clearModel();
   document.body.classList.add('mode2d');
+  refold(); // (the row changed -- View out, the 2D badge in -- and the header's size may not have)
   const cv = $('view2d');
   cv.hidden = false;
   app.dxf = { drawing, name, url, sheet: -1 };
@@ -5517,7 +5522,7 @@ function toggle2DMeasure() {
   v.setMeasure(on);
   if (!on) v.clearMeasure();
   $('measure').setAttribute('aria-pressed', String(on));
-  tell(on ? `Measure: ${coarseOnly() ? 'tap' : 'click'} two points (they snap to line ends, middles and circle centres)` : 'measure off', 3000, on ? 'measure on' : 'measure off');
+  tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres)` : 'measure off', 3000, on ? 'measure on' : 'measure off');
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)
@@ -5529,6 +5534,7 @@ function leave2D() {
   $('view2d').hidden = true;
   $('sheet').hidden = true;
   clearHover();
+  refold();
 }
 
 // the parts list as the drawing's layers: colour, name, line count, a box

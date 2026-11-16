@@ -28,7 +28,9 @@ export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at i
 // the rims, it was one too small to tell that was not: r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // a touch-only device taps (and has no Esc): the words say so (UI design rounds 5-6)
-const touchOnly = () => typeof matchMedia === 'function' && !matchMedia('(any-pointer: fine)').matches;
+// (the stylesheet's own test: "no fine pointer" alone also matches a browser that reports no pointer)
+export const TOUCH_ONLY = '(any-pointer: coarse) and (not (any-pointer: fine))';
+const touchOnly = () => typeof matchMedia === 'function' && matchMedia(TOUCH_ONLY).matches;
 export const untoldText = (n, holes = 0) => {
   // (both kinds: the rounding coarser than the share, or the loop within that rounding of the circle
   // test -- it said "too small" of a Ø7.28 rim 131 m out whose rounding was 0.215% of its radius: r70 A3)
@@ -728,7 +730,8 @@ export function createMeasure(deps) {
     $('measchip').setAttribute('aria-expanded', String(st.listOpen));
     $('measnote').textContent = kept ? 'Measure is off; its results stay until cleared'
       : st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
-      : st.mode === 'note' ? (st.pending.length ? 'type the note, Enter pins it' : `${touchOnly() ? 'tap' : 'click'} where the note goes`)
+      // (typing: the field's placeholder says it once -- UI design round 7 R7-3)
+      : st.mode === 'note' ? (st.pending.length ? '' :`${touchOnly() ? 'tap' : 'click'} where the note goes`)
         : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
     if (!(st.mode === 'note' && st.pending.length)) $('measnotetext').hidden = true;
     if (st.listOpen) fillList();
