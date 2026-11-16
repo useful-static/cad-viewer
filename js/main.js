@@ -2932,8 +2932,10 @@ function refold(keep = focusNow()) {
   // Save picture, Export, Save drawing, Browse models and Download, which
   // standing in a wide row folded the view presets even at 1920 px
   for (const id of MENUS) $(id).classList.toggle('folded', id === 'filemenu' || id === 'displaymenu');
-  // Measure stands in the row after Fit (back there before measuring)
+  // Measure stands in the row after Fit (back there before measuring), and a drawing's sheet
+  // select after it (File holds it where the row is short)
   placeMeasure(false);
+  if ($('sheet').parentElement !== tb) $('tools').after($('sheet'));
   tb.classList.add('measuring');
   // the model list is a step of its own, after View and before Show: it
   // folds into File's panel (it stood outside every group, so the wide row
@@ -2951,8 +2953,14 @@ function refold(keep = focusNow()) {
   // Show folds before the model list: its four buttons do nothing until a
   // part is selected, while the list is how a visitor reaches the other
   // models (UI organization review rank 6)
-  for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist']) {
+  for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist', 'sheet']) {
     if (toolbarFits(tb)) break;
+    if (id === 'sheet') {
+      // a drawing's sheet select, last: into File's panel, first there (2D has no View or Show to
+      // fold, and a 320 px phone's row ran past the edge with it: UI design round 8 R8-1)
+      if (!$('sheet').hidden) $('filepanel').prepend($('sheet'));
+      continue;
+    }
     if (id === 'tools') {
       $('tools').classList.add('compact');
       continue;
@@ -5483,7 +5491,6 @@ function show2D(drawing, name, url) {
   leave2D();
   clearModel();
   document.body.classList.add('mode2d');
-  refold(); // (the row changed -- View out, the 2D badge in -- and the header's size may not have)
   const cv = $('view2d');
   cv.hidden = false;
   app.dxf = { drawing, name, url, sheet: -1 };
@@ -5498,6 +5505,11 @@ function show2D(drawing, name, url) {
     const o = document.createElement('option'); o.value = v; o.textContent = t; return o;
   }));
   sel.hidden = !sheets.length;
+  // (an embedded drawing pans; nothing turns: UI design round 8 R8-4)
+  $('embedhint').textContent = `${tapWord() === 'tap' ? 'Tap' : 'Click'} to pan and zoom the drawing`;
+  // (the row changed -- View out, the 2D badge and the sheet select in -- and the header's size
+  // may not have: after the select is shown, so the fold counts it, UI design round 8 R8-1)
+  refold();
   setSheet(dxfLib.sheetDraws(drawing) || !sheets.length ? -1 : sheets[0].i);
   $('measure').setAttribute('aria-pressed', 'false');
   updateButtons(); // (clearModel ran them before app.dxf: Measure, Fit and Print come on for the drawing)

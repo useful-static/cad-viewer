@@ -187,6 +187,9 @@
   #helppop dt { color:var(--fg); }
   #helppop dd { margin:0; }
   #helppop .nobr { white-space:nowrap; }
+  /* a drawing: its own group; the 3D groups (orbit, views, explode, walk, isolate) left out */
+  #helppop .help-2d, body.mode2d #helppop section:not(.help-2d) { display:none; }
+  body.mode2d #helppop .help-2d { display:block; }
   #helppop kbd { display:inline-block; min-width:18px; padding:0 4px; border:1px solid #4a5363; border-bottom-width:2px; border-radius:3px;
     background:#2e343e; color:var(--fg); font:11px/15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align:center; }
   #backend { flex:none; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; }
@@ -492,6 +495,8 @@
   #sheet[hidden] { display:none; }
   #sheet { margin-left:4px; }
   body.mode2d :is(#viewmenu, #viewmenu + .sep, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
+  /* File's 3D-only items, greyed in 2D: not shown there (UI design round 8 R8-5) */
+  body.mode2d :is(#addmodelbtn, #tourmake, #picmore, #savedrawing, #exportmesh, #export) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid var(--dim); margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
@@ -543,8 +548,9 @@
      touch hint was 2.5:1) */
   #hover:not(:empty) { background:rgba(29,33,39,.8); padding:1px 6px; border-radius:4px; }
   html.dark #hover:not(:empty) { background:rgba(15,23,42,.8); } /* (the slate frame's own) */
-  #stage[data-bg="paper"] #hover { color:#222; text-shadow:none; }
-  #stage[data-bg="paper"] #hover:not(:empty) { background:rgba(255,255,255,0.9); padding:1px 6px; border-radius:4px; box-shadow:0 0 0 1px #d0d0cc; }
+  /* (a drawing is on paper too: its notices were the dark view's grey, 2.9:1) */
+  :is(#stage[data-bg="paper"], body.mode2d #stage) #hover { color:#222; text-shadow:none; }
+  :is(#stage[data-bg="paper"], body.mode2d #stage) #hover:not(:empty) { background:rgba(255,255,255,0.9); padding:1px 6px; border-radius:4px; box-shadow:0 0 0 1px #d0d0cc; }
   /* status and the model name stay in the document for the live region and
      the tab title; the bar that showed them repeated the empty card */
   footer { display:none; }
@@ -660,6 +666,7 @@
     header.more-right::after { content:''; position:absolute; top:0; right:var(--endw, 0px); bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
+    body.mode2d #badge2d { display:none; } /* (the drawing on screen says it is 2D; a phone's row has no room: a stray "2" under the fade) */
     header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
     #tools .ico { margin-right:0; }
     #tb { gap:5px; padding:6px 8px; }
@@ -879,6 +886,13 @@
     <!-- one group per kind of thing to do: what to press, then what it
          does. Mouse or Touch by the device (a hybrid shows both) -->
     <div class="hcols">
+      <!-- a 2D drawing's own controls, in place of the 3D groups (UI design round 8 R8-2) -->
+      <section class="help-2d"><h3>Drawing</h3><dl>
+        <dt>Drag, one finger</dt><dd>Pan</dd>
+        <dt>Wheel, pinch</dt><dd>Zoom</dd>
+        <dt>Double-click, double-tap</dt><dd>Fit the drawing</dd>
+        <dt>Click, tap a line</dt><dd>Select its layer</dd>
+        <dt>Measure</dt><dd>Two points; they snap to line ends, middles and circle centres</dd></dl></section>
       <section class="keys help-mouse"><h3>Mouse</h3><dl>
         <dt>Drag</dt><dd>Orbit</dd>
         <dt>Right-drag, Shift+drag</dt><dd>Pan</dd>
