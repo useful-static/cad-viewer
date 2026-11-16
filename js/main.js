@@ -1262,11 +1262,14 @@ function clearHover() {
 // where they can be seen. Their help sits in the parts panel, which a phone
 // keeps closed, so a first visitor saw none of it (feature review
 // 2026-10-29). Once per browser; a note already showing (a view link's) wins.
-const TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
+// ("☰ for parts" only where the ☰ is shown: a touch tablet's wide layout has the list beside the
+// view -- UI design round 6 R6-2)
+let TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
 function touchHintOnce() {
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
+  TOUCH_HINT = `one finger turns · two pinch and pan · tap names a part${$('panelbtn').getClientRects().length ? ' · ☰ for parts' : ''}`;
   tell(TOUCH_HINT, 6000);
   // (counted as seen only if it held its time: a 6 s note right after the load replaced it, and it
   // was recorded as shown and never came back -- r47 Q7)
@@ -1672,7 +1675,7 @@ function setPaint(on) {
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) tell('this model has no b-rep faces to paint', 3000);
-  else if (on) tell('Paint: click a face to paint it in the swatch\'s colour', 3000);
+  else if (on) tell(`Paint: ${coarseOnly() ? 'tap' : 'click'} a face to paint it in the swatch's colour`, 3000);
   updateButtons();
 }
 function paintFace(f) {
@@ -5514,7 +5517,7 @@ function toggle2DMeasure() {
   v.setMeasure(on);
   if (!on) v.clearMeasure();
   $('measure').setAttribute('aria-pressed', String(on));
-  tell(on ? 'Measure: click two points (they snap to line ends, middles and circle centres)' : 'measure off', 3000, on ? 'measure on' : 'measure off');
+  tell(on ? `Measure: ${coarseOnly() ? 'tap' : 'click'} two points (they snap to line ends, middles and circle centres)` : 'measure off', 3000, on ? 'measure on' : 'measure off');
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)

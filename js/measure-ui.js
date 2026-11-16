@@ -27,6 +27,8 @@ export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at i
 // the through-holes left out as their other rim is one of them, their own rim told (counted among
 // the rims, it was one too small to tell that was not: r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// a touch-only device taps (and has no Esc): the words say so (UI design rounds 5-6)
+const touchOnly = () => typeof matchMedia === 'function' && !matchMedia('(any-pointer: fine)').matches;
 export const untoldText = (n, holes = 0) => {
   // (both kinds: the rounding coarser than the share, or the loop within that rounding of the circle
   // test -- it said "too small" of a Ø7.28 rim 131 m out whose rounding was 0.215% of its radius: r70 A3)
@@ -726,7 +728,7 @@ export function createMeasure(deps) {
     $('measchip').setAttribute('aria-expanded', String(st.listOpen));
     $('measnote').textContent = kept ? 'Measure is off; its results stay until cleared'
       : st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
-      : st.mode === 'note' ? (st.pending.length ? 'type the note, Enter pins it' : 'click where the note goes')
+      : st.mode === 'note' ? (st.pending.length ? 'type the note, Enter pins it' : `${touchOnly() ? 'tap' : 'click'} where the note goes`)
         : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
     if (!(st.mode === 'note' && st.pending.length)) $('measnotetext').hidden = true;
     if (st.listOpen) fillList();
@@ -768,9 +770,7 @@ export function createMeasure(deps) {
     // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     const plain = on && scene.mesh && !scene.mesh.faces;
-    // (a touch-only device taps, and has no Esc: UI design round 5 V-3)
-    const touchOnly = typeof matchMedia === 'function' && !matchMedia('(any-pointer: fine)').matches;
-    deps.tell(on ? `Measure: ${touchOnly ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
+    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
     if (focus) (on ? $('measoff') : $('measure')).focus();
   }
 
@@ -901,7 +901,7 @@ export function createMeasure(deps) {
     if (!ids || !ids.length) { st.holes = null; box.hidden = true; deps.queueFrame(); return null; }
     const t = holeRows(ids, ref);
     st.holes = { list: t.list, pick: -1 };
-    $('holestitle').textContent = `Holes of ${name} (${t.list.length})`;
+    $('holestitle').textContent = t.list.length ? `Holes of ${name} (${t.list.length})` : `Holes of ${name}`;
     const sum = $('holessum');
     sum.replaceChildren();
     for (const g of t.groups) {
@@ -965,8 +965,8 @@ export function createMeasure(deps) {
     const none = !t.list.length;
     box.querySelector('table').hidden = none;
     $('holesfrom').hidden = $('holessumbox').hidden = none;
-    $('holescsv').disabled = none;
-    if (none && note.hidden) { note.hidden = false; note.textContent = 'No round holes found in these parts'; }
+    $('holescsv').hidden = none;
+    if (none && note.hidden) { note.hidden = false; note.textContent = 'No round holes found'; }
     box.hidden = false;
     deps.queueFrame();
     deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);

@@ -349,7 +349,8 @@
   #testeps li::before { content:counter(step); color:var(--dim); min-width:1.6em; text-align:right; padding-right:2px; }
   #testeps li.sel .tename { border-color:var(--acc); }
   #testeps .tename { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #testeps li button:not(.tename) { padding:2px 6px; }
+  #testeps li button:not(.tename) { padding:3px 6px; } /* (the height of the step name beside it) */
+  #touredit .terow label { display:inline-flex; align-items:center; gap:4px; } /* (Loop's box on its word's line) */
   #tourcard b { display:block; font-size:15px; margin-bottom:2px; }
   #tourcard b[hidden], #tourcard p[hidden] { display:none; }
   #tourcard p { margin:0 0 8px; line-height:1.4; white-space:pre-line; }
@@ -578,7 +579,13 @@
   /* a touch-only device: no mouse help, and no keyboard shortcuts (the View
      panel hides its key hints there too); the Touch group and the graphics
      line are what the box holds */
-  @media (any-pointer: coarse) and (not (any-pointer: fine)) { .help-mouse, #helppop section.keys:not(.help-touch) { display:none; } }
+  @media (any-pointer: coarse) and (not (any-pointer: fine)) {
+    /* (Walk moves by W A S D: not offered without keys) */
+    .help-mouse, #helppop section.keys:not(.help-touch), #helppop .kbonly, #walk { display:none; }
+    /* (one group left: a box its width, not 560 px with one 257 px column) */
+    #helppop { width:min(360px, calc(100vw - 16px)); }
+    #helppop .hcols { columns:auto; }
+  }
   @media (any-pointer: coarse) {
     button, select, label.btn, a.btn { min-height:40px; padding:6px 12px; }
     #secsel { min-width:40px; } /* one glyph: 34 px wide without it */
@@ -602,7 +609,8 @@
     #colours input[type=color] { width:44px; height:40px; }
     #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
     button.mini, #testeps li button:not(.tename), #picopts button, #teclose { min-width:40px; }
-    #picopts button { min-height:40px; }
+    #picopts button { min-height:40px; font-size:13px; }
+    #touredit button { font-size:13px; } /* (12 px on a 40 px button; 13 everywhere else) */
     #touredit input[type=checkbox] { width:20px; height:20px; }
     #touredit :is(input[type=text], input[type=number]), #scenelist input { min-height:40px; }
   }
@@ -863,7 +871,7 @@
        and the renderer (main.js wireHelp) -->
   <div id="helppop" class="help" role="dialog" aria-label="Controls, shortcuts and graphics" tabindex="-1" hidden>
     <div class="gfx"><span id="backend">…</span><span id="gfxnote"></span></div>
-    <span class="head">Controls &amp; shortcuts</span>
+    <span class="head">Controls<span class="kbonly"> &amp; shortcuts</span></span>
     <!-- one group per kind of thing to do: what to press, then what it
          does. Mouse or Touch by the device (a hybrid shows both) -->
     <div class="hcols">
