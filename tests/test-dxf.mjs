@@ -2897,6 +2897,10 @@ test('a DIMENSION drawn without its block, on odd groups: \\X a new line, a nega
   assert.deepEqual([at.x, at.y], [50, 0]);
   const flip = ents2([[11, 50], [21, 12], [70, 0], [50, 30], [42, 10], [210, 0], [220, 0], [230, -1]]).texts[0];
   assert.ok(flip.rot > -Math.PI / 2 && flip.rot <= Math.PI / 2 + 1e-9, `${(flip.rot * 180) / Math.PI}`);
+  // (turned half round to read, its attachment turns with it: 71 = 1, top-left, at 180 degrees is
+  // bottom-right -- must fire: top-left kept, the text on the other side of its point, r138 L2)
+  const side = ents2([[11, 50], [21, 12], [70, 0], [50, 180], [42, 10], [71, 1]]).texts[0];
+  assert.deepEqual([side.align, side.valign, Math.abs(side.rot) < 1e-9], ['right', 'bottom', true]);
   const zero = ents2([[11, 50], [21, 12], [70, 1], [42, -0.0001]], [[0, 'SECTION'], [2, 'HEADER'], [9, '$DIMDEC'], [70, 0], [9, '$DIMZIN'], [70, 12], [0, 'ENDSEC']]).texts[0];
   assert.equal(zero.text, '0');
 });

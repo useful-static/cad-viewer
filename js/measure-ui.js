@@ -842,27 +842,27 @@ export function createMeasure(deps) {
     // (one size one line whatever it prints as: a Ø on a rounding half-step, 0.0215 in, read
     // "0.021 in × 2" + "0.022 in × 3" -- r123 M2. A size: a Ø within 1e-4 of the one before it, as
     // the list is ordered)
-    // (sizes and printed values joined as one, a union: a size whose holes print either side of a
-    // rounding step, one side as a smaller size prints, was split across that size's line and its own
-    // -- r124 L3. Far out, where fit noise passes 1e-4 of the Ø -- the stored positions' rounding, at
-    // the centre's distance -- the chain's step is that noise: it broke the chain, r124 L5)
-    const groups = new Map(), sizeOf = new Map(), up = [];
-    const root = (a) => { while (up[a] !== a) { up[a] = up[up[a]]; a = up[a]; } return a; };
+    // (each size one line, under its mean Ø as printed; two sizes share a line only where their means
+    // print alike. Keyed on each hole's own printed Ø, a size whose holes print either side of a
+    // rounding step was split across that size's line and a smaller one's -- r124 L3; joined through
+    // the printed values as a union, a whole size was pulled into a smaller size's line, H3-CC's Ø0.55
+    // ×8 into Ø0.45's at 1 decimal -- r138 M1. Far out, where fit noise passes 1e-4 of the Ø -- the
+    // stored positions' rounding at the centre's distance -- the chain's step is that noise, r124 L5)
+    const groups = new Map(), sums = [], counts = [];
     const sized = [];
     let sid = -1, prev = -Infinity;
     for (const h of list) {
       const far = Math.max(...h.centre.map(Math.abs));
       const noise = far > 0 ? 2 * 2 ** (Math.floor(Math.log2(far)) - 23) : 0; // (two float32 steps there)
-      if (!(Math.abs(h.diameter - prev) <= Math.max(1e-4 * h.diameter, noise))) { sid++; up[sid] = sid; }
+      if (!(Math.abs(h.diameter - prev) <= Math.max(1e-4 * h.diameter, noise))) { sid++; sums[sid] = 0; counts[sid] = 0; }
       prev = h.diameter;
-      const p = deps.num(h.diameter);
-      if (!sizeOf.has(p)) sizeOf.set(p, sid);
-      else { const a = root(sizeOf.get(p)), b = root(sid); if (a !== b) up[Math.max(a, b)] = Math.min(a, b); }
+      sums[sid] += h.diameter; counts[sid]++;
       sized.push([h, sid]);
     }
+    const meanOf = (s) => sums[s] / counts[s];
     for (const [h, s] of sized) {
-      const key = `${root(s)}|${h.head ? deps.num(h.head) : ''}`;
-      if (!groups.has(key)) groups.set(key, { d: h.diameter, head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
+      const key = `${deps.num(meanOf(s))}|${h.head ? deps.num(h.head) : ''}`;
+      if (!groups.has(key)) groups.set(key, { d: meanOf(s), head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;
       // (the axis each hole runs along: one size in a top face and a side wall spans all three)

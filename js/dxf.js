@@ -1621,8 +1621,13 @@ function emit(recs, M, byBlock, depth, ctx) {
               // (read from below or the left as drawn, after its extrusion: one along -Z read upside
               // down, its angle kept readable before the mirror -- r134 2D L3)
               let rw = dirThrough(O, Math.cos(t.rot), Math.sin(t.rot));
+              // (turned half round to read, its attachment turns with it: left for right, top for
+              // bottom -- kept, a side-attached text hung on the other side of its point: r138 L2)
+              let att = a;
+              const turn = rw > Math.PI / 2 + 1e-9 || rw <= -Math.PI / 2 + 1e-9;
               if (rw > Math.PI / 2 + 1e-9) rw -= Math.PI; else if (rw <= -Math.PI / 2 + 1e-9) rw += Math.PI;
-              ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(a), valign: ['top', 'middle', 'bottom'][Math.floor((a - 1) / 3)], rot: rw });
+              if (turn) att = 10 - a;
+              ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(att), valign: ['top', 'middle', 'bottom'][Math.floor((att - 1) / 3)], rot: rw });
             }
           }
           break;
@@ -1689,7 +1694,7 @@ function emit(recs, M, byBlock, depth, ctx) {
 // its style's 140 times its 40 -- its style (3) from the DIMSTYLE table, else the header's $DIM...,
 // else AutoCAD's own defaults. An angular or ordinate one's 42 is no length: only a text it writes
 // out in full. Its direction (OCS radians): a rotated one's 50, an aligned one's 13 -> 14, else
-// along x, turned by its 53 and kept reading from below or the left. -> { text, h, rot } or null
+// along x, turned by its 53 (the caller keeps it reading from below or the left). -> { text, h, rot } or null
 function dimensionText(r, ctx) {
   const st = ctx.dimStyles.get(nameKey(get(r, 3, ctx.dimHeader.$DIMSTYLE))) || {};
   const v = (k, d) => (Number.isFinite(st[k]) ? st[k] : Number.isFinite(ctx.dimHeader[k]) ? ctx.dimHeader[k] : d);
@@ -1716,10 +1721,9 @@ function dimensionText(r, ctx) {
   let rot = type === 0 ? (num(r, 50, 0) * Math.PI) / 180 : type === 1 ? Math.atan2(num(r, 24) - num(r, 23), num(r, 14) - num(r, 13)) : 0;
   if (!Number.isFinite(rot)) rot = 0;
   rot += (num(r, 53, 0) * Math.PI) / 180;
-  // (read from below or the left: within (-90, 90] degrees)
-  rot = Math.atan2(Math.sin(rot), Math.cos(rot));
-  if (rot > Math.PI / 2 + 1e-9) rot -= Math.PI; else if (rot <= -Math.PI / 2 + 1e-9) rot += Math.PI;
-  return { text, h, rot };
+  // (made to read from below or the left where it is drawn, after its transform, its attachment
+  // turned with it: the caller -- r138 L2)
+  return { text, h, rot: Math.atan2(Math.sin(rot), Math.cos(rot)) };
 }
 
 // entity records that are structure, not something drawn (never counted as "not drawn"). The one

@@ -1079,7 +1079,7 @@ await test('snap candidates are ordered the same whatever order they arrive in (
   assert.ok(olds.size > 1, `the old rule gave ${[...olds]}`);
 });
 
-await test('a size printed either side of a rounding step joins the size printed as its smaller side: one line, not split (r124 L3)', async () => {
+await test('each hole size is one summary line under its mean Ø, never split by its holes\' rounding, and sizes that print apart stay apart (r124 L3, r138 M1)', async () => {
   const lines = [];
   const had = globalThis.document;
   globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {} }, append(...c) { this.kids.push(...c); } }; if (tag === 'li') lines.push(e); return e; } };
@@ -1090,8 +1090,16 @@ await test('a size printed either side of a rounding step joins the size printed
     const { meas } = await measureAt([w(2.999, 15), w(3.0049, 45), w(3.0051, 75)], new Set(), { num: (x) => x.toFixed(2), lenText: (x) => `${x.toFixed(2)} mm` });
     meas.showHoles([1, 2, 3], { min: [0, 0, 0], name: 'all' }, 'all');
     const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
-    assert.equal(sizes.length, 1, sizes.join(' | '));
-    assert.match(sizes[0], /× 3/);
+    // (the chained size on one line, under its mean: with Ø2.999's where the mean prints alike, else its own)
+    const counts = sizes.map((s) => Number(s.match(/× (\d+)/)[1])).sort();
+    assert.ok(JSON.stringify(counts) === '[3]' || JSON.stringify(counts) === '[1,2]', sizes.join(' | '));
+    // (two sizes printing apart stay apart, whatever their holes print one by one: Ø0.45 ×2 and
+    // Ø0.55 ×2 at 1 decimal -- must fire: joined through the printed values, "Ø 0.5 × 4", r138 M1)
+    lines.length = 0;
+    const b = await measureAt([w(0.45, 15), w(0.450001, 35), w(0.55, 55), w(0.550001, 75)], new Set(), { num: (x) => x.toFixed(1), lenText: (x) => `${x.toFixed(1)} mm` });
+    b.meas.showHoles([1, 2, 3, 4], { min: [0, 0, 0], name: 'all' }, 'all');
+    const two = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
+    assert.equal(two.length, 2, two.join(' | '));
   } finally {
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }

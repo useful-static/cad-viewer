@@ -1454,7 +1454,9 @@ async function exportMesh(fmt) {
   // saved line says when either is on -- nothing said it, r128 L2)
   // (a cut that removes something: a cut at the model's end, nothing on its cut side, is no cut --
   // "uncut" was said of it: r134 3D L2)
-  const pl = sectionPlane(), sb = pl && sectionBox();
+  // (against every body as drawn: the section's box is a tour step's first model's, and a cut at its
+  // end still cut the models added past it -- r138 L1)
+  const pl = sectionPlane(), sb = pl && drawnBox(null);
   const cuts = !!pl && [0, 1, 2].reduce((m, k) => m + Math.max(pl[k] * sb.min[k], pl[k] * sb.max[k]), 0) > pl[3] + 1e-9 * (1 + Math.abs(pl[3]));
   const viewOnly = [cuts ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
   const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: the section and Explode change the view, not the file)` : '';
