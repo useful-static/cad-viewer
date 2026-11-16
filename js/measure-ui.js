@@ -916,9 +916,11 @@ export function createMeasure(deps) {
     $('holesdia').textContent = `Ø (${deps.unit()})`;
     $('holespos').textContent = t.posHead;
     $('holesdepth').textContent = `depth (${deps.unit()})`; // (its numbers had no unit: r124 L1)
-    const from = document.createElement('li');
-    from.textContent = `positions from the corner of ${ref.name || 'the whole model'}`;
-    sum.prepend(from);
+    // (a caption, not a size among the sizes; the sizes fold past 6, so a board's 21 left the table
+    // out of sight as it opened: UI design round 3 F-08, F-14)
+    $('holesfrom').textContent = `Positions from the corner of ${ref.name || 'the whole model'}`;
+    $('holessumhead').textContent = `${t.groups.length} ${t.groups.length === 1 ? 'size' : 'sizes'}`;
+    $('holessumbox').open = t.groups.length <= 6;
     if (t.untold || t.unpaired) {
       const un = document.createElement('li');
       un.textContent = untoldText(t.untold, t.unpaired);

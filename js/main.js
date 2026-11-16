@@ -1544,7 +1544,7 @@ function syncPicOpts() {
       : `${sz.W} × ${sz.H} px`;
   }
   for (const b of $('picopts').querySelectorAll('[data-bg]')) b.setAttribute('aria-pressed', String(app.pic.bg === b.dataset.bg));
-  $('picbgview').textContent = currentStyle().paper || app.lightBg ? 'view (paper)' : 'view';
+  $('picbgview').textContent = currentStyle().paper || app.lightBg ? 'View (paper)' : 'View';
   $('picsel').setAttribute('aria-pressed', String(app.pic.sel));
 }
 function savePicOpts() {
@@ -5606,7 +5606,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? '; the Sheet menu shows the layouts' : ''})`);
+    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? '; the "Model" menu beside Fit lists the layouts' : ''})`); // (named as it reads on screen: nothing shows "Sheet")
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
