@@ -2525,6 +2525,8 @@ function setupEmbed() {
   $('stage').append($('hdend'));
   $('embedbar').hidden = false;
   $('embedhint').hidden = app.embedActive;
+  // (a touch-only device taps: UI design round 5 V-3)
+  if (!matchMedia('(any-pointer: fine)').matches) $('embedhint').textContent = 'Tap to turn and zoom the model';
   $('embedfit').onclick = () => fitTo(drawnBox(null));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
   // &maximize=1 (a product page's inline viewer): "Open in cad.place" is a

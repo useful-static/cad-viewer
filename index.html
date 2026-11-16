@@ -186,6 +186,7 @@
   #helppop dl { display:grid; grid-template-columns:9.5em 1fr; gap:3px 10px; margin:0; align-items:baseline; }
   #helppop dt { color:var(--fg); }
   #helppop dd { margin:0; }
+  #helppop .nobr { white-space:nowrap; }
   #helppop kbd { display:inline-block; min-width:18px; padding:0 4px; border:1px solid #4a5363; border-bottom-width:2px; border-radius:3px;
     background:#2e343e; color:var(--fg); font:11px/15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align:center; }
   #backend { flex:none; padding:0 6px; border-radius:3px; background:#2f4a33; color:#b5e3bc; font-weight:600; font-size:10px; line-height:16px; }
@@ -236,11 +237,10 @@
   #picmore { padding:3px 6px; margin-left:0; font-size:inherit; } /* (Save picture's own half, not a .mini beside a value) */
   #picopts { display:flex; flex-direction:column; gap:4px; padding:6px; border:1px solid var(--line); border-radius:6px; }
   #picopts[hidden] { display:none; }
-  /* one line a row, the labels one column wide, so the buttons line up and
-     opening the options never widens File's panel past them */
-  /* sized to File's column, never widening it (width 0, min 100 %); each row's
-     label on a line of its own above its buttons, so the buttons line up */
-  #picopts { width:0; min-width:100%; } /* (File's column is at least 240 px: each row fits a line) */
+  /* sized to File's column, never widening it (width 0, min 100 %; the
+     column is at least 256 px, so each row fits a line); each row's label on
+     a line of its own above its buttons, so the buttons line up */
+  #picopts { width:0; min-width:100%; }
   #picopts .optrow { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
   #picopts .optlab { color:var(--dim); font-size:11px; flex-basis:100%; }
   #picopts button { padding:1px 7px; font-size:12px; }
@@ -575,7 +575,10 @@
      trackpad is touch-primary). A hybrid shows both. */
   /* (hidden only on touch-ONLY devices: "no fine pointer" alone also matches
      a browser that reports no pointer at all, measured in headless Chromium) */
-  @media (any-pointer: coarse) and (not (any-pointer: fine)) { .help-mouse { display:none; } }
+  /* a touch-only device: no mouse help, and no keyboard shortcuts (the View
+     panel hides its key hints there too); the Touch group and the graphics
+     line are what the box holds */
+  @media (any-pointer: coarse) and (not (any-pointer: fine)) { .help-mouse, #helppop section.keys:not(.help-touch) { display:none; } }
   @media (any-pointer: coarse) {
     button, select, label.btn, a.btn { min-height:40px; padding:6px 12px; }
     #secsel { min-width:40px; } /* one glyph: 34 px wide without it */
@@ -598,7 +601,9 @@
     .seg button, #panelbtn, #helpbtn { min-width:40px; justify-content:center; }
     #colours input[type=color] { width:44px; height:40px; }
     #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
-    button.mini, #testeps li button:not(.tename) { min-width:40px; }
+    button.mini, #testeps li button:not(.tename), #picopts button, #teclose { min-width:40px; }
+    #picopts button { min-height:40px; }
+    #touredit input[type=checkbox] { width:20px; height:20px; }
     #touredit :is(input[type=text], input[type=number]), #scenelist input { min-height:40px; }
   }
   /* iOS Safari zooms the page into a focused control under 16 px: on a
@@ -891,7 +896,7 @@
         <dt><kbd>A</kbd></dt><dd>Show all</dd>
         <dt><kbd>Ctrl+Z</kbd></dt><dd>Undo</dd></dl></section>
       <section class="keys"><h3>Parts list</h3><dl>
-        <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move (<kbd>Home</kbd> <kbd>End</kbd>: first, last)</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move (<span class="nobr"><kbd>Home</kbd> <kbd>End</kbd>:</span> first, last)</dd>
         <dt><kbd>Enter</kbd></dt><dd>Select</dd>
         <dt><kbd>Space</kbd></dt><dd>Show / hide</dd>
         <dt><kbd>→</kbd> <kbd>←</kbd></dt><dd>Open / close</dd></dl></section>

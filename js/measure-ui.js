@@ -768,7 +768,9 @@ export function createMeasure(deps) {
     // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     const plain = on && scene.mesh && !scene.mesh.faces;
-    deps.tell(on ? `Measure: click points on the model (Esc to stop)${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
+    // (a touch-only device taps, and has no Esc: UI design round 5 V-3)
+    const touchOnly = typeof matchMedia === 'function' && !matchMedia('(any-pointer: fine)').matches;
+    deps.tell(on ? `Measure: ${touchOnly ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
     if (focus) (on ? $('measoff') : $('measure')).focus();
   }
 
@@ -959,6 +961,12 @@ export function createMeasure(deps) {
         ...(t.untold || t.unpaired ? [`# ${untoldText(t.untold, t.unpaired)}`] : [])].join('\n');
       copyText(csv, 'hole table copied');
     };
+    // no hole at all: one line saying so, not an empty table under a caption (UI design round 5 V-2)
+    const none = !t.list.length;
+    box.querySelector('table').hidden = none;
+    $('holesfrom').hidden = $('holessumbox').hidden = none;
+    $('holescsv').disabled = none;
+    if (none && note.hidden) { note.hidden = false; note.textContent = 'No round holes found in these parts'; }
     box.hidden = false;
     deps.queueFrame();
     deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);

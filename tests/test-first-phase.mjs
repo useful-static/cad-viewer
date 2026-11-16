@@ -65,8 +65,10 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // new import; 972.2 KB in 42 at r131, code: main.js's and measure-ui.js's review lows, scene.js's
   // copiesOf -- no new import; 975.3 KB in 42 at r136, code: main.js's kept cut (keepingCut, held,
   // viewLanding) and measure-ui.js's snap budget -- no new import; 979.0 KB in 42 after r137, code:
-  // measure-ui.js's edge spheres and hole-size union, main.js's export note -- no new import)
-  assert.ok(bytes < 982e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // measure-ui.js's edge spheres and hole-size union, main.js's export note -- no new import; 982.5 KB
+  // in 42 after UI design round 5, code: measure-ui.js's hole fold, caption, note and empty table, the
+  // touch-only words, main.js's reference line and 2D plurals -- no new import)
+  assert.ok(bytes < 985e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {
