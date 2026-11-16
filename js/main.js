@@ -1172,7 +1172,7 @@ for (const v of VIEW_ROWS) {
     b.append(k);
   }
   document.querySelector('.presets').append(b);
-  // and its key in the ? box, before "the opposite side"
+  // and its key in the ? box, before "the opposite view"
   if (v.key) {
     const dt = document.createElement('dt');
     const k = document.createElement('kbd');
@@ -6620,6 +6620,7 @@ function syncRefRow() {
   // (a button about to hide hands the focus on, as the toolbar's do)
   if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
   $('refclear').hidden = !app.ref;
+  $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
   // holes need the b-rep faces (a .cadmesh written before they were kept has none)
   $('holesbtn').disabled = !app.selected.size || !(app.baseMesh && app.baseMesh.faces);
   // an open hole table follows the reference and the display unit

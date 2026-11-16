@@ -123,7 +123,7 @@ export function createTourRecorder(api) {
       down.textContent = '↓'; down.disabled = i === draft.steps.length - 1; down.setAttribute('aria-label', `Move step ${i + 1} down`);
       down.onclick = () => move(i, 1);
       const del = document.createElement('button');
-      del.textContent = '✕'; del.setAttribute('aria-label', `Delete step ${i + 1}`);
+      del.textContent = '×'; del.setAttribute('aria-label', `Delete step ${i + 1}`);
       del.onclick = () => remove(i);
       li.append(name, up, down, del);
       el.list.append(li);
