@@ -5597,7 +5597,7 @@ function fillInfo2D(el) {
   // reference's line counted as drawn: r65 A3)
   // (dxf.js openCounts, dwg-check's count too: r67 A5)
   const oc = dxfLib.openCounts(d, full.layers);
-  row('contents', `${fmtInt(oc.shapes)} lines and shapes, ${fmtInt(oc.texts)} texts${oc.hidden ? ` (and ${fmtInt(oc.hidden)} on layers off or frozen)` : ''}`);
+  row('contents', `${fmtInt(oc.shapes)} ${oc.shapes === 1 ? 'line or shape' : 'lines and shapes'}, ${fmtInt(oc.texts)} ${oc.texts === 1 ? 'text' : 'texts'}${oc.hidden ? ` (and ${fmtInt(oc.hidden)} on layers off or frozen)` : ''}`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
   const nd = Object.entries(full.notDrawn || {});
   if (nd.length) row('not drawn', nd.map(([k, n]) => `${fmtInt(n)} ${k}`).join(', '));

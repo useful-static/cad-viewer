@@ -99,10 +99,10 @@
      text field's ground; accent-color gives the checkboxes and sliders the
      accent instead of the browser's blue */
   :root { --bg:#1d2127; --panel:#252a32; --line:#343b46; --fg:#d8dde5; --dim:#8c95a3; --acc:#ff8c1a; --acc-text:var(--acc);
-    --field:#1b1f25; color-scheme:dark; accent-color:var(--acc); }
+    --ring:var(--acc); --field:#1b1f25; color-scheme:dark; accent-color:var(--acc); }
   /* ?embed=1&theme=light (the head script): a light frame over the light view
      (--bg is the paper the view draws on, styles.js PAPER) */
-  html.light { --bg:#f4f4f2; --panel:#ffffff; --line:#d0d5dc; --fg:#1d2127; --dim:#5b6472; --acc-text:#b35a00; --field:#ffffff; color-scheme:light; }
+  html.light { --bg:#f4f4f2; --panel:#ffffff; --line:#d0d5dc; --fg:#1d2127; --dim:#5b6472; --acc-text:#b35a00; --ring:#b35a00; --field:#ffffff; color-scheme:light; }
   html.light :is(button, select, label.btn, a.btn) { background:#eef0f3; }
   html.light :is(button, label.btn, a.btn):hover { border-color:#9aa3af; }
   html.light :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(255,255,255,.9); }
@@ -151,7 +151,7 @@
      / WebGL 1) with why a faster one was skipped. An embedded page has no
      header: main.js puts them over the view's top right corner there. */
   #hdend { flex:none; display:flex; gap:6px; align-items:center; padding:6px 10px 6px 0; }
-  #hdend :is(button, a.btn) { min-width:28px; padding:3px 6px; display:inline-flex; align-items:center; justify-content:center; }
+  #hdend :is(button, a.btn) { min-width:28px; min-height:26px; padding:3px 6px; display:inline-flex; align-items:center; justify-content:center; }
   #stage > #hdend { position:absolute; top:8px; right:8px; z-index:1; padding:0; }
   /* (embedded with &maximize=1: the maximize icon, Open in cad.place, stands
      in Full screen's place) */
@@ -219,22 +219,24 @@
   /* Save picture and its options (▾): one row; the options a small group */
   .split { display:inline-flex; gap:2px; }
   .split > #savepic { flex:1; }
-  #picmore { padding:3px 6px; }
+  #picmore { padding:3px 6px; margin-left:0; font-size:inherit; } /* (Save picture's own half, not a .mini beside a value) */
   #picopts { display:flex; flex-direction:column; gap:4px; padding:6px; border:1px solid var(--line); border-radius:6px; }
   #picopts[hidden] { display:none; }
-  #picopts .optrow { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
-  #picopts .optlab { color:var(--dim); font-size:11px; min-width:7ch; }
+  /* one line a row, the labels one column wide, so the buttons line up and
+     opening the options never widens File's panel past them */
+  #picopts .optrow { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; }
+  #picopts .optlab { color:var(--dim); font-size:11px; min-width:11ch; }
   #picopts button { padding:1px 7px; font-size:12px; }
   #tourlinks { display:contents; } /* its buttons are File's column's own */
   .expgroup { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:12px; }
-  .expgroup button { flex:1; }
+  .expgroup button { flex:1; font-size:13px; } /* (the group's 12 px is for "Save as" alone) */
   /* Open… (a label) centred like the buttons under it; it sat at the left */
   .menu.folded :is(label.btn, a.btn) { justify-content:center; }
   #panelbtn .lbl { margin-left:5px; }
   /* Number-key hints: in the open View panel only (the row keeps its width),
      and not on a touch-only device (no keyboard to press them on) */
   kbd, .kbdnote { display:none; }
-  .menu.folded kbd { display:inline-block; margin-left:6px; padding:0 4px; border:1px solid var(--line); border-radius:3px;
+  .menu.folded kbd { display:inline-block; margin-left:6px; padding:0 4px; border:1px solid #566173; border-radius:3px;
     color:var(--fg); font:11px/15px ui-monospace, monospace; } /* (dim on the button fill was 3.9:1) */
   .menu.folded .kbdnote { display:block; flex-basis:100%; color:var(--dim); font-size:12px; }
   .menu.folded .kbdnote kbd { margin:0 4px 0 0; }
@@ -244,7 +246,7 @@
   :is(#fullscreen, .maxopen) svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #fullscreen .fs-off, #fullscreen[aria-pressed=true] .fs-on { display:none; }
   #fullscreen[aria-pressed=true] .fs-off { display:inline; }
-  @media (any-pointer: coarse) { #hdend :is(button, a.btn) { min-width:40px; padding:6px 8px; } :is(#fullscreen, .maxopen) svg { width:20px; height:20px; } }
+  @media (any-pointer: coarse) { #hdend :is(button, a.btn) { min-width:40px; min-height:40px; padding:6px 8px; } :is(#fullscreen, .maxopen) svg { width:20px; height:20px; } }
   /* The options bar along the bottom of the 3D view: one row per tool that
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
@@ -275,9 +277,8 @@
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
   #info b { color:var(--dim); font-weight:500; }
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
-  #material { font-size:11px; padding:0 4px; }
   #densitybox[hidden] { display:none; }
-  #density { width:6ch; font-size:11px; padding:0 4px; background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; }
+  #density { width:6ch; font-size:12px; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc-text); }
   /* the models' gallery and the poster: cards over the view */
@@ -320,7 +321,10 @@
   #touredit .tehint { color:var(--dim); margin:0 0 8px; }
   #touredit .tefield { display:flex; flex-direction:column; gap:2px; margin:6px 0; color:var(--dim); }
   #touredit .tefield :is(input, textarea, select) { color:var(--fg); }
-  #touredit textarea { resize:vertical; font:inherit; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:4px; }
+  /* its text and number fields as the viewer's other fields (they were the browser's grey boxes) */
+  #touredit :is(input[type=text], input[type=number], textarea) { font:inherit; color:var(--fg); background:var(--field);
+    border:1px solid var(--line); border-radius:4px; padding:3px 6px; }
+  #touredit textarea { resize:vertical; }
   #touredit .terow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; color:var(--dim); }
   #touredit input[type=number] { width:4.5em; }
   #testeps { margin:6px 0; padding-left:0; list-style:none; counter-reset:step; }
@@ -333,15 +337,17 @@
   #tourcard b[hidden], #tourcard p[hidden] { display:none; }
   #tourcard p { margin:0 0 8px; line-height:1.4; white-space:pre-line; }
   #tourcard .tourbar { display:flex; align-items:center; gap:6px; }
+  #tourcard .tourbar button { min-width:32px; display:inline-flex; align-items:center; justify-content:center; }
   #tourcount { color:var(--dim); font-size:12px; min-width:3.5em; text-align:center; }
   #tourexit { margin-left:auto; }
-  #tourcard .tourbar svg, #secsel svg { vertical-align:-2px; }
+  #tourcard .tourbar svg, #secsel svg, #measundo svg { vertical-align:-2px; }
   #tourplay .tp-pause, #tourplay.playing .tp-play { display:none; }
   #tourplay.playing .tp-pause { display:inline; }
   @media (any-pointer: coarse) { #tourcard .tourbar button { min-width:40px; min-height:40px; } }
   #embedbar { position:absolute; top:8px; left:8px; display:flex; gap:6px; z-index:2; }
   #embedbar[hidden], #embedhint[hidden] { display:none; }
   #embedhint { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); background:rgba(20,24,30,.85); color:var(--fg);
+    box-shadow:0 0 0 1px var(--line);
     padding:4px 10px; border-radius:12px; font-size:12px; pointer-events:none; white-space:nowrap; }
   /* Measure: an SVG layer and HTML labels over the view, projected each frame
      (js/measure-ui.js); they take no pointer input */
@@ -407,17 +413,18 @@
   #holes td, #holes th { padding:1px 4px; text-align:left; border-bottom:1px solid var(--line); }
   #holes tr.pick td { background:#3a4250; }
   #holes tbody tr { cursor:pointer; }
-  #inforef button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
+  /* a small button beside a heading or a value: one style (the hole table's
+     Copy and × were full size) */
+  button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
   #inforef .refbtns { display:flex; gap:6px; margin-bottom:4px; }
   #inforef .refbtns button { flex:1; white-space:nowrap; font-size:12px; padding-left:6px; padding-right:6px; }
   /* the file, graphics backend, triangles: folded at the foot of the values */
   #infomore summary { cursor:pointer; color:var(--dim); font-size:11px; margin-top:2px; }
-  #scene button.mini { padding:0 6px; font-size:11px; margin-left:4px; }
   #scenelist { list-style:none; margin:2px 0; padding:0; }
   #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scenelist input { width:4.2em; font:inherit; font-size:11px; }
   #clearval { color:var(--fg); }
-  #unitsel { padding:1px 4px; }
+  #unitsel, #material { font-size:12px; padding:1px 4px; } /* (one size for the panel's inline selects) */
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
      names were cut, 3 of a board list's 8 at 1280 px. The fold step sheds it
      into File where the row is short) */
@@ -427,6 +434,7 @@
   #treefilter { margin:6px 10px 2px; padding:4px 8px; background:var(--field); color:var(--fg); border:1px solid var(--line);
     border-radius:4px; font:inherit; min-width:0; }
   #treefilter[hidden] { display:none; }
+  #treefilter::placeholder { color:var(--dim); } /* (the browser's grey was 3.6:1) */
   #tree input:indeterminate { opacity:.75; }
   #tree ul { list-style:none; margin:0; padding:0; }
   #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px 4px; }
@@ -435,6 +443,7 @@
   #tree .tw { width:12px; color:var(--dim); cursor:pointer; text-align:center; }
   #tree .label { cursor:pointer; overflow:hidden; text-overflow:ellipsis; flex:1; }
   #tree .cnt { color:var(--dim); font-size:11px; }
+  #tree .row.sel .cnt { color:#b8c6d4; } /* (the dim grey on the selection's cyan was 3.4:1) */
   #tree input { margin:0; }
   #tree .cbwrap { display:inline-flex; align-items:center; } /* the box centred on the row, as before it was wrapped */
   #stage { position:relative; min-width:0; min-height:0; overflow:hidden; touch-action:none; }
@@ -459,8 +468,8 @@
   body.mode2d #badge2d { display:inline-block; }
   #sheet[hidden] { display:none; }
   #sheet { margin-left:4px; }
-  body.mode2d :is(#viewmenu, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
-  #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid #0006; margin-right:6px; vertical-align:-1px; }
+  body.mode2d :is(#viewmenu, #viewmenu + .sep, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
+  #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid var(--dim); margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
   #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
@@ -516,10 +525,11 @@
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   /* one focus ring for every control (the browser's white ring was on most,
      the accent on a few) */
-  :is(button, select, input, textarea, label.btn, a.btn, #tree .label, [role=button]):focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  :is(button, select, input, textarea, summary, label.btn, a.btn, #tree .label, [role=button]):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
   /* (wraps rather than cut the scheme's name: "File colou" in a phone's drawer) */
   #colours { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   #colours select { flex:1; min-width:8em; } /* (one line in a mouse's 340 px drawer; a finger's larger controls wrap) */
+  #colours :is(select, button, input[type=color]) { height:26px; } /* (one height: 27, 24 and 25 px side by side) */
   #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
@@ -606,6 +616,8 @@
        the folded row fits a 320 px phone: with 12 px of padding the row was
        305 px in 253. */
     #tb :is(button, select, label.btn, a.btn) { padding-left:2px; padding-right:2px; min-width:40px; }
+    /* (the row only: in an open menu's panel a label touched both its borders) */
+    #tb .menu.folded.open > .menu-panel :is(button, select, label.btn, a.btn) { padding-left:8px; padding-right:8px; }
     /* (a 320 px phone: the separators go, which with ? and Full screen
        beside the row it had no room for: 240 px in 234) */
     @media (max-width: 340px) { #tb { gap:2px; padding:6px 2px 6px 4px; } #hdend { gap:2px; padding:6px 4px 6px 0; } .sep { display:none; } }
@@ -669,7 +681,7 @@
       <span class="split"><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at the size and background chosen in the picture options (▾), without the hover highlight, with Measure's results drawn in (P)">Save picture</button><button id="picmore" class="mini" autocomplete="off" disabled aria-expanded="false" aria-controls="picopts" aria-label="Picture options" title="Picture options: size, background, selection">▾</button></span>
       <div id="picopts" role="group" aria-label="Picture options" hidden>
         <span class="optrow" role="group" aria-label="Size"><span class="optlab">size</span><button data-scale="1" aria-pressed="false">1×</button><button data-scale="2" aria-pressed="true">2×</button><button data-scale="4" aria-pressed="false">4×</button></span>
-        <span class="optrow" role="group" aria-label="Background"><span class="optlab">background</span><button data-bg="view" aria-pressed="true" id="picbgview">view</button><button data-bg="white" aria-pressed="false">white</button><button data-bg="transparent" aria-pressed="false">transparent</button></span>
+        <span class="optrow" role="group" aria-label="Background"><span class="optlab">background</span><button data-bg="view" aria-pressed="true" id="picbgview">View</button><button data-bg="white" aria-pressed="false">White</button><button data-bg="transparent" aria-pressed="false">Transparent</button></span>
         <span class="optrow"><button id="picsel" aria-pressed="false" title="Draw the selected parts as selected in the picture">Include selection</button><button id="piccopy" hidden title="Copy the picture to the clipboard instead of saving a file">Copy image</button></span>
       </div><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program, turned as the view is oriented, whole (not cut or exploded)">Save as <!-- one button per format: main.js builds them from js/export-mesh.js EXPORTS --></span>
@@ -738,8 +750,9 @@
     <div id="holes" hidden><div class="holeshead"><b id="holestitle">Holes</b>
       <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
-      <ul id="holessum"></ul>
-      <div class="holesscroll"><table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th id="holesdepth">depth</th></tr></thead><tbody id="holesrows"></tbody></table></div></div>
+      <!-- the summary scrolls with the table, in one box: a board's 18 summary
+           lines left the table 1.5 rows under two nested scrollbars -->
+      <div class="holesscroll"><ul id="holessum"></ul><table><thead><tr><th>#</th><th id="holesdia">Ø</th><th id="holespos">position</th><th id="holesdepth">depth</th></tr></thead><tbody id="holesrows"></tbody></table></div></div>
     <!-- more than one model in the view (File > Add model…): each added one
          moved by an offset, and the clearance between the models -->
     <div id="scene" hidden><div class="holeshead"><b>Models</b>
@@ -779,7 +792,7 @@
     <div class="terow"><label>Plays <select id="temode" autocomplete="off"><option value="static">step by step</option><option value="animated">by itself</option></select></label>
       <label><input id="teloop" type="checkbox" autocomplete="off"> loop</label></div>
     <ol id="testeps" aria-label="Steps"></ol>
-    <div class="terow"><button id="teadd" class="primary">Add step</button><button id="teopen">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
+    <div class="terow"><button id="teadd">Add step</button><button id="teopen">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
     <div id="testep" hidden>
       <label class="tefield">Step title <input id="tes-title" type="text" autocomplete="off"></label>
       <label class="tefield">Text <textarea id="tes-text" rows="3"></textarea></label>
@@ -798,7 +811,7 @@
        that step it and leave it -->
   <div id="tourcard" role="region" aria-label="Tour" hidden>
     <b id="tourtitle"></b><p id="tourbody"></p>
-    <div class="tourbar"><button id="tourplay" aria-pressed="false" aria-label="Play the tour" title="Play: each step in turn (Space)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="tp-play" d="M4 2.5v11l9-5.5z" fill="currentColor"/><path class="tp-pause" d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg></button><button id="tourprev" aria-label="Previous step" title="Previous step (←)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M12 2.5v11L3 8z" fill="currentColor"/></svg></button><span id="tourcount" aria-hidden="true"></span><button id="tournext" aria-label="Next step" title="Next step (→)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11L13 8z" fill="currentColor"/></svg></button><button id="tourexit" aria-label="Leave the tour" title="Leave the tour (Esc)">×</button></div>
+    <div class="tourbar"><button id="tourplay" aria-pressed="false" aria-label="Play the tour" title="Play: each step in turn (Space)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="tp-play" d="M4 2.5v11l9-5.5z" fill="currentColor"/><path class="tp-pause" d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg></button><button id="tourprev" aria-label="Previous step" title="Previous step (←)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13 2.5v11L5.5 8zM3 2.5h2v11H3z" fill="currentColor"/></svg></button><span id="tourcount" aria-hidden="true"></span><button id="tournext" aria-label="Next step" title="Next step (→)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 2.5v11L10.5 8zM11 2.5h2v11h-2z" fill="currentColor"/></svg></button><button id="tourexit" aria-label="Leave the tour" title="Leave the tour (Esc)">×</button></div>
   </div>
   <!-- the box ? opens (in the header's #hdend): the controls and shortcuts,
        and the renderer (main.js wireHelp) -->
@@ -869,7 +882,7 @@
       <span class="seg" id="measmode" role="group" aria-label="What to measure"><button data-mode="distance" aria-pressed="true" title="The distance between two points, and its X, Y and Z parts">Distance</button><button data-mode="angle" aria-pressed="false" title="The angle at the middle of three points">Angle</button><button data-mode="face" aria-pressed="false" title="The gap between two faces, the first one flat">Face</button><button data-mode="note" aria-pressed="false" title="A note pinned to a point of the model: a view link carries it">Note</button></span>
       <span id="measnote" class="secval"></span>
       <input id="measnotetext" type="text" hidden autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
-      <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result">↶</button>
+      <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 3L2 6.5 5.5 10M2.5 6.5h7a4 4 0 0 1 0 8H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="measclear" disabled title="Remove every result">Clear all</button>
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
     </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
