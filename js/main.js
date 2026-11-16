@@ -715,8 +715,10 @@ function keepingCut(fn) {
   const keep = k !== undefined && !app.tour && !viewLanding && app.header && app.header.bbox;
   let at = null;
   if (keep) {
+    // (held for the model or scene it was taken on, until the visitor sets the cut: another model, an
+    // Add model or a move, or the slider back at its end, took the stale place -- r136 M1-M3)
     const h = s.held;
-    if (h && h.axis === s.axis && h.t === s.t) at = h.at;
+    if (h && h.axis === s.axis && h.t === s.t && h.header === app.header) at = h.at;
     else { const { min, max } = sectionBox(); at = min[k] + (max[k] - min[k]) * s.t; }
   }
   const out = fn();
@@ -724,7 +726,7 @@ function keepingCut(fn) {
   // model away and its link -- t out of 0..1 -- opened uncut: r134 M1)
   if (at !== null && app.section.axis === s.axis) {
     setSectionAt(at);
-    s.held = { axis: s.axis, t: s.t, at };
+    s.held = { axis: s.axis, t: s.t, at, header: app.header };
   }
   return out;
 }
@@ -1320,7 +1322,7 @@ function applyView(v, link = false) {
   // tab keeps that tab's cut and hidden parts
   // (the Section button's axis -- last -- is only ever a real axis: set to "off" it turned the
   // button into one that does nothing)
-  if (v.section) Object.assign(app.section, { of: null }, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
+  if (v.section) Object.assign(app.section, { of: null, held: null }, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
   // Explode as the link has it (a whole link without it: off), how far
@@ -1911,7 +1913,7 @@ function applyStepState(s) {
   if (!same) { app.overrides = overrides; recolour(); }
   setStyle(s.style || base.view.style, false);
   // (a step's t is a fraction of the tour's own model, the scene's first: sectionBox)
-  if (s.section) Object.assign(app.section, s.section, { of: 'first' }, s.section.axis !== 'off' ? { last: s.section.axis } : {});
+  if (s.section) Object.assign(app.section, s.section, { of: 'first', held: null }, s.section.axis !== 'off' ? { last: s.section.axis } : {});
   else Object.assign(app.section, { of: null }, base.view.section);
   // (a step's own callouts are pinned by showTourStep, where the parts will be)
   // (the visitor's own notes shown as the page's while the tour plays: they
@@ -3871,6 +3873,7 @@ function wireFullscreen() {
 // unit -- r89 A7), clamped to the model's extent
 function setSectionAt(at) {
   const s = app.section;
+  s.held = null; // (the visitor's cut, set: no position held for it -- keepingCut holds its own after)
   if (s.axis === 'off' || !app.header) return;
   const k = { x: 0, y: 1, z: 2 }[s.axis];
   const { min, max } = sectionBox();
@@ -7411,7 +7414,7 @@ function wireInput() {
     pushState();
     viewChanged();
   };
-  $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; updateButtons(); viewChanged(); };
+  $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; app.section.held = null; updateButtons(); viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
   const pal = $('palette');
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));

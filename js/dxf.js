@@ -1928,7 +1928,8 @@ function deBoorPts(deg, knots, cx, cy, cz, w) {
   // (and knots that ever decrease, or span nothing: one point repeated, which took a hatch whose edge
   // it was away unsaid -- r134 2D L2)
   // (a dip of a rounding step -- 0.30000000000000004 then 0.3 -- is no decrease: r135 L1)
-  const span = Math.abs(knots[knots.length - 1] - knots[0]) || 1;
+  // (of the knots' size too: a dip of one rounding step in knots near 1e6, span 1, was a decrease -- r136 L3)
+  const span = Math.max(Math.abs(knots[knots.length - 1] - knots[0]), Math.abs(knots[0]), Math.abs(knots[knots.length - 1])) || 1;
   const ordered = knots.every((x, k) => Number.isFinite(x) && (k === 0 || x >= knots[k - 1] - 1e-12 * span)) && knots[n] > knots[deg];
   if (!Number.isInteger(deg) || deg < 1 || deg >= n || deg > MAX_SPLINE_DEGREE || knots.length !== n + deg + 1 || !ordered) return cx.flatMap((x, k) => [x, cy[k], cz[k]]);
   const W = w.length === n ? w : new Array(n).fill(1);

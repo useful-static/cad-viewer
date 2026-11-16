@@ -2741,6 +2741,16 @@ test('a hatch spline edge whose knots decrease keeps its hatch, drawn by the con
   const sp = parseDXF(ents([[0, 'SPLINE'], [8, 'S'], [70, 0], [71, 2], [72, k2.length], [73, 5], ...k2.map((x) => [40, x]),
     ...[[0, 0], [5, 10], [10, 0], [15, 10], [20, 0]].flatMap(([x, y]) => [[10, x], [20, y], [30, 0]])])).paths[0];
   assert.ok(sp.pts.length / 2 > 10, `${sp.pts.length / 2} points`);
+  // (and one in knots near 1e6, span 1: the tolerance is of their size too -- r136 L3)
+  const big = 1e6, k3 = [big, big, big, big + 0.3 + 1.2e-10, big + 0.3, big + 1, big + 1, big + 1];
+  const sp3 = parseDXF(ents([[0, 'SPLINE'], [8, 'S'], [70, 0], [71, 2], [72, k3.length], [73, 5], ...k3.map((x) => [40, x]),
+    ...[[0, 0], [5, 10], [10, 0], [15, 10], [20, 0]].flatMap(([x, y]) => [[10, x], [20, y], [30, 0]])])).paths[0];
+  assert.ok(sp3.pts.length / 2 > 10, `${sp3.pts.length / 2} points`);
+  // (a real decrease is still one: the control polygon)
+  const k4 = [0, 0, 0, 0.4, 0.3, 1, 1, 1];
+  const sp4 = parseDXF(ents([[0, 'SPLINE'], [8, 'S'], [70, 0], [71, 2], [72, k4.length], [73, 5], ...k4.map((x) => [40, x]),
+    ...[[0, 0], [5, 10], [10, 0], [15, 10], [20, 0]].flatMap(([x, y]) => [[10, x], [20, y], [30, 0]])])).paths[0];
+  assert.equal(sp4.pts.length / 2, 5);
 });
 test('an MTEXT \\A written without its ";" is a code, not text: "\\A400" reads 400 (r131: r125 L4, old-14/024-C-2)', () => {
   // (must fire: "\A400" drawn as written)
