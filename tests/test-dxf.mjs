@@ -2901,6 +2901,10 @@ test('a DIMENSION drawn without its block, on odd groups: \\X a new line, a nega
   // bottom-right -- must fire: top-left kept, the text on the other side of its point, r138 L2)
   const side = ents2([[11, 50], [21, 12], [70, 0], [50, 180], [42, 10], [71, 1]]).texts[0];
   assert.deepEqual([side.align, side.valign, Math.abs(side.rot) < 1e-9], ['right', 'bottom', true]);
+  // (in a mirrored frame, extrusion -Z: a reflection flips one axis -- 71 = 1 at 0 degrees is read
+  // turned, its left for right only, top kept -- must fire: right / bottom, top for bottom too, r139 L1)
+  const mir = ents2([[11, 50], [21, 12], [70, 0], [50, 0], [42, 10], [71, 1], [210, 0], [220, 0], [230, -1]]).texts[0];
+  assert.deepEqual([mir.align, mir.valign], ['right', 'top']);
   const zero = ents2([[11, 50], [21, 12], [70, 1], [42, -0.0001]], [[0, 'SECTION'], [2, 'HEADER'], [9, '$DIMDEC'], [70, 0], [9, '$DIMZIN'], [70, 12], [0, 'ENDSEC']]).texts[0];
   assert.equal(zero.text, '0');
 });

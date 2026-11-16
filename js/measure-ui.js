@@ -860,9 +860,25 @@ export function createMeasure(deps) {
       sized.push([h, sid]);
     }
     const meanOf = (s) => sums[s] / counts[s];
+    // (a size's printed Ø: what most of its holes print, its mean's on a tie -- a mean just under a
+    // rounding half-step put V2C's Ø3.25 ×2, whose rows print 3.3, on Ø3.20's line at 1 decimal: r139 L3)
+    const votes = [];
+    for (const [h, s] of sized) { const p = deps.num(h.diameter); (votes[s] ||= new Map()).set(p, (votes[s].get(p) || 0) + 1); }
+    const printed = (s) => {
+      let best = deps.num(meanOf(s)), n = votes[s].get(best) || 0;
+      for (const [p, c] of votes[s]) if (c > n) { best = p; n = c; }
+      return best;
+    };
+    // (the line's Ø shown: the mean where it prints the line's value, else a hole that does)
+    const shownOf = (s) => {
+      const p = printed(s);
+      if (deps.num(meanOf(s)) === p) return meanOf(s);
+      const h = sized.find(([x, t]) => t === s && deps.num(x.diameter) === p);
+      return h ? h[0].diameter : meanOf(s);
+    };
     for (const [h, s] of sized) {
-      const key = `${deps.num(meanOf(s))}|${h.head ? deps.num(h.head) : ''}`;
-      if (!groups.has(key)) groups.set(key, { d: meanOf(s), head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
+      const key = `${printed(s)}|${h.head ? deps.num(h.head) : ''}`;
+      if (!groups.has(key)) groups.set(key, { d: shownOf(s), head: h.head || 0, n: 0, lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], normal: h.normal });
       const g = groups.get(key);
       g.n++;
       // (the axis each hole runs along: one size in a top face and a side wall spans all three)

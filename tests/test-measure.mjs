@@ -1100,6 +1100,14 @@ await test('each hole size is one summary line under its mean Ø, never split by
     b.meas.showHoles([1, 2, 3, 4], { min: [0, 0, 0], name: 'all' }, 'all');
     const two = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
     assert.equal(two.length, 2, two.join(' | '));
+    // (a size under what most of its holes print: Ø3.25002 ×2 and Ø3.24990, one chained size whose
+    // rows print 3.3, 3.3, 3.2 and whose mean prints 3.2, beside Ø3.20 ×3 -- must fire: by its mean it
+    // joined Ø3.20's line, "Ø 3.2 × 6", r139 L3)
+    lines.length = 0;
+    const c = await measureAt([w(3.2, 10), w(3.2, 25), w(3.2, 40), w(3.25002, 55), w(3.25002, 70), w(3.2499, 85)], new Set(), { num: (x) => x.toFixed(1), lenText: (x) => `${x.toFixed(1)} mm` });
+    c.meas.showHoles([1, 2, 3, 4, 5, 6], { min: [0, 0, 0], name: 'all' }, 'all');
+    const by = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø ')).map((s) => s.replace(/ ·.*/, ''));
+    assert.deepEqual(by, ['Ø 3.2 mm × 3', 'Ø 3.3 mm × 3'], by.join(' | '));
   } finally {
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }

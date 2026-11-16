@@ -1623,10 +1623,17 @@ function emit(recs, M, byBlock, depth, ctx) {
               let rw = dirThrough(O, Math.cos(t.rot), Math.sin(t.rot));
               // (turned half round to read, its attachment turns with it: left for right, top for
               // bottom -- kept, a side-attached text hung on the other side of its point: r138 L2)
+              // (in a mirrored frame -- extrusion -Z, an insert with one scale negative -- the
+              // reflection flips one axis: turned, left for right only; not turned, top for bottom
+              // only -- both were swapped, or neither: r139 L1)
               let att = a;
               const turn = rw > Math.PI / 2 + 1e-9 || rw <= -Math.PI / 2 + 1e-9;
               if (rw > Math.PI / 2 + 1e-9) rw -= Math.PI; else if (rw <= -Math.PI / 2 + 1e-9) rw += Math.PI;
-              if (turn) att = 10 - a;
+              const mirrored = O[0] * O[3] - O[1] * O[2] < 0;
+              const col = (a - 1) % 3, row = Math.floor((a - 1) / 3);
+              // (turned: left for right; turned, or mirrored, but not both: top for bottom)
+              const swapCol = turn, swapRow = turn !== mirrored;
+              att = (swapRow ? 2 - row : row) * 3 + (swapCol ? 2 - col : col) + 1;
               ctx.addText({ layer, colour, h: t.h * k, text: t.text, mtext: true, x, y, align: mtextAlign(att), valign: ['top', 'middle', 'bottom'][Math.floor((att - 1) / 3)], rot: rw });
             }
           }
