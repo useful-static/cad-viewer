@@ -296,7 +296,7 @@
   /* the parts list keeps room for about six rows however tall the info above
      it grows (a long graphics line, a selection's rows); past that the panel
      itself scrolls */
-  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; overflow-y:auto; }
+  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; overflow-y:auto; scrollbar-width:thin; }
   /* (flex-shrink 0: held -- a fixed height, scrolling inside itself, main.js -- its minimum flex
      height fell to 0, and in a long list's drawer it shrank to a 17 px strip, the list jumping
      under the finger: UI design round 16 R16-1; a thin scrollbar as the toolbar's: R16-4) */
@@ -447,7 +447,7 @@
   #holes table { border-collapse:collapse; width:100%; font-size:11px; }
   /* a board's 30-odd holes scroll in a box of their own, so the table never
      pushes the parts list out of the panel (UI organization review rank 1) */
-  #holes .holesscroll { max-height:40vh; overflow:auto; }
+  #holes .holesscroll { max-height:40vh; overflow:auto; scrollbar-width:thin; } /* (one scrollbar style in the panel: round 17 R17-4) */
   #holes thead th { position:sticky; top:0; background:var(--panel); }
   #holes td, #holes th { padding:1px 4px; text-align:left; border-bottom:1px solid var(--line); }
   #holes tr.pick td { background:#3a4250; }

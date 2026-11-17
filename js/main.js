@@ -388,6 +388,14 @@ function setPanel(open, focusBack = false) {
   $('panelbtn').setAttribute('aria-expanded', String(open));
   // closed from inside (Esc): focus would otherwise sit in a hidden panel
   if (!open && focusBack && $('parts').contains(document.activeElement)) $('panelbtn').focus();
+  // a short drawer opened by a tap showed the info and no parts (0 rows at 844 x 390): it opens
+  // scrolled to the list where fewer than about three rows would show (the keyboard's way in
+  // already scrolls there -- round 17 R17-3)
+  if (open) requestAnimationFrame(() => {
+    const a = $('parts'), t = $('tree');
+    if (!t.firstElementChild || a.scrollTop) return;
+    if (a.getBoundingClientRect().bottom - t.getBoundingClientRect().top < 100) a.scrollTop = $('colours').offsetTop - a.offsetTop;
+  });
 }
 
 // Where the keyboard enters the parts panel: the parts list's tab stop, or
@@ -4955,29 +4963,29 @@ const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
 // it names a tapped part (the device test said "mouse" there: UI design round 12 R12-4)
 addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { capture: true, passive: true });
 
-// While the pointer (or the keyboard's focus) is in the parts or layer list, the info panel above it
-// keeps its height, scrolling inside itself if it grows: a selection's lines wrap to their own height
-// (a long name, a "part" row, a 40 px copies button on touch), and the list moved under the pointer,
-// so a second click or a double-click landed on the next row. Let go once the pointer leaves, or a
-// finger presses elsewhere (UI design round 15 R15-1..R15-3).
+// While the pointer, or the keyboard's focus, is in the parts / layer list, the info panel keeps its
+// height (scrolling inside itself): a selection's lines wrap to their own height, and the list moved
+// under the pointer. Let go on leaving, a press elsewhere, a resize, and a new list (rounds 15-17).
 {
   const info = $('info'), tree = $('tree');
   const hold = () => {
-    if (info.style.height || !info.offsetHeight) return; // (held already; or hidden: nothing to hold)
+    if (info.style.height || !info.offsetHeight) return;
     info.style.height = `${info.offsetHeight}px`;
     info.style.overflowY = 'auto';
   };
   const release = () => { info.style.height = ''; info.style.overflowY = ''; };
   tree.addEventListener('pointerenter', hold);
   tree.addEventListener('pointerdown', hold);
-  tree.addEventListener('focusin', hold);
-  // (the pointer leaving lets go whatever has the focus: a clicked row keeps it, and a selection
-  // taller than the panel stayed cut after the pointer went to the view -- round 16 R16-2)
+  let keyAt = -1e9; // (focus held only from the keyboard: not the page's own refocus, R17-1)
+  addEventListener('keydown', () => { keyAt = performance.now(); }, { capture: true, passive: true });
+  tree.addEventListener('focusin', () => { if (performance.now() - keyAt < 1000) hold(); });
+  // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
+  // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
   tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
   tree.addEventListener('focusout', (e) => { if (!tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
   addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
-  addEventListener('resize', release); // (a phone turned: the old height no longer fits -- R16-5)
-  app.releaseInfo = release; // (a new model or drawing lays the panel out afresh)
+  addEventListener('resize', release);
+  app.releaseInfo = release;
 }
 
 // The edge list and body facts of a loaded model: from the file when it
