@@ -5659,7 +5659,8 @@ function buildLayerList() {
       lab.tabIndex = -1; labs[j].tabIndex = 0; labs[j].focus();
     };
     const n = document.createElement('span');
-    n.className = 'count';
+    n.className = 'cnt'; // (the parts list's count style: "count" had no rule, so it read as the name -- round 14 R14-2)
+    lab.title = l.name; // (a long name cut with "…" whole on hover, as a part's: R14-3)
     n.textContent = fmtInt(count.get(l.name));
     row.append(wrap, lab, n);
     li.append(row);
@@ -5717,7 +5718,7 @@ function fillInfo2D(el) {
     const of = (it) => dxfLib.layersOf(it).includes(l);
     const np = d.paths.filter((p) => of(p) && dxfLib.isShape(p)).length, nt = d.texts.filter(of).length;
     row('selection', `layer ${l}: ${fmtInt(np)} ${np === 1 ? 'line or shape' : 'lines and shapes'}${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
-  }
+  } else row('selection', `none: ${tapWord()} a line or a layer`); // (a row either way: round 14 R14-1)
 }
 
 // what Open… and a drop take, for the messages that say so
@@ -6698,10 +6699,19 @@ function density() {
 
 function syncMassRow() {
   const f = app.factsNow;
-  const show = !!app.header && !!f && app.selected.size > 0;
+  // (shown with or without a selection, so the panel keeps its rows as one is made -- round 14 R14-1)
+  const show = !!app.header && !!f;
   $('infomass').hidden = !show;
   $('densitybox').hidden = $('material').value !== 'custom';
   if (!show) return;
+  // (short, one line as a mass is: the longer words wrapped to two, and the list moved 17 px as the
+  // first part was picked -- round 14 R14-1; the reason in its tooltip)
+  if (!app.selected.size) {
+    $('massval').textContent = 'select parts';
+    $('massval').title = 'A whole model is rarely one material: select the parts made of it';
+    return;
+  }
+  $('massval').title = '';
   const d = density();
   // (a volume in mm³ weighed: another unit said first, whatever else is missing -- weighed 16,387x off
   // before: r84 A5)
@@ -6837,7 +6847,9 @@ function fillInfo(el) {
   // where it is: from the reference's corner (js/datum.js), and how far it
   // stands above and below a reference part (a board)
   const ref = app.ref ? bboxOf(app.ref.ids) : app.header.bbox;
-  if (ids.length && b && ref) {
+  // (the whole model's too: a row that came with the first selection moved the parts list under the
+  // pointer, so a second click or a double-click landed on the row above -- UI design round 14 R14-1)
+  if (b && ref) {
     add(`position (${lenUnit()})`, rangesFrom(b, ref)
       .map(([lo, hi], k) => `${'XYZ'[k]} ${lenNum(lo, 'size')} to ${lenNum(hi, 'size')}`).join(' · '));
   }
@@ -6881,7 +6893,6 @@ function fillInfo(el) {
     add('area', `≈ ${areaWords}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
-    if (!ids.length) add('mass', 'select parts (a whole model is rarely one material)');
   }
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)

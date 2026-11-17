@@ -70,8 +70,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // touch-only words, main.js's reference line and 2D plurals -- no new import; 985.6 KB in 42 after
   // UI design round 9, code: main.js's 2D fold step, embed hint, 2D tooltips and the tap word -- no
   // new import; 988.4 KB in 42 after UI design round 11, code: main.js's 2D keyboard, mode words,
-  // one picture offer for a model and a drawing -- no new import)
-  assert.ok(bytes < 991e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // one picture offer for a model and a drawing -- no new import; 991.1 KB in 42 after UI design
+  // round 14, code: main.js's layer-list keys and steady info rows -- no new import)
+  assert.ok(bytes < 994e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {
