@@ -5622,11 +5622,13 @@ function show2D(drawing, name, url) {
 // clears its results
 function toggle2DMeasure() {
   if (!app.dxf) return;
-  const v = app.dxf.view, on = !v.measuring;
+  const v = app.dxf.view, on = !v.measuring, n = on ? 0 : (v.results?.length || 0);
   v.setMeasure(on);
   if (!on) v.clearMeasure();
   $('measure').setAttribute('aria-pressed', String(on));
-  tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres)` : 'measure off', 3000, on ? 'measure on' : 'measure off');
+  // (a drawing's results go with Measure: said, as nothing else did -- R23-3)
+  const off = n ? `measure off: ${n} ${n === 1 ? 'result' : 'results'} cleared` : 'measure off';
+  tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres)` : off, 3000, on ? 'measure on' : off);
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)
@@ -7880,6 +7882,7 @@ async function main() {
       document.body?.classList.add('nogpu'); // (the unwired toolbar's tools did nothing: R21-2)
       const h2 = document.querySelector?.('#empty h2');
       if (h2) h2.textContent = 'No 3D in this browser';
+      for (const id of ['view', 'view2d']) if ($(id)) $(id).tabIndex = -1; // (an empty canvas as a Tab stop: R23-2)
       openLbl.hidden = true;
       $('emptyopen').hidden = true;
       window.addEventListener('dragover', over);

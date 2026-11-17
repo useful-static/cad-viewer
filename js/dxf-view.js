@@ -924,7 +924,8 @@ export function createDxfView(canvas, drawing, cb = {}) {
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
       dot(a); dot(b);
     }
-    for (const r of st.results) {
+    // (every label placed and its leader drawn, then every label over them: R23-1, R23-8)
+    const boxes = st.results.map((r) => {
       const a = toPx(...r.a), b = toPx(...r.b);
       const t = r.text;
       const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
@@ -932,11 +933,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
       const { dx, dy } = clearOf({ left: m[0] - w / 2, right: m[0] + w / 2, top: m[1] - 18, bottom: m[1] - 2 }, done, { left: 2, right: W - 2, top: 2, bottom: H - 2 });
       const cx = m[0] + dx;
       done.push({ left: cx - w / 2, right: cx + w / 2, top: m[1] - 18 + dy, bottom: m[1] - 2 + dy });
-      if (Math.abs(dy) > 4) {
+      if (Math.abs(dy) > 4 || Math.abs(dx) > 4) {
         ctx.save(); ctx.lineWidth = 1; ctx.setLineDash?.([3, 3]);
         ctx.beginPath(); ctx.moveTo(m[0], m[1]); ctx.lineTo(cx, dy < 0 ? m[1] - 2 + dy : m[1] - 18 + dy); ctx.stroke();
         ctx.restore();
       }
+      return { t, m, w, cx, dy };
+    });
+    for (const { t, m, w, cx, dy } of boxes) {
       ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fillRect(cx - w / 2, m[1] - 18 + dy, w, 16);
       ctx.strokeStyle = '#9a6b00'; ctx.lineWidth = 1; ctx.strokeRect(cx - w / 2, m[1] - 18 + dy, w, 16); // (a border: R22-9)
       ctx.lineWidth = 1.5;

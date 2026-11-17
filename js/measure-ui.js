@@ -623,6 +623,9 @@ export function createMeasure(deps) {
     const v = projector();
     drawLoupe(v);
     placed.length = 0;
+    // (the axis triad is a box the labels keep off: R23-9)
+    const tri = $('triad');
+    if (tri && !tri.hidden && tri.getBoundingClientRect) { const t = tri.getBoundingClientRect(); placed.push({ left: t.left, right: t.right, top: t.top, bottom: t.bottom }); }
     for (const r of st.results) drawResult(v, r);
     const pend = st.pending.map((q) => v.toScreen(q.p));
     for (let i = 1; i < pend.length; i++) {
@@ -704,7 +707,9 @@ export function createMeasure(deps) {
       ctx.fillStyle = ink.line;
       for (const x of q) { ctx.beginPath(); ctx.arc(x[0], x[1], 4 * s, 0, 2 * Math.PI); ctx.fill(); }
     }
-    for (const [r, q] of shown) {
+    // (every label placed and its leader drawn, then every label: a leader crossed the labels drawn
+    // before it, R23-1; a sideways move gets its leader too, R23-8)
+    const boxes = shown.map(([r, q]) => {
       const at = r.mode === 'angle' ? q[1] : [(q[0][0] + q[q.length - 1][0]) / 2, (q[0][1] + q[q.length - 1][1]) / 2];
       ctx.font = `${12 * s}px system-ui, sans-serif`;
       const w = Math.max(ctx.measureText(r.main).width, r.sub ? ctx.measureText(r.sub).width * 0.85 : 0) + 12 * s;
@@ -713,11 +718,15 @@ export function createMeasure(deps) {
       const { dx, dy } = clearOf({ left: x, right: x + w, top: yy, bottom: yy + h }, done, { left: 2 * s, right: W - 2 * s, top: 2 * s, bottom: H - 2 * s });
       const x0 = x + dx, y0 = yy + dy;
       done.push({ left: x0, right: x0 + w, top: y0, bottom: y0 + h });
-      if (Math.abs(dy) > 4 * s) {
+      if (Math.abs(dy) > 4 * s || Math.abs(dx) > 4 * s) {
         ctx.strokeStyle = ink.line; ctx.lineWidth = 1 * s; ctx.setLineDash?.([3 * s, 3 * s]);
         ctx.beginPath(); ctx.moveTo(at[0], at[1]); ctx.lineTo(x0 + w / 2, dy < 0 ? y0 + h : y0); ctx.stroke();
         ctx.setLineDash?.([]);
       }
+      return { r, x0, y0, w, h };
+    });
+    for (const { r, x0, y0, w, h } of boxes) {
+      ctx.font = `${12 * s}px system-ui, sans-serif`;
       ctx.fillStyle = ink.label;
       ctx.strokeStyle = ink.line;
       ctx.lineWidth = 1 * s;
