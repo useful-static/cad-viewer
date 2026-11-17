@@ -764,12 +764,14 @@ export function createMeasure(deps) {
       ctx.textBaseline = 'top';
       // (the screen's rule: every ring, then the numbers that clear each other, each on a halo -- R25-2)
       const at = st.holes.list.map((h) => P(h.centre));
-      at.forEach((q, i) => {
-        if (!q) return;
-        ctx.strokeStyle = i === st.holes.pick ? INK.dark.line : HOLE;
-        ctx.lineWidth = 2 * s;
-        ctx.beginPath(); ctx.arc(q[0], q[1], 6 * s, 0, 2 * Math.PI); ctx.stroke();
-      });
+      // (the picked ring last and as on screen, 9 px with a 3 px line: R26-5)
+      const ring = (q, picked) => {
+        ctx.strokeStyle = picked ? INK.dark.line : HOLE;
+        ctx.lineWidth = (picked ? 3 : 2) * s;
+        ctx.beginPath(); ctx.arc(q[0], q[1], (picked ? 9 : 6) * s, 0, 2 * Math.PI); ctx.stroke();
+      };
+      at.forEach((q, i) => { if (q && i !== st.holes.pick) ring(q, false); });
+      if (at[st.holes.pick]) ring(at[st.holes.pick], true);
       for (const [i, q] of holeNumbers(at, st.holes.pick, s)) {
         ctx.strokeStyle = light ? '#fff' : '#000'; ctx.lineWidth = 3 * s; ctx.lineJoin = 'round';
         ctx.strokeText(String(i + 1), q[0] + 8 * s, q[1] - 18 * s);
@@ -830,7 +832,8 @@ export function createMeasure(deps) {
         st.results.splice(i, 1);
         if (!st.results.length) setList(false);
         syncRow(); deps.queueFrame();
-        if (kb) { const xs = [...ul.querySelectorAll('li button:last-child')]; (xs[Math.min(i, xs.length - 1)] || $('measchip')).focus?.(); }
+        // (the last one gone: Measure's toggle, shown, not the hidden chip -- R26-2)
+        if (kb) { const xs = [...ul.querySelectorAll('li button:last-child')]; (xs[Math.min(i, xs.length - 1)] || ($('measchip').hidden ? (st.on ? $('measoff') : $('measure')) : $('measchip'))).focus?.(); }
       };
       li.append(t, copy, x);
       ul.append(li);
@@ -983,7 +986,9 @@ export function createMeasure(deps) {
     const box = $('holes');
     if (!ids || !ids.length) { st.holes = null; box.hidden = true; deps.queueFrame(); return null; }
     const t = holeRows(ids, ref);
-    st.holes = { list: t.list, pick: -1 };
+    // (the same holes shown again keep their pick: a picture's redraw un-picked it, R26-1)
+    const key = ids.join(','), keep = st.holes && st.holes.key === key && st.holes.pick < t.list.length ? st.holes.pick : -1;
+    st.holes = { list: t.list, pick: keep, key };
     $('holestitle').textContent = t.list.length ? `Holes of ${name} (${t.list.length})` : `Holes of ${name}`;
     const sum = $('holessum');
     sum.replaceChildren();
@@ -1035,6 +1040,7 @@ export function createMeasure(deps) {
       };
       tr.onclick = pick;
       tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
+      if (st.holes.pick === r.n - 1) tr.classList.add('pick'); // (a kept pick: R26-1)
       tb.append(tr);
     }
     $('holescsv').onclick = () => {

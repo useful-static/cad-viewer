@@ -1812,17 +1812,18 @@ async function shareView() {
   // copied" told: r51 A6)
   const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
     : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas);
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf);
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
 // ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
 // '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
-function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0) {
+function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false) {
+  const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
     nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : '',
-    nMeas ? `it carries notes, not the ${nMeas === 1 ? 'measurement' : `${nMeas} measurements`} (copy them from the results list)` : ''].filter(Boolean);
+    !nMeas ? '' : is2d ? `it leaves out the ${meas}` : `it carries notes, not the ${meas} (copy them from the results list)`].filter(Boolean);
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
