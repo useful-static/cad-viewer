@@ -395,7 +395,7 @@ function setPanel(open, focusBack = false) {
     const fresh = app.listFresh;
     app.listFresh = false;
     if (!t.firstElementChild) return;
-    if (app.selected.size) { a.scrollTop = 0; return; }
+    if (app.selected.size) { if (!t.contains(document.activeElement)) a.scrollTop = 0; return; } // (R19-2)
     if (fresh && a.getBoundingClientRect().bottom - t.getBoundingClientRect().top < 100) {
       a.scrollTop += $('colours').getBoundingClientRect().top - a.getBoundingClientRect().top;
     }
@@ -4982,10 +4982,10 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   const MOVES = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
   addEventListener('keydown', (e) => { if (MOVES.has(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) keyAt = performance.now(); }, { capture: true, passive: true });
   tree.addEventListener('focusin', () => { if (performance.now() - keyAt < 1000) hold(); });
-  tree.addEventListener('keydown', (e) => { // (a key's selection that cuts the panel lets go: R18-3)
+  tree.addEventListener('keydown', (e) => { // (a key's selection that cuts the panel lets go, no mouse in the list: R18-3, R19-1)
     if (e.key !== 'Enter' && e.key !== ' ') return;
     setTimeout(() => {
-      if (info.scrollHeight <= info.clientHeight + 1) return;
+      if (info.scrollHeight <= info.clientHeight + 1 || tree.matches(':hover')) return;
       release();
       document.activeElement?.scrollIntoView?.({ block: 'nearest' });
     }, 0);
@@ -4996,7 +4996,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   tree.addEventListener('focusout', (e) => { if (!tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
   addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
   addEventListener('resize', release);
-  app.releaseInfo = release;
+  app.releaseInfo = () => { release(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
 }
 
 // The edge list and body facts of a loaded model: from the file when it
@@ -5645,8 +5645,8 @@ function leave2D() {
 
 // the parts list as the drawing's layers: colour, name, line count, a box
 function buildLayerList() {
-  app.releaseInfo?.();
-  app.listFresh = true; // (the drawer's first open scrolls to it: setPanel) // (a list built afresh: a new drawing, a sheet -- the old panel's height is not this one's)
+  app.releaseInfo?.(); // (a list built afresh: the old panel's height is not this one's)
+  app.listFresh = true; // (the drawer's first open scrolls to it: setPanel)
   const tree = $('tree');
   tree.textContent = '';
   $('treefilter').hidden = true;
@@ -5701,8 +5701,8 @@ function buildLayerList() {
       lab.tabIndex = -1; labs[j].tabIndex = 0; labs[j].focus();
     };
     const n = document.createElement('span');
-    n.className = 'cnt'; // (the parts list's count style: "count" had no rule, so it read as the name -- round 14 R14-2)
-    lab.title = l.name; // (a long name cut with "…" whole on hover, as a part's: R14-3)
+    n.className = 'cnt'; // (the parts list's count style: R14-2)
+    lab.title = l.name; // (R14-3)
     n.textContent = fmtInt(count.get(l.name));
     row.append(wrap, lab, n);
     li.append(row);
