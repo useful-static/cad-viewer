@@ -512,9 +512,12 @@
   body.mode2d :is(#addmodelbtn, #tourmake, #picmore, #savedrawing, #exportmesh, #export) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid var(--dim); margin-right:6px; vertical-align:-1px; }
   /* the 3D view takes the keyboard's focus (arrows turn it): say so */
-  #view:focus-visible { box-shadow:inset 0 0 0 2px var(--acc); }
+  /* the views' focus ring: an outline drawn inside their edge, over the picture (an inset
+     box-shadow is painted under a canvas's own pixels, so neither view ever showed one: round 12
+     R12-1); on paper the dark orange, 4.4:1 (the bright one was 2.1:1 there) */
   #view2d { outline:none; }
-  #view2d:focus-visible { box-shadow:inset 0 0 0 2px var(--ring); } /* (a drawing is a Tab stop too: round 11 R11-1) */
+  :is(#view, #view2d):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
+  :is(#stage[data-bg="paper"] #view, body.mode2d #view2d):focus-visible { outline-color:#b35a00; }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
      over the view shows), and load progress. Centred, never wider than the view. */
   #stage .card { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%);
@@ -860,7 +863,7 @@
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
 <div id="scrim" aria-hidden="true"></div>
-<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" tabindex="0" role="img" aria-label="2D drawing" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown + - F M" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><canvas id="measloupe" aria-hidden="true" hidden></canvas><div id="hover"></div><div id="pictoast" role="status" hidden><span>Picture ready</span><button id="picshare" hidden>Share</button><button id="picsave">Save</button></div>
+<div id="stage"><canvas id="view" tabindex="0" role="img" aria-label="3D view: no model open"></canvas><canvas id="view2d" tabindex="0" role="img" aria-label="2D drawing" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Plus Minus F M P" hidden></canvas><svg id="measvg" aria-hidden="true"></svg><svg id="triad" viewBox="-36 -36 72 72" width="72" height="72" aria-hidden="true" hidden></svg><div id="measlabels" aria-hidden="true"></div><canvas id="measloupe" aria-hidden="true" hidden></canvas><div id="hover"></div><div id="pictoast" role="status" hidden><span>Picture ready</span><button id="picshare" hidden>Share</button><button id="picsave">Save</button></div>
   <!-- shown by main.js where the browser has a full-screen API (not iPhone) -->
   <!-- ?embed=1: the model alone in another site's page (main.js setupEmbed) -->
   <div id="embedbar" hidden><button id="embedfit" title="Fit the model in view">Fit</button><a id="embedopen" class="btn" target="_blank" rel="noopener" title="Open this model in the full viewer, at this view, in a new tab">Open in cad.place ↗</a></div>
@@ -915,6 +918,8 @@
         <dt class="help-touch">Tap a line</dt><dd class="help-touch">Select its layer</dd>
         <dt>Measure</dt><dd>Two points; they snap to line ends, middles and circle centres</dd></dl></section>
       <section class="keys help-2d"><h3>Keys</h3><dl>
+        <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Pan</dd>
+        <dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>Zoom</dd>
         <dt><kbd>F</kbd></dt><dd>Fit the drawing</dd>
         <dt><kbd>M</kbd></dt><dd>Measure</dd>
         <dt><kbd>P</kbd></dt><dd>Save a picture</dd>

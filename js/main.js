@@ -4950,6 +4950,9 @@ const COARSE_SILHOUETTE_CAP = 500_000;
 const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
 // the words a device is told ("tap" or "click"): the stylesheet's own touch-only test, as measure-ui.js asks
 const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
+// the pointer the last press came from: a touchscreen laptop's finger names a tapped layer, as
+// it names a tapped part (the device test said "mouse" there: UI design round 12 R12-4)
+addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { capture: true, passive: true });
 
 // The edge list and body facts of a loaded model: from the file when it
 // carries them, else built by a worker from copies of its arrays. Resolves
@@ -5468,7 +5471,7 @@ function setSheet(i) {
   app.dxf.view = dxfViewLib.createDxfView($('view2d'), shown, {
     // (a touch has no hover, so the layer a tap selects is named in the view, as a tapped part is:
     // UI design round 11 R11-4)
-    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); if (layer && tapWord() === 'tap') tell(`layer ${layer}`, 2500); },
+    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500); },
     onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
     onMeasure: (r) => tell(r.text, 4000),
   });
@@ -5502,7 +5505,7 @@ function dropAddressModel(u) {
 // The tooltips a drawing gives the controls it keeps (the 3D ones are put back on leaving it)
 const TITLES_2D = [
   ['measure', 'Measure the drawing: two points, which snap to line ends, middles and circle centres (M)'],
-  ['savepic', 'Save the drawing as a PNG picture, as it is shown (P)'],
+  ['savepic', 'Save the drawing as a PNG picture, as it is shown without the selection and the hover (P)'],
   // (round 10 R10-4: Fit's "selection, or the whole model", an embed's "model")
   ['fit', 'Fit the drawing in view (F)'],
   ['embedfit', 'Fit the drawing in view'],
@@ -5510,8 +5513,8 @@ const TITLES_2D = [
   // (round 11 R11-2, R11-3: a link keeps the drawing, not its sheet or zoom; Print names the
   // drawing; ☰ lists its layers)
   ['sharelink', 'Copy a link that opens this drawing'],
-  ['printbtn', 'Print the drawing as it is shown, with its name'],
-  ['panelbtn', 'Layers'],
+  ['printbtn', 'Print the drawing, without the selection and the hover, with its name'],
+  ['panelbtn', 'Layers list'],
 ];
 
 // The words that name what is shown: ☰ lists a drawing's layers, the skip link goes to the
@@ -5520,6 +5523,7 @@ function modeWords(is2d) {
   $('panelbtn').setAttribute('aria-label', is2d ? 'Layers' : 'Parts');
   $('panelbtn').querySelector('.lbl').textContent = is2d ? 'Layers' : 'Parts';
   $('skipview').textContent = is2d ? 'Skip to the drawing' : 'Skip to the 3D view';
+  $('parts').setAttribute('aria-label', is2d ? 'Layers' : 'Parts'); // (the drawer itself: round 12 R12-9)
 }
 
 // An embed's hint, for what is shown: a drawing pans, a model turns. One place sets it, so a 3D
@@ -5563,7 +5567,7 @@ function show2D(drawing, name, url) {
   buildLayerList();
   $('model').textContent = name;
   document.title = `${name} — ${SHORT_TITLE}`;
-  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} layers`);
+  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} layers; arrows pan, plus and minus zoom`);
   $('sharelink').disabled = !url;
   // (Save picture, Print and the picture options: updateButtons above sets them from app.dxf)
   syncMenuButtons();
@@ -5625,16 +5629,27 @@ function buildLayerList() {
     cb.checked = app.dxf.view.layerOn(l.name);
     cb.setAttribute('aria-label', `Show layer ${l.name}`);
     cb.onchange = () => app.dxf.view.setLayerOn(l.name, cb.checked);
+    cb.tabIndex = -1; // (Space on the row shows / hides: one tab stop, as the parts list)
     wrap.append(cb);
     const lab = document.createElement('span');
     lab.className = 'label';
-    lab.tabIndex = 0;
+    lab.tabIndex = tree.children.length ? -1 : 0;
     const sw = document.createElement('span');
     sw.className = 'layer-swatch';
     sw.style.background = dxfLib.onPaper(l.colour);
     lab.append(sw, l.name);
     lab.onclick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
-    lab.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); lab.onclick(); } };
+    // the parts list's keys: one tab stop for the list, ↑ ↓ Home End move (a roving tabindex),
+    // Enter selects, Space shows / hides (each row was two tab stops, with no arrows: round 12 R12-6)
+    lab.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); lab.onclick(); return; }
+      if (e.key === ' ') { e.preventDefault(); cb.click(); return; }
+      const labs = [...tree.querySelectorAll('.label')], i = labs.indexOf(lab);
+      const j = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: labs.length - 1 }[e.key];
+      if (j === undefined || !labs[j]) return;
+      e.preventDefault();
+      lab.tabIndex = -1; labs[j].tabIndex = 0; labs[j].focus();
+    };
     const n = document.createElement('span');
     n.className = 'count';
     n.textContent = fmtInt(count.get(l.name));
@@ -7658,7 +7673,7 @@ function wireInput() {
         e.preventDefault();
         const v = $('view2d');
         if (zoom) app.dxf.view.zoomAt(zoom, v.clientWidth / 2, v.clientHeight / 2);
-        else app.dxf.view.panBy(-arrow[0] * 40, -arrow[1] * 40);
+        else app.dxf.view.panBy(arrow[0] * 40, arrow[1] * 40); // (← moves it left, as Shift+← moves a model: round 12 R12-3)
         return;
       }
     }
