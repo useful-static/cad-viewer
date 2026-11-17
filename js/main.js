@@ -388,13 +388,17 @@ function setPanel(open, focusBack = false) {
   $('panelbtn').setAttribute('aria-expanded', String(open));
   // closed from inside (Esc): focus would otherwise sit in a hidden panel
   if (!open && focusBack && $('parts').contains(document.activeElement)) $('panelbtn').focus();
-  // a short drawer opened by a tap showed the info and no parts (0 rows at 844 x 390): it opens
-  // scrolled to the list where fewer than about three rows would show (the keyboard's way in
-  // already scrolls there -- round 17 R17-3)
+  // a short drawer's first open of a new list, nothing selected, scrolls to the list where under about
+  // three rows would show; with a selection, to its values at the top (R17-3, R18-2)
   if (open) requestAnimationFrame(() => {
     const a = $('parts'), t = $('tree');
-    if (!t.firstElementChild || a.scrollTop) return;
-    if (a.getBoundingClientRect().bottom - t.getBoundingClientRect().top < 100) a.scrollTop = $('colours').offsetTop - a.offsetTop;
+    const fresh = app.listFresh;
+    app.listFresh = false;
+    if (!t.firstElementChild) return;
+    if (app.selected.size) { a.scrollTop = 0; return; }
+    if (fresh && a.getBoundingClientRect().bottom - t.getBoundingClientRect().top < 100) {
+      a.scrollTop += $('colours').getBoundingClientRect().top - a.getBoundingClientRect().top;
+    }
   });
 }
 
@@ -1506,9 +1510,8 @@ async function savePicture(print = false) {
   });
 }
 
-// A picture made: saved, or on a touch-only device offered. There the render has used up the tap's
-// gesture, and the share sheet needs a fresh one, so "Picture ready: Share / Save" waits 8 s for a
-// tap of its own (Share only where files can be shared)
+// A picture made: saved, or on a touch-only device offered: the share sheet needs a fresh tap, so
+// "Picture ready: Share / Save" waits 8 s for one (Share only where files can be shared)
 function offerPicture(png, name, save) {
   if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
     const file = new File([png], name, { type: 'image/png' });
@@ -4957,10 +4960,9 @@ function sayClearance(lc) {
 // a tablet) leaves them out; js/edges.js's SILHOUETTE_CAP elsewhere
 const COARSE_SILHOUETTE_CAP = 500_000;
 const coarseOnly = () => matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
-// the words a device is told ("tap" or "click"): the stylesheet's own touch-only test, as measure-ui.js asks
+// "tap" or "click", by the stylesheet's touch-only test
 const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
-// the pointer the last press came from: a touchscreen laptop's finger names a tapped layer, as
-// it names a tapped part (the device test said "mouse" there: UI design round 12 R12-4)
+// the last press's pointer: a finger names a tapped layer on any device (R12-4)
 addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { capture: true, passive: true });
 
 // While the pointer, or the keyboard's focus, is in the parts / layer list, the info panel keeps its
@@ -4976,9 +4978,18 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   const release = () => { info.style.height = ''; info.style.overflowY = ''; };
   tree.addEventListener('pointerenter', hold);
   tree.addEventListener('pointerdown', hold);
-  let keyAt = -1e9; // (focus held only from the keyboard: not the page's own refocus, R17-1)
-  addEventListener('keydown', () => { keyAt = performance.now(); }, { capture: true, passive: true });
+  let keyAt = -1e9; // (focus held only after a focus-moving key: not a refocus, nor Alt+Left -- R17-1, R18-1)
+  const MOVES = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+  addEventListener('keydown', (e) => { if (MOVES.has(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) keyAt = performance.now(); }, { capture: true, passive: true });
   tree.addEventListener('focusin', () => { if (performance.now() - keyAt < 1000) hold(); });
+  tree.addEventListener('keydown', (e) => { // (a key's selection that cuts the panel lets go: R18-3)
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    setTimeout(() => {
+      if (info.scrollHeight <= info.clientHeight + 1) return;
+      release();
+      document.activeElement?.scrollIntoView?.({ block: 'nearest' });
+    }, 0);
+  });
   // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
   // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
   tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
@@ -5536,32 +5547,27 @@ function dropAddressModel(u) {
   u.hash = '';
 }
 
-// The tooltips a drawing gives the controls it keeps (the 3D ones are put back on leaving it)
+// A drawing's tooltips for the controls it keeps; the 3D ones are put back on leaving (rounds 9-12)
 const TITLES_2D = [
   ['measure', 'Measure the drawing: two points, which snap to line ends, middles and circle centres (M)'],
   ['savepic', 'Save the drawing as a PNG picture, as it is shown without the selection and the hover (P)'],
-  // (round 10 R10-4: Fit's "selection, or the whole model", an embed's "model")
   ['fit', 'Fit the drawing in view (F)'],
   ['embedfit', 'Fit the drawing in view'],
   ['embedopen', 'Open this drawing in the full viewer, in a new tab'],
-  // (round 11 R11-2, R11-3: a link keeps the drawing, not its sheet or zoom; Print names the
-  // drawing; ☰ lists its layers)
   ['sharelink', 'Copy a link that opens this drawing'],
   ['printbtn', 'Print the drawing, without the selection and the hover, with its name'],
   ['panelbtn', 'Layers list'],
 ];
 
-// The words that name what is shown: ☰ lists a drawing's layers, the skip link goes to the
-// drawing (UI design round 11 R11-1, R11-3)
+// The words naming what is shown: ☰, the drawer and the skip link (round 11-12)
 function modeWords(is2d) {
   $('panelbtn').setAttribute('aria-label', is2d ? 'Layers' : 'Parts');
   $('panelbtn').querySelector('.lbl').textContent = is2d ? 'Layers' : 'Parts';
   $('skipview').textContent = is2d ? 'Skip to the drawing' : 'Skip to the 3D view';
-  $('parts').setAttribute('aria-label', is2d ? 'Layers' : 'Parts'); // (the drawer itself: round 12 R12-9)
+  $('parts').setAttribute('aria-label', is2d ? 'Layers' : 'Parts');
 }
 
-// An embed's hint, for what is shown: a drawing pans, a model turns. One place sets it, so a 3D
-// model shown after a drawing no longer said "the drawing" (UI design round 9 R9-1)
+// An embed's hint for what is shown: a drawing pans, a model turns (round 9 R9-1)
 function embedHint() {
   const verb = tapWord() === 'tap' ? 'Tap' : 'Click';
   $('embedhint').textContent = app.dxf ? `${verb} to pan and zoom the drawing` : `${verb} to turn and zoom the model`;
@@ -5639,7 +5645,8 @@ function leave2D() {
 
 // the parts list as the drawing's layers: colour, name, line count, a box
 function buildLayerList() {
-  app.releaseInfo?.(); // (a list built afresh: a new drawing, a sheet -- the old panel's height is not this one's)
+  app.releaseInfo?.();
+  app.listFresh = true; // (the drawer's first open scrolls to it: setPanel) // (a list built afresh: a new drawing, a sheet -- the old panel's height is not this one's)
   const tree = $('tree');
   tree.textContent = '';
   $('treefilter').hidden = true;
@@ -6288,6 +6295,7 @@ function buildTree() {
   // (every model opened builds its list -- Back, a drop, a list pick, a scene -- and a hold kept
   // from the model before stuck the panel at its height: round 16 R16-3)
   app.releaseInfo?.();
+  app.listFresh = true;
   labelMeshes();
   const root = $('tree');
   root.textContent = '';
