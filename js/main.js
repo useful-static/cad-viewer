@@ -4971,9 +4971,12 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   tree.addEventListener('pointerenter', hold);
   tree.addEventListener('pointerdown', hold);
   tree.addEventListener('focusin', hold);
-  tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch' && !tree.contains(document.activeElement)) release(); });
+  // (the pointer leaving lets go whatever has the focus: a clicked row keeps it, and a selection
+  // taller than the panel stayed cut after the pointer went to the view -- round 16 R16-2)
+  tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
   tree.addEventListener('focusout', (e) => { if (!tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
   addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
+  addEventListener('resize', release); // (a phone turned: the old height no longer fits -- R16-5)
   app.releaseInfo = release; // (a new model or drawing lays the panel out afresh)
 }
 
@@ -5628,6 +5631,7 @@ function leave2D() {
 
 // the parts list as the drawing's layers: colour, name, line count, a box
 function buildLayerList() {
+  app.releaseInfo?.(); // (a list built afresh: a new drawing, a sheet -- the old panel's height is not this one's)
   const tree = $('tree');
   tree.textContent = '';
   $('treefilter').hidden = true;
@@ -6273,6 +6277,9 @@ function numberRepeats(names) {
 }
 
 function buildTree() {
+  // (every model opened builds its list -- Back, a drop, a list pick, a scene -- and a hold kept
+  // from the model before stuck the panel at its height: round 16 R16-3)
+  app.releaseInfo?.();
   labelMeshes();
   const root = $('tree');
   root.textContent = '';
@@ -6730,7 +6737,7 @@ function syncMassRow() {
   // (short, one line as a mass is: the longer words wrapped to two, and the list moved 17 px as the
   // first part was picked -- round 14 R14-1; the reason in its tooltip)
   if (!app.selected.size) {
-    $('massval').textContent = 'select parts';
+    $('massval').textContent = 'select parts'; // (one piece: "parts" wrapped alone at 320 px -- R16-6)
     $('massval').title = 'A whole model is rarely one material: select the parts made of it';
     return;
   }
