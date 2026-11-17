@@ -1102,11 +1102,12 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // the drawing as a PNG, as the 3D picture is: without the hover and the selection's tint and
     // fade (they were saved and printed as drawn -- UI design round 11 R11-5)
     async png() {
-      // (Measure's snap marker too: round 12 R12-7)
-      const keep = [st.hover, st.selected, st.snap];
-      st.hover = null; st.selected = null; st.snap = null; draw();
+      // (Measure's snap marker and a half-taken point too, as a 3D picture paints only finished
+      // results: rounds 12-13, R12-7 and R13-3)
+      const keep = [st.hover, st.selected, st.snap, st.pending];
+      st.hover = null; st.selected = null; st.snap = null; st.pending = null; draw();
       const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
-      [st.hover, st.selected, st.snap] = keep; draw();
+      [st.hover, st.selected, st.snap, st.pending] = keep; draw();
       return blob;
     },
     // the keyboard's pan, in css px, as a drag of that many (UI design round 11 R11-1)

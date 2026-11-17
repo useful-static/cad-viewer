@@ -5639,6 +5639,14 @@ function buildLayerList() {
     sw.style.background = dxfLib.onPaper(l.colour);
     lab.append(sw, l.name);
     lab.onclick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
+    // (the row focused by a click takes the one tab stop, as a parts row does: a click then ↓ left
+    // two -- round 13 R13-1)
+    lab.onfocus = () => {
+      for (const x of tree.querySelectorAll('.label[tabindex="0"]')) if (x !== lab) x.tabIndex = -1;
+      lab.tabIndex = 0;
+    };
+    lab.setAttribute('role', 'button'); // (a named button with a pressed state, as a parts row: R13-2)
+    lab.setAttribute('aria-pressed', 'false');
     // the parts list's keys: one tab stop for the list, ↑ ↓ Home End move (a roving tabindex),
     // Enter selects, Space shows / hides (each row was two tab stops, with no arrows: round 12 R12-6)
     lab.onkeydown = (e) => {
@@ -5660,7 +5668,11 @@ function buildLayerList() {
   syncLayerRows();
 }
 function syncLayerRows() {
-  for (const li of $('tree').children) li.querySelector('.row').classList.toggle('sel', !!app.dxf && li.dataset.layer === app.dxf.view.selected);
+  for (const li of $('tree').children) {
+    const on = !!app.dxf && li.dataset.layer === app.dxf.view.selected;
+    li.querySelector('.row').classList.toggle('sel', on);
+    li.querySelector('.label')?.setAttribute('aria-pressed', String(on));
+  }
 }
 
 // the info panel in 2D mode: the drawing's size, unit, layers and contents
@@ -5704,7 +5716,7 @@ function fillInfo2D(el) {
     // counts a frame so its layer can be hidden; a frame is no line or shape of the drawing -- r67 A10)
     const of = (it) => dxfLib.layersOf(it).includes(l);
     const np = d.paths.filter((p) => of(p) && dxfLib.isShape(p)).length, nt = d.texts.filter(of).length;
-    row('selection', `layer ${l}: ${fmtInt(np)} lines and shapes${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
+    row('selection', `layer ${l}: ${fmtInt(np)} ${np === 1 ? 'line or shape' : 'lines and shapes'}${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
   }
 }
 
