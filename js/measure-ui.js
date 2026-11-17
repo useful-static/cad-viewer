@@ -924,15 +924,20 @@ export function createMeasure(deps) {
       return ax[k] > 0.999 ? [0, 1, 2].filter((j) => j !== k) : [0, 1, 2];
     };
     const first = list.length ? axesOf(list[0]).join() : '';
-    const shared = list.every((h) => axesOf(h).join() === first);
-    // (a table of mixed directions: every row all three, its own axis's too -- across, two holes a
-    // part apart read alike, the RK3399's side dimples: UI design round 28, R28-1)
+    const vals = (h, axes) => axes.map((j) => deps.num(h.centre[j] - ref.min[j]));
+    // all three where one direction's two would not tell the rows apart: a table of mixed
+    // directions, or two rows alike across their axis -- the RK3399's side dimples a part apart
+    // (R28-1, R29-2). The axes in the column's head, numbers only in the cells: a letter in each
+    // wrapped every row of the 300 px panel, its letter from its number (R29-1)
+    const across = list.map((h) => vals(h, axesOf(h)).join(', '));
+    const all3 = !list.every((h) => axesOf(h).join() === first) || new Set(across).size < across.length;
+    const axes = all3 ? [0, 1, 2] : first.split(',').map(Number);
     const rows = list.map((h, i) => {
-      const at = (shared ? axesOf(h) : [0, 1, 2]).map((j) => `${shared ? '' : `${'XYZ'[j]} `}${deps.num(h.centre[j] - ref.min[j])}`).join(shared ? ', ' : ' · ');
+      const v = all3 ? vals(h, axes) : vals(h, axesOf(h));
       // (head: a countersunk hole's countersink diameter -- js/measure-geom.js holesOf, r67)
-      return { n: i + 1, d: h.diameter, at, through: h.rims > 1, depth: h.depth, head: h.head || 0 };
+      return { n: i + 1, d: h.diameter, at: v.join(', '), said: v.map((x, q) => `${'XYZ'[axes[q]]} ${x}`).join(', '), through: h.rims > 1, depth: h.depth, head: h.head || 0 };
     });
-    const posHead = list.length && shared ? `${first.split(',').map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
+    const posHead = list.length ? `${axes.map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
     // per diameter as shown: how many, and how far apart their centres spread
     // (keyed on the printed value: 0.508 and 0.511 mm read as two "0.51" lines)
     // (and its countersink: a countersunk Ø3 and a plain one read "Ø 3.00 mm × 2" -- r68 A8, Q11)
@@ -1007,7 +1012,9 @@ export function createMeasure(deps) {
       // (holes along different axes -- a top face's and a side wall's -- spread in all three: the
       // first hole's two cross axes left the third out, r124 L4)
       const mixed = g.axes && g.axes.size > 1;
-      const spread = [0, 1, 2].filter((j) => mixed || j !== k).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
+      // (and along their axis where they lie apart on it: two side dimples a part apart spanned
+      // "0.00 mm × 0.00 mm" -- R29-2)
+      const spread = [0, 1, 2].filter((j) => mixed || j !== k || deps.num(g.hi[j] - g.lo[j]) !== deps.num(0)).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
       const li = document.createElement('li');
       li.textContent = `Ø ${holeDia(g, deps.lenText)} × ${g.n}${g.n > 1 ? ` · centres span ${spread}` : ''}`;
       sum.append(li);
@@ -1043,7 +1050,8 @@ export function createMeasure(deps) {
       const pick = () => {
         st.holes.pick = r.n - 1;
         for (const x of tb.children) x.classList.toggle('pick', x === tr);
-        const said = `hole ${r.n}: Ø ${holeDia(r, deps.lenText)} at ${t.posHead} ${r.at}`;
+        // (the coordinates named, not the column's head pasted in: R29-3)
+        const said = `hole ${r.n}: Ø ${holeDia(r, deps.lenText)} at ${r.said} ${deps.unit()}`;
         deps.tell(said, 3000);
         deps.queueFrame();
       };

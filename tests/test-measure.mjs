@@ -1161,5 +1161,25 @@ await test('one hole size in a top face and a side wall spans its centres in all
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }
 });
+await test('two holes of one direction alike across it, apart along it: every row X, Y, Z, numbers only, the axes in the head; their span along it too (UI design round 29, R29-1, R29-2: the RK3399\'s side dimples read alike, then wrapped)', async () => {
+  const tds = [], lines = [];
+  const had = globalThis.document;
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {}, add() {} }, append(...c) { this.kids.push(...c); } }; if (tag === 'td') tds.push(e); if (tag === 'li') lines.push(e); return e; } };
+  try {
+    // (two Ø3 washers standing in walls facing Y, at X 60, Z 30, 20 apart along Y: (x, y, z) -> (x, -z + c, y))
+    const wall = (c) => washer(1.5, 4, 1.6, 48, 60, 30).map((f) => f.map((t) => t.map(([x, y, z]) => P(x, -z + c, y))));
+    const { meas, $ } = await measureAt([{ name: 'a', faces: wall(10) }, { name: 'b', faces: wall(30) }]);
+    meas.showHoles([1, 2], { min: [0, 0, 0], name: 'both' }, 'both');
+    assert.equal($('holespos').textContent, 'X, Y, Z (mm)');
+    const pos = tds.filter((_, i) => i % 4 === 2).map((e) => e.textContent);
+    assert.equal(pos.length, 2, JSON.stringify(pos));
+    assert.notEqual(pos[0], pos[1], `two holes 20 apart read alike: ${pos.join(' | ')}`);
+    assert.ok(pos.every((s) => /^[-\d., ]+$/.test(s)), `numbers only: ${pos.join(' | ')}`);
+    const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
+    assert.ok(sizes.length === 1 && /\b20\.00 mm\b/.test(sizes[0]), `the span along Y: ${sizes.join(' | ')}`);
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
+});
 
 done();

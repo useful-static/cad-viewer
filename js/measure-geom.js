@@ -852,9 +852,14 @@ export function holesOf(geom) {
   //   - each behind the other's face, no wall between them, the bore's wall running on in front of
   //     both: a shaft through a collar (the Sweet Potato's M2 standoffs), no hole: neither row.
   const left = new Map();
-  for (const [i, row] of single) {
+  // (none at all unless rims left single look both ways: building the keys of 16,000 all looking one
+  // way and searching them was 170 ms of the time test's 600 -- round 29)
+  const ways = new Set(single.map(([i]) => keys[i].f));
+  for (const [i, row] of ways.size > 1 ? single : []) {
     if (drop.has(row) || out[row].rims !== 1 || out[row].head) continue;
-    const s = `${keys[i].r}|${keys[i].q.join(',')}`;
+    // (keyed by which way its face looks along the axis too, as the pairing's: 16,000 rims all
+    // looking one way each searched the rest, the time test's margin halved -- round 29)
+    const s = `${keys[i].f}|${keys[i].r}|${keys[i].q.join(',')}`;
     let a = left.get(s); if (!a) left.set(s, (a = [])); a.push([i, row]);
   }
   // (each key's sorted along the axis, a rim trying the nearest either side of it only: every one
@@ -864,12 +869,12 @@ export function holesOf(geom) {
   // wallJoins' slack of one -- a quarter of the radius missed the RK3399's parts, a 0.01 mm stub
   // then a dome)
   const shaft = (c) => wallJoins(geom, c, { centre: c.centre.map((v, k) => v + faceN(c)[k] * 4 * PLANE_FLOOR_MM) });
-  for (const [i, row] of single) {
+  for (const [i, row] of ways.size > 1 ? single : []) {
     if (drop.has(row) || out[row].rims !== 1 || out[row].head) continue;
     const r = rims[i], k = keys[i];
     let best = null;
     for (let dr = -1; dr <= 1; dr++) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
-      const a = left.get(`${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
+      const a = left.get(`${-k.f}|${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
       if (!a) continue;
       let lo = 0, hi = a.length;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (keys[a[mid][0]].t < k.t) lo = mid + 1; else hi = mid; }
