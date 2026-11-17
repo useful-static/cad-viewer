@@ -237,6 +237,28 @@ test('a hole read by its wall as the faces join it: chamfered at either end or b
     }
   }
 });
+test('two rims alike on one axis are one row or none: a shaft through a collar no hole, a boss over a blind recess the recess only, a plain hole in a body wound inside out one through row; the same 20 m out (UI design round 27, R27-2: the Sweet Potato\'s M2 standoffs, the RK3399\'s domes and 0.27 mm layer, each two rows alike)', () => {
+  const show = (h) => h.map((x) => [Math.round(x.diameter * 100) / 100, x.rims, Math.round(x.depth * 100) / 100]);
+  for (const o of [0, 20000]) {
+    const n = 48, ro = 8, H = 4, r = 1.5;
+    const ring = (rr, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(o + rr * Math.cos(t), o + rr * Math.sin(t), z); });
+    const band = (a, b) => { const t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push([a[i], b[i], b[j]], [a[i], b[j], a[j]]); } return t; };
+    const disc = (rr, z, up) => { const c = P(o, o, z), e = ring(rr, z), t = []; for (let i = 0; i < n; i++) { const j = (i + 1) % n; t.push(up ? [c, e[i], e[j]] : [c, e[j], e[i]]); } return t; };
+    const rows = (faces) => show(holesOf(bodyGeometry(model([{ name: 'p', faces }]), 0)));
+    // a shaft Ø3 through a collar Ø4.5, 0.8 thick: its two shoulders' inner circles, no hole (HEAD: two Ø3 one-rim rows)
+    const collar = [band(ring(r, 0.8), ring(2.25, 0.8)), band(ring(2.25, 0), ring(r, 0)), band(ring(2.25, 0.8), ring(2.25, 0)),
+      band(ring(r, 1.8), ring(r, 0.8)), band(ring(r, 0), ring(r, -1)), disc(r, 1.8, true), disc(r, -1, false)];
+    assert.deepEqual(rows(collar), [], `a shaft through a collar at ${o}`);
+    // a plate with a boss Ø3 on top and a blind recess Ø3, 1 deep, under it: the recess only
+    const boss = [band(ring(r, H), ring(ro, H)), band(ring(r, H + 1), ring(r, H)), disc(r, H + 1, true),
+      band(ring(ro, 0), ring(r, 0)), band(ring(r, 0), ring(r, 1)), disc(r, 1, false), band(ring(ro, H), ring(ro, 0))];
+    assert.deepEqual(rows(boss), [[3, 1, 0]], `a boss over a recess at ${o}`);
+    // a plain through-hole in a plate wound inside out: one row through it
+    const inside = [band(ring(r, H), ring(ro, H)), band(ring(ro, 0), ring(r, 0)), band(ring(r, 0), ring(r, H)), band(ring(ro, H), ring(ro, 0))]
+      .map((f) => f.map(([a, b, c]) => [a, c, b]));
+    assert.deepEqual(rows(inside), [[3, 2, 4]], `an inside-out plain hole at ${o}`);
+  }
+});
 test('a shallow drill point 2^17 mm out is not a flat face: the plane floor is the rounding\'s, four steps (r69: at sixteen a point 0.13 deep read flat, the blind hole through)', () => {
   const n = 48, ro = 8, H = 4, r = 1.5, Z = 2 ** 17 + 20;
   const ring = (rr, z) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return P(rr * Math.cos(t), rr * Math.sin(t), Z + z); });

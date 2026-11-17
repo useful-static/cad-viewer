@@ -832,8 +832,12 @@ export function createMeasure(deps) {
         st.results.splice(i, 1);
         if (!st.results.length) setList(false);
         syncRow(); deps.queueFrame();
-        // (the last one gone: Measure's toggle, shown, not the hidden chip -- R26-2)
-        if (kb) { const xs = [...ul.querySelectorAll('li button:last-child')]; (xs[Math.min(i, xs.length - 1)] || ($('measchip').hidden ? (st.on ? $('measoff') : $('measure')) : $('measchip'))).focus?.(); }
+        // (by the count left, not the list -- a closed list is not refilled, and its removed row's
+        // hidden x took the focus nowhere: the last one gone, Measure's toggle shown, R26-2, R27-1)
+        if (kb) {
+          const xs = st.results.length ? [...ul.querySelectorAll('li button:last-child')] : [];
+          (xs[Math.min(i, xs.length - 1)] || (st.on ? $('measoff') : $('measure'))).focus?.();
+        }
       };
       li.append(t, copy, x);
       ul.append(li);

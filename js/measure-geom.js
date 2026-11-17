@@ -845,6 +845,57 @@ export function holesOf(geom) {
     drop.add(singleOf.get(best));
     out[row] = { centre: top.centre, normal: top.normal, diameter: 2 * w.bore, depth: bestAlong, rims: 2, ...(wider(top.radius) ? { head: 2 * top.radius } : {}) };
   }
+  // Two rims still single on one axis, of one radius, their faces looking opposite ways -- each
+  // listed as a row, two alike (UI design round 27, R27-2):
+  //   - each in front of the other's face, a wall rim to rim: one through-hole whose faces look
+  //     into its material (the RK3399's 0.27 mm layer, r68): one row;
+  //   - each behind the other's face, no wall between them, the bore's wall running on in front of
+  //     both: a shaft through a collar (the Sweet Potato's M2 standoffs), no hole: neither row.
+  const left = new Map();
+  for (const [i, row] of single) {
+    if (drop.has(row) || out[row].rims !== 1 || out[row].head) continue;
+    const s = `${keys[i].r}|${keys[i].q.join(',')}`;
+    let a = left.get(s); if (!a) left.set(s, (a = [])); a.push([i, row]);
+  }
+  // (each key's sorted along the axis, a rim trying the nearest either side of it only: every one
+  // against every other was 9.9 s of 4,000 fins' rims on one shaft)
+  for (const a of left.values()) a.sort((x, y) => keys[x[0]].t - keys[y[0]].t);
+  // (a wall on the side the rim's face looks to, just out from it: four micrometres, past
+  // wallJoins' slack of one -- a quarter of the radius missed the RK3399's parts, a 0.01 mm stub
+  // then a dome)
+  const shaft = (c) => wallJoins(geom, c, { centre: c.centre.map((v, k) => v + faceN(c)[k] * 4 * PLANE_FLOOR_MM) });
+  for (const [i, row] of single) {
+    if (drop.has(row) || out[row].rims !== 1 || out[row].head) continue;
+    const r = rims[i], k = keys[i];
+    let best = null;
+    for (let dr = -1; dr <= 1; dr++) for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+      const a = left.get(`${k.r + dr}|${k.q[0] + dx},${k.q[1] + dy},${k.q[2] + dz}`);
+      if (!a) continue;
+      let lo = 0, hi = a.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (keys[a[mid][0]].t < k.t) lo = mid + 1; else hi = mid; }
+      for (const p of [lo - 2, lo - 1, lo, lo + 1]) {
+        if (p < 0 || p >= a.length) continue;
+        const [j, rowJ] = a[p];
+        if (j === i || drop.has(rowJ) || out[rowJ].rims !== 1) continue;
+        const c = rims[j];
+        if (Math.abs(c.radius - r.radius) > RADIUS_TOL * r.radius || dot(faceN(c), faceN(r)) > -0.999) continue;
+        const d = sub(c.centre, r.centre), along = dot(d, r.normal);
+        if (len(sub(d, r.normal.map((v) => v * along))) > RADIUS_TOL * r.radius + 1e-6) continue;
+        if (!best || Math.abs(along) < best.along) best = { j, rowJ, along: Math.abs(along), front: dot(d, faceN(r)) > 0 };
+      }
+    }
+    if (!best) continue;
+    const c = rims[best.j];
+    if (best.front && wallJoins(geom, r, c)) {
+      out[row] = { centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best.along, rims: 2 };
+      drop.add(best.rowJ);
+    } else if (!best.front && !wallJoins(geom, r, c)) {
+      // (each rim so walled, no hole: a shaft's two, or a pressed dome's bump -- its dimple across
+      // the part kept, a recess -- the RK3399's and the A311D's parts)
+      if (shaft(r)) drop.add(row);
+      if (shaft(c)) drop.add(best.rowJ);
+    }
+  }
   if (drop.size) { const kept = out.filter((_, q) => !drop.has(q)); out.length = 0; out.push(...kept); }
   orderHoles(out);
   // (and how many rims of flat faces the stored positions cannot tell, so far from the origin, and
