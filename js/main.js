@@ -6218,6 +6218,13 @@ function guard(p, seq = null) {
     if (seq !== null && stale(seq)) return;
     console.error(e);
     app.error = String(e.message || e);
+    // no GPU: a plain reason on the card, the backends' errors in the help box's graphics line (R22-5, R22-6)
+    if (app.noGpu) {
+      $('backend').textContent = 'no 3D';
+      $('gfxnote').textContent = app.error;
+      setStatus('error', 'This browser could not start its 3D graphics: turn on hardware acceleration, or try another browser');
+      return;
+    }
     setStatus('error', app.error);
   });
 }
@@ -7869,7 +7876,10 @@ async function main() {
       // card's "Choose a file…" did nothing, a chosen file vanished), and a
       // drop is caught (the browser left the page for it): review r23
       $('open').onchange = null;
-      document.body.classList.add('nogpu'); // (the unwired toolbar's tools did nothing: R21-2)
+      app.noGpu = true;
+      document.body?.classList.add('nogpu'); // (the unwired toolbar's tools did nothing: R21-2)
+      const h2 = document.querySelector?.('#empty h2');
+      if (h2) h2.textContent = 'No 3D in this browser';
       openLbl.hidden = true;
       $('emptyopen').hidden = true;
       window.addEventListener('dragover', over);

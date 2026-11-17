@@ -136,7 +136,10 @@
      shown and pressable (Measure's modes R20-1, Full screen without the API R21-1, Open… with no GPU R21-2) */
   [hidden] { display:none !important; }
   /* no GPU: nothing in the toolbar can act; the card says why (R21-2) */
-  body.nogpu #tb > :not(.title), body.nogpu #empty .drop-hint { display:none !important; }
+  body.nogpu #tb > :not(.title), body.nogpu #empty .drop-hint, body.nogpu #parts, body.nogpu #helppop .hcols { display:none !important; }
+  body.nogpu { grid-template-columns:minmax(0, 1fr); } /* (no panel: the card centred over the whole width, R22-4) */
+  body.nogpu :is(header, #stage) { grid-column:1 / -1; }
+  body.nogpu #tb > .title { display:inline !important; } /* (the page's name in an otherwise empty header, R22-10) */
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
   /* header = the non-scrolling frame (background, border, the narrow layout's

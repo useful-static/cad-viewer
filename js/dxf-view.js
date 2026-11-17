@@ -917,24 +917,30 @@ export function createDxfView(canvas, drawing, cb = {}) {
     ctx.fillStyle = '#9a6b00';
     ctx.font = '12px sans-serif';
     const dot = (p) => { ctx.beginPath(); ctx.arc(p[0], p[1], 3.5, 0, 2 * Math.PI); ctx.fill(); };
-    // (labels kept clear of each other, as 3D's: crossing measurements showed one -- round 21 R21-6)
-    const done = [], H = css()[1];
+    // (labels kept clear of each other and inside the view, as 3D's, over every line: rounds 21-22)
+    const done = [], [W, H] = css();
     for (const r of st.results) {
       const a = toPx(...r.a), b = toPx(...r.b);
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
       dot(a); dot(b);
+    }
+    for (const r of st.results) {
+      const a = toPx(...r.a), b = toPx(...r.b);
       const t = r.text;
       const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       const w = ctx.measureText(t).width + 8;
-      const dy = clearOf({ left: m[0] - w / 2, right: m[0] + w / 2, top: m[1] - 18, bottom: m[1] - 2 }, done, 0, H);
-      done.push({ left: m[0] - w / 2, right: m[0] + w / 2, top: m[1] - 18 + dy, bottom: m[1] - 2 + dy });
-      if (dy) {
+      const { dx, dy } = clearOf({ left: m[0] - w / 2, right: m[0] + w / 2, top: m[1] - 18, bottom: m[1] - 2 }, done, { left: 2, right: W - 2, top: 2, bottom: H - 2 });
+      const cx = m[0] + dx;
+      done.push({ left: cx - w / 2, right: cx + w / 2, top: m[1] - 18 + dy, bottom: m[1] - 2 + dy });
+      if (Math.abs(dy) > 4) {
         ctx.save(); ctx.lineWidth = 1; ctx.setLineDash?.([3, 3]);
-        ctx.beginPath(); ctx.moveTo(m[0], m[1]); ctx.lineTo(m[0], dy < 0 ? m[1] - 2 + dy : m[1] - 18 + dy); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(m[0], m[1]); ctx.lineTo(cx, dy < 0 ? m[1] - 2 + dy : m[1] - 18 + dy); ctx.stroke();
         ctx.restore();
       }
-      ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fillRect(m[0] - w / 2, m[1] - 18 + dy, w, 16);
-      ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(t, m[0], m[1] - 6 + dy);
+      ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fillRect(cx - w / 2, m[1] - 18 + dy, w, 16);
+      ctx.strokeStyle = '#9a6b00'; ctx.lineWidth = 1; ctx.strokeRect(cx - w / 2, m[1] - 18 + dy, w, 16); // (a border: R22-9)
+      ctx.lineWidth = 1.5;
+      ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(t, cx, m[1] - 6 + dy);
       ctx.fillStyle = '#9a6b00';
     }
     if (st.pending) dot(toPx(...st.pending));
