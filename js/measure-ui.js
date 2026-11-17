@@ -608,6 +608,7 @@ export function createMeasure(deps) {
     if (!scene.header) return;
     const v = projector();
     drawLoupe(v);
+    placed.length = 0;
     for (const r of st.results) drawResult(v, r);
     const pend = st.pending.map((q) => v.toScreen(q.p));
     for (let i = 1; i < pend.length; i++) {
@@ -648,7 +649,19 @@ export function createMeasure(deps) {
     lab.textContent = r.main;
     if (r.sub) { const d = document.createElement('small'); d.textContent = r.sub; lab.append(d); }
     labels.append(lab);
+    // (a label over one placed before it moves up clear of it: two hid each other's ΔX ΔY ΔZ, R20-4)
+    if (!lab.getBoundingClientRect) return; // (a test's stand-in element)
+    let b = lab.getBoundingClientRect();
+    for (let k = 0; k < 8; k++) {
+      const hit = placed.find((p) => b.left < p.right && b.right > p.left && b.top < p.bottom && b.bottom > p.top);
+      if (!hit) break;
+      at[1] -= b.bottom - hit.top + 2;
+      lab.style.top = `${at[1]}px`;
+      b = lab.getBoundingClientRect();
+    }
+    placed.push(b);
   }
+  const placed = [];
 
   // The results and the hole table's markers onto a 2D canvas, for a saved
   // picture (main.js savePicture): as draw() places them, at s device px per

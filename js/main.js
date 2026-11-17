@@ -1496,7 +1496,7 @@ async function savePicture(print = false) {
     return offerPicture(png, name, () => { downloadBlob(png, name); tell(`saved ${name}`, 3000); });
   }
   if (!app.header || !app.renderer) return;
-  const pic = await renderPicture();
+  const pic = await renderPicture(print ? { ...app.pic, bg: 'white' } : app.pic); // (paper: R20-2)
   if (!pic) { tell('the picture could not be read from the GPU', 4000); return; }
   const out = pic.canvas;
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
@@ -4025,6 +4025,7 @@ function updateButtons() {
   $('explode').hidden = !app.renderer;
   $('explode').disabled = !has;
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
+  $('section').disabled = !has && app.section.axis === 'off'; // (no model: nothing to cut, as Explode -- R20-3)
   for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
   $('tourmake').disabled = !has;
   $('addmodelbtn').disabled = !has || !app.scene;

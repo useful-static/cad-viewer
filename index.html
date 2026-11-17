@@ -286,6 +286,7 @@
   .opt.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
     background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
   .seg { display:inline-flex; }
+  .seg[hidden] { display:none; } /* (Measure's modes stayed shown, and pressable, with Measure off: R20-1) */
   .seg button { border-radius:0; margin-left:-1px; }
   .seg button:first-child { border-radius:4px 0 0 4px; margin-left:0; }
   .seg button:last-child { border-radius:0 4px 4px 0; }
@@ -495,6 +496,7 @@
   /* File > Print: only the picture and the model's name on paper */
   #printout { display:none; }
   @media print {
+    html, body { background:#fff !important; } /* (a navy page with the browser's background graphics on: R20-2) */
     body > *:not(#printout) { display:none !important; }
     #printout { display:block !important; }
     #printimg { max-width:100%; max-height:90vh; display:block; margin:0 auto; }
@@ -618,6 +620,9 @@
   @media (any-pointer: coarse) {
     button, select, label.btn, a.btn { min-height:40px; padding:6px 12px; }
     #secsel { min-width:40px; } /* one glyph: 34 px wide without it */
+    #secval:not(:empty) { min-height:40px; display:inline-flex; align-items:center; } /* (the tap-to-type value was 18 px: R20-5) */
+    #galleryclose { min-width:40px; } /* (R20-9) */
+    #pictoast button { min-height:40px; } /* (R20-10) */
     #tree .row { min-height:34px; }
     #tree input { width:20px; height:20px; }
     /* the checkbox's label wrapper fills the row height: a tap anywhere in
