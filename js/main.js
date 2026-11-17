@@ -4199,6 +4199,7 @@ function dropModel(msg) {
 
 // The 3D model gone from the UI and the GPU (a failed load; a DXF opened)
 function clearModel() {
+  app.releaseInfo?.(); // (the panel of the model before is not the height to hold)
   app.mesh = null;
   showBase(null, [], 'stopped: another model was opened');
   app.scene = null;
@@ -4953,6 +4954,28 @@ const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
 // the pointer the last press came from: a touchscreen laptop's finger names a tapped layer, as
 // it names a tapped part (the device test said "mouse" there: UI design round 12 R12-4)
 addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { capture: true, passive: true });
+
+// While the pointer (or the keyboard's focus) is in the parts or layer list, the info panel above it
+// keeps its height, scrolling inside itself if it grows: a selection's lines wrap to their own height
+// (a long name, a "part" row, a 40 px copies button on touch), and the list moved under the pointer,
+// so a second click or a double-click landed on the next row. Let go once the pointer leaves, or a
+// finger presses elsewhere (UI design round 15 R15-1..R15-3).
+{
+  const info = $('info'), tree = $('tree');
+  const hold = () => {
+    if (info.style.height || !info.offsetHeight) return; // (held already; or hidden: nothing to hold)
+    info.style.height = `${info.offsetHeight}px`;
+    info.style.overflowY = 'auto';
+  };
+  const release = () => { info.style.height = ''; info.style.overflowY = ''; };
+  tree.addEventListener('pointerenter', hold);
+  tree.addEventListener('pointerdown', hold);
+  tree.addEventListener('focusin', hold);
+  tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch' && !tree.contains(document.activeElement)) release(); });
+  tree.addEventListener('focusout', (e) => { if (!tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
+  addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
+  app.releaseInfo = release; // (a new model or drawing lays the panel out afresh)
+}
 
 // The edge list and body facts of a loaded model: from the file when it
 // carries them, else built by a worker from copies of its arrays. Resolves
@@ -6851,7 +6874,9 @@ function fillInfo(el) {
   // pointer, so a second click or a double-click landed on the row above -- UI design round 14 R14-1)
   if (b && ref) {
     add(`position (${lenUnit()})`, rangesFrom(b, ref)
-      .map(([lo, hi], k) => `${'XYZ'[k]} ${lenNum(lo, 'size')} to ${lenNum(hi, 'size')}`).join(' · '));
+      // (no-break spaces inside an axis's range: the only break is between axes, at " · " -- it broke
+      // "· Z" from "0.0 to 84.0": round 15 R15-4)
+      .map(([lo, hi], k) => `${'XYZ'[k]} ${lenNum(lo, 'size')} to ${lenNum(hi, 'size')}`).join(' · '));
   }
   if (app.ref && b && ref) {
     // (how far it stands out past the reference's top and its bottom; a part
