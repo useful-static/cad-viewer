@@ -1014,9 +1014,13 @@ export function createMeasure(deps) {
       const mixed = g.axes && g.axes.size > 1;
       // (and along their axis where they lie apart on it: two side dimples a part apart spanned
       // "0.00 mm × 0.00 mm" -- R29-2)
-      const spread = [0, 1, 2].filter((j) => mixed || j !== k || deps.num(g.hi[j] - g.lo[j]) !== deps.num(0)).map((j) => deps.lenText(g.hi[j] - g.lo[j])).join(' × ');
+      // (each axis named, as the table's head and a picked row are, the unit once, an axis they do
+      // not spread along left out: "0.00 mm × 11.87 mm × 0.00 mm" named none, and broke
+      // between a number and its unit -- R30-1)
+      const spread = [0, 1, 2].filter((j) => (mixed || j !== k || deps.num(g.hi[j] - g.lo[j]) !== deps.num(0)) && deps.num(g.hi[j] - g.lo[j]) !== deps.num(0))
+        .map((j) => `${'XYZ'[j]} ${deps.num(g.hi[j] - g.lo[j])}`).join(', ');
       const li = document.createElement('li');
-      li.textContent = `Ø ${holeDia(g, deps.lenText)} × ${g.n}${g.n > 1 ? ` · centres span ${spread}` : ''}`;
+      li.textContent = `Ø ${holeDia(g, deps.lenText)} × ${g.n}${g.n > 1 ? (spread ? ` · centres span ${spread} ${deps.unit()}` : ' · one centre') : ''}`;
       sum.append(li);
     }
     $('holesdia').textContent = `Ø (${deps.unit()})`;

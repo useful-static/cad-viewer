@@ -460,7 +460,7 @@
   #holessumbox.flat > summary { display:none; } /* (6 sizes or fewer: a plain list, no heading over it) */
   #holesnote { margin:2px 0; color:var(--dim); }
   #holesnote[hidden] { display:none; }
-  #holes table { border-collapse:collapse; width:100%; font-size:11px; }
+  #holes table { border-collapse:collapse; width:100%; font-size:11px; font-variant-numeric:tabular-nums; } /* (positions line up down the column: R30-2) */
   /* a board's 30-odd holes scroll in a box of their own, so the table never
      pushes the parts list out of the panel (UI organization review rank 1) */
   #holes .holesscroll { max-height:40vh; overflow:auto; scrollbar-width:thin; } /* (one scrollbar style in the panel: round 17 R17-4) */

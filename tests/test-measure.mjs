@@ -1156,7 +1156,8 @@ await test('one hole size in a top face and a side wall spans its centres in all
     const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
     assert.equal(sizes.length, 1, sizes.join(' | '));
     // (must fire: two spans, the flat hole's X and Y, left the wall's Z out)
-    assert.equal((sizes[0].match(/×/g) || []).length, 1 + 2, sizes[0]);
+    // (each axis named: R30-1)
+    assert.deepEqual([...sizes[0].matchAll(/([XYZ]) [\d.]+/g)].map((x) => x[1]), ['X', 'Y', 'Z'], sizes[0]);
   } finally {
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }
@@ -1176,7 +1177,8 @@ await test('two holes of one direction alike across it, apart along it: every ro
     assert.notEqual(pos[0], pos[1], `two holes 20 apart read alike: ${pos.join(' | ')}`);
     assert.ok(pos.every((s) => /^[-\d., ]+$/.test(s)), `numbers only: ${pos.join(' | ')}`);
     const sizes = lines.map((e) => e.textContent).filter((s) => s.startsWith('Ø '));
-    assert.ok(sizes.length === 1 && /\b20\.00 mm\b/.test(sizes[0]), `the span along Y: ${sizes.join(' | ')}`);
+    // (the span along Y alone, its axis named, the unit kept with it: R30-1)
+    assert.ok(sizes.length === 1 && sizes[0].endsWith('centres span Y 20.00 mm'), `the span along Y: ${sizes.join(' | ')}`);
   } finally {
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }
