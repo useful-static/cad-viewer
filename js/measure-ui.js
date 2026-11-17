@@ -836,7 +836,9 @@ export function createMeasure(deps) {
         // hidden x took the focus nowhere: the last one gone, Measure's toggle shown, R26-2, R27-1)
         if (kb) {
           const xs = st.results.length ? [...ul.querySelectorAll('li button:last-child')] : [];
-          (xs[Math.min(i, xs.length - 1)] || (st.on ? $('measoff') : $('measure'))).focus?.();
+          // (Measure's button, or View's when it is folded into View's closed panel: at 390 it fell
+          // to File -- R28-2)
+          (xs[Math.min(i, xs.length - 1)] || (st.on ? $('measoff') : offFocus())).focus?.();
         }
       };
       li.append(t, copy, x);
@@ -850,6 +852,7 @@ export function createMeasure(deps) {
     syncRow();
   }
 
+  const offFocus = () => (deps.toolFocus ? deps.toolFocus('measure') : $('measure'));
   function setOn(on, focus = false) {
     // (the viewer turns off what cannot run beside Measure: Explode)
     if (on && !st.on && deps.beforeOn) deps.beforeOn();
@@ -861,7 +864,7 @@ export function createMeasure(deps) {
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     const plain = on && scene.mesh && !scene.mesh.faces;
     deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
-    if (focus) (on ? $('measoff') : $('measure')).focus();
+    if (focus) (on ? $('measoff') : offFocus()).focus();
   }
 
   function undo() {
@@ -922,8 +925,10 @@ export function createMeasure(deps) {
     };
     const first = list.length ? axesOf(list[0]).join() : '';
     const shared = list.every((h) => axesOf(h).join() === first);
+    // (a table of mixed directions: every row all three, its own axis's too -- across, two holes a
+    // part apart read alike, the RK3399's side dimples: UI design round 28, R28-1)
     const rows = list.map((h, i) => {
-      const at = axesOf(h).map((j) => `${shared ? '' : `${'XYZ'[j]} `}${deps.num(h.centre[j] - ref.min[j])}`).join(shared ? ', ' : ' · ');
+      const at = (shared ? axesOf(h) : [0, 1, 2]).map((j) => `${shared ? '' : `${'XYZ'[j]} `}${deps.num(h.centre[j] - ref.min[j])}`).join(shared ? ', ' : ' · ');
       // (head: a countersunk hole's countersink diameter -- js/measure-geom.js holesOf, r67)
       return { n: i + 1, d: h.diameter, at, through: h.rims > 1, depth: h.depth, head: h.head || 0 };
     });

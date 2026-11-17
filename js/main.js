@@ -7050,7 +7050,7 @@ function wireInput() {
     },
     lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
     num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
-    announce, tell, queueFrame, syncOptbar,
+    announce, tell, queueFrame, syncOptbar, toolFocus,
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => currentStyle().seesHidden,
