@@ -1099,6 +1099,17 @@ export function createDxfView(canvas, drawing, cb = {}) {
   fit();
   return {
     fit, draw, select, layerAt, toPx: (x, y) => toPx(x - o[0], y - o[1]), zoomAt,
+    // the drawing as a PNG, as the 3D picture is: without the hover and the selection's tint and
+    // fade (they were saved and printed as drawn -- UI design round 11 R11-5)
+    async png() {
+      const keep = [st.hover, st.selected];
+      st.hover = null; st.selected = null; draw();
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+      [st.hover, st.selected] = keep; draw();
+      return blob;
+    },
+    // the keyboard's pan, in css px, as a drag of that many (UI design round 11 R11-1)
+    panBy(dx, dy) { st.c = [st.c[0] - dx / st.s, st.c[1] + dy / st.s]; draw(); },
     get selected() { return st.selected; }, get scale() { return st.s; },
     setLayerOn(name, on) { if (on) st.off.delete(name); else st.off.add(name); draw(); },
     // 2D Measure: on / off; Esc drops a pending point first (true when it did)

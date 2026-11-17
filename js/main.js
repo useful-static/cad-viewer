@@ -1474,15 +1474,14 @@ async function exportMesh(fmt) {
 // Measure's results and the hole table's markers drawn in.
 // print: the picture printed (File > Print) instead of saved
 async function savePicture(print = false) {
-  // a drawing: its canvas as it is drawn
+  // a drawing: its canvas without the hover and selection; on a phone the same Share / Save as a
+  // model's picture (UI design round 11 R11-5)
   if (app.dxf) {
-    const blob = await new Promise((res) => $('view2d').toBlob(res, 'image/png'));
-    if (!blob) return;
-    if (print) return printPng(blob);
+    const png = await app.dxf.view.png();
+    if (!png) return;
+    if (print) return printPng(png);
     const name = pictureName(app.dxf.name);
-    downloadBlob(blob, name);
-    tell(`saved ${name}`, 3000);
-    return;
+    return offerPicture(png, name, () => { downloadBlob(png, name); tell(`saved ${name}`, 3000); });
   }
   if (!app.header || !app.renderer) return;
   const pic = await renderPicture();
@@ -1491,15 +1490,18 @@ async function savePicture(print = false) {
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
   if (print) return printPng(png);
   const name = pictureName(app.sourceName);
-  const save = () => {
+  offerPicture(png, name, () => {
     const url = downloadBlob(png, name);
     app.lastPicture = { name, width: out.width, height: out.height, url, cssW: pic.cssW, cssH: pic.cssH, tiles: pic.tiles, capped: pic.capped }; // (for tests)
     // (a size the view has grown too big for saves at the largest allowed)
     tell(`saved ${name}, ${out.width} × ${out.height}${pic.capped ? ` (the largest a picture of this view can be at ${app.pic.scale}×)` : ''}`, 3000);
-  };
-  // A touch-only device: the render has used up the tap's gesture, and the
-  // share sheet needs a fresh one, so "Picture ready: Share / Save" waits 8 s
-  // for a tap of its own (Share only where files can be shared)
+  });
+}
+
+// A picture made: saved, or on a touch-only device offered. There the render has used up the tap's
+// gesture, and the share sheet needs a fresh one, so "Picture ready: Share / Save" waits 8 s for a
+// tap of its own (Share only where files can be shared)
+function offerPicture(png, name, save) {
   if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
     const file = new File([png], name, { type: 'image/png' });
     const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
@@ -2555,7 +2557,7 @@ function setEmbedActive(on) {
   app.embedActive = on;
   document.body.classList.toggle('active', on);
   $('embedhint').hidden = on;
-  announce(on ? 'the model now turns and zooms with the pointer; Esc gives the page its wheel back' : 'the page scrolls again');
+  announce(on ? `${app.dxf ? 'the drawing now pans' : 'the model now turns'} and zooms with the pointer; Esc gives the page its wheel back` : 'the page scrolls again');
 }
 
 // the style in force: the select's choice, else the model list's style for
@@ -5464,7 +5466,9 @@ function setSheet(i) {
   app.dxf.shown = shown;
   $('sheet').value = String(i);
   app.dxf.view = dxfViewLib.createDxfView($('view2d'), shown, {
-    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); },
+    // (a touch has no hover, so the layer a tap selects is named in the view, as a tapped part is:
+    // UI design round 11 R11-4)
+    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); if (layer && tapWord() === 'tap') tell(`layer ${layer}`, 2500); },
     onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
     onMeasure: (r) => tell(r.text, 4000),
   });
@@ -5502,8 +5506,21 @@ const TITLES_2D = [
   // (round 10 R10-4: Fit's "selection, or the whole model", an embed's "model")
   ['fit', 'Fit the drawing in view (F)'],
   ['embedfit', 'Fit the drawing in view'],
-  ['embedopen', 'Open this drawing in the full viewer, at this view, in a new tab'],
+  ['embedopen', 'Open this drawing in the full viewer, in a new tab'],
+  // (round 11 R11-2, R11-3: a link keeps the drawing, not its sheet or zoom; Print names the
+  // drawing; ☰ lists its layers)
+  ['sharelink', 'Copy a link that opens this drawing'],
+  ['printbtn', 'Print the drawing as it is shown, with its name'],
+  ['panelbtn', 'Layers'],
 ];
+
+// The words that name what is shown: ☰ lists a drawing's layers, the skip link goes to the
+// drawing (UI design round 11 R11-1, R11-3)
+function modeWords(is2d) {
+  $('panelbtn').setAttribute('aria-label', is2d ? 'Layers' : 'Parts');
+  $('panelbtn').querySelector('.lbl').textContent = is2d ? 'Layers' : 'Parts';
+  $('skipview').textContent = is2d ? 'Skip to the drawing' : 'Skip to the 3D view';
+}
 
 // An embed's hint, for what is shown: a drawing pans, a model turns. One place sets it, so a 3D
 // model shown after a drawing no longer said "the drawing" (UI design round 9 R9-1)
@@ -5536,6 +5553,7 @@ function show2D(drawing, name, url) {
   // the kept controls' tooltips in a drawing's words (Measure's named faces and hole centres,
   // Save picture the options ▾ that 2D hides: UI design round 9 R9-9)
   for (const [id, t] of TITLES_2D) { const b = $(id); if (b) { b.dataset.title3d ??= b.title; b.title = t; } } // (?noopen=1 removes embedopen)
+  modeWords(true);
   // (the row changed -- View out, the 2D badge and the sheet select in -- and the header's size
   // may not have: after the select is shown, so the fold counts it, UI design round 8 R8-1)
   refold();
@@ -5576,6 +5594,7 @@ function leave2D() {
   $('sheet').hidden = true;
   clearHover();
   for (const [id] of TITLES_2D) { const b = $(id); if (b && b.dataset.title3d !== undefined) b.title = b.dataset.title3d; }
+  modeWords(false);
   embedHint();
   refold();
 }
@@ -7442,7 +7461,7 @@ function wireInput() {
   $('piccopy').onclick = () => copyPicture();
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
-  $('skipview').onclick = () => $('view').focus();
+  $('skipview').onclick = () => (app.dxf ? $('view2d') : $('view')).focus();
   $('tourprev').onclick = () => app.tour && showTourStep(app.tour.i - 1);
   $('tournext').onclick = () => app.tour && showTourStep(app.tour.i + 1);
   $('tourexit').onclick = () => endTour();
@@ -7628,7 +7647,21 @@ function wireInput() {
     // Shift+arrows pan, + and - zoom; where the focus is the 3D view itself
     // or nowhere (a control's own arrows win: the tree, a slider, a select).
     // Only presets moved it from the keyboard before (feature review r2).
-    const onView = t === $('view') || t === document.body || t === document.documentElement || !(t instanceof Node);
+    const onView = t === $('view') || t === $('view2d') || t === document.body || t === document.documentElement || !(t instanceof Node);
+    // a drawing from the keyboard: arrows pan (as a drag), + and - zoom about the middle; it had
+    // only F, so a keyboard user could not move it (UI design round 11 R11-1)
+    if (app.dxf && onView && !e.defaultPrevented) {
+      const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      const zoom = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' ? 1.2
+        : e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract' ? 1 / 1.2 : 0;
+      if (arrow || zoom) {
+        e.preventDefault();
+        const v = $('view2d');
+        if (zoom) app.dxf.view.zoomAt(zoom, v.clientWidth / 2, v.clientHeight / 2);
+        else app.dxf.view.panBy(-arrow[0] * 40, -arrow[1] * 40);
+        return;
+      }
+    }
     if (app.header && onView && !e.defaultPrevented) {
       const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
       const zoom = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd' ? 1 / 1.2
