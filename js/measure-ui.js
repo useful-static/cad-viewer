@@ -27,6 +27,17 @@ export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at i
 // the through-holes left out as their other rim is one of them, their own rim told (counted among
 // the rims, it was one too small to tell that was not: r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// A label's box ({ left, right, top, bottom }) moved clear of those placed before it: up first, down
+// where up leaves [top, bottom] -> its shift in y, 0 where neither fits (the screen's and a picture's)
+export function clearOf(r, placed, top, bottom) {
+  const hit = (y) => placed.find((p) => r.left < p.right && r.right > p.left && r.top + y < p.bottom && r.bottom + y > p.top);
+  for (const dir of [-1, 1]) {
+    let y = 0;
+    for (let k = 0; k < 16; k++) { const h = hit(y); if (!h) break; y = dir < 0 ? h.top - r.bottom - 2 : h.bottom - r.top + 2; }
+    if (!hit(y) && r.top + y >= top && r.bottom + y <= bottom) return y;
+  }
+  return 0;
+}
 // a touch-only device taps (and has no Esc): the words say so (UI design rounds 5-6)
 // (the stylesheet's own test: "no fine pointer" alone also matches a browser that reports no pointer)
 export const TOUCH_ONLY = '(any-pointer: coarse) and (not (any-pointer: fine))';
@@ -631,7 +642,8 @@ export function createMeasure(deps) {
         el('circle', { cx: s[0], cy: s[1], r: 7, class: 'msnap' }, layer);
         const t = el('text', { x: s[0] + 10, y: s[1] - 10, class: 'msnaptext' }, layer);
         const info = sn.kind === 'centre' ? ` Ø ${deps.lenText(sn.info.diameter)}`
-          : (sn.kind === 'edge' || sn.kind === 'mid') && sn.info ? ` edge ${deps.lenText(sn.info.length)}` : '';
+          : sn.kind === 'edge' && sn.info ? ` ${deps.lenText(sn.info.length)}` // ("edge edge 40.00 mm": R21-7)
+            : sn.kind === 'mid' && sn.info ? ` edge ${deps.lenText(sn.info.length)}` : '';
         t.textContent = `${MARK[sn.kind]} ${KIND_NAME[sn.kind]}${info}`;
       }
     }
@@ -649,17 +661,16 @@ export function createMeasure(deps) {
     lab.textContent = r.main;
     if (r.sub) { const d = document.createElement('small'); d.textContent = r.sub; lab.append(d); }
     labels.append(lab);
-    // (a label over one placed before it moves up clear of it: two hid each other's ΔX ΔY ΔZ, R20-4)
+    // (a label over one placed before it moves clear of it, inside the view, with a leader back to
+    // its line: R20-4, R21-3, R21-4)
     if (!lab.getBoundingClientRect) return; // (a test's stand-in element)
-    let b = lab.getBoundingClientRect();
-    for (let k = 0; k < 8; k++) {
-      const hit = placed.find((p) => b.left < p.right && b.right > p.left && b.top < p.bottom && b.bottom > p.top);
-      if (!hit) break;
-      at[1] -= b.bottom - hit.top + 2;
-      lab.style.top = `${at[1]}px`;
-      b = lab.getBoundingClientRect();
+    const b = lab.getBoundingClientRect(), box = labels.getBoundingClientRect();
+    const y = clearOf(b, placed, box.top, box.bottom);
+    if (y) {
+      lab.style.top = `${at[1] + y}px`;
+      el('line', { x1: at[0], y1: at[1], x2: at[0], y2: (y < 0 ? b.bottom : b.top) + y - box.top, class: 'mlead' }, layer);
     }
-    placed.push(b);
+    placed.push({ left: b.left, right: b.right, top: b.top + y, bottom: b.bottom + y });
   }
   const placed = [];
 
@@ -673,6 +684,7 @@ export function createMeasure(deps) {
     const ink = light ? INK.light : INK.dark;
     ctx.save();
     ctx.lineCap = 'round';
+    const done = []; // (the screen's placement: crossing results drew one readable label, R21-5)
     for (const r of st.results) {
       const q = r.pts.map(P);
       if (q.some((x) => !x)) continue;
@@ -687,7 +699,15 @@ export function createMeasure(deps) {
       ctx.font = `${12 * s}px system-ui, sans-serif`;
       const w = Math.max(ctx.measureText(r.main).width, r.sub ? ctx.measureText(r.sub).width * 0.85 : 0) + 12 * s;
       const h = (r.sub ? 32 : 18) * s;
-      const x0 = at[0] - w / 2, y0 = at[1] - h - 8 * s;
+      const x = at[0] - w / 2, yy = at[1] - h - 8 * s;
+      const dy = clearOf({ left: x, right: x + w, top: yy, bottom: yy + h }, done, 0, ctx.canvas.height);
+      const x0 = x, y0 = yy + dy;
+      done.push({ left: x0, right: x0 + w, top: y0, bottom: y0 + h });
+      if (dy) {
+        ctx.strokeStyle = ink.line; ctx.lineWidth = 1 * s; ctx.setLineDash?.([3 * s, 3 * s]);
+        ctx.beginPath(); ctx.moveTo(at[0], at[1]); ctx.lineTo(at[0], dy < 0 ? y0 + h : y0); ctx.stroke();
+        ctx.setLineDash?.([]);
+      }
       ctx.fillStyle = ink.label;
       ctx.strokeStyle = ink.line;
       ctx.lineWidth = 1 * s;

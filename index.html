@@ -132,6 +132,11 @@
   html.embed:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
+  /* hidden means hidden: an element's own display rule beat the attribute, and a hidden control stayed
+     shown and pressable (Measure's modes R20-1, Full screen without the API R21-1, Open… with no GPU R21-2) */
+  [hidden] { display:none !important; }
+  /* no GPU: nothing in the toolbar can act; the card says why (R21-2) */
+  body.nogpu #tb > :not(.title), body.nogpu #empty .drop-hint { display:none !important; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
   /* header = the non-scrolling frame (background, border, the narrow layout's
@@ -401,6 +406,8 @@
   #stage[data-bg="paper"] #measloupe { box-shadow:0 0 0 2px #9a6b00, 0 2px 10px rgba(0,0,0,.25); }
   #measvg .mline { stroke:#ffd23f; stroke-width:2.5; filter:drop-shadow(0 0 1px #000); }
   #measvg .mline.pend { stroke-dasharray:5 4; }
+  #measvg .mlead { stroke:#ffd23f; stroke-width:1; stroke-dasharray:3 3; } /* (a moved label's way back to its line: R21-4) */
+  #stage[data-bg="paper"] #measvg .mlead { stroke:#9a6b00; }
   #measvg .mdot { fill:#ffd23f; stroke:#000; stroke-width:1; }
   #measvg .msnap { fill:none; stroke:#ffd23f; stroke-width:2; }
   #measvg .msnaptext, #measvg .mholetext { fill:#fff; font:12px sans-serif; paint-order:stroke; stroke:#000; stroke-width:3px; }

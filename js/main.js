@@ -7869,6 +7869,7 @@ async function main() {
       // card's "Choose a file…" did nothing, a chosen file vanished), and a
       // drop is caught (the browser left the page for it): review r23
       $('open').onchange = null;
+      document.body.classList.add('nogpu'); // (the unwired toolbar's tools did nothing: R21-2)
       openLbl.hidden = true;
       $('emptyopen').hidden = true;
       window.addEventListener('dragover', over);
