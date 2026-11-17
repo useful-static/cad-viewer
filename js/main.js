@@ -1810,16 +1810,18 @@ async function shareView() {
   // (the added models opened from this device, which viewLink leaves out: said too -- a scene of a
   // URL's case and a board added from the device copied a link to the case alone, "View link
   // copied" told: r51 A6)
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left);
+  const nMeas = app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas);
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
 // ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
 // '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
-function linkToldText(copied, hasUrl, nNotes, nLocal = 0) {
+function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0) {
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
-    nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : ''].filter(Boolean);
+    nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : '',
+    nMeas ? `it carries notes, not the ${nMeas === 1 ? 'measurement' : `${nMeas} measurements`} (copy them from the results list)` : ''].filter(Boolean);
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
@@ -3365,7 +3367,8 @@ function fillModelList(entries) {
   none.hidden = true;
   sel.add(none);
   sel.hidden = entries.length === 0;
-  $('gallerybtn').hidden = entries.length < 2; // Browse models: a list to browse
+  // Browse models: a list with pictures to browse (R24-5)
+  $('gallerybtn').hidden = entries.length < 2 || !entries.some((e) => e.image);
   syncModelList();
   refold();
   showModelName(); // a model shown before the list came is named from it now
@@ -6788,7 +6791,7 @@ function syncRefRow() {
   $('refclear').hidden = !app.ref;
   $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
   // holes need the b-rep faces (a .cadmesh written before they were kept has none)
-  $('holesbtn').disabled = !app.selected.size || !(app.baseMesh && app.baseMesh.faces);
+  $('holesbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
   // an open hole table follows the reference and the display unit
   if (app.holesFor && app.measure) showHoles(app.holesFor);
 }
@@ -7650,8 +7653,11 @@ function wireInput() {
   $('refset').onclick = () => setRef(true);
   $('refclear').onclick = () => setRef(false);
   $('holesbtn').onclick = () => {
-    const ids = [...app.selected];
-    showHoles({ ids, name: app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) });
+    // (nothing selected: the parts shown -- a one-part board's List holes was greyed with nothing
+    // saying to pick it first, R24-4)
+    const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+    const name = app.selected.size ? app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) : 'the parts shown';
+    showHoles({ ids, name });
   };
   $('holesclose').onclick = () => { showHoles(null); $('holesbtn').focus(); };
   // 'change', not 'input': a picker drag fires input continuously, and each
@@ -7883,6 +7889,8 @@ async function main() {
       const h2 = document.querySelector?.('#empty h2');
       if (h2) h2.textContent = 'No 3D in this browser';
       for (const id of ['view', 'view2d']) if ($(id)) $(id).tabIndex = -1; // (an empty canvas as a Tab stop: R23-2)
+      // (Esc closes the help, as on a working page, whose key map is never wired here: R24-8)
+      addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('helppop') && !$('helppop').hidden) $('helpbtn').click(); });
       openLbl.hidden = true;
       $('emptyopen').hidden = true;
       window.addEventListener('dragover', over);

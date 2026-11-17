@@ -436,7 +436,9 @@
   #measlist { position:absolute; bottom:100%; right:8px; max-height:50vh; overflow:auto; margin:0 0 4px; padding:4px; list-style:none;
     background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   #measlist[hidden] { display:none; }
-  #measlist li { display:flex; gap:6px; align-items:center; padding:2px 4px; white-space:nowrap; }
+  /* (never wider than the view: at 390 it ran off the left edge, every distance cut, R24-1) */
+  #measlist { max-width:calc(100vw - 16px); }
+  #measlist li { display:flex; gap:6px; align-items:center; padding:2px 4px; overflow-wrap:anywhere; }
   #measlist li span { flex:1; }
   /* the tools: Measure, Section, Explode, side by side (each drives the
      options bar along the bottom of the view) */
@@ -655,6 +657,8 @@
     .seg button, #panelbtn, #helpbtn { min-width:40px; justify-content:center; }
     #colours input[type=color] { width:44px; height:40px; }
     #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
+    #holes tbody td { height:40px; } /* (18 px rows to tap: R24-6) */
+    #measlist li button { min-width:40px; min-height:40px; } /* (R24-12) */
     button.mini, #testeps li button:not(.tename), #picopts button, #teclose { min-width:40px; }
     button.mini { font-size:13px; } /* (11 px on a 40 px button) */
     #measnotetext, #secin { min-height:40px; } /* (30 px beside the options bar's 40 px buttons) */

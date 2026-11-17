@@ -634,10 +634,16 @@ export function createMeasure(deps) {
     for (const s of pend) if (s) el('circle', { cx: s[0], cy: s[1], r: 4, class: 'mdot' }, layer);
     // the hole table's holes, numbered as its rows
     if (st.holes) {
+      // (a number only where it clears the ones before it, the picked hole's always: a board's
+      // numbers overprinted into clusters, R24-2; the table lists every one)
+      const nums = [];
       st.holes.list.forEach((h, i) => {
         const s = v.toScreen(h.centre);
         if (!s) return;
         el('circle', { cx: s[0], cy: s[1], r: i === st.holes.pick ? 9 : 6, class: i === st.holes.pick ? 'mhole pick' : 'mhole' }, layer);
+        const b = { left: s[0] + 7, right: s[0] + 9 + 7 * String(i + 1).length, top: s[1] - 18, bottom: s[1] - 4 };
+        if (i !== st.holes.pick && nums.some((p) => b.left < p.right && b.right > p.left && b.top < p.bottom && b.bottom > p.top)) return;
+        nums.push(b);
         el('text', { x: s[0] + 8, y: s[1] - 6, class: 'mholetext' }, layer).textContent = String(i + 1);
       });
     }
