@@ -80,6 +80,9 @@ test('a wide or square view keeps the usual iso; so does a model without a long 
   assert.deepEqual(isoView(Z_UP_ORIENT, board, PORTRAIT), ISO);
   assert.deepEqual(isoView(Z_UP_ORIENT, { min: [0, 0, 0], max: [50, 45, 9] }, 0.5), ISO);
   assert.deepEqual(isoView(Z_UP_ORIENT, null, 0.5), ISO);
+  // a board opened Y-up (no list to say Z): its thickness is the front extent, its face toward the
+  // viewer -- the usual iso, not its edge (it showed a sliver on a phone: UI design round 25 R25-9)
+  assert.deepEqual(isoView(DEFAULT_ORIENT, { min: [0, 0, 0], max: [85, 56, 2] }, 0.5), ISO);
 });
 test('on a tall view a board long left to right is seen from its left end, steeply; long front to back, from the front', () => {
   // Z up, front -y: right is +x, the board's long side

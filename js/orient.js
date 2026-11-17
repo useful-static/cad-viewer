@@ -98,9 +98,12 @@ export const PORTRAIT = 0.8;
 export const LONG = 1.2;
 export function isoView(o, bbox, aspect) {
   if (!bbox || !(aspect < PORTRAIT)) return ISO;
-  const { right, front } = orientRoles(o);
+  const { right, up, front } = orientRoles(o);
   const ext = (n) => { const k = 'xyz'.indexOf(n[1]); return bbox.max[k] - bbox.min[k]; };
-  const r = ext(right), f = ext(front);
+  const r = ext(right), f = ext(front), u = ext(up);
+  // (only a model lying flat, its up extent the smallest, turns: a board opened Y-up -- its thickness
+  // the front extent -- was turned to its edge on a phone, a sliver: UI design round 25 R25-9)
+  if (u > Math.min(r, f)) return ISO;
   if (r > LONG * f) return [-Math.PI / 2, 1.0];
   if (f > LONG * r) return [0, 1.0];
   return ISO;

@@ -1810,7 +1810,8 @@ async function shareView() {
   // (the added models opened from this device, which viewLink leaves out: said too -- a scene of a
   // URL's case and a board added from the device copied a link to the case alone, "View link
   // copied" told: r51 A6)
-  const nMeas = app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
+  const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
+    : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
   const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas);
   if (said) tell(said, copied ? 3000 : 4000);
 }
@@ -6537,6 +6538,7 @@ function setSheets(show) {
 
 function syncTreeChecks() {
   syncSheets();
+  syncHoles();
   document.querySelectorAll('#tree li').forEach((li) => {
     const shown = li._ids.filter((id) => !app.hidden.has(id)).length;
     li._cb.checked = shown > 0;
@@ -6790,10 +6792,26 @@ function syncRefRow() {
   if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
   $('refclear').hidden = !app.ref;
   $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
-  // holes need the b-rep faces (a .cadmesh written before they were kept has none)
-  $('holesbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
+  syncHoles();
   // an open hole table follows the reference and the display unit
   if (app.holesFor && app.measure) showHoles(app.holesFor);
+}
+
+// List holes' state and an open "parts shown" table, after a selection or a visibility change:
+// holes need b-rep faces (said in its tooltip, R25-5), and with nothing selected some part shown
+// (R25-4); a table of the parts shown follows what is shown, and closes with none (R25-3)
+const shownIds = () => app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+function syncHoles() {
+  if (!app.header) return;
+  const faces = !!(app.baseMesh && app.baseMesh.faces), shown = shownIds();
+  $('holesbtn').disabled = !faces || (!app.selected.size && !shown.length);
+  $('holesbtn').title = faces
+    ? 'List the holes of the selected parts, or of every part shown: diameter, position from the reference\'s corner, and how far apart they lie'
+    : 'Holes need a CAD file\'s faces: a STEP, IGES or BREP file, or a .cadmesh saved with them';
+  if (app.holesFor?.shown && app.measure) {
+    if (!shown.length) { showHoles(null); return; }
+    if (shown.length !== app.holesFor.ids.length || shown.some((id, i) => id !== app.holesFor.ids[i])) showHoles({ ...app.holesFor, ids: shown });
+  }
 }
 
 // The hole table of the parts `f.ids` ({ ids, name }), positions from the reference
@@ -7655,9 +7673,9 @@ function wireInput() {
   $('holesbtn').onclick = () => {
     // (nothing selected: the parts shown -- a one-part board's List holes was greyed with nothing
     // saying to pick it first, R24-4)
-    const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
+    const ids = app.selected.size ? [...app.selected] : shownIds();
     const name = app.selected.size ? app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) : 'the parts shown';
-    showHoles({ ids, name });
+    showHoles({ ids, name, shown: !app.selected.size });
   };
   $('holesclose').onclick = () => { showHoles(null); $('holesbtn').focus(); };
   // 'change', not 'input': a picker drag fires input continuously, and each

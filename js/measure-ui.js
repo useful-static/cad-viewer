@@ -41,6 +41,19 @@ export function clearOf(r, placed, b) {
   }
   return { dx, dy: y0 };
 }
+// The hole numbers to draw, [index, screen point]: the picked hole's first, then each that clears
+// those kept (s: px per CSS px); the table lists every one (R24-2, R25-1, R25-2)
+export function holeNumbers(at, pick, s) {
+  const order = at.map((p, i) => i).filter((i) => at[i]);
+  if (pick >= 0 && at[pick]) order.splice(order.indexOf(pick), 1), order.unshift(pick);
+  const kept = [], out = [];
+  for (const i of order) {
+    const p = at[i], b = { left: p[0] + 7 * s, right: p[0] + (9 + 7 * String(i + 1).length) * s, top: p[1] - 18 * s, bottom: p[1] - 4 * s };
+    if (kept.some((q) => b.left < q.right && b.right > q.left && b.top < q.bottom && b.bottom > q.top)) continue;
+    kept.push(b); out.push([i, p]);
+  }
+  return out;
+}
 // a touch-only device taps (and has no Esc): the words say so (UI design rounds 5-6)
 // (the stylesheet's own test: "no fine pointer" alone also matches a browser that reports no pointer)
 export const TOUCH_ONLY = '(any-pointer: coarse) and (not (any-pointer: fine))';
@@ -636,16 +649,13 @@ export function createMeasure(deps) {
     if (st.holes) {
       // (a number only where it clears the ones before it, the picked hole's always: a board's
       // numbers overprinted into clusters, R24-2; the table lists every one)
-      const nums = [];
-      st.holes.list.forEach((h, i) => {
-        const s = v.toScreen(h.centre);
-        if (!s) return;
-        el('circle', { cx: s[0], cy: s[1], r: i === st.holes.pick ? 9 : 6, class: i === st.holes.pick ? 'mhole pick' : 'mhole' }, layer);
-        const b = { left: s[0] + 7, right: s[0] + 9 + 7 * String(i + 1).length, top: s[1] - 18, bottom: s[1] - 4 };
-        if (i !== st.holes.pick && nums.some((p) => b.left < p.right && b.right > p.left && b.top < p.bottom && b.bottom > p.top)) return;
-        nums.push(b);
+      // (every ring first, then the numbers, the picked one placed first: later rings covered numbers,
+      // and the picked number printed over another -- R25-1)
+      const at = st.holes.list.map((h) => v.toScreen(h.centre));
+      at.forEach((s, i) => { if (s) el('circle', { cx: s[0], cy: s[1], r: i === st.holes.pick ? 9 : 6, class: i === st.holes.pick ? 'mhole pick' : 'mhole' }, layer); });
+      for (const [i, s] of holeNumbers(at, st.holes.pick, 1)) {
         el('text', { x: s[0] + 8, y: s[1] - 6, class: 'mholetext' }, layer).textContent = String(i + 1);
-      });
+      }
     }
     const sn = st.snap;
     if (st.on && sn && sn.p) {
@@ -752,15 +762,20 @@ export function createMeasure(deps) {
       // (its own baseline: set only in the results' loop, a picture without results drew the
       // numbers 12 px higher)
       ctx.textBaseline = 'top';
-      st.holes.list.forEach((h, i) => {
-        const q = P(h.centre);
+      // (the screen's rule: every ring, then the numbers that clear each other, each on a halo -- R25-2)
+      const at = st.holes.list.map((h) => P(h.centre));
+      at.forEach((q, i) => {
         if (!q) return;
         ctx.strokeStyle = i === st.holes.pick ? INK.dark.line : HOLE;
         ctx.lineWidth = 2 * s;
         ctx.beginPath(); ctx.arc(q[0], q[1], 6 * s, 0, 2 * Math.PI); ctx.stroke();
+      });
+      for (const [i, q] of holeNumbers(at, st.holes.pick, s)) {
+        ctx.strokeStyle = light ? '#fff' : '#000'; ctx.lineWidth = 3 * s; ctx.lineJoin = 'round';
+        ctx.strokeText(String(i + 1), q[0] + 8 * s, q[1] - 18 * s);
         ctx.fillStyle = ink.text;
         ctx.fillText(String(i + 1), q[0] + 8 * s, q[1] - 18 * s);
-      });
+      }
     }
     ctx.restore();
   }
@@ -796,7 +811,7 @@ export function createMeasure(deps) {
     deps.syncOptbar();
   }
   function fillList() {
-    const ul = $('measlist');
+    const ul = $('measlist'), top = ul.scrollTop; // (kept: a removal jumped the list to its top, R25-7)
     ul.replaceChildren();
     st.results.forEach((r, i) => {
       const li = document.createElement('li');
@@ -810,10 +825,17 @@ export function createMeasure(deps) {
       const x = document.createElement('button');
       x.textContent = '×';
       x.setAttribute('aria-label', `Remove ${r.main}`);
-      x.onclick = () => { st.results.splice(i, 1); if (!st.results.length) setList(false); syncRow(); deps.queueFrame(); };
+      x.onclick = () => {
+        const kb = document.activeElement === x; // (the focus to the next row's ×, or the chip: it fell to the page, R25-8)
+        st.results.splice(i, 1);
+        if (!st.results.length) setList(false);
+        syncRow(); deps.queueFrame();
+        if (kb) { const xs = [...ul.querySelectorAll('li button:last-child')]; (xs[Math.min(i, xs.length - 1)] || $('measchip')).focus?.(); }
+      };
       li.append(t, copy, x);
       ul.append(li);
     });
+    ul.scrollTop = top;
   }
   function setList(open) {
     st.listOpen = open && st.results.length > 0;
