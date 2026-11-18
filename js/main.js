@@ -6435,7 +6435,7 @@ function buildTree() {
       viewChanged();
     };
     label.onclick = (e) => select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
-    label.ondblclick = () => fitTo(drawnBox(ids));
+    label.ondblclick = () => fitParts(ids);
     return li;
   };
   // an unnamed root with a single branch (a typical STEP wrapper) is skipped:
@@ -6964,7 +6964,7 @@ function fillInfo(el) {
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
-      open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).join(' / ');
+      open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).join(' / ').replace(/ /g, ' '); // (R34-3)
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
     // (in a unit not converted, in that unit, as the lengths are: r86 A4)
@@ -6972,11 +6972,11 @@ function fillInfo(el) {
     const hu = geomMm() ? u : headerUnitWord(app.header.units);
     const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
     // (none closed: no number, as mass -- R31-1)
-    const others = counts.replace(/^0 closed( \/ )?/, '');
-    add('volume', `${closed ? `≈ ${volWords} · ${counts}` : `none closed${others ? ` · ${others}` : ''}`}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
+    const others = counts.replace(/^0 closed( \/ )?/, '');
+    add('volume', `${closed ? `≈ ${volWords} · ${counts}` : `none closed${others ? ` · ${others}` : ''}`}${flagsSaid(facts, which.map((id) => id - 1), ' · ').replace(/(\d) /g, '$1 ')}`);
     add('area', area > 0 ? `≈ ${areaWords}` : 'none'); // (R33-3)
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open, empty));
-    app.factsNow = { vol, closed, of: which.length - empty };
+    app.factsNow = { vol, closed, of: which.length }; // (R34-4)
   }
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
@@ -6989,10 +6989,18 @@ const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
 // What the volume counts, in words (Details, under the volume): "the 305
 // closed bodies; 1,082 are flat sheets (pads, labels) and 4 are open surface
 // models", with "(12 of them closed by the converter's caps)" when some are
-// every selected body of no area (the facts in)
-function emptySelection() {
+// all of no area: said, seen (R34-2)
+function noSurface(ids, then) {
   const area = app.baseMesh?.edgeInfo?.value?.facts?.area;
-  return !!area && app.selected.size > 0 && [...app.selected].every((id) => !(area[id - 1] > 0));
+  if (!area || !ids.length || ids.some((id) => area[id - 1] > 0)) return false;
+  if (panelOpen()) setPanel(false);
+  tell(`${ids.length === 1 ? `${meshLabel(ids[0])} has` : `these ${fmtInt(ids.length)} have`} no surface: ${then}`, 4000);
+  return true;
+}
+// Fit, F, a row's double-click (R34-1)
+function fitParts(ids) {
+  if (noSurface(ids, 'the whole model fitted')) { fitTo(drawnBox(null)); return; }
+  fitTo(drawnBox(ids.length ? ids : null));
 }
 
 function volumeCounts(n, closed, capped, sheets, open, empty = 0) {
@@ -7545,9 +7553,7 @@ function wireInput() {
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => {
     if (app.dxf) return app.dxf.view.fit();
-    // (no area: all fitted, said why -- a grey blur, R33-2)
-    if (emptySelection()) { fitTo(drawnBox(null)); tell(`${app.selected.size === 1 ? 'it has' : 'they have'} no surface: the whole model fitted`, 4000); return; }
-    fitTo(drawnBox(app.selected.size ? [...app.selected] : null));
+    fitParts([...app.selected]);
   };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
@@ -7569,8 +7575,7 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
-    // (blank, unsaid: R33-2)
-    if (emptySelection()) tell(`${app.selected.size === 1 ? 'it has' : 'they have'} no surface: nothing to show`, 4000);
+    noSurface([...app.selected], 'nothing to show'); // (blank, unsaid: R33-2)
   };
   $('hide').onclick = () => {
     if (!app.selected.size) return;
