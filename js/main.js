@@ -1842,7 +1842,16 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 // the bottom of the view the caption card covers (frames sit above it)
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
 
+// a name with its owner, as compared: lower case, one space either side of each ›
+const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' › ');
+
 function tourParts(names) {
+  // (a name with its owner, as a label reads, matched whole first: its last piece alone, "bolt #2",
+  // named every bracket's -- R37-1)
+  names = names.flatMap((n) => {
+    const ids = typeof n === 'string' && n.includes('›') ? app.rowPaths?.get(pathKey(n)) : null;
+    return ids ? [...ids].map((id) => `#${id}`) : [n];
+  });
   if (app.tourIdxFor !== app.header) {
     const idx = partIndex(app.header, app.partLabels, firstModelBodies());
     // (the file's names first; then the list's, numbered: "COMPOUND #2" named nothing -- R36-5)
@@ -6337,6 +6346,7 @@ function buildTree() {
   root.textContent = '';
   app.rowOf = new Map(); // body id -> the most specific row holding only it (picks reveal it)
   app.rowNames = new Map(); // a row's name as shown, lower case -> its bodies
+  app.rowPaths = new Map(); // "owner › row" as a label reads, pathKey -> its bodies
   // a node's bodies, gathered once (kidsOf's filter and mk both asked for every node's)
   const gathered = new Map();
   const idsOf = (node) => {
@@ -6366,8 +6376,12 @@ function buildTree() {
     // the deepest wins; and the body is labelled by it and the row above, as the list names them
     // ("bolt #2", "COMPOUND #2 › mesh 12": the hover, selection, holes and links said "bolt" -- R36-1)
     if (ids.length === 1 && !app.rowOf.has(ids[0])) { app.rowOf.set(ids[0], li); app.meshLabel[ids[0] - 1] = up && up !== name ? `${up} › ${name}` : name; }
-    const k = name.trim().toLowerCase(); // (the names the list shows, for a tour's or a note's: R36-5)
-    if (!app.rowNames.has(k)) app.rowNames.set(k, new Set(ids));
+    // (the names the list shows, for a tour's or a note's, each with every row so named, as a file's
+    // name -- R36-5; and "owner › name" as the labels read: the first row of a name alone took the
+    // first bracket's "bolt #2" for the second's, R37-1)
+    const put = (m, key) => { let s = m.get(key); if (!s) m.set(key, (s = new Set())); for (const id of ids) s.add(id); };
+    put(app.rowNames, name.trim().toLowerCase());
+    if (up) put(app.rowPaths, pathKey(`${up} › ${name}`));
     const tw = document.createElement('span');
     tw.className = 'tw';
     tw.textContent = kids.length ? (depth < 2 ? '▾' : '▸') : '';
@@ -6934,7 +6948,7 @@ function fillInfo(el) {
   if (n > 1) {
     const sel = document.createElement('button');
     sel.className = 'mini';
-    sel.textContent = `1 of ${fmtInt(n)}`;
+    sel.textContent = `all ${fmtInt(n)}`; // ("bolt #2 [1 of 6]": two numbers for one part -- R37-3)
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `one of ${n} copies: select all ${n}`);
     sel.onclick = () => select(sameParts(ids[0]), false);
