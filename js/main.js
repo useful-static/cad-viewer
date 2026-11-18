@@ -6969,7 +6969,10 @@ function fillInfo(el) {
     // (its number in the header's unit, so named: lenUnit may be Auto's mm for one in m -- r89 Q1)
     const hu = geomMm() ? u : headerUnitWord(app.header.units);
     const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
-    add('volume', `≈ ${volWords} · ${counts}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
+    // (none closed: no number -- "≈ 0 mm³" sat two rows above the mass row's "none closed: no
+    // volume", R31-1)
+    const others = counts.replace(/^0 closed( \/ )?/, '');
+    add('volume', `${closed ? `≈ ${volWords} · ${counts}` : `none closed${others ? ` · ${others}` : ''}`}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
     add('area', `≈ ${areaWords}`);
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
     app.factsNow = { vol, closed, of: which.length };
