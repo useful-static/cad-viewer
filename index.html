@@ -551,7 +551,7 @@
      box-shadow is painted under a canvas's own pixels, so neither view ever showed one: round 12
      R12-1); on paper the dark orange, 4.4:1 (the bright one was 2.1:1 there) */
   #view2d { outline:none; }
-  :is(#view, #view2d):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
+  :is(#view, #view2d, #info):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; } /* (the held panel, a scroll box: the app's ring, R48-2) */
   :is(#stage[data-bg="paper"] #view, body.mode2d #view2d):focus-visible { outline-color:#b35a00; }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
      over the view shows), and load progress. Centred, never wider than the view. */

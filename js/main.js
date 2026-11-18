@@ -5031,12 +5031,28 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
 // under the pointer. Let go on leaving, a press elsewhere, a resize, and a new list (rounds 15-17).
 {
   const info = $('info'), tree = $('tree');
+  const parts = $('parts');
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
-    info.style.height = `${info.offsetHeight}px`;
+    // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
+    // browser's ring, nothing to scroll -- R48-2)
+    info.style.height = `${info.getBoundingClientRect().height}px`;
     info.style.overflowY = 'auto';
+    parts.style.paddingBottom = '';
   };
-  const release = () => { info.style.height = ''; info.style.overflowY = ''; };
+  // (the height it gives up kept at the drawer's foot, so a drawer scrolled to its end is not pulled
+  // back under a press landing in the panel -- 17 px, a tap on the mass row opened Details: R48-1;
+  // the spacer goes at the drawer's next scroll by hand)
+  const release = () => {
+    if (!info.style.height) return;
+    const h = info.getBoundingClientRect().height;
+    parts.style.paddingBottom = `${h}px`;
+    info.style.height = ''; info.style.overflowY = '';
+    const lost = h - info.getBoundingClientRect().height;
+    parts.style.paddingBottom = lost > 0.5 ? `${lost}px` : '';
+  };
+  const unspace = () => { parts.style.paddingBottom = ''; };
+  for (const ev of ['wheel', 'touchmove', 'keydown']) parts.addEventListener(ev, unspace, { passive: true });
   tree.addEventListener('pointerenter', hold);
   tree.addEventListener('pointerdown', hold);
   let keyAt = -1e9; // (focus held only after a focus-moving key: not a refocus, nor Alt+Left -- R17-1, R18-1)
@@ -5061,7 +5077,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   info.addEventListener('focusout', (e) => { if (e.target === info && !tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
   addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
   addEventListener('resize', release);
-  app.releaseInfo = () => { release(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
+  app.releaseInfo = () => { release(); unspace(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
 }
 
 // The edge list and body facts of a loaded model: from the file when it
