@@ -2217,6 +2217,15 @@ function startTour(tour, url, only = null) {
   // before the first, not the first tour's step)
   const prev = app.tour;
   endTour(false);
+  // (an exploding tour's card above the Explode bar throughout: R44-3)
+  let floor = 0;
+  if (tour.steps.some((s) => s.explode)) {
+    const x = $('xpopt'), o = $('optbar'), was = [x.hidden, o.hidden];
+    o.style.visibility = 'hidden'; o.hidden = false; x.hidden = false;
+    floor = o.offsetHeight;
+    [x.hidden, o.hidden] = was; o.style.visibility = '';
+  }
+  $('stage').style.setProperty('--tour-floor', `${floor}px`);
   const saved = prev ? prev.saved : currentView();
   // what the visitor had: each step is applied to it, and leaving puts it back
   // (styleChoice: the visitor's own choice of style, which a step's style is
@@ -3212,8 +3221,7 @@ function keepFocus() {
     last = null;
     if (keepFilter(f)) return;
     if ((inTree || $('parts').contains(f)) && focusInPanel(f, inTree)) return;
-    // (a card File opens -- the tour card's and maker's ×, a gallery pick -- back to File: they went to
-    // "Open…", R43-4; else Open…, a cancelled load's next act)
+    // (a card File opens: back to File, R43-4; else Open…)
     const fromFile = ['gallery', 'touredit', 'tourcard'].some((id) => $(id)?.contains(f));
     focusBeside($('tb').contains(f) ? f : fromFile ? $('filemenu').querySelector('.menu-btn') : $('open').parentElement);
   };
@@ -3278,8 +3286,7 @@ function wireMenus() {
       // a menu left with nothing to do is disabled (Undo, Show's last live
       // item): its neighbour then; the focus fell to the page and the next
       // Tab went to the full-screen button, past the toolbar (review r19)
-      // (not when the item moved it on itself -- Browse models, Make a tour into their cards: the
-      // ring stayed on File behind the card, R43-1)
+      // (not when the item moved it itself: R43-1)
       if (back && (document.activeElement === document.body || m.contains(document.activeElement))) focusBeside(btn);
     });
     // Tab out of an open menu closes it
@@ -5572,7 +5579,8 @@ function setSheet(i) {
     // UI design round 11 R11-4)
     onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500); },
     onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
-    onMeasure: (r) => tell(r.text, 4000),
+    onMeasure: (r) => { tell(r.text, 4000); app.measure?.sync2D(app.dxf?.view); },
+    onPending: () => app.measure?.sync2D(app.dxf?.view),
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
@@ -5676,9 +5684,12 @@ function show2D(drawing, name, url) {
 function toggle2DMeasure() {
   if (!app.dxf) return;
   const v = app.dxf.view, on = !v.measuring, n = on ? 0 : (v.results?.length || 0);
+  const kb = $('measoff').matches(':focus-visible'); // (its ×: the focus to Measure)
   v.setMeasure(on);
   if (!on) v.clearMeasure();
   $('measure').setAttribute('aria-pressed', String(on));
+  app.measure?.sync2D(v);
+  if (kb && !on) toolFocus('measure').focus();
   // (a drawing's results go with Measure: said, as nothing else did -- R23-3)
   const off = n ? `measure off: ${n} ${n === 1 ? 'result' : 'results'} cleared` : 'measure off';
   tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres)` : off, 3000, on ? 'measure on' : off);
@@ -5689,6 +5700,7 @@ function leave2D() {
   if (!app.dxf) return;
   app.dxf.view.destroy();
   app.dxf = null;
+  app.measure?.sync2D(null); // (its bar goes with it)
   document.body.classList.remove('mode2d');
   $('view2d').hidden = true;
   $('sheet').hidden = true;
@@ -6918,9 +6930,7 @@ function setRef(on) {
 // with the values, so whether it is open is kept here.
 // a name as shown: " #2" kept with it (R39-1; its "-" left breakable, a copy pasting as typed: R40-2)
 const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1');
-// (a copy of a name or a value pastes plain spaces: a copied "bolt #2" found no row in the filter,
-// R40-2 -- only text alone: a copy over a select, a field, a link or a table kept as the browser
-// makes it, its material, density and cells -- R41-2)
+// (a copy of text alone pastes plain spaces, R40-2; over controls, the browser's own, R41-2)
 document.addEventListener('copy', (e) => {
   const sel = getSelection(), s = String(sel);
   if (!s.includes(' ') || !e.clipboardData || !sel.rangeCount) return;
@@ -6929,9 +6939,7 @@ document.addEventListener('copy', (e) => {
   e.clipboardData.setData('text/plain', s.replace(/ /g, ' '));
   e.preventDefault();
 });
-// A name and its button on the name's last word's line -- the word, " #N" apart, short; a long part
-// number wraps as the panel breaks long words (R39-1, R40-1; " #3" counted made a 14-letter word
-// long, "all 6" alone on a line: R41-1)
+// a name and its button on one line, with its last word (R39-1, R40-1, R41-1)
 function nameWithButton(text, btn) {
   const t = nameWords(text);
   let cut = t.lastIndexOf(' ') + 1;
@@ -7020,8 +7028,7 @@ function fillInfo(el) {
     sel.textContent = `all ${fmtInt(n)}`; // ("bolt #2 [1 of 6]": two numbers for one part -- R37-3)
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
-    // (from the keyboard, the focus to Measure from selection: the button goes with the rebuild, and
-    // the focus fell to the toolbar -- R42-1)
+    // (from a key, the focus to Measure from selection: R42-1)
     sel.onclick = () => { const kb = document.activeElement === sel; select(sameParts(ids[0]), false); if (kb) $('refset').focus(); };
     add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
@@ -7184,6 +7191,7 @@ function wireInput() {
     lenText: (mm) => `${lenNum(mm, 'measure')} ${lenUnit()}`,
     num: (mm) => lenNum(mm, 'measure'), unit: () => lenUnit(),
     announce, tell, queueFrame, syncOptbar, toolFocus,
+    view2d: () => (app.dxf ? app.dxf.view : null), toggle2D: () => toggle2DMeasure(), // (R44-4)
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => currentStyle().seesHidden,
@@ -7717,11 +7725,10 @@ function wireInput() {
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => (app.dxf ? $('view2d') : $('view')).focus();
-  // (at the last step Next greys out, at the first Previous: the focus to the other -- it fell to
-  // "Open…", R43-3)
+  // (Next greyed at the end, Previous at the start: the focus to the other, R43-3)
   const stepBy = (d, b, other) => () => {
     if (!app.tour) return;
-    const kb = document.activeElement === b;
+    const kb = b.matches(':focus-visible'); // (R44-6)
     showTourStep(app.tour.i + d);
     if (kb && b.disabled) other.focus();
   };
@@ -7821,7 +7828,13 @@ function wireInput() {
     // saying to pick it first, R24-4)
     const ids = app.selected.size ? [...app.selected] : shownIds();
     const name = app.selected.size ? app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) : 'the parts shown';
+    const kb = $('holesbtn').matches(':focus-visible');
     showHoles({ ids, name, shown: !app.selected.size });
+    // (its head in view; from a key, the focus to its Copy: R44-2)
+    if (!$('holes').hidden) {
+      $('holestitle').scrollIntoView({ block: 'nearest' });
+      if (kb) $('holescsv').focus({ preventScroll: true });
+    }
   };
   $('holesclose').onclick = () => { showHoles(null); $('holesbtn').focus(); };
   // 'change', not 'input': a picker drag fires input continuously, and each
@@ -7951,7 +7964,7 @@ function wireInput() {
     // Section (each a mode the view is in), then the selection
     const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? (app.dxf.view.escapeMeasure() || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), true)) || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
         // (then a selected layer, then an active embed lets the page have the wheel back, as in 3D: round 10 R10-2)
         : app.dxf.view.selected ? app.dxf.view.select(null) : app.embed && app.embedActive ? (setEmbedActive(false), true) : false)) : app.measure.escape()
         || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),

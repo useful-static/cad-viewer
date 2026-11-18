@@ -1004,7 +1004,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
   function measureClick(px, py) {
     const s = snapAt(px, py);
     const p = s ? [s[0], s[1]] : toUnits(px, py);
-    if (!st.pending) { st.pending = p; draw(); return null; }
+    if (!st.pending) { st.pending = p; draw(); if (cb.onPending) cb.onPending(); return null; }
     const a = st.pending, dx = p[0] - a[0], dy = p[1] - a[1];
     const d = Math.hypot(dx, dy);
     const r = { a, b: p, d, dx, dy, text: measureText(d, dx, dy, drawing.units, span) };
@@ -1138,8 +1138,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // (and the layer last hovered let go: it stayed lit while Measure was on -- r107 A9)
     setMeasure(on) { if (on) snapTree(); st.measure = on; st.pending = null; st.snap = null; if (st.hover !== null) { st.hover = null; if (cb.onHover) cb.onHover(null); } draw(); }, // (the snaps indexed as Measure turns on, not on its first move)
     get measuring() { return st.measure; },
-    get results() { return st.results; },
+    get results() { return st.results; }, get pending() { return st.pending; },
     clearMeasure() { st.results = []; st.pending = null; draw(); },
+    // the pending point, else the last result (Measure's Undo in a drawing: UI design round 44 R44-4)
+    undoMeasure() { if (st.pending) st.pending = null; else st.results.pop(); draw(); },
     escapeMeasure() { if (st.pending) { st.pending = null; draw(); return true; } return false; },
     measureClick, snapAt,
     layerOn: (name) => !st.off.has(name),

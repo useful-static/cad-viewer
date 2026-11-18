@@ -789,6 +789,7 @@ export function createMeasure(deps) {
     // results on screen are always removable from the screen
     // (results the user made; a tour's callouts and the notes a list or a
     // view link pins are the page's, and never pop the bar up on their own)
+    if (deps.view2d?.()) { sync2D(deps.view2d()); return; } // (a drawing's bar is its own)
     const kept = !st.on && st.results.some((r) => !r.given);
     $('measopt').hidden = !st.on && !kept;
     for (const id of ['measoff', 'measmode', 'measundo']) $(id).hidden = kept;
@@ -810,6 +811,20 @@ export function createMeasure(deps) {
         : st.pending.length ? `point ${st.pending.length + 1} of ${need()}` : `point 1 of ${need()}`;
     if (!(st.mode === 'note' && st.pending.length)) $('measnotetext').hidden = true;
     if (st.listOpen) fillList();
+    deps.syncOptbar();
+  }
+  // a drawing's Measure: the bar with its ×, Undo and Clear all (R44-4)
+  function sync2D(v) {
+    const on = !!v?.measuring;
+    $('measopt').hidden = !on;
+    if (on) {
+      for (const id of ['measmode', 'measchip', 'measlist', 'measnotetext']) $(id).hidden = true;
+      for (const id of ['measoff', 'measundo', 'measclear']) $(id).hidden = false;
+      const n = v.results.length;
+      $('measundo').disabled = !n && !v.pending;
+      $('measclear').disabled = !n && !v.pending;
+      $('measnote').textContent = v.pending ? 'point 2 of 2' : n ? `${n} result${n === 1 ? '' : 's'}` : 'point 1 of 2';
+    }
     deps.syncOptbar();
   }
   function fillList() {
@@ -1085,24 +1100,26 @@ export function createMeasure(deps) {
   }
 
   $('measure').onclick = () => setOn(!st.on, true);
-  $('measoff').onclick = () => setOn(false, true);
+  $('measoff').onclick = () => (deps.view2d?.() ? deps.toggle2D() : setOn(false, true));
   for (const b of $('measmode').querySelectorAll('button')) {
     b.onclick = () => { st.mode = b.dataset.mode; st.pending = []; st.snap = null; syncRow(); deps.queueFrame(); };
   }
-  // (a button gone or greyed by its own press hands the focus to Measure's × or button, as a result's
-  // × does: Undo's last point and Clear all sent it to "Open…" -- R43-2)
+  // (a button its press hides or greys: the focus to Measure's × or button, R43-2)
   const handOn = (b, f) => () => {
-    const kb = document.activeElement === b;
+    const kb = !!b.matches?.(':focus-visible'); // (a key's press, not a mouse's or a finger's: R44-6)
     f();
     if (kb && (b.disabled || b.hidden || !b.getClientRects().length)) (st.on ? $('measoff') : offFocus()).focus();
   };
-  $('measundo').onclick = handOn($('measundo'), undo);
+  // (in a drawing, its results: R44-4)
+  $('measundo').onclick = handOn($('measundo'), () => { const v = deps.view2d?.(); if (v) { v.undoMeasure(); sync2D(v); } else undo(); });
   // the note's text: Enter pins it, Esc drops the note (and stays in Measure)
   $('measnotetext').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); }
   });
   $('measclear').onclick = handOn($('measclear'), () => {
+    const v = deps.view2d?.();
+    if (v) { const k = v.results.length; v.clearMeasure(); sync2D(v); if (k) deps.announce(`${k} result${k === 1 ? '' : 's'} cleared`); return; }
     const n = st.results.length;
     st.pending = []; st.results = []; setList(false); syncRow(); deps.queueFrame();
     if (n) deps.announce(`${n} result${n === 1 ? '' : 's'} cleared`);
@@ -1133,7 +1150,7 @@ export function createMeasure(deps) {
     // (for tests: whether q is inside a closed body, walked into the plane pl's kept side)
     insideAt: (q, pl) => { model(); return insideClosed(q, scene.header.meshes.map((_, i) => i), pl, null); },
     get loupeShown() { return !!st.loupe; },
-    setOn, hover, place, draw, paint, escape, reset, undo, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    setOn, hover, place, draw, paint, escape, reset, undo, sync2D, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
     // the results that are not notes (distances, angles...), taken off the view and given back:
     // a tour step holds notes only, so while one plays they are set aside (main.js startTour)
     setAside() {

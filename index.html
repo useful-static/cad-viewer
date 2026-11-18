@@ -324,6 +324,9 @@
      like the rest, its × kept on its name's last line by main.js -- a column of its own wrapped at
      x 103 under rows at 22: R41-3) */
   #refline { display:block; }
+  /* (the drawer anchors on nothing: scrolled a few px at 844 x 390, "Measure from selection" jumped up
+     under the header as the rows below re-flowed -- R44-1; #info's own the same since round 33) */
+  #parts { overflow-anchor:none; }
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
   #densitybox[hidden] { display:none; }
   #density { width:6ch; font-size:12px; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
@@ -360,8 +363,9 @@
   #stage:has(#tourcard:not([hidden])) #embedhint { display:none; }
   /* a tour's caption card: bottom left, above the options bar; frames keep
      the strip it covers clear (main.js tourCover) */
-  #tourcard { position:absolute; left:12px; bottom:calc(12px + var(--optbar-h, 0px)); z-index:2;
-    max-width:min(440px, calc(100% - 24px)); padding:10px 12px; border:1px solid var(--line); border-radius:10px;
+  /* (its foot past the Explode bar a tour opens, and one width: a step lifted it and moved its ×, R44-3) */
+  #tourcard { position:absolute; left:12px; bottom:calc(12px + max(var(--optbar-h, 0px), var(--tour-floor, 0px))); z-index:2;
+    width:min(440px, calc(100% - 24px)); box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px;
     background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px; }
   #tourcard[hidden] { display:none; }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
