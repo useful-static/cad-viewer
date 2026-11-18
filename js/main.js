@@ -1848,9 +1848,15 @@ const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' 
 function tourParts(names) {
   // (a name with its owner, as a label reads, matched whole first: its last piece alone, "bolt #2",
   // named every bracket's -- R37-1)
+  // (and one that names no such owner, or more levels than a label, by its last two pieces, else
+  // missing: its last piece alone isolated every bracket's bolt #2 unsaid -- R38-1)
+  const lacking = [];
   names = names.flatMap((n) => {
-    const ids = typeof n === 'string' && n.includes('›') ? app.rowPaths?.get(pathKey(n)) : null;
-    return ids ? [...ids].map((id) => `#${id}`) : [n];
+    if (typeof n !== 'string' || !n.includes('›')) return [n];
+    const k = pathKey(n), ids = app.rowPaths?.get(k) || app.rowPaths?.get(k.split(' › ').slice(-2).join(' › '));
+    if (ids) return [...ids].map((id) => `#${id}`);
+    if (app.rowPaths?.size) { lacking.push(n); return []; }
+    return [n];
   });
   if (app.tourIdxFor !== app.header) {
     const idx = partIndex(app.header, app.partLabels, firstModelBodies());
@@ -1858,7 +1864,8 @@ function tourParts(names) {
     app.tourIdx = { bodies: idx.bodies, get: (k) => idx.get(k) ?? app.rowNames?.get(k) };
     app.tourIdxFor = app.header;
   }
-  return resolveParts(names, app.tourIdx);
+  const r = resolveParts(names, app.tourIdx);
+  return lacking.length ? { ...r, missing: [...r.missing, ...lacking] } : r;
 }
 
 async function readTour(url) {
@@ -6677,7 +6684,9 @@ function select(ids, additive, name = null) {
   if (!additive) app.selected.clear();
   for (const id of ids) app.selected.add(id);
   // an additive pick that added nothing leaves the selection, and its name, as they were
-  if (!additive) app.selName = name;
+  // (one body: its full label, as a pick in the view or a link names it -- the list's "bolt #2"
+  // read the same for either bracket's: R38-2)
+  if (!additive) app.selName = ids.length === 1 && meshLabel(ids[0]) ? meshLabel(ids[0]) : name;
   else if (app.selected.size !== before) app.selName = null;
   pushState();
   syncTreeChecks();
@@ -6950,7 +6959,7 @@ function fillInfo(el) {
     sel.className = 'mini';
     sel.textContent = `all ${fmtInt(n)}`; // ("bolt #2 [1 of 6]": two numbers for one part -- R37-3)
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
-    sel.setAttribute('aria-label', `one of ${n} copies: select all ${n}`);
+    sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     sel.onclick = () => select(sameParts(ids[0]), false);
     add('selection', `${title} `, sel);
   } else add('selection', title);
