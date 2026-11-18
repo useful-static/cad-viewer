@@ -525,6 +525,7 @@
   #printout { display:none; }
   @media print {
     html, body { background:#fff !important; } /* (a navy page with the browser's background graphics on: R20-2) */
+    body { display:block !important; height:auto !important; } /* (not the page's grid: landscape printed a 300 px column, R46-1) */
     body > *:not(#printout) { display:none !important; }
     #printout { display:block !important; }
     #printimg { max-width:100%; max-height:90vh; display:block; margin:0 auto; }
@@ -847,7 +848,7 @@
     </div></div>
 </div><div id="hdend"><button id="helpbtn" aria-expanded="false" aria-controls="helppop" aria-keyshortcuts="?" title="Controls, shortcuts and graphics (?)">?</button><button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button></div></header>
 <aside id="parts" aria-label="Parts">
-  <div id="info" hidden>
+  <div id="info" hidden tabindex="-1"><!-- (never a Tab stop of its own, scrolling or not: R46-2) -->
     <!-- where positions are measured from: the model, or a part chosen with
          "Measure from selection" (a board's PCB); outside #infovals, so a
          refresh of the values never takes the focus from its buttons. At the
@@ -1025,7 +1026,7 @@
       <span class="seg" id="measmode" role="group" aria-label="What to measure"><button data-mode="distance" aria-pressed="true" title="The distance between two points, and its X, Y and Z parts">Distance</button><button data-mode="angle" aria-pressed="false" title="The angle at the middle of three points">Angle</button><button data-mode="face" aria-pressed="false" title="The gap between two faces, the first one flat">Face</button><button data-mode="note" aria-pressed="false" title="A note pinned to a point of the model: a view link carries it">Note</button></span>
       <span id="measnote" class="secval"></span>
       <input id="measnotetext" type="text" hidden autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
-      <button id="measundo" disabled aria-label="Undo the last point" title="Undo the last point or result"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 3L2 6.5 5.5 10M2.5 6.5h7a4 4 0 0 1 0 8H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="measundo" disabled aria-label="Undo the last point or result" title="Undo the last point or result"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 3L2 6.5 5.5 10M2.5 6.5h7a4 4 0 0 1 0 8H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="measclear" disabled title="Remove every result">Clear all</button>
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
     </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
