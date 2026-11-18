@@ -5054,7 +5054,11 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
   // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
   tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
-  tree.addEventListener('focusout', (e) => { if (!tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
+  // (to the held panel itself -- a scroll box the browser lets Shift+Tab reach -- the hold stays, so
+  // the focus has somewhere to be; released as it leaves: R46-2, the tabindex that was its fix
+  // taking a click on the panel's text, R47-1)
+  tree.addEventListener('focusout', (e) => { if (e.relatedTarget !== info && !tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
+  info.addEventListener('focusout', (e) => { if (e.target === info && !tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
   addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
   addEventListener('resize', release);
   app.releaseInfo = () => { release(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
