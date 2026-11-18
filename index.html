@@ -319,7 +319,12 @@
   #info b { color:var(--dim); font-weight:500; }
   /* (a row's value wrapped hangs under itself, not under its name: a long part's name ran on under
      "selection" -- R39-1) */
-  #infovals > div { padding-left:12px; text-indent:-12px; }
+  #infovals div, #infomass, #infounits { padding-left:12px; text-indent:-12px; }
+  /* (the Details, mass and units rows too, flush under indented ones: R40-4; "measured from" its
+     name in a column of its own, its × never alone on a line: R40-3) */
+  #refline { display:flex; gap:4px; align-items:baseline; }
+  #refline #refname { flex:1; min-width:0; }
+  #refline #refclear { flex:none; }
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
   #densitybox[hidden] { display:none; }
   #density { width:6ch; font-size:12px; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; }

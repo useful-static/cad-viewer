@@ -1028,7 +1028,8 @@ export function createMeasure(deps) {
     $('holesdepth').textContent = `depth (${deps.unit()})`; // (its numbers had no unit: r124 L1)
     // (a caption, not a size among the sizes; the sizes fold past 6, so a board's 21 left the table
     // out of sight as it opened: UI design round 3 F-08, F-14)
-    $('holesfrom').textContent = `Positions from the corner of ${ref.name || 'the whole model'}`;
+    // (the table's own part: "its corner", its long name not a third time -- R40-5)
+    $('holesfrom').textContent = `Positions from ${ref.name && ref.name === name ? 'its corner' : `the corner of ${ref.name || 'the whole model'}`}`;
     $('holessumhead').textContent = `${t.groups.length} ${t.groups.length === 1 ? 'size' : 'sizes'}`;
     // (6 sizes or fewer: a plain list, no "N sizes" heading over it)
     const flat = t.groups.length <= 6;

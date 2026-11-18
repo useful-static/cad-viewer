@@ -6890,7 +6890,7 @@ const isSel = (ids) => ids.length === app.selected.size && ids.every((id) => app
 function showHoles(f) {
   app.holesFor = f;
   if (!f) { app.measure.showHoles(null); return; }
-  const ref = { ...(app.ref ? bboxOf(app.ref.ids) : app.header.bbox), name: app.ref ? (isSel(app.ref.ids) ? 'the selection' : app.ref.name) : 'the whole model' };
+  const ref = { ...(app.ref ? bboxOf(app.ref.ids) : app.header.bbox), name: app.ref ? (isSel(app.ref.ids) ? 'the selection' : nameWords(app.ref.name)) : 'the whole model' };
   app.measure.showHoles(f.ids, ref, !f.shown && isSel(f.ids) ? 'the selection' : nameWords(f.name));
 }
 
@@ -6909,8 +6909,15 @@ function setRef(on) {
 // organization review rank 3: the panel opened on "graphics WebGL 2 --
 // WebGPU not available" and pushed the parts list down). The fold is rebuilt
 // with the values, so whether it is open is kept here.
-// a name as shown: " #2" kept with it, unbroken at "-" (R39-1)
-const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1').replace(/(\w)-(?=\w)/g, '$1‑');
+// a name as shown: " #2" kept with it (R39-1; its "-" left breakable, a copy pasting as typed: R40-2)
+const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1');
+// (a copy of the page's text pastes plain spaces: a copied "bolt #2" found no row in the filter, R40-2)
+document.addEventListener('copy', (e) => {
+  const s = String(getSelection());
+  if (!s.includes(' ') || !e.clipboardData) return;
+  e.clipboardData.setData('text/plain', s.replace(/ /g, ' '));
+  e.preventDefault();
+});
 
 function fillInfo(el) {
   const line = (k, v) => {
@@ -6986,10 +6993,16 @@ function fillInfo(el) {
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     sel.onclick = () => select(sameParts(ids[0]), false);
-    const t = nameWords(title), cut = t.lastIndexOf(' ') + 1, glued = document.createElement('span');
-    glued.style.whiteSpace = 'nowrap';
-    glued.append(`${t.slice(cut)} `, sel);
-    add('selection', t.slice(0, cut), glued);
+    // (glued to a short last word only: a long part number and the button ran off the panel, the
+    // button out of reach -- R40-1)
+    const t = nameWords(title), cut = t.lastIndexOf(' ') + 1;
+    if (t.length - cut > 16) add('selection', `${t} `, sel);
+    else {
+      const glued = document.createElement('span');
+      glued.style.whiteSpace = 'nowrap';
+      glued.append(`${t.slice(cut)} `, sel);
+      add('selection', t.slice(0, cut), glued);
+    }
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
   // it carries more than the name
