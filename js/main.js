@@ -384,6 +384,7 @@ const panelOpen = () => document.body.classList.contains('panel-open')
   && getComputedStyle($('panelbtn')).display !== 'none';
 function setPanel(open, focusBack = false) {
   app.filterOpened = false; // (keepFilter sets it after: the slide-out it opened itself)
+  if (!open) app.unspaceParts?.(); // (R49-2)
   document.body.classList.toggle('panel-open', open);
   $('panelbtn').setAttribute('aria-expanded', String(open));
   // closed from inside (Esc): focus would otherwise sit in a hidden panel
@@ -5038,21 +5039,27 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     // browser's ring, nothing to scroll -- R48-2)
     info.style.height = `${info.getBoundingClientRect().height}px`;
     info.style.overflowY = 'auto';
-    parts.style.paddingBottom = '';
+    // (the spacer kept: cleared here, the drawer was pulled back under the next tap in the list,
+    // the row above taken -- R49-1)
   };
   // (the height it gives up kept at the drawer's foot, so a drawer scrolled to its end is not pulled
   // back under a press landing in the panel -- 17 px, a tap on the mass row opened Details: R48-1;
   // the spacer goes at the drawer's next scroll by hand)
+  // (added to a spacer already there; none where the drawer does not scroll -- the wide sidebar's list
+  // stood 17 px short: R49-2)
   const release = () => {
     if (!info.style.height) return;
+    const was = parseFloat(parts.style.paddingBottom) || 0, scrolls = parts.scrollHeight > parts.clientHeight + 1;
     const h = info.getBoundingClientRect().height;
-    parts.style.paddingBottom = `${h}px`;
+    parts.style.paddingBottom = `${was + h}px`;
     info.style.height = ''; info.style.overflowY = '';
     const lost = h - info.getBoundingClientRect().height;
-    parts.style.paddingBottom = lost > 0.5 ? `${lost}px` : '';
+    parts.style.paddingBottom = scrolls && was + lost > 0.5 ? `${was + lost}px` : '';
   };
   const unspace = () => { parts.style.paddingBottom = ''; };
   for (const ev of ['wheel', 'touchmove', 'keydown']) parts.addEventListener(ev, unspace, { passive: true });
+  addEventListener('resize', unspace);
+  app.unspaceParts = unspace; // (the drawer closed: setPanel)
   tree.addEventListener('pointerenter', hold);
   tree.addEventListener('pointerdown', hold);
   let keyAt = -1e9; // (focus held only after a focus-moving key: not a refocus, nor Alt+Left -- R17-1, R18-1)
