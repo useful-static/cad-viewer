@@ -1261,7 +1261,7 @@ function hoverLabel(text, asked = false) {
   if (asked && text && $('hover').textContent === TOUCH_HINT) setPref('cadv.touchHint', '1');
   if (!(asked && text) && performance.now() < noteHeldUntil) return;
   noteHeldUntil = 0;
-  $('hover').textContent = text;
+  $('hover').textContent = String(text ?? '').replace(/ #(\d)/g, ' #$1'); // (" #3" kept with its name: R39-7)
 }
 // the hover line emptied, a note's hold and the last label with it (a model or drawing left)
 function clearHover() {
@@ -1850,20 +1850,24 @@ function tourParts(names) {
   // named every bracket's -- R37-1)
   // (and one that names no such owner, or more levels than a label, by its last two pieces, else
   // missing: its last piece alone isolated every bracket's bolt #2 unsaid -- R38-1)
-  const lacking = [];
-  names = names.flatMap((n) => {
-    if (typeof n !== 'string' || !n.includes('›')) return [n];
-    const k = pathKey(n), ids = app.rowPaths?.get(k) || app.rowPaths?.get(k.split(' › ').slice(-2).join(' › '));
-    if (ids) return [...ids].map((id) => `#${id}`);
-    if (app.rowPaths?.size) { lacking.push(n); return []; }
-    return [n];
-  });
   if (app.tourIdxFor !== app.header) {
     const idx = partIndex(app.header, app.partLabels, firstModelBodies());
     // (the file's names first; then the list's, numbered: "COMPOUND #2" named nothing -- R36-5)
     app.tourIdx = { bodies: idx.bodies, get: (k) => idx.get(k) ?? app.rowNames?.get(k) };
     app.tourIdxFor = app.header;
   }
+  // (every ending, then the whole name: R39-3)
+  const lacking = [];
+  names = names.flatMap((n) => {
+    if (typeof n !== 'string' || !n.includes('›')) return [n];
+    const k = pathKey(n), parts = k.split(' › ');
+    let ids = null;
+    for (let i = 0; !ids && i < parts.length - 1; i++) ids = app.rowPaths?.get(parts.slice(i).join(' › '));
+    ids ||= app.tourIdx.get(n.trim().toLowerCase()) || app.tourIdx.get(k);
+    if (ids) return [...ids].map((id) => `#${id}`);
+    if (app.rowPaths?.size) { lacking.push(n); return []; }
+    return [n];
+  });
   const r = resolveParts(names, app.tourIdx);
   return lacking.length ? { ...r, missing: [...r.missing, ...lacking] } : r;
 }
@@ -2571,6 +2575,21 @@ function setupEmbed() {
   $('embedhint').hidden = app.embedActive;
   // (a touch-only device taps: UI design round 5 V-3)
   embedHint();
+  // the hint rises past the hover's line only where they meet (R39-4, R39-5)
+  {
+    const hint = $('embedhint'), hover = $('hover');
+    const place = () => {
+      hint.style.bottom = '';
+      if (hint.hidden || !hover.textContent) return;
+      const a = hover.getBoundingClientRect(), b = hint.getBoundingClientRect();
+      if (a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom) {
+        hint.style.bottom = `${parseFloat(getComputedStyle(hover).bottom) + hover.offsetHeight + 8}px`;
+      }
+    };
+    new MutationObserver(place).observe(hover, { childList: true, characterData: true, subtree: true });
+    new MutationObserver(place).observe(hint, { attributes: true, attributeFilter: ['hidden'] });
+    addEventListener('resize', place);
+  }
   // (a drawing fits by its own view: drawnBox is the 3D model's, null in 2D -- round 10 R10-1)
   $('embedfit').onclick = () => (app.dxf ? $('fit').click() : fitTo(drawnBox(null)));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
@@ -6836,7 +6855,8 @@ function syncMassRow() {
 function syncRefRow() {
   $('inforef').hidden = !app.header;
   if (!app.header) return;
-  $('refname').textContent = app.ref ? app.ref.name : 'the whole model';
+  // (R39-2)
+  $('refname').textContent = !app.ref ? 'the whole model' : isSel(app.ref.ids) ? 'the selection' : nameWords(app.ref.name);
   $('refset').disabled = !app.selected.size;
   // (a button about to hide hands the focus on, as the toolbar's do)
   if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
@@ -6865,11 +6885,13 @@ function syncHoles() {
 }
 
 // The hole table of the parts `f.ids` ({ ids, name }), positions from the reference
+// these bodies are the selection, exactly
+const isSel = (ids) => ids.length === app.selected.size && ids.every((id) => app.selected.has(id));
 function showHoles(f) {
   app.holesFor = f;
   if (!f) { app.measure.showHoles(null); return; }
-  const ref = { ...(app.ref ? bboxOf(app.ref.ids) : app.header.bbox), name: app.ref ? app.ref.name : 'the whole model' };
-  app.measure.showHoles(f.ids, ref, f.name);
+  const ref = { ...(app.ref ? bboxOf(app.ref.ids) : app.header.bbox), name: app.ref ? (isSel(app.ref.ids) ? 'the selection' : app.ref.name) : 'the whole model' };
+  app.measure.showHoles(f.ids, ref, !f.shown && isSel(f.ids) ? 'the selection' : nameWords(f.name));
 }
 
 function setRef(on) {
@@ -6887,6 +6909,9 @@ function setRef(on) {
 // organization review rank 3: the panel opened on "graphics WebGL 2 --
 // WebGPU not available" and pushed the parts list down). The fold is rebuilt
 // with the values, so whether it is open is kept here.
+// a name as shown: " #2" kept with it, unbroken at "-" (R39-1)
+const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1').replace(/(\w)-(?=\w)/g, '$1‑');
+
 function fillInfo(el) {
   const line = (k, v) => {
     const d = document.createElement('div');
@@ -6961,8 +6986,11 @@ function fillInfo(el) {
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     sel.onclick = () => select(sameParts(ids[0]), false);
-    add('selection', `${title} `, sel);
-  } else add('selection', title);
+    const t = nameWords(title), cut = t.lastIndexOf(' ') + 1, glued = document.createElement('span');
+    glued.style.whiteSpace = 'nowrap';
+    glued.append(`${t.slice(cut)} `, sel);
+    add('selection', t.slice(0, cut), glued);
+  } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
   // it carries more than the name
   // (the STEP file's part data is the first model's: an added model's body of the same name is not it)
