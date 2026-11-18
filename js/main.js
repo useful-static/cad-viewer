@@ -3212,7 +3212,10 @@ function keepFocus() {
     last = null;
     if (keepFilter(f)) return;
     if ((inTree || $('parts').contains(f)) && focusInPanel(f, inTree)) return;
-    focusBeside($('tb').contains(f) ? f : $('open').parentElement);
+    // (a card File opens -- the tour card's and maker's ×, a gallery pick -- back to File: they went to
+    // "Open…", R43-4; else Open…, a cancelled load's next act)
+    const fromFile = ['gallery', 'touredit', 'tourcard'].some((id) => $(id)?.contains(f));
+    focusBeside($('tb').contains(f) ? f : fromFile ? $('filemenu').querySelector('.menu-btn') : $('open').parentElement);
   };
   new MutationObserver(lost).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled', 'hidden'] });
 }
@@ -3275,7 +3278,9 @@ function wireMenus() {
       // a menu left with nothing to do is disabled (Undo, Show's last live
       // item): its neighbour then; the focus fell to the page and the next
       // Tab went to the full-screen button, past the toolbar (review r19)
-      if (back) focusBeside(btn);
+      // (not when the item moved it on itself -- Browse models, Make a tour into their cards: the
+      // ring stayed on File behind the card, R43-1)
+      if (back && (document.activeElement === document.body || m.contains(document.activeElement))) focusBeside(btn);
     });
     // Tab out of an open menu closes it
     m.addEventListener('focusout', (e) => { if (e.relatedTarget && !m.contains(e.relatedTarget)) setMenu(m, false); });
@@ -7712,8 +7717,16 @@ function wireInput() {
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => (app.dxf ? $('view2d') : $('view')).focus();
-  $('tourprev').onclick = () => app.tour && showTourStep(app.tour.i - 1);
-  $('tournext').onclick = () => app.tour && showTourStep(app.tour.i + 1);
+  // (at the last step Next greys out, at the first Previous: the focus to the other -- it fell to
+  // "Open…", R43-3)
+  const stepBy = (d, b, other) => () => {
+    if (!app.tour) return;
+    const kb = document.activeElement === b;
+    showTourStep(app.tour.i + d);
+    if (kb && b.disabled) other.focus();
+  };
+  $('tourprev').onclick = stepBy(-1, $('tourprev'), $('tournext'));
+  $('tournext').onclick = stepBy(1, $('tournext'), $('tourprev'));
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
   // the tour maker: File > Make a tour… (a tour playing is opened in it)

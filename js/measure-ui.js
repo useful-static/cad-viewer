@@ -1089,17 +1089,24 @@ export function createMeasure(deps) {
   for (const b of $('measmode').querySelectorAll('button')) {
     b.onclick = () => { st.mode = b.dataset.mode; st.pending = []; st.snap = null; syncRow(); deps.queueFrame(); };
   }
-  $('measundo').onclick = undo;
+  // (a button gone or greyed by its own press hands the focus to Measure's × or button, as a result's
+  // × does: Undo's last point and Clear all sent it to "Open…" -- R43-2)
+  const handOn = (b, f) => () => {
+    const kb = document.activeElement === b;
+    f();
+    if (kb && (b.disabled || b.hidden || !b.getClientRects().length)) (st.on ? $('measoff') : offFocus()).focus();
+  };
+  $('measundo').onclick = handOn($('measundo'), undo);
   // the note's text: Enter pins it, Esc drops the note (and stays in Measure)
   $('measnotetext').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); }
   });
-  $('measclear').onclick = () => {
+  $('measclear').onclick = handOn($('measclear'), () => {
     const n = st.results.length;
     st.pending = []; st.results = []; setList(false); syncRow(); deps.queueFrame();
     if (n) deps.announce(`${n} result${n === 1 ? '' : 's'} cleared`);
-  };
+  });
   $('measchip').onclick = () => setList(!st.listOpen);
 
   // every length result written again in the unit now shown (the unit picker changed, or results
