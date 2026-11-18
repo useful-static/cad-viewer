@@ -823,7 +823,8 @@ export function createMeasure(deps) {
       const n = v.results.length;
       $('measundo').disabled = !n && !v.pending;
       $('measclear').disabled = !n && !v.pending;
-      $('measnote').textContent = v.pending ? 'point 2 of 2' : n ? `${n} result${n === 1 ? '' : 's'}` : 'point 1 of 2';
+      // (one width: R45-3)
+      $('measnote').textContent = v.pending ? 'point 2 of 2' : 'point 1 of 2';
     }
     deps.syncOptbar();
   }
@@ -1108,7 +1109,7 @@ export function createMeasure(deps) {
   const handOn = (b, f) => () => {
     const kb = !!b.matches?.(':focus-visible'); // (a key's press, not a mouse's or a finger's: R44-6)
     f();
-    if (kb && (b.disabled || b.hidden || !b.getClientRects().length)) (st.on ? $('measoff') : offFocus()).focus();
+    if (kb && (b.disabled || b.hidden || !b.getClientRects().length)) (st.on || deps.view2d?.()?.measuring ? $('measoff') : offFocus()).focus(); // (a drawing's too: R45-4)
   };
   // (in a drawing, its results: R44-4)
   $('measundo').onclick = handOn($('measundo'), () => { const v = deps.view2d?.(); if (v) { v.undoMeasure(); sync2D(v); } else undo(); });

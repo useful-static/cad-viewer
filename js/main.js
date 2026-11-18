@@ -5585,6 +5585,7 @@ function setSheet(i) {
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
   if (old) { buildLayerList(); showInfo(); announce(L ? `${L.name}: paper space` : 'model space'); }
+  app.measure?.sync2D(app.dxf.view); // (R45-2)
 }
 
 // A model or drawing from the device is not the ?model / ?index / ?src (and ?unit) a list

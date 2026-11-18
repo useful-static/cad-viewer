@@ -540,7 +540,8 @@
   body.mode2d #tb.nobadge #badge2d { display:none; }
   #sheet[hidden] { display:none; }
   #sheet { margin-left:4px; }
-  body.mode2d :is(#viewmenu, #viewmenu + .sep, #showmenu, #triad, #measvg, #optbar, #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
+  body.mode2d :is(#viewmenu, #viewmenu + .sep, #showmenu, #triad, #measvg, #optbar > :not(#measopt), #sheetsrow, #colours, #scene, #section, #explode) { display:none !important; }
+  /* (Measure's row shown in 2D: R45-1) */
   /* File's 3D-only items, greyed in 2D: not shown there (UI design round 8 R8-5) */
   body.mode2d :is(#addmodelbtn, #tourmake, #picmore, #savedrawing, #exportmesh, #export) { display:none !important; }
   #tree .layer-swatch { display:inline-block; width:10px; height:10px; border:1px solid var(--dim); margin-right:6px; vertical-align:-1px; }
