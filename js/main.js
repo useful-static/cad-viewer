@@ -1383,6 +1383,9 @@ function applyView(v, link = false) {
   if (v.notes && app.measure) app.measure.setNotes(v.notes);
   updateButtons();
   viewChanged();
+  // (and the list opened at it, as a pick in the view opens it: a link's part was in a closed branch,
+  // nothing in the list lit -- R36-4)
+  if (bodies.selected.length) revealRow(bodies.selected[0]);
   // the part a link points at, named as it opens (on a phone the info panel
   // is in the closed drawer)
   if (link && bodies.selected.length && !bodies.changed) {
@@ -1840,7 +1843,12 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
 
 function tourParts(names) {
-  if (app.tourIdxFor !== app.header) { app.tourIdx = partIndex(app.header, app.partLabels, firstModelBodies()); app.tourIdxFor = app.header; }
+  if (app.tourIdxFor !== app.header) {
+    const idx = partIndex(app.header, app.partLabels, firstModelBodies());
+    // (the file's names first; then the list's, numbered: "COMPOUND #2" named nothing -- R36-5)
+    app.tourIdx = { bodies: idx.bodies, get: (k) => idx.get(k) ?? app.rowNames?.get(k) };
+    app.tourIdxFor = app.header;
+  }
   return resolveParts(names, app.tourIdx);
 }
 
@@ -6328,6 +6336,7 @@ function buildTree() {
   const root = $('tree');
   root.textContent = '';
   app.rowOf = new Map(); // body id -> the most specific row holding only it (picks reveal it)
+  app.rowNames = new Map(); // a row's name as shown, lower case -> its bodies
   // a node's bodies, gathered once (kidsOf's filter and mk both asked for every node's)
   const gathered = new Map();
   const idsOf = (node) => {
@@ -6344,7 +6353,7 @@ function buildTree() {
       : [];
     return [...node.children, ...own].filter((c) => idsOf(c).length);
   };
-  const mk = (node, depth, name) => {
+  const mk = (node, depth, name, up = '') => {
     const ids = idsOf(node);
     if (!ids.length) return null;
     const li = document.createElement('li');
@@ -6353,8 +6362,12 @@ function buildTree() {
     row.style.paddingLeft = `${depth * 12 + 4}px`;
     const items = node.meshes.length === 1 && !node.children.length ? [] : kidsOf(node);
     const names = numberRepeats(items.map((c) => nodeName(c, idsOf(c))));
-    const kids = items.map((c, j) => mk(c, depth + 1, names[j])).filter(Boolean);
-    if (ids.length === 1 && !app.rowOf.has(ids[0])) app.rowOf.set(ids[0], li); // the deepest wins
+    const kids = items.map((c, j) => mk(c, depth + 1, names[j], name)).filter(Boolean);
+    // the deepest wins; and the body is labelled by it and the row above, as the list names them
+    // ("bolt #2", "COMPOUND #2 › mesh 12": the hover, selection, holes and links said "bolt" -- R36-1)
+    if (ids.length === 1 && !app.rowOf.has(ids[0])) { app.rowOf.set(ids[0], li); app.meshLabel[ids[0] - 1] = up && up !== name ? `${up} › ${name}` : name; }
+    const k = name.trim().toLowerCase(); // (the names the list shows, for a tour's or a note's: R36-5)
+    if (!app.rowNames.has(k)) app.rowNames.set(k, new Set(ids));
     const tw = document.createElement('span');
     tw.className = 'tw';
     tw.textContent = kids.length ? (depth < 2 ? '▾' : '▸') : '';
@@ -7011,8 +7024,8 @@ function noSurface(ids, then) {
   return true;
 }
 // Fit, F, a row's double-click (R34-1)
-// (a drawer over most of the stage closed, so what it does is seen: a phone's -- R35-3)
-const uncover = () => { if (panelOpen() && $('parts').getBoundingClientRect().width > innerWidth * 0.6) setPanel(false, true); };
+// (an open drawer closed, so what it does is seen: one rule with noSurface's -- R35-3, R36-2)
+const uncover = () => { if (panelOpen()) setPanel(false, true); };
 function fitParts(ids) {
   if (noSurface(ids, 'the whole model fitted')) { fitTo(drawnBox(null)); return; }
   uncover();

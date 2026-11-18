@@ -351,6 +351,9 @@
   body.embed:not(.active) #view2d { pointer-events:none; }
   /* a tour's card has the view's foot: the hint would sit half under it (round 10 R10-5) */
   #stage:has(#tourcard:not([hidden])) #embedhint { display:none; }
+  /* (the embed's hint and the hover's label, both at the foot: the label waits for the hint to go --
+     at 390 a part's name ran under it, neither read: R36-3) */
+  #stage:has(#embedhint:not([hidden])) #hover { visibility:hidden; }
   /* a tour's caption card: bottom left, above the options bar; frames keep
      the strip it covers clear (main.js tourCover) */
   #tourcard { position:absolute; left:12px; bottom:calc(12px + var(--optbar-h, 0px)); z-index:2;
