@@ -6856,7 +6856,8 @@ function syncRefRow() {
   $('inforef').hidden = !app.header;
   if (!app.header) return;
   // (R39-2)
-  $('refname').textContent = !app.ref ? 'the whole model' : isSel(app.ref.ids) ? 'the selection' : nameWords(app.ref.name);
+  // (its × on the name's last line, as "all N" -- R40-3, R41-3)
+  $('refname').replaceChildren(...nameWithButton(!app.ref ? 'the whole model' : isSel(app.ref.ids) ? 'the selection' : app.ref.name, $('refclear')));
   $('refset').disabled = !app.selected.size;
   // (a button about to hide hands the focus on, as the toolbar's do)
   if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
@@ -6911,13 +6912,30 @@ function setRef(on) {
 // with the values, so whether it is open is kept here.
 // a name as shown: " #2" kept with it (R39-1; its "-" left breakable, a copy pasting as typed: R40-2)
 const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1');
-// (a copy of the page's text pastes plain spaces: a copied "bolt #2" found no row in the filter, R40-2)
+// (a copy of a name or a value pastes plain spaces: a copied "bolt #2" found no row in the filter,
+// R40-2 -- only text alone: a copy over a select, a field, a link or a table kept as the browser
+// makes it, its material, density and cells -- R41-2)
 document.addEventListener('copy', (e) => {
-  const s = String(getSelection());
-  if (!s.includes(' ') || !e.clipboardData) return;
+  const sel = getSelection(), s = String(sel);
+  if (!s.includes(' ') || !e.clipboardData || !sel.rangeCount) return;
+  const c = sel.getRangeAt(0).cloneContents();
+  if (c.querySelector('select, input, textarea, a, table, details')) return;
   e.clipboardData.setData('text/plain', s.replace(/ /g, ' '));
   e.preventDefault();
 });
+// A name and its button on the name's last word's line -- the word, " #N" apart, short; a long part
+// number wraps as the panel breaks long words (R39-1, R40-1; " #3" counted made a 14-letter word
+// long, "all 6" alone on a line: R41-1)
+function nameWithButton(text, btn) {
+  const t = nameWords(text), cut = t.lastIndexOf(' ') + 1, word = t.slice(cut);
+  const had = document.activeElement === btn;
+  if (had) queueMicrotask(() => btn.focus()); // (moved, it keeps the focus)
+  if (word.replace(/ #\d+$/, '').length > 16) return [`${t} `, btn];
+  const g = document.createElement('span');
+  g.style.whiteSpace = 'nowrap';
+  g.append(`${word} `, btn);
+  return [t.slice(0, cut), g];
+}
 
 function fillInfo(el) {
   const line = (k, v) => {
@@ -6993,16 +7011,7 @@ function fillInfo(el) {
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     sel.onclick = () => select(sameParts(ids[0]), false);
-    // (glued to a short last word only: a long part number and the button ran off the panel, the
-    // button out of reach -- R40-1)
-    const t = nameWords(title), cut = t.lastIndexOf(' ') + 1;
-    if (t.length - cut > 16) add('selection', `${t} `, sel);
-    else {
-      const glued = document.createElement('span');
-      glued.style.whiteSpace = 'nowrap';
-      glued.append(`${t.slice(cut)} `, sel);
-      add('selection', t.slice(0, cut), glued);
-    }
+    add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
   // it carries more than the name
