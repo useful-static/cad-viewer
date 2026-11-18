@@ -6951,10 +6951,12 @@ function fillInfo(el) {
     app.factsNow = null;
     add('volume', pendingVolume(app.baseMesh?.edgeInfo, app.scene?.length > 1));
   } else {
-    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0;
+    let vol = 0, area = 0, closed = 0, capped = 0, sheets = 0, open = 0, empty = 0;
     for (const id of which) {
       const i = id - 1, kind = app.header.meshes[i].kind;
       area += facts.area[i] || 0;
+      // (no area: neither closed nor open -- R33-1)
+      if (!(facts.area[i] > 0)) { empty++; continue; }
       if (facts.closed[i]) {
         vol += facts.volume[i] || 0; closed++;
         if (kind === 'capped') capped++;
@@ -6962,20 +6964,19 @@ function fillInfo(el) {
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
-      open && `${fmtInt(open)} open`].filter(Boolean).join(' / ');
+      open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).join(' / ');
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
     // (in a unit not converted, in that unit, as the lengths are: r86 A4)
     // (its number in the header's unit, so named: lenUnit may be Auto's mm for one in m -- r89 Q1)
     const hu = geomMm() ? u : headerUnitWord(app.header.units);
     const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
-    // (none closed: no number -- "≈ 0 mm³" sat two rows above the mass row's "none closed: no
-    // volume", R31-1)
+    // (none closed: no number, as mass -- R31-1)
     const others = counts.replace(/^0 closed( \/ )?/, '');
     add('volume', `${closed ? `≈ ${volWords} · ${counts}` : `none closed${others ? ` · ${others}` : ''}`}${flagsSaid(facts, which.map((id) => id - 1), ' · ')}`);
-    add('area', `≈ ${areaWords}`);
-    addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open));
-    app.factsNow = { vol, closed, of: which.length };
+    add('area', area > 0 ? `≈ ${areaWords}` : 'none'); // (R33-3)
+    addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open, empty));
+    app.factsNow = { vol, closed, of: which.length - empty };
   }
   if (app.unmeshedFaces) add('missing faces', `${fmtInt(app.unmeshedFaces)} (the converter could not mesh them)`);
   // converted in this tab just now: on how many threads (js/converter-choice.js)
@@ -6988,13 +6989,20 @@ const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
 // What the volume counts, in words (Details, under the volume): "the 305
 // closed bodies; 1,082 are flat sheets (pads, labels) and 4 are open surface
 // models", with "(12 of them closed by the converter's caps)" when some are
-function volumeCounts(n, closed, capped, sheets, open) {
+// every selected body of no area (the facts in)
+function emptySelection() {
+  const area = app.baseMesh?.edgeInfo?.value?.facts?.area;
+  return !!area && app.selected.size > 0 && [...app.selected].every((id) => !(area[id - 1] > 0));
+}
+
+function volumeCounts(n, closed, capped, sheets, open, empty = 0) {
   const bodies = (k) => `${fmtInt(k)} ${k === 1 ? 'body' : 'bodies'}`;
   let s = closed === n ? (n === 1 ? 'the one body, closed' : `all ${bodies(n)}, every one closed`)
     : closed ? `the ${fmtInt(closed)} closed ${closed === 1 ? 'body' : 'bodies'}` : 'no body: none is closed';
   if (capped) s += ` (${fmtInt(capped)} of them closed by the converter's caps)`;
   const rest = [sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'is a flat sheet' : 'are flat sheets'} (pads, labels)`,
-    open && `${fmtInt(open)} ${open === 1 ? 'is an open surface model' : 'are open surface models'}`].filter(Boolean);
+    open && `${fmtInt(open)} ${open === 1 ? 'is an open surface model' : 'are open surface models'}`,
+    empty && `${fmtInt(empty)} ${empty === 1 ? 'has' : 'have'} no surface (empty)`].filter(Boolean);
   return rest.length ? `${s}; ${rest.join(' and ')}` : s;
 }
 
@@ -7535,7 +7543,12 @@ function wireInput() {
     if (files.length) openFile(pickModelFile(files));
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
-  $('fit').onclick = () => (app.dxf ? app.dxf.view.fit() : fitTo(drawnBox(app.selected.size ? [...app.selected] : null)));
+  $('fit').onclick = () => {
+    if (app.dxf) return app.dxf.view.fit();
+    // (no area: all fitted, said why -- a grey blur, R33-2)
+    if (emptySelection()) { fitTo(drawnBox(null)); tell(`${app.selected.size === 1 ? 'it has' : 'they have'} no surface: the whole model fitted`, 4000); return; }
+    fitTo(drawnBox(app.selected.size ? [...app.selected] : null));
+  };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
@@ -7556,6 +7569,8 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
+    // (blank, unsaid: R33-2)
+    if (emptySelection()) tell(`${app.selected.size === 1 ? 'it has' : 'they have'} no surface: nothing to show`, 4000);
   };
   $('hide').onclick = () => {
     if (!app.selected.size) return;
