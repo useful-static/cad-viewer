@@ -6856,11 +6856,12 @@ function syncRefRow() {
   $('inforef').hidden = !app.header;
   if (!app.header) return;
   // (R39-2)
-  // (its × on the name's last line, as "all N" -- R40-3, R41-3)
+  // (its × on the name's last line, as "all N" -- R40-3, R41-3; its focus read before it moves: R42-2)
+  const hadX = document.activeElement === $('refclear');
   $('refname').replaceChildren(...nameWithButton(!app.ref ? 'the whole model' : isSel(app.ref.ids) ? 'the selection' : app.ref.name, $('refclear')));
   $('refset').disabled = !app.selected.size;
   // (a button about to hide hands the focus on, as the toolbar's do)
-  if ($('refclear').hidden !== !app.ref && document.activeElement === $('refclear')) $('refset').focus();
+  if (hadX && !app.ref) $('refset').focus();
   $('refclear').hidden = !app.ref;
   $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
   syncHoles();
@@ -6927,13 +6928,17 @@ document.addEventListener('copy', (e) => {
 // number wraps as the panel breaks long words (R39-1, R40-1; " #3" counted made a 14-letter word
 // long, "all 6" alone on a line: R41-1)
 function nameWithButton(text, btn) {
-  const t = nameWords(text), cut = t.lastIndexOf(' ') + 1, word = t.slice(cut);
-  const had = document.activeElement === btn;
-  if (had) queueMicrotask(() => btn.focus()); // (moved, it keeps the focus)
-  if (word.replace(/ #\d+$/, '').length > 16) return [`${t} `, btn];
+  const t = nameWords(text);
+  let cut = t.lastIndexOf(' ') + 1;
+  const word = t.slice(cut), num = (/ #\d+$/.exec(word) || [''])[0];
+  // (moved, it keeps the focus -- unless it is gone or hidden by then: R42-2)
+  if (document.activeElement === btn) queueMicrotask(() => { if (btn.isConnected && !btn.hidden) btn.focus(); });
+  // (a long word: its last few letters, its " #N" and the button kept together -- "#3 all 6" began a
+  // line, apart from its name: R41-4, R42-3)
+  if (word.length - num.length > 16) cut = t.length - num.length - 4;
   const g = document.createElement('span');
   g.style.whiteSpace = 'nowrap';
-  g.append(`${word} `, btn);
+  g.append(`${t.slice(cut)} `, btn);
   return [t.slice(0, cut), g];
 }
 
@@ -7010,7 +7015,9 @@ function fillInfo(el) {
     sel.textContent = `all ${fmtInt(n)}`; // ("bolt #2 [1 of 6]": two numbers for one part -- R37-3)
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
-    sel.onclick = () => select(sameParts(ids[0]), false);
+    // (from the keyboard, the focus to Measure from selection: the button goes with the rebuild, and
+    // the focus fell to the toolbar -- R42-1)
+    sel.onclick = () => { const kb = document.activeElement === sel; select(sameParts(ids[0]), false); if (kb) $('refset').focus(); };
     add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
