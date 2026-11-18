@@ -6261,9 +6261,22 @@ function labelMeshes() {
   // a view link names its selection by the file's own names, so a list's
   // labels never change what an old link selects
   app.bodyKeys = bodyKeys(labels);
-  // the model list's labels for its parts ("HDMI_1_3" -> "HDMI"), each piece
-  // of "owner › body" on its own
-  app.meshLabel = app.partLabels ? labels.map((l, i) => (i < firstModelBodies() ? l.split(' › ').map(partLabel).join(' › ') : l)) : labels;
+  app.meshLabel = shownLabels(app.header);
+}
+
+// Each body's label as the list shows its owner: the model list's labels for its parts ("HDMI_1_3" ->
+// "HDMI"), and repeated sibling names numbered ("COMPOUND #2": the hover and a note said "COMPOUND"
+// of the list's second -- R35-1)
+function shownLabels(header) {
+  const labels = header.meshes.map((m) => m.name);
+  const pl = (s, i) => (app.partLabels && i < firstModelBodies() ? partLabel(s) : s);
+  const walk = (n, nm) => {
+    for (const i of n.meshes) { const mn = pl(header.meshes[i].name, i); labels[i] = nm && nm !== mn ? `${nm} › ${mn}` : mn; }
+    const kids = numberRepeats(n.children.map((c) => (c.name ? pl(c.name, c.meshes[0] ?? 0) : '')));
+    n.children.forEach((c, k) => walk(c, (c.name && kids[k]) || nm));
+  };
+  if (header.root) walk(header.root, header.root.name ? pl(header.root.name, 0) : '');
+  return labels;
 }
 
 const meshLabel = (id) => app.meshLabel[id - 1];
@@ -6964,7 +6977,7 @@ function fillInfo(el) {
     }
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
-      open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).join(' / ').replace(/ /g, ' '); // (R34-3)
+      open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).map((c) => c.replace(/ /g,' ')).join(' / '); // (each one piece, a break after " / ": R34-3, R35-5)
     // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
     // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
     // (in a unit not converted, in that unit, as the lengths are: r86 A4)
@@ -6972,7 +6985,7 @@ function fillInfo(el) {
     const hu = geomMm() ? u : headerUnitWord(app.header.units);
     const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
     // (none closed: no number, as mass -- R31-1)
-    const others = counts.replace(/^0 closed( \/ )?/, '');
+    const others = counts.replace(/^0 closed( \/ )?/, '');
     add('volume', `${closed ? `≈ ${volWords} · ${counts}` : `none closed${others ? ` · ${others}` : ''}`}${flagsSaid(facts, which.map((id) => id - 1), ' · ').replace(/(\d) /g, '$1 ')}`);
     add('area', area > 0 ? `≈ ${areaWords}` : 'none'); // (R33-3)
     addMore('volume counts', volumeCounts(which.length, closed, capped, sheets, open, empty));
@@ -6993,13 +7006,16 @@ const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
 function noSurface(ids, then) {
   const area = app.baseMesh?.edgeInfo?.value?.facts?.area;
   if (!area || !ids.length || ids.some((id) => area[id - 1] > 0)) return false;
-  if (panelOpen()) setPanel(false);
+  if (panelOpen()) setPanel(false, true); // (the focus to ☰, not the page: R35-2)
   tell(`${ids.length === 1 ? `${meshLabel(ids[0])} has` : `these ${fmtInt(ids.length)} have`} no surface: ${then}`, 4000);
   return true;
 }
 // Fit, F, a row's double-click (R34-1)
+// (a drawer over most of the stage closed, so what it does is seen: a phone's -- R35-3)
+const uncover = () => { if (panelOpen() && $('parts').getBoundingClientRect().width > innerWidth * 0.6) setPanel(false, true); };
 function fitParts(ids) {
   if (noSurface(ids, 'the whole model fitted')) { fitTo(drawnBox(null)); return; }
+  uncover();
   fitTo(drawnBox(ids.length ? ids : null));
 }
 
@@ -7575,7 +7591,7 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
-    noSurface([...app.selected], 'nothing to show'); // (blank, unsaid: R33-2)
+    if (!noSurface([...app.selected], 'nothing to show')) uncover(); // (blank, unsaid: R33-2)
   };
   $('hide').onclick = () => {
     if (!app.selected.size) return;
