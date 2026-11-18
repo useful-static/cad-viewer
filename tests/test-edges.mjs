@@ -75,6 +75,12 @@ test('the converter\'s kind decides closed, not the mesh', () => {
   const r = buildEdges(model([body(boxFaces(0, 0, 0, 1, 1, 1, ['top']), 'capped'), body(boxFaces(2, 0, 0, 3, 1, 1), 'open')]));
   assert.deepEqual(r.facts.closed, [true, false]);
 });
+test('a body of no area is not closed, whatever its converter calls it (UI design round 32, R32-1: the RK3399\'s 2-triangle bodies of no size, "closed", read "≈ 0 mm³ · 6 closed")', () => {
+  // (one quad, all four corners at one point: two triangles of no area)
+  const p = [5, 5, 5];
+  const r = buildEdges(model([body([[[p, p, p, p]]], 'closed'), body(boxFaces(0, 0, 0, 1, 1, 1), 'closed')]));
+  assert.deepEqual(r.facts.closed, [false, true]);
+});
 test('a mirrored body has a positive volume', () => {
   const b = body(boxFaces(0, 0, 0, 2, 2, 2));
   for (let i = 0; i < b.positions.length; i += 3) b.positions[i] = -b.positions[i];

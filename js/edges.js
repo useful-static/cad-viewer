@@ -308,7 +308,9 @@ function body(pos, bits, index, m, edges, sil, budget) {
   // kind, the mesh's own test where not -- and a solid closed by its b-rep's word lets every shell
   // hold, as Clearance does: a b-rep cube with a one-ulp crack read 1008 for 1000)
   const sh = shellsOf(index, t0, nt, weld, v0, nv);
-  const closed = m.kind ? kindClosed(m.kind) : sh.closed;
+  // (and none with no area, whatever its file's word: the RK3399's six 2-triangle bodies of no size,
+  // written "closed", read "≈ 0 mm³ · 6 closed" over a mass of 0 g -- UI design round 32, R32-1)
+  const closed = A > 0 && (m.kind ? kindClosed(m.kind) : sh.closed);
   const open = m.kind && closed ? new Uint8Array(sh.shellOpen.length) : sh.shellOpen;
   return { sil: nsil, closed, area: A, ...materialVolume(pos, index, t0, nt, sh.shell, open, sh.shellBranched, closed, V, budget) };
 }
