@@ -5033,6 +5033,9 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
 {
   const info = $('info'), tree = $('tree');
   const parts = $('parts');
+  // (its gutter's width, for its right padding: R51-2)
+  const gutter = () => { const w = info.offsetWidth - info.clientWidth; if (info.offsetWidth) document.documentElement.style.setProperty('--infosb', `${Math.max(0, w)}px`); };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(gutter).observe(info);
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
     // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
