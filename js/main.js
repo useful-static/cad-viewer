@@ -5038,7 +5038,6 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
     // browser's ring, nothing to scroll -- R48-2)
     info.style.height = `${info.getBoundingClientRect().height}px`;
-    info.style.overflowY = 'auto';
     // (the spacer kept: cleared here, the drawer was pulled back under the next tap in the list,
     // the row above taken -- R49-1)
   };
@@ -5052,7 +5051,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     const was = parseFloat(parts.style.paddingBottom) || 0, scrolls = parts.scrollHeight > parts.clientHeight + 1;
     const h = info.getBoundingClientRect().height;
     parts.style.paddingBottom = `${was + h}px`;
-    info.style.height = ''; info.style.overflowY = '';
+    info.style.height = '';
     const lost = h - info.getBoundingClientRect().height;
     parts.style.paddingBottom = scrolls && was + lost > 0.5 ? `${was + lost}px` : '';
   };

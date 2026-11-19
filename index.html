@@ -312,7 +312,8 @@
   /* (flex-shrink 0: held -- a fixed height, scrolling inside itself, main.js -- its minimum flex
      height fell to 0, and in a long list's drawer it shrank to a 17 px strip, the list jumping
      under the finger: UI design round 16 R16-1; a thin scrollbar as the toolbar's: R16-4) */
-  #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; flex-shrink:0; scrollbar-width:thin; overflow-anchor:none; }
+  #info { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; flex-shrink:0; scrollbar-width:thin; overflow-anchor:none;
+    overflow-y:auto; scrollbar-gutter:stable; } /* (one width held or not: a scrollbar coming and going re-wrapped its lines, a click landing a row off -- R50-1) */
   /* (overflow-anchor: no scroll anchor in the panel's changing rows -- partly in view in a phone's
      drawer, they moved the drawer a row on a tap, the next tap taking another: round 33) */
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
