@@ -508,7 +508,10 @@
   #treefilter::placeholder { color:var(--dim); } /* (the browser's grey was 3.6:1) */
   #tree input:indeterminate { opacity:.75; }
   #tree ul { list-style:none; margin:0; padding:0; }
-  #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px 4px; }
+  /* (the right inset the filter field, Paint and the panel above end at; and a layer row, with no
+     expand arrow, starts its box under the panel's text: R52-1) */
+  #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px 10px 1px 4px; }
+  #tree li[data-layer] > .row { padding-left:10px; }
   #tree .row:hover { background:#2d333d; }
   #tree .row.sel { background:#16465a; } /* the same cyan family as the 3D selection tint */
   #tree .tw { width:12px; color:var(--dim); cursor:pointer; text-align:center; }
@@ -661,6 +664,7 @@
     /* the checkbox's label wrapper fills the row height: a tap anywhere in
        that column toggles visibility (a label click toggles its checkbox) */
     #tree .cbwrap { align-self:stretch; display:flex; align-items:center; padding:0 4px; }
+    #tree li[data-layer] > .row { padding-left:6px; } /* (its box at the panel text's 10, as with a mouse: R52-1) */
     #tree .tw { width:24px; align-self:stretch; display:flex; align-items:center; justify-content:center; }
     /* the drag hit area is the input's box; margin 0 drops the UA's 2 px, which
        made it the toolbar's tallest item (a 4 px taller phone header) */
