@@ -510,7 +510,8 @@
   #tree ul { list-style:none; margin:0; padding:0; }
   /* (the right inset the filter field, Paint and the panel above end at; and a layer row, with no
      expand arrow, starts its box under the panel's text: R52-1) */
-  #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px 10px 1px 4px; }
+  #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px max(0px, calc(10px - var(--treesb, 0px))) 1px 4px; }
+  #tree .cnt:empty { display:none; } /* (a leaf's: its gap cut a long name 4 px short -- R53-2) */
   #tree li[data-layer] > .row { padding-left:10px; }
   #tree .row:hover { background:#2d333d; }
   #tree .row.sel { background:#16465a; } /* the same cyan family as the 3D selection tint */
@@ -620,7 +621,10 @@
   :is(button, select, input, textarea, summary, label.btn, a.btn, #tree .label, [role=button]):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
   /* (wraps rather than cut the scheme's name: "File colou" in a phone's drawer) */
   #colours { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
-  #colours select { flex:1; min-width:8em; } /* (one line in a mouse's 340 px drawer; a finger's larger controls wrap) */
+  /* (one line in a mouse's 340 px drawer; a finger's larger controls wrap. Its least is its longest
+     value's width, so Paint wraps before "File colours" is cut: 8em was 103 px at 1280 hybrid and
+     in the 320 drawer -- R53-1) */
+  #colours select { flex:1; min-width:9.5em; }
   #colours :is(select, button, input[type=color]) { height:26px; } /* (one height: 27, 24 and 25 px side by side) */
   #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
   /* with nothing selected the picker has no colour to show: an empty dashed

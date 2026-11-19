@@ -5036,6 +5036,12 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   // (its gutter's width, for its right padding: R51-2)
   const gutter = () => { const w = info.offsetWidth - info.clientWidth; if (info.offsetWidth) document.documentElement.style.setProperty('--infosb', `${Math.max(0, w)}px`); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(gutter).observe(info);
+  // (and the list's, for its rows' right padding: a list scrolling by itself at 1280 put its counts
+  // 10 px inside the filter field's edge -- R53-2. It comes and goes with a row opened or closed, so
+  // read on a change of the list as well as of its size)
+  const treeGutter = () => { const w = tree.offsetWidth - tree.clientWidth; if (tree.offsetWidth) document.documentElement.style.setProperty('--treesb', `${Math.max(0, w)}px`); };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(treeGutter).observe(tree);
+  new MutationObserver(treeGutter).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
     // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
