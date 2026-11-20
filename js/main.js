@@ -7206,7 +7206,7 @@ const uncover = () => { if (panelOpen()) setPanel(false, true); };
 if (self.ResizeObserver) { // (R69-1..R71-3)
   let h = 0, open = false;
   const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
-    if (open !== !te.hidden) { open = !te.hidden; h = 0; }
+    if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
     st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798);
     const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
@@ -7772,7 +7772,7 @@ function wireInput() {
   };
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => {
-    if (app.dxf) return app.dxf.view.fit();
+    if (app.dxf) { uncover(); return app.dxf.view.fit(); }
     fitParts([...app.selected]);
   };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
