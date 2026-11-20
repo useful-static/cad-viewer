@@ -2192,9 +2192,7 @@ function showTourStep(i) {
   }
   if (x.on) x.t = exNow;
   flyTo(to ? to.pose : null, to ? to.ortho : !!app.cam.ortho, s.transition, s.ease, ex1, holdStep);
-  // (not right after the tour's start, which told every part it lacks -- the two said in one moment,
-  // in two wordings, the start's 6 s note replaced at once: r46 A4, Q4; keyed on that, not on the
-  // index: step 1 shown again by ◀, a loop or a replay never named its missing parts -- r47 A7)
+  // (not right after the tour's start, which told every part it lacks: r46 A4, r47 A7)
   tellStepMissing(t);
   // (a step with no text read without a trailing space: r49 Q7)
   announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}.${s.text ? ` ${s.text}` : ''}`);
@@ -2231,13 +2229,11 @@ function startTour(tour, url, only = null) {
   $('stage').style.setProperty('--tour-floor', `${floor}px`);
   const saved = prev ? prev.saved : currentView();
   // what the visitor had: each step is applied to it, and leaving puts it back
-  // (styleChoice: the visitor's own choice of style, which a step's style is
-  // not; leaving puts it back as it was)
+  // (styleChoice: the visitor's own, not a step's; leaving puts it back)
   const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), faceOverrides: app.faceOverrides, styleChoice: app.styleChoice,
     explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk };
   app.tour = { tour, full, url, i: 0, saved, base, playing: false };
-  // (in place of another tour: the visitor's orientation, not that tour's,
-  // unless this one sets its own below)
+  // (in place of another tour: the visitor's orientation, unless this one sets its own)
   if (prev && saved.cam && saved.cam.orient && saved.cam.orient !== app.cam.orient) {
     app.cam.orient = saved.cam.orient;
     updateButtons();
@@ -7838,8 +7834,16 @@ function wireInput() {
   app.recorder = createTourRecorder({
     capture: captureStep,
     captureNote: () => captureNote,
-    preview: (tour, from, play) => { endTour(); if (!startTourIn(tour, null)) return; app.previewing = true; if (from) showTourStep(from); setTourPlaying(play); },
-    stopPreview: () => { if (app.previewing) endTour(); app.previewing = false; },
+    preview: (tour, from, play) => {
+      const t = app.tour; // (R74-2)
+      if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i };
+      endTour(); if (!startTourIn(tour, null)) return; app.previewing = app.tour; if (from) showTourStep(from); setTourPlaying(play);
+    },
+    stopPreview: () => { // (R73-1, R74-1)
+      const w = app.watched;
+      if (app.tour && app.tour === app.previewing) { endTour(); if (w && startTourIn(w.t, w.u)) showTourStep(w.i); }
+      app.previewing = app.watched = null;
+    },
     modelUrl: () => {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
@@ -7852,7 +7856,7 @@ function wireInput() {
     video: tourVideo,
     announce,
   });
-  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = false; app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
+  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = app.watched = null; app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
