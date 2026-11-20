@@ -1691,7 +1691,7 @@ function setPaint(on) {
   if (on && app.explode.on) setExplode(false);
   const was = app.paintFaces;
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
-  if (was && !app.paintFaces) tell('paint off'); // (R65-1)
+  if (was && !app.paintFaces) tell('paint off', 3000); // (R65-1, R66-3)
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) tell('this model has no b-rep faces to paint', 3000);
   else if (on) tell(`Paint: ${tapWord()} a face to paint it in the swatch's colour`, 3000);
@@ -2252,12 +2252,16 @@ function startTour(tour, url, only = null) {
   app.hover = 0;
   // Paint's face colours are the visitor's, and no step holds them: not drawn while it plays, so
   // the maker's Show and Preview show what the saved tour will (leaving puts them back)
+  if (!prev) base.paint = app.paintFaces;
   if (app.paintFaces) setPaint(false);
   if (app.faceOverrides.size) { app.faceOverrides = new Map(); recolour(); }
   // and Measure's distances and angles, and the hole table: a step holds notes only, and they
   // were drawn into the tour's pictures and video (leaving puts them back)
   if (!prev) {
     base.measured = app.measure ? app.measure.setAside() : null;
+    // (Measure off while it plays: R66-1)
+    base.measureOn = !!(app.measure && app.measure.on);
+    if (base.measureOn) app.measure.setOn(false);
     base.holesFor = app.holesFor;
     if (app.holesFor && app.measure) showHoles(null);
   }
@@ -2307,6 +2311,8 @@ function endTour(restore = true) {
     restoreExplode(base.explode);
     applyView(saved); // camera, style, section, hidden and selected parts, notes
     if (app.measure) app.measure.putBack(base.measured);
+    if (base.measureOn && app.measure && !app.measure.on) app.measure.setOn(true);
+    else if (base.paint && !app.paintFaces) setPaint(true);
     if (base.holesFor && app.measure) showHoles(base.holesFor);
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
@@ -3211,7 +3217,7 @@ function pressFocus(row, name) {
   row.addEventListener('mousedown', (e) => {
     if (e.button > 2) return;
     if (!e.button) e.preventDefault();
-    if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press: R60-5)
+    if (name.matches(':focus-visible')) name.blur(); // (R60-5)
     calm();
   });
   // (R60-1, R61-1, R61-2)
@@ -5080,12 +5086,12 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
 {
   const info = $('info'), tree = $('tree');
   const parts = $('parts');
-  // (its gutter's width, for its right padding: R51-2)
+  // (R51-2)
   const gutter = () => { const w = info.offsetWidth - info.clientWidth; if (info.offsetWidth) document.documentElement.style.setProperty('--infosb', `${Math.max(0, w)}px`); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(gutter).observe(info);
-  // (and the list's, for its rows: R53-2; read on a row opened or closed too)
+  // (R53-2)
   const treeGutter = () => { const w = tree.offsetWidth - tree.clientWidth; if (tree.offsetWidth) document.documentElement.style.setProperty('--treesb', `${Math.max(0, w)}px`); };
-  // (spacers trimmed as it changes or resizes: R56-1, R57-1)
+  // (R56-1, R57-1)
   const onTree = () => { treeGutter(); trimSpacer(parts); trimSpacer(tree); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(onTree).observe(tree);
   new MutationObserver(onTree).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] });
@@ -5122,7 +5128,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
       document.activeElement?.scrollIntoView?.({ block: 'nearest' });
     }, 0);
   });
-  // (a finger has no leave, and is not let go on its lift: R17-2; held over all below the panel: R54-1)
+  // (R17-2, R54-1)
   const below = (n) => n instanceof Node && parts.contains(n) && !info.contains(n);
   const overBelow = () => parts.matches(':hover') && !info.matches(':hover');
   parts.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
@@ -6600,7 +6606,7 @@ function buildTree() {
       pushState();
       viewChanged();
     };
-    // (the whole row selects, but its arrow and box: R58-1)
+    // (R58-1)
     const ctl = (e) => e.target.closest('.tw[role=button], .cbwrap');
     pressFocus(row, label);
     row.onclick = (e) => { if (!ctl(e)) select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent); };
@@ -7345,7 +7351,7 @@ function wireInput() {
     // view: a press on them is theirs. Capturing it for an orbit retargeted
     // the click to the view, so "Choose a file…" and Cancel never received it.
     if (e.target.closest(OVER_VIEW)) return;
-    // (a finger from beside the view: no pick or orbit, but a pinch's -- R59-2, R60-2, R60-4)
+    // (R59-2, R60-2, R60-4)
     const r = stage.getBoundingClientRect();
     const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
     // embedded and not yet active: no capture, no gesture; a press that
