@@ -1101,7 +1101,10 @@ export function createDxfView(canvas, drawing, cb = {}) {
     pts.delete(e.pointerId);
     if (pts.size < 2) pinch = null;
     else if (pinch && (e.pointerId === pinch.ia || e.pointerId === pinch.ib)) startPinch();
-    if (drag && !moved && pts.size === 0) { if (st.measure) measureClick(...p); else select(layerAt(...p)); }
+    // (a primary press or a finger picks: a right or middle click selected, or measured, as 3D's does
+    // not -- R63-1; a cancelled finger never -- R63-2)
+    const picks = e.type !== 'pointercancel' && (e.button === 0 || e.pointerType !== 'mouse');
+    if (drag && !moved && pts.size === 0 && picks) { if (st.measure) measureClick(...p); else select(layerAt(...p)); }
     if (pts.size === 0) drag = null;
   };
   // (the pointer gone, the hover and the snap go: the picture and the print are the canvas as last
