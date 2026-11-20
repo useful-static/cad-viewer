@@ -2242,8 +2242,7 @@ function startTour(tour, url, only = null) {
     app.cam.orient = saved.cam.orient;
     updateButtons();
   }
-  // Walk off while it plays (its keys would move the camera off the step);
-  // leaving puts it back, the camera with it
+  // Walk off while it plays; leaving puts it back
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
   // nothing selected while it plays (a selection greys the rest); leaving puts it back
   if (app.selected.size) select([], false);
@@ -7206,8 +7205,13 @@ function noSurface(ids, then) {
 // Fit, F, a row's double-click (R34-1)
 // (an open drawer closed, so what it does is seen: one rule with noSurface's -- R35-3, R36-2)
 const uncover = () => { if (panelOpen()) setPanel(false, true); };
-if (self.ResizeObserver) { // (R69-1, R69-2)
-  const st = $('stage'), c = $('tourcard'), ro = new ResizeObserver(() => { st.style.setProperty('--tourcard-h', `${c.offsetHeight}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); });
+if (self.ResizeObserver) { // (R69-1, R69-2, R70-3, R70-4)
+  let h = 0;
+  const st = $('stage'), c = $('tourcard'), ro = new ResizeObserver(() => {
+    h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
+    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798);
+    const f = document.activeElement; if ($('touredit').contains(f)) f.scrollIntoView({ block: 'nearest' });
+  });
   ro.observe(c); ro.observe(st);
 }
 function fitParts(ids) {
@@ -7852,7 +7856,7 @@ function wireInput() {
     video: tourVideo,
     announce,
   });
-  $('tourmake').onclick = () => { closeMenus(); app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
+  $('tourmake').onclick = () => { closeMenus(); uncover(); app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });

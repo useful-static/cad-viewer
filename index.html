@@ -369,7 +369,10 @@
   /* (its foot past the Explode bar a tour opens, and one width: a step lifted it and moved its ×, R44-3) */
   #tourcard { position:absolute; left:12px; bottom:calc(12px + max(var(--optbar-h, 0px), var(--tour-floor, 0px))); z-index:2;
     width:min(440px, calc(100% - 24px)); box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px;
-    background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px; }
+    background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px;
+    max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); display:flex; flex-direction:column; }
+  #tourcard > * { flex:none; }
+  #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; } /* (a long caption scrolls, title and buttons kept: R70-2) */
   #tourcard[hidden] { display:none; }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
   /* the tour maker: a panel at the right of the view */
@@ -776,6 +779,7 @@
       transform:translateX(-102%); visibility:hidden; transition:transform .22s ease, visibility 0s linear .22s; }
     body.panel-open aside { transform:none; visibility:visible; transition:transform .22s ease, visibility 0s; }
     aside #tree { flex:none; overflow:visible; } /* the panel scrolls as a whole */
+    #stage { isolation:isolate; } /* (the drawer over the view's own layers -- the tour maker: R70-1) */
     #scrim { grid-row:2; grid-column:1; z-index:2; background:rgba(0,0,0,.35); display:block;
       opacity:0; pointer-events:none; transition:opacity .22s; }
     body.panel-open #scrim { opacity:1; pointer-events:auto; }
