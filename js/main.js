@@ -3189,8 +3189,22 @@ function focusInPanel(f, wasInTree) {
   return !!to;
 }
 
-// `change` keeps `el` in place: a spacer at its scroll box's foot (the list, else the drawer), gone at
-// the next scroll by hand (R54-3)
+// A spacer at a scroll box's foot for height taken away (R48-1, R54-3), trimmed as it scrolls back:
+// dropped at once, a swipe threw the content 434 px (R55-3)
+const spacerOf = (box) => box._sp || 0;
+function setSpacer(box, s) {
+  if (!box._sp) box._pb0 = parseFloat(getComputedStyle(box).paddingBottom);
+  box._sp = s > 0.5 ? s : 0;
+  box.style.paddingBottom = box._sp ? `${box._pb0 + box._sp}px` : '';
+}
+function trimSpacer(box) {
+  if (!box._sp) return;
+  const need = box.scrollTop + box.clientHeight - (box.scrollHeight - box._sp);
+  if (need < box._sp - 0.5) setSpacer(box, Math.max(0, need));
+}
+
+// `change` keeps `el` in place, its box (the list, else the drawer) padded from its content's end:
+// scrollHeight is the box's own when the rest is shorter (R55-1)
 function keepRowPlace(el, change) {
   const tree = $('tree');
   const box = tree.scrollHeight > tree.clientHeight + 1 && getComputedStyle(tree).overflowY !== 'visible' ? tree : $('parts');
@@ -3199,12 +3213,12 @@ function keepRowPlace(el, change) {
   const d = el.getBoundingClientRect().top - top;
   if (d < 0.5) return;
   const want = box.scrollTop + d;
-  const pad = parseFloat(getComputedStyle(box).paddingBottom);
-  box.style.paddingBottom = `${pad + d}px`;
+  const last = [...box.children].reverse().find((c) => c.getClientRects().length);
+  const end = last ? last.getBoundingClientRect().bottom - box.getBoundingClientRect().top - box.clientTop + box.scrollTop : 0;
+  const pb0 = box._sp ? box._pb0 : parseFloat(getComputedStyle(box).paddingBottom);
+  const sp = want + box.clientHeight - end - pb0;
+  if (sp > spacerOf(box)) setSpacer(box, sp);
   box.scrollTop = want;
-  // (the rest shorter than the box: its height too)
-  const short = want - box.scrollTop;
-  if (short > 0.5) { box.style.paddingBottom = `${pad + d + short}px`; box.scrollTop = want; }
 }
 
 function keepFocus() {
@@ -4143,6 +4157,7 @@ function updateButtons() {
   $('partcolour').disabled = !sel.length && !app.paintFaces;
   if (sel.length && !app.paintFaces) $('partcolour').value = rgbToHex(partColourOf(sel[0]));
   $('paintbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
+  $('paintbtn').hidden = $('paintbtn').disabled; // (no faces: R55-4)
   const all = !sel.length;
   $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
   // (kept in place, disabled: shown by a recolour it wrapped alone, the list 34 px lower -- R54-2)
@@ -5067,21 +5082,21 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     // the row above taken -- R49-1)
   };
   // (the height it gives up kept at the drawer's foot, so a drawer scrolled to its end is not pulled
-  // back under a press landing in the panel -- 17 px, a tap on the mass row opened Details: R48-1;
-  // the spacer goes at the drawer's next scroll by hand)
+  // back under a press landing in the panel -- 17 px, a tap on the mass row opened Details: R48-1)
   // (added to a spacer already there; none where the drawer does not scroll -- the wide sidebar's list
   // stood 17 px short: R49-2)
   const release = () => {
     if (!info.style.height) return;
-    const was = parseFloat(parts.style.paddingBottom) || 0, scrolls = parts.scrollHeight > parts.clientHeight + 1;
+    const was = spacerOf(parts), scrolls = parts.scrollHeight > parts.clientHeight + 1;
     const h = info.getBoundingClientRect().height;
-    parts.style.paddingBottom = `${was + h}px`;
+    setSpacer(parts, was + h);
     info.style.height = '';
     const lost = h - info.getBoundingClientRect().height;
-    parts.style.paddingBottom = scrolls && was + lost > 0.5 ? `${was + lost}px` : '';
+    setSpacer(parts, scrolls ? was + lost : 0);
   };
-  const unspace = () => { parts.style.paddingBottom = ''; tree.style.paddingBottom = ''; }; // (and a closed row's: R54-3)
-  for (const ev of ['wheel', 'touchmove', 'keydown']) parts.addEventListener(ev, unspace, { passive: true });
+  const unspace = () => { setSpacer(parts, 0); setSpacer(tree, 0); };
+  // (not dropped at a key: ← closing a row took its own spacer, R55-2)
+  for (const box of [parts, tree]) box.addEventListener('scroll', () => trimSpacer(box), { passive: true });
   addEventListener('resize', unspace);
   app.unspaceParts = unspace; // (the drawer closed: setPanel)
   tree.addEventListener('pointerenter', hold);

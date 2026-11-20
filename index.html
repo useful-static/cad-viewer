@@ -626,7 +626,7 @@
      in the 320 drawer -- R53-1) */
   #colours select { flex:1; min-width:9.5em; }
   #colours :is(select, button, input[type=color]) { height:26px; } /* (one height: 27, 24 and 25 px side by side) */
-  #colours input[type=color] { width:32px; height:24px; padding:0 2px; border:1px solid var(--line); background:none; cursor:pointer; }
+  #colours input[type=color] { width:32px; height:26px; padding:0 2px; border:1px solid var(--line); border-radius:4px; background:none; cursor:pointer; } /* (the buttons' height and corners: R55-5) */
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
   #colours input[type=color]:disabled { cursor:default; border-style:dashed; }
@@ -635,6 +635,7 @@
   /* the swatch, Paint and Reset wrap as one, the row's gap between them (R54-4); Reset as wide as
      "Reset all", so its words for a selection or none never re-wrap the row (R54-2) */
   #colours .group { gap:8px; }
+  #colours button[hidden] { display:none; }
   #partreset { min-width:6em; }
   #cachebar { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
   #cachebar[hidden] { display:none; }
