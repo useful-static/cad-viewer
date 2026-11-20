@@ -3200,7 +3200,7 @@ function setSpacer(box, s) {
 function trimSpacer(box) {
   if (!box._sp) return;
   const need = box.scrollTop + box.clientHeight - (box.scrollHeight - box._sp);
-  if (need < box._sp - 0.5) setSpacer(box, Math.max(0, need));
+  if (need < box._sp - 1) setSpacer(box, Math.max(0, Math.ceil(need))); // (a px a wheel notch: R56-2)
 }
 
 // `change` keeps `el` in place, its box (the list, else the drawer) padded from its content's end:
@@ -5072,7 +5072,8 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   // (and the list's, for its rows: R53-2; read on a row opened or closed too)
   const treeGutter = () => { const w = tree.offsetWidth - tree.clientWidth; if (tree.offsetWidth) document.documentElement.style.setProperty('--treesb', `${Math.max(0, w)}px`); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(treeGutter).observe(tree);
-  new MutationObserver(treeGutter).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+  // (spacers trimmed as it changes: R56-1)
+  new MutationObserver(() => { treeGutter(); trimSpacer(parts); trimSpacer(tree); }).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] });
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
     // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
@@ -5115,8 +5116,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   });
   // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
   // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
-  // (held over all the panel moves, the sidebar below it: let go at the list's edge, a press on the
-  // filter field after a pick missed, 21 of 26 -- R54-1)
+  // (held over all below the panel: let go at the list's edge, a press on the filter missed -- R54-1)
   const below = (n) => n instanceof Node && parts.contains(n) && !info.contains(n);
   const overBelow = () => parts.matches(':hover') && !info.matches(':hover');
   parts.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
