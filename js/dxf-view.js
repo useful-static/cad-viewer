@@ -1103,7 +1103,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     else if (pinch && (e.pointerId === pinch.ia || e.pointerId === pinch.ib)) startPinch();
     // (a primary press or a finger picks: a right or middle click selected, or measured, as 3D's does
     // not -- R63-1; a cancelled finger never -- R63-2)
-    const picks = e.type !== 'pointercancel' && (e.button === 0 || e.pointerType !== 'mouse');
+    const picks = e.type !== 'pointercancel' && e.button === 0; // (a pen's barrel button no pick: R64-2)
     if (drag && !moved && pts.size === 0 && picks) { if (st.measure) measureClick(...p); else select(layerAt(...p)); }
     if (pts.size === 0) drag = null;
   };
@@ -1116,7 +1116,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     draw(); // (once for both: r107 Q10)
     if (cb.onHover) { if (snap) cb.onHover(null, true); if (hover) cb.onHover(null); }
   };
-  const onDbl = () => fit();
+  const onDbl = () => { if (!st.measure) fit(); }; // (measuring keeps the zoom, as 3D's: R64-1)
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
