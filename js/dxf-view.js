@@ -1056,7 +1056,14 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // pinch, as the 3D view's: R60-2)
     const r = canvas.getBoundingClientRect();
     const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
-    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) }; drag = null; } else if (pts.size === 1) drag = out ? null : xy(e); // (a third finger is no pan, as in 3D: R61-3)
+    if (pts.size === 2) { startPinch(); drag = null; } else if (pts.size === 1) drag = out ? null : xy(e); // (a third finger is no pan, as in 3D: R61-3)
+  };
+  // (the pinch is its two fingers by id, as the 3D view's: a resting third finger stopped it, and one
+  // lifting jumped the zoom -- R62-1)
+  const startPinch = () => {
+    const [ia, ib] = [...pts.keys()];
+    const a = pts.get(ia), b = pts.get(ib);
+    pinch = { ia, ib, d: Math.hypot(a[0] - b[0], a[1] - b[1]) };
   };
   const onMove = (e) => {
     const p = xy(e);
@@ -1073,8 +1080,9 @@ export function createDxfView(canvas, drawing, cb = {}) {
     }
     const prev = pts.get(e.pointerId);
     pts.set(e.pointerId, p);
-    if (pinch && pts.size === 2) {
-      const [a, b] = [...pts.values()];
+    if (pinch) {
+      if (e.pointerId !== pinch.ia && e.pointerId !== pinch.ib) return;
+      const a = pts.get(pinch.ia), b = pts.get(pinch.ib);
       const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
       if (pinch.d > 0) zoomAt(d / pinch.d, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
       pinch.d = d;
@@ -1092,6 +1100,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     const p = xy(e);
     pts.delete(e.pointerId);
     if (pts.size < 2) pinch = null;
+    else if (pinch && (e.pointerId === pinch.ia || e.pointerId === pinch.ib)) startPinch();
     if (drag && !moved && pts.size === 0) { if (st.measure) measureClick(...p); else select(layerAt(...p)); }
     if (pts.size === 0) drag = null;
   };

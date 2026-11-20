@@ -3207,7 +3207,7 @@ function trimSpacer(box) {
 function pressFocus(row, name) {
   const calm = () => name.focus({ preventScroll: true, focusVisible: false });
   row.addEventListener('mousedown', (e) => {
-    if (e.button > 1) return;
+    if (e.button > 2) return;
     if (!e.button) e.preventDefault();
     if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press: R60-5)
     calm();
