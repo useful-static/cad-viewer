@@ -3203,6 +3203,16 @@ function trimSpacer(box) {
   if (need < box._sp - 1) setSpacer(box, Math.max(0, Math.ceil(need))); // (R56-2)
 }
 
+// A row's press focuses its name (R59-3)
+function pressFocus(row, name) {
+  row.addEventListener('mousedown', (e) => {
+    if (e.button) return;
+    e.preventDefault();
+    if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press)
+    name.focus({ preventScroll: true, focusVisible: false });
+  });
+}
+
 // `change` keeps `el` in place (R55-1)
 function keepRowPlace(el, change) {
   const tree = $('tree');
@@ -5076,16 +5086,9 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   new MutationObserver(onTree).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] });
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
-    // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the
-    // browser's ring, nothing to scroll -- R48-2)
-    info.style.height = `${info.getBoundingClientRect().height}px`;
-    // (the spacer kept: cleared here, the drawer was pulled back under the next tap in the list,
-    // the row above taken -- R49-1)
+    info.style.height = `${info.getBoundingClientRect().height}px`; // (unrounded: R48-2; spacer kept: R49-1)
   };
-  // (the height it gives up kept at the drawer's foot, so a drawer scrolled to its end is not pulled
-  // back under a press landing in the panel -- 17 px, a tap on the mass row opened Details: R48-1)
-  // (added to a spacer already there; none where the drawer does not scroll -- the wide sidebar's list
-  // stood 17 px short: R49-2)
+  // (the height it gives up kept at the drawer's foot: R48-1, R49-2)
   const release = () => {
     if (!info.style.height) return;
     const was = spacerOf(parts), scrolls = parts.scrollHeight > parts.clientHeight + 1;
@@ -5114,16 +5117,12 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
       document.activeElement?.scrollIntoView?.({ block: 'nearest' });
     }, 0);
   });
-  // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
-  // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
-  // (held over all below the panel: R54-1)
+  // (a finger has no leave, and is not let go on its lift: R17-2; held over all below the panel: R54-1)
   const below = (n) => n instanceof Node && parts.contains(n) && !info.contains(n);
   const overBelow = () => parts.matches(':hover') && !info.matches(':hover');
   parts.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
   info.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') release(); });
-  // (to the held panel itself -- a scroll box the browser lets Shift+Tab reach -- the hold stays, so
-  // the focus has somewhere to be; released as it leaves: R46-2, the tabindex that was its fix
-  // taking a click on the panel's text, R47-1)
+  // (to the held panel itself the hold stays: R46-2, R47-1)
   parts.addEventListener('focusout', (e) => { if (below(e.target) && e.relatedTarget !== info && !below(e.relatedTarget) && !overBelow()) release(); });
   info.addEventListener('focusout', (e) => { if (e.target === info && !below(e.relatedTarget) && !overBelow()) release(); });
   addEventListener('pointerdown', (e) => { if (!below(e.target)) release(); }, { capture: true, passive: true });
@@ -5821,11 +5820,8 @@ function buildLayerList() {
     sw.style.background = dxfLib.onPaper(l.colour);
     lab.append(sw, l.name);
     const pick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
-    row.onclick = (e) => {
-      if (e.target.closest('.cbwrap')) return;
-      if (e.target !== lab) lab.focus({ preventScroll: true });
-      pick();
-    };
+    pressFocus(row, lab);
+    row.onclick = (e) => { if (!e.target.closest('.cbwrap')) pick(); };
     // (the row focused by a click takes the one tab stop, as a parts row does: a click then ↓ left
     // two -- round 13 R13-1)
     lab.onfocus = () => {
@@ -6601,11 +6597,8 @@ function buildTree() {
     };
     // (the whole row selects, but its arrow and box: R58-1)
     const ctl = (e) => e.target.closest('.tw[role=button], .cbwrap');
-    row.onclick = (e) => {
-      if (ctl(e)) return;
-      if (e.target !== label) label.focus({ preventScroll: true });
-      select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
-    };
+    pressFocus(row, label);
+    row.onclick = (e) => { if (!ctl(e)) select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent); };
     row.ondblclick = (e) => { if (!ctl(e)) fitParts(ids); };
     return li;
   };
@@ -7347,6 +7340,8 @@ function wireInput() {
     // view: a press on them is theirs. Capturing it for an orbit retargeted
     // the click to the view, so "Choose a file…" and Cancel never received it.
     if (e.target.closest(OVER_VIEW)) return;
+    // (a tap moved here from beside the view: R59-2)
+    if (e.pointerType === 'touch') { const r = stage.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right) return; }
     // embedded and not yet active: no capture, no gesture; a press that
     // lifts where it went down (a click, a tap) makes it active
     if (app.embed && !app.embedActive) { embedPress = { id: e.pointerId, x: e.clientX, y: e.clientY }; return; }
