@@ -2203,8 +2203,8 @@ function showTourStep(i) {
 // leaves the model as it is; returns whether the tour started.
 function startTour(tour, url, only = null) {
   if (!app.header) return false;
-  // (the whole tour, kept beside a one-step copy: File > Make a tour… edits the whole, not the copy
-  // ?step= shows -- it saved one step under the tour's title)
+  if (!app.inMaker) app.watched = null;
+  // (the whole tour, kept beside a ?step= one-step copy: the maker edits the whole)
   const full = tour;
   if (only) {
     const s = tour.steps.find((x) => x.id === only);
@@ -2467,10 +2467,17 @@ const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
 // A tour as pictures: each step applied at once (no flight), its colours on
 // the GPU, rendered at twice the view's size with its caption painted in;
 // the pictures zipped, in order. -> the number of pictures
+// the maker's tour (Show, Preview, an export); its close gives back the watched one (R74-2, R76-1)
+function makerTour(tour) {
+  const t = app.tour;
+  if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i, p: t.playing, h: app.header, o: t.full && t.tour !== t.full ? t.tour.steps[0].id : null };
+  endTour(); app.inMaker = true;
+  startTourIn(tour, null); // (scaled to the reading: js/tour.js tourAt)
+  app.inMaker = false;
+  return (app.previewing = app.tour);
+}
 async function tourPictures(tour) {
-  endTour();
-  startTourIn(tour, null); // (scaled to the reading, as Show and Preview are: js/tour.js tourAt)
-  if (!app.tour) return 0;
+  if (!makerTour(tour)) return 0;
   setTourPlaying(false);
   app.tour.cut = true;
   // (the tour the pictures are of: ended meanwhile -- the maker closed, Esc, ✕, another model -- the
@@ -2514,9 +2521,7 @@ async function tourVideo(tour) {
   const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   const mime = window.MediaRecorder && types.find((t) => MediaRecorder.isTypeSupported(t));
   if (!mime || !HTMLCanvasElement.prototype.captureStream) return 'this browser cannot record video';
-  endTour();
-  startTourIn(tour, null); // (scaled to the reading, as Show and Preview are)
-  if (!app.tour) return 'no model';
+  if (!makerTour(tour)) return 'no model';
   const t = app.tour;
   t.recording = true;
   const r = app.renderer, box = $('stage');
@@ -7201,7 +7206,7 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
-    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798);
+    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth);
     const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   });
   ro.observe(c); ro.observe(st); ro.observe(te);
@@ -7831,11 +7836,7 @@ function wireInput() {
   app.recorder = createTourRecorder({
     capture: captureStep,
     captureNote: () => captureNote,
-    preview: (tour, from, play) => {
-      const t = app.tour; // (R74-2)
-      if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i, p: t.playing, h: app.header, o: t.full && t.tour !== t.full ? t.tour.steps[0].id : null };
-      endTour(); if (!startTourIn(tour, null)) return; app.previewing = app.tour; if (from) showTourStep(from); setTourPlaying(play);
-    },
+    preview: (tour, from, play) => { if (!makerTour(tour)) return; if (from) showTourStep(from); setTourPlaying(play); },
     stopPreview: () => { // (R73-1, R74-1)
       const w = app.watched;
       if (app.tour && app.tour === app.previewing) endTour(); // (R75-1..3: its step, its play, on its model only)
