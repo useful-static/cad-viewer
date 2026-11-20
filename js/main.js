@@ -3827,11 +3827,8 @@ function wireHistory() {
   // (the page as first opened, marked in its own entry's state: its address is rewritten under it --
   // syncUnitParam moves ?unit= while its model loads, forgetAddressModel drops its model --, and a
   // Back compared by its text found the first entry no longer and reopened its model alone: r61 A1)
-  // (every entry the page knows carries its id, cadvEntry = app.pageId: an entry without one is new, a #view= edit
-  // just made, and takes its marks from the entry it was made on -- the first entry's mark, a pick's
-  // depth; a step Back or Forward lands on one with an id, read as it is. Told apart by a pick's
-  // stamp alone, an edit of the first entry lost its mark, and a step back onto the first entry was
-  // read as an edit: r63 A1, Q1, Q3.)
+  // (every entry the page knows carries its id, cadvEntry = app.pageId: an entry without one is a
+  // #view= edit just made, and takes its marks from the entry it was made on: r63 A1, Q1, Q3.)
   // (a reloaded entry's own marks were the page before's -- a pick's depth -- and are dropped)
   const { cadvFirst: _f, cadvEntry: _e, cadvPick: _p, depth: _d, ...kept } = history.state || {};
   history.replaceState({ ...kept, cadvFirst: true, cadvEntry: app.pageId }, '', location.href);
@@ -7836,12 +7833,13 @@ function wireInput() {
     captureNote: () => captureNote,
     preview: (tour, from, play) => {
       const t = app.tour; // (R74-2)
-      if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i };
+      if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i, p: t.playing, h: app.header, o: t.full && t.tour !== t.full ? t.tour.steps[0].id : null };
       endTour(); if (!startTourIn(tour, null)) return; app.previewing = app.tour; if (from) showTourStep(from); setTourPlaying(play);
     },
     stopPreview: () => { // (R73-1, R74-1)
       const w = app.watched;
-      if (app.tour && app.tour === app.previewing) { endTour(); if (w && startTourIn(w.t, w.u)) showTourStep(w.i); }
+      if (app.tour && app.tour === app.previewing) endTour(); // (R75-1..3: its step, its play, on its model only)
+      if (!app.tour && w && w.h === app.header && startTourIn(w.t, w.u, w.o)) { if (!w.o) showTourStep(w.i); setTourPlaying(w.p); }
       app.previewing = app.watched = null;
     },
     modelUrl: () => {
