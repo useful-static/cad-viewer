@@ -2245,21 +2245,16 @@ function startTour(tour, url, only = null) {
   // Walk off while it plays (its keys would move the camera off the step);
   // leaving puts it back, the camera with it
   if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
-  // nothing selected while it plays: a selection greys every other part, so Preview and the
-  // tour's video showed the maker's "frame the selection" pick, not the step (its pictures
-  // drop the selection); leaving puts it back with the rest of the view (saved.selected)
+  // nothing selected while it plays (a selection greys the rest); leaving puts it back
   if (app.selected.size) select([], false);
   app.hover = 0;
-  // Paint's face colours are the visitor's, and no step holds them: not drawn while it plays, so
-  // the maker's Show and Preview show what the saved tour will (leaving puts them back)
+  // Paint's face colours, Measure's results and the hole table: no step holds them, so set aside
+  // while it plays, Measure off (R66-1); leaving puts them back
   if (!prev) base.paint = app.paintFaces;
   if (app.paintFaces) setPaint(false);
   if (app.faceOverrides.size) { app.faceOverrides = new Map(); recolour(); }
-  // and Measure's distances and angles, and the hole table: a step holds notes only, and they
-  // were drawn into the tour's pictures and video (leaving puts them back)
   if (!prev) {
     base.measured = app.measure ? app.measure.setAside() : null;
-    // (Measure off while it plays: R66-1)
     base.measureOn = !!(app.measure && app.measure.on);
     if (base.measureOn) app.measure.setOn(false);
     base.holesFor = app.holesFor;
@@ -7211,6 +7206,10 @@ function noSurface(ids, then) {
 // Fit, F, a row's double-click (R34-1)
 // (an open drawer closed, so what it does is seen: one rule with noSurface's -- R35-3, R36-2)
 const uncover = () => { if (panelOpen()) setPanel(false, true); };
+if (self.ResizeObserver) { // (R69-1, R69-2)
+  const st = $('stage'), c = $('tourcard'), ro = new ResizeObserver(() => { st.style.setProperty('--tourcard-h', `${c.offsetHeight}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); });
+  ro.observe(c); ro.observe(st);
+}
 function fitParts(ids) {
   if (noSurface(ids, 'the whole model fitted')) { fitTo(drawnBox(null)); return; }
   uncover();

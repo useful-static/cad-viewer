@@ -377,8 +377,9 @@
     overflow:auto; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel);
     box-shadow:0 8px 24px rgba(0,0,0,.45); font-size:12px; color:var(--fg); }
   #touredit[hidden] { display:none; }
-  /* (a phone's maker ends above the card while its draft plays: it covered the card -- R68-1) */
-  @media (max-width:520px) { #stage.touring #touredit { max-height:calc(100% - 100px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); } }
+  /* (a maker too wide to sit beside the card ends above it while its draft plays, by the card's own
+     height: it covered the card -- R68-1, R69-1, R69-2) */
+  #stage.touring.tournarrow #touredit { max-height:calc(100% - 28px - var(--tourcard-h, 62px) - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
   #touredit .tehead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
   #touredit .tehead b { font-size:14px; }
   #touredit .tehint { color:var(--dim); margin:0 0 8px; }
