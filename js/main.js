@@ -2312,7 +2312,7 @@ function endTour(restore = true) {
     applyView(saved); // camera, style, section, hidden and selected parts, notes
     if (app.measure) app.measure.putBack(base.measured);
     if (base.measureOn && app.measure && !app.measure.on) app.measure.setOn(true);
-    else if (base.paint && !app.paintFaces) setPaint(true);
+    else if (base.paint && !app.paintFaces && !app.measure?.on) setPaint(true);
     if (base.holesFor && app.measure) showHoles(base.holesFor);
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
@@ -5574,6 +5574,7 @@ function setMeshUnit(u) {
 // whether it can be re-read now, meshSource: a scene's tour was saved with no unit and played 25.4x off)
 const tourReading = () => (app.scene && app.scene[0] && app.scene[0].unitless ? readUnit() : null);
 function startTourIn(tour, url, only = null) {
+  uncover(); // (R67-1)
   return startTour(tourAt(tour, tourReading()), url, only);
 }
 // A zip (feature review item 24): the first model in it that the viewer
