@@ -3205,12 +3205,15 @@ function trimSpacer(box) {
 
 // A row's press focuses its name (R59-3)
 function pressFocus(row, name) {
+  const calm = () => name.focus({ preventScroll: true, focusVisible: false });
   row.addEventListener('mousedown', (e) => {
-    if (e.button) return;
-    e.preventDefault();
-    if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press)
-    name.focus({ preventScroll: true, focusVisible: false });
+    if (e.button > 1) return;
+    if (!e.button) e.preventDefault();
+    if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press: R60-5)
+    calm();
   });
+  // (the box's label column focused the box after the press: R60-1)
+  row.addEventListener('focusin', (e) => { if (e.target.type === 'checkbox') calm(); });
 }
 
 // `change` keeps `el` in place (R55-1)
@@ -7340,11 +7343,13 @@ function wireInput() {
     // view: a press on them is theirs. Capturing it for an orbit retargeted
     // the click to the view, so "Choose a file…" and Cancel never received it.
     if (e.target.closest(OVER_VIEW)) return;
-    // (a tap moved here from beside the view: R59-2)
-    if (e.pointerType === 'touch') { const r = stage.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right) return; }
+    // (a finger Chrome moved here from beside the view -- the sidebar, under the toolbar -- neither
+    // picks nor orbits, but counts toward a pinch: R59-2, R60-2, R60-4)
+    const r = stage.getBoundingClientRect();
+    const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
     // embedded and not yet active: no capture, no gesture; a press that
     // lifts where it went down (a click, a tap) makes it active
-    if (app.embed && !app.embedActive) { embedPress = { id: e.pointerId, x: e.clientX, y: e.clientY }; return; }
+    if (app.embed && !app.embedActive) { if (!out) embedPress = { id: e.pointerId, x: e.clientX, y: e.clientY }; return; }
     if (e.pointerType === 'touch') {
       touches.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
@@ -7356,7 +7361,7 @@ function wireInput() {
         app.hoverSeq++;
         return;
       }
-      if (touches.size > 1) return;
+      if (touches.size > 1 || out) return;
     }
     if (drag || pinch) {
       // a mouse or pen does not start a gesture mid-gesture; and the dblclick

@@ -1052,7 +1052,11 @@ export function createDxfView(canvas, drawing, cb = {}) {
     canvas.setPointerCapture?.(e.pointerId);
     pts.set(e.pointerId, xy(e));
     moved = false;
-    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) }; drag = null; } else drag = xy(e);
+    // (a finger Chrome moved here from beside the view neither picks nor pans, but counts toward a
+    // pinch, as the 3D view's: R60-2)
+    const r = canvas.getBoundingClientRect();
+    const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) }; drag = null; } else drag = out ? null : xy(e);
   };
   const onMove = (e) => {
     const p = xy(e);
