@@ -511,6 +511,7 @@
   /* (the right inset the filter field, Paint and the panel above end at; and a layer row, with no
      expand arrow, starts its box under the panel's text: R52-1) */
   #tree .row { display:flex; align-items:center; gap:4px; white-space:nowrap; padding:1px max(0px, calc(10px - var(--treesb, 0px))) 1px 4px; }
+  #tree .row { cursor:pointer; } /* (the row selects: R58-1) */
   #tree .cnt:empty { display:none; } /* (a leaf's: its gap cut a long name 4 px short -- R53-2) */
   #tree li[data-layer] > .row { padding-left:10px; }
   #tree .row:hover { background:#2d333d; }
@@ -630,6 +631,7 @@
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
   #colours input[type=color]:disabled { cursor:default; border-style:dashed; }
+  #colours input[type=color]:enabled { border-color:transparent; } /* (the chip's ring the one frame: R58-2) */
   /* (the chip rounded inside the rounded outline, R56-3; its edge the dim grey, 3:1 on the panel and
      on black -- a black part's chip read as the empty swatch: R57-2) */
   #colours input[type=color]::-webkit-color-swatch-wrapper { padding:3px 1px; }

@@ -3189,8 +3189,7 @@ function focusInPanel(f, wasInTree) {
   return !!to;
 }
 
-// A spacer at a scroll box's foot for height taken away (R48-1, R54-3), trimmed as it scrolls back
-// (R55-3)
+// A scroll box's foot spacer: R48-1, R54-3, R55-3
 const spacerOf = (box) => box._sp || 0;
 function setSpacer(box, s) {
   if (!box._sp) box._pb0 = parseFloat(getComputedStyle(box).paddingBottom);
@@ -3201,10 +3200,10 @@ function trimSpacer(box) {
   if (!box._sp) return;
   // (none at the top: R57-1)
   const need = box.scrollTop < 1 ? 0 : box.scrollTop + box.clientHeight - (box.scrollHeight - box._sp);
-  if (need < box._sp - 1) setSpacer(box, Math.max(0, Math.ceil(need))); // (a px a wheel notch: R56-2)
+  if (need < box._sp - 1) setSpacer(box, Math.max(0, Math.ceil(need))); // (R56-2)
 }
 
-// `change` keeps `el` in place, its box padded from its content's end, not scrollHeight (R55-1)
+// `change` keeps `el` in place (R55-1)
 function keepRowPlace(el, change) {
   const tree = $('tree');
   const box = tree.scrollHeight > tree.clientHeight + 1 && getComputedStyle(tree).overflowY !== 'visible' ? tree : $('parts');
@@ -4160,7 +4159,7 @@ function updateButtons() {
   $('paintbtn').hidden = $('paintbtn').disabled; // (no faces: R55-4)
   const all = !sel.length;
   $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
-  // (kept in place, disabled: shown by a recolour it wrapped alone, the list 34 px lower -- R54-2)
+  // (kept in place, disabled: R54-2)
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
   $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
     : 'Give the selected parts their scheme colour again';
@@ -5097,7 +5096,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     setSpacer(parts, scrolls ? was + lost : 0);
   };
   const unspace = () => { setSpacer(parts, 0); setSpacer(tree, 0); };
-  // (not dropped at a key: ← closing a row took its own spacer, R55-2)
+  // (not dropped at a key: R55-2)
   for (const box of [parts, tree]) box.addEventListener('scroll', () => trimSpacer(box), { passive: true });
   addEventListener('resize', unspace);
   app.unspaceParts = unspace; // (the drawer closed: setPanel)
@@ -5117,7 +5116,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   });
   // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
   // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
-  // (held over all below the panel: let go at the list's edge, a press on the filter missed -- R54-1)
+  // (held over all below the panel: R54-1)
   const below = (n) => n instanceof Node && parts.contains(n) && !info.contains(n);
   const overBelow = () => parts.matches(':hover') && !info.matches(':hover');
   parts.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
@@ -5821,7 +5820,12 @@ function buildLayerList() {
     sw.className = 'layer-swatch';
     sw.style.background = dxfLib.onPaper(l.colour);
     lab.append(sw, l.name);
-    lab.onclick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
+    const pick = () => app.dxf.view.select(app.dxf.view.selected === l.name ? null : l.name);
+    row.onclick = (e) => {
+      if (e.target.closest('.cbwrap')) return;
+      if (e.target !== lab) lab.focus({ preventScroll: true });
+      pick();
+    };
     // (the row focused by a click takes the one tab stop, as a parts row does: a click then ↓ left
     // two -- round 13 R13-1)
     lab.onfocus = () => {
@@ -5833,7 +5837,7 @@ function buildLayerList() {
     // the parts list's keys: one tab stop for the list, ↑ ↓ Home End move (a roving tabindex),
     // Enter selects, Space shows / hides (each row was two tab stops, with no arrows: round 12 R12-6)
     lab.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); lab.onclick(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); pick(); return; }
       if (e.key === ' ') { e.preventDefault(); cb.click(); return; }
       const labs = [...tree.querySelectorAll('.label')], i = labs.indexOf(lab);
       const j = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: labs.length - 1 }[e.key];
@@ -6542,7 +6546,7 @@ function buildTree() {
         tw.setAttribute('aria-expanded', String(open));
         tw.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label.textContent}`);
       };
-      // (a row closed stays put: a drawer's scroll clamped, its top row jumped 469 px -- R54-3)
+      // (a row closed stays put: R54-3)
       const setOpen = (open) => {
         if (!open && !ul.hidden && row.isConnected) keepRowPlace(row, () => mark(false));
         else mark(open);
@@ -6595,8 +6599,14 @@ function buildTree() {
       pushState();
       viewChanged();
     };
-    label.onclick = (e) => select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
-    label.ondblclick = () => fitParts(ids);
+    // (the whole row selects, but its arrow and box: R58-1)
+    const ctl = (e) => e.target.closest('.tw[role=button], .cbwrap');
+    row.onclick = (e) => {
+      if (ctl(e)) return;
+      if (e.target !== label) label.focus({ preventScroll: true });
+      select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
+    };
+    row.ondblclick = (e) => { if (!ctl(e)) fitParts(ids); };
     return li;
   };
   // an unnamed root with a single branch (a typical STEP wrapper) is skipped:
