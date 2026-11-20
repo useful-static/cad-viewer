@@ -3189,6 +3189,24 @@ function focusInPanel(f, wasInTree) {
   return !!to;
 }
 
+// `change` keeps `el` in place: a spacer at its scroll box's foot (the list, else the drawer), gone at
+// the next scroll by hand (R54-3)
+function keepRowPlace(el, change) {
+  const tree = $('tree');
+  const box = tree.scrollHeight > tree.clientHeight + 1 && getComputedStyle(tree).overflowY !== 'visible' ? tree : $('parts');
+  const top = el.getBoundingClientRect().top;
+  change();
+  const d = el.getBoundingClientRect().top - top;
+  if (d < 0.5) return;
+  const want = box.scrollTop + d;
+  const pad = parseFloat(getComputedStyle(box).paddingBottom);
+  box.style.paddingBottom = `${pad + d}px`;
+  box.scrollTop = want;
+  // (the rest shorter than the box: its height too)
+  const short = want - box.scrollTop;
+  if (short > 0.5) { box.style.paddingBottom = `${pad + d + short}px`; box.scrollTop = want; }
+}
+
 function keepFocus() {
   let last = null;
   let inTree = false;
@@ -4127,7 +4145,7 @@ function updateButtons() {
   $('paintbtn').disabled = !(app.baseMesh && app.baseMesh.faces);
   const all = !sel.length;
   $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
-  $('partreset').hidden = $('partreset').disabled; // shown only when there is something to reset
+  // (kept in place, disabled: shown by a recolour it wrapped alone, the list 34 px lower -- R54-2)
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
   $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
     : 'Give the selected parts their scheme colour again';
@@ -5036,9 +5054,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   // (its gutter's width, for its right padding: R51-2)
   const gutter = () => { const w = info.offsetWidth - info.clientWidth; if (info.offsetWidth) document.documentElement.style.setProperty('--infosb', `${Math.max(0, w)}px`); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(gutter).observe(info);
-  // (and the list's, for its rows' right padding: a list scrolling by itself at 1280 put its counts
-  // 10 px inside the filter field's edge -- R53-2. It comes and goes with a row opened or closed, so
-  // read on a change of the list as well as of its size)
+  // (and the list's, for its rows: R53-2; read on a row opened or closed too)
   const treeGutter = () => { const w = tree.offsetWidth - tree.clientWidth; if (tree.offsetWidth) document.documentElement.style.setProperty('--treesb', `${Math.max(0, w)}px`); };
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(treeGutter).observe(tree);
   new MutationObserver(treeGutter).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
@@ -5064,7 +5080,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
     const lost = h - info.getBoundingClientRect().height;
     parts.style.paddingBottom = scrolls && was + lost > 0.5 ? `${was + lost}px` : '';
   };
-  const unspace = () => { parts.style.paddingBottom = ''; };
+  const unspace = () => { parts.style.paddingBottom = ''; tree.style.paddingBottom = ''; }; // (and a closed row's: R54-3)
   for (const ev of ['wheel', 'touchmove', 'keydown']) parts.addEventListener(ev, unspace, { passive: true });
   addEventListener('resize', unspace);
   app.unspaceParts = unspace; // (the drawer closed: setPanel)
@@ -5077,20 +5093,25 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   tree.addEventListener('keydown', (e) => { // (a key's selection that cuts the panel lets go, no mouse in the list: R18-3, R19-1)
     if (e.key !== 'Enter' && e.key !== ' ') return;
     setTimeout(() => {
-      if (info.scrollHeight <= info.clientHeight + 1 || tree.matches(':hover')) return;
+      if (info.scrollHeight <= info.clientHeight + 1 || overBelow()) return;
       release();
       document.activeElement?.scrollIntoView?.({ block: 'nearest' });
     }, 0);
   });
   // (a finger has no leave, and is not let go on its lift: that moved the list under it, 23-40 px,
   // the next tap taking another row -- a cut row scrolls inside the panel instead, R17-2)
-  tree.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
+  // (held over all the panel moves, the sidebar below it: let go at the list's edge, a press on the
+  // filter field after a pick missed, 21 of 26 -- R54-1)
+  const below = (n) => n instanceof Node && parts.contains(n) && !info.contains(n);
+  const overBelow = () => parts.matches(':hover') && !info.matches(':hover');
+  parts.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') release(); });
+  info.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') release(); });
   // (to the held panel itself -- a scroll box the browser lets Shift+Tab reach -- the hold stays, so
   // the focus has somewhere to be; released as it leaves: R46-2, the tabindex that was its fix
   // taking a click on the panel's text, R47-1)
-  tree.addEventListener('focusout', (e) => { if (e.relatedTarget !== info && !tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
-  info.addEventListener('focusout', (e) => { if (e.target === info && !tree.contains(e.relatedTarget) && !tree.matches(':hover')) release(); });
-  addEventListener('pointerdown', (e) => { if (!tree.contains(e.target)) release(); }, { capture: true, passive: true });
+  parts.addEventListener('focusout', (e) => { if (below(e.target) && e.relatedTarget !== info && !below(e.relatedTarget) && !overBelow()) release(); });
+  info.addEventListener('focusout', (e) => { if (e.target === info && !below(e.relatedTarget) && !overBelow()) release(); });
+  addEventListener('pointerdown', (e) => { if (!below(e.target)) release(); }, { capture: true, passive: true });
   addEventListener('resize', release);
   app.releaseInfo = () => { release(); unspace(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
 }
@@ -6499,11 +6520,16 @@ function buildTree() {
       // with → / ← as its keyboard shortcuts for the same expand/collapse.
       tw.setAttribute('role', 'button');
       tw.tabIndex = -1;
-      const setOpen = (open) => {
+      const mark = (open) => {
         ul.hidden = !open;
         tw.textContent = open ? '▾' : '▸';
         tw.setAttribute('aria-expanded', String(open));
         tw.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${label.textContent}`);
+      };
+      // (a row closed stays put: a drawer's scroll clamped, its top row jumped 469 px -- R54-3)
+      const setOpen = (open) => {
+        if (!open && !ul.hidden && row.isConnected) keepRowPlace(row, () => mark(false));
+        else mark(open);
       };
       // the top two levels start open -- but not a node whose rows are only its
       // own bodies (19 "COMPONENTn" rows would push every other part away);

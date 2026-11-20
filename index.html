@@ -632,7 +632,10 @@
   #colours input[type=color]:disabled { cursor:default; border-style:dashed; }
   #colours input[type=color]:disabled::-webkit-color-swatch { background:transparent !important; border:none; }
   #colours input[type=color]:disabled::-moz-color-swatch { background:transparent !important; border:none; }
-  #colours button[hidden] { display:none; }
+  /* the swatch, Paint and Reset wrap as one, the row's gap between them (R54-4); Reset as wide as
+     "Reset all", so its words for a selection or none never re-wrap the row (R54-2) */
+  #colours .group { gap:8px; }
+  #partreset { min-width:6em; }
   #cachebar { color:var(--dim); font-size:11px; padding:6px 10px; border-top:1px solid var(--line); display:flex; align-items:center; gap:8px; }
   #cachebar[hidden] { display:none; }
   #cacheinfo { flex:1; }
@@ -906,9 +909,9 @@
   <label id="sheetsrow" hidden title="Show or hide every flat sheet of the model at once: on a board its pads, silkscreen and labels (Undo steps back)"><input type="checkbox" id="sheets" checked autocomplete="off"> flat sheets (pads, labels) <span id="sheetscount"></span></label>
   <div id="colours"><label for="palette">Colours</label>
     <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select>
-    <input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">
+    <span class="group"><input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">
     <button id="paintbtn" aria-pressed="false" disabled title="Paint faces: while on, a click paints the face under it in the swatch's colour (Reset all, with nothing selected, clears them)">Paint</button>
-    <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></div>
+    <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></span></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
   <ul id="tree"></ul>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
