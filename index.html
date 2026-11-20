@@ -373,6 +373,10 @@
     max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); display:flex; flex-direction:column; }
   #tourcard > * { flex:none; }
   #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; } /* (a long caption scrolls, title and buttons kept: R70-2) */
+  /* (half the view while the maker shares a narrow one: a tall caption left it a strip -- R71-3;
+     below an embed's Fit and Open: R71-4) */
+  #stage.tournarrow:has(#touredit:not([hidden])) #tourcard { max-height:50%; }
+  #stage:has(#embedbar:not([hidden])) #tourcard { max-height:calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
   #tourcard[hidden] { display:none; }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
   /* the tour maker: a panel at the right of the view */
@@ -623,7 +627,7 @@
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   /* one focus ring for every control (the browser's white ring was on most,
      the accent on a few) */
-  :is(button, select, input, textarea, summary, label.btn, a.btn, #tree .label, [role=button]):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
+  :is(button, select, input, textarea, summary, label.btn, a.btn, #tree .label, [role=button], #tourbody):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
   /* (wraps rather than cut the scheme's name: "File colou" in a phone's drawer) */
   #colours { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   /* (its least its longest value's width: R53-1) */
@@ -773,14 +777,15 @@
     #panelbtn { display:inline-flex; align-items:center; justify-content:center; gap:5px; }
     /* open: the grey of an open menu (a disclosure), not a pressed tool's orange */
     body.panel-open #panelbtn { background:#3a4250; border-color:#566173; }
-    aside { grid-row:2; grid-column:1; z-index:3; justify-self:start; width:min(86vw, 340px); height:100%;
+    /* (z 5 and its scrim 4: over the view's tour maker (3) and card (2), under the help box (10) and
+       the picture toast (6) -- R70-1, R71-1, R71-2) */
+    aside { grid-row:2; grid-column:1; z-index:5; justify-self:start; width:min(86vw, 340px); height:100%;
       border-right:1px solid var(--line); box-shadow:4px 0 18px rgba(0,0,0,.4);
       overflow-y:auto; overscroll-behavior:contain;
       transform:translateX(-102%); visibility:hidden; transition:transform .22s ease, visibility 0s linear .22s; }
     body.panel-open aside { transform:none; visibility:visible; transition:transform .22s ease, visibility 0s; }
     aside #tree { flex:none; overflow:visible; } /* the panel scrolls as a whole */
-    #stage { isolation:isolate; } /* (the drawer over the view's own layers -- the tour maker: R70-1) */
-    #scrim { grid-row:2; grid-column:1; z-index:2; background:rgba(0,0,0,.35); display:block;
+    #scrim { grid-row:2; grid-column:1; z-index:4; background:rgba(0,0,0,.35); display:block;
       opacity:0; pointer-events:none; transition:opacity .22s; }
     body.panel-open #scrim { opacity:1; pointer-events:auto; }
     @media (prefers-reduced-motion: reduce) { aside, body.panel-open aside, #scrim { transition:none; } }

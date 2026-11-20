@@ -2247,8 +2247,7 @@ function startTour(tour, url, only = null) {
   // nothing selected while it plays (a selection greys the rest); leaving puts it back
   if (app.selected.size) select([], false);
   app.hover = 0;
-  // Paint's face colours, Measure's results and the hole table: no step holds them, so set aside
-  // while it plays, Measure off (R66-1); leaving puts them back
+  // Paint, Measure and the hole table set aside while it plays (R66-1)
   if (!prev) base.paint = app.paintFaces;
   if (app.paintFaces) setPaint(false);
   if (app.faceOverrides.size) { app.faceOverrides = new Map(); recolour(); }
@@ -2259,8 +2258,7 @@ function startTour(tour, url, only = null) {
     base.holesFor = app.holesFor;
     if (app.holesFor && app.measure) showHoles(null);
   }
-  // the tour's orientation while it plays (leaving puts the visitor's back,
-  // with the rest of their view)
+  // the tour's orientation while it plays (leaving puts the visitor's back)
   if (tour.orient && tour.orient !== app.cam.orient) {
     app.cam.orient = tour.orient;
     updateButtons();
@@ -7205,14 +7203,15 @@ function noSurface(ids, then) {
 // Fit, F, a row's double-click (R34-1)
 // (an open drawer closed, so what it does is seen: one rule with noSurface's -- R35-3, R36-2)
 const uncover = () => { if (panelOpen()) setPanel(false, true); };
-if (self.ResizeObserver) { // (R69-1, R69-2, R70-3, R70-4)
-  let h = 0;
-  const st = $('stage'), c = $('tourcard'), ro = new ResizeObserver(() => {
+if (self.ResizeObserver) { // (R69-1..R71-3)
+  let h = 0, open = false;
+  const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
+    if (open !== !te.hidden) { open = !te.hidden; h = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
     st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798);
-    const f = document.activeElement; if ($('touredit').contains(f)) f.scrollIntoView({ block: 'nearest' });
+    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   });
-  ro.observe(c); ro.observe(st);
+  ro.observe(c); ro.observe(st); ro.observe(te);
 }
 function fitParts(ids) {
   if (noSurface(ids, 'the whole model fitted')) { fitTo(drawnBox(null)); return; }
