@@ -1056,7 +1056,7 @@ export function createDxfView(canvas, drawing, cb = {}) {
     // pinch, as the 3D view's: R60-2)
     const r = canvas.getBoundingClientRect();
     const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
-    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) }; drag = null; } else drag = out ? null : xy(e);
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) }; drag = null; } else if (pts.size === 1) drag = out ? null : xy(e); // (a third finger is no pan, as in 3D: R61-3)
   };
   const onMove = (e) => {
     const p = xy(e);

@@ -3212,8 +3212,9 @@ function pressFocus(row, name) {
     if (name.matches(':focus-visible')) name.blur(); // (a key's ring off at a press: R60-5)
     calm();
   });
-  // (the box's label column focused the box after the press: R60-1)
-  row.addEventListener('focusin', (e) => { if (e.target.type === 'checkbox') calm(); });
+  // (R60-1, R61-1, R61-2)
+  row.addEventListener('focusin', (e) => { if (e.target !== name) calm(); });
+  row.addEventListener('mouseup', (e) => { if (e.button) calm(); });
 }
 
 // `change` keeps `el` in place (R55-1)
