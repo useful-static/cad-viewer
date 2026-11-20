@@ -1058,10 +1058,10 @@ function drawTriad() {
     const l = document.createElementNS(ns, 'line');
     l.setAttribute('x1', 0); l.setAttribute('y1', 0);
     l.setAttribute('x2', (a.x * R).toFixed(1)); l.setAttribute('y2', (a.y * R).toFixed(1));
-    l.setAttribute('stroke', a.col); l.setAttribute('opacity', op);
+    l.setAttribute('stroke', a.col); l.setAttribute('opacity', op); l.setAttribute('class', `a${a.n}`);
     const t = document.createElementNS(ns, 'text');
     t.setAttribute('x', (a.x * (R + 8)).toFixed(1)); t.setAttribute('y', (a.y * (R + 8)).toFixed(1));
-    t.setAttribute('fill', a.col); t.setAttribute('opacity', op);
+    t.setAttribute('fill', a.col); t.setAttribute('opacity', op); t.setAttribute('class', `a${a.n}`);
     t.textContent = a.n;
     svg.append(l, t);
   }

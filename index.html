@@ -429,6 +429,10 @@
   #triad line { stroke-width:2.5; stroke-linecap:round; }
   #triad text { font:bold 11px system-ui, sans-serif; text-anchor:middle; dominant-baseline:central; paint-order:stroke; stroke:#000; stroke-width:2.5px; }
   #stage[data-bg="paper"] #triad text { stroke:#fff; }
+  /* (on paper, colours that read on it, as Measure's: R77-1) */
+  #stage[data-bg="paper"] #triad .aX { stroke:#c62828; } #stage[data-bg="paper"] #triad text.aX { fill:#c62828; stroke:#fff; }
+  #stage[data-bg="paper"] #triad .aY { stroke:#2e7d32; } #stage[data-bg="paper"] #triad text.aY { fill:#2e7d32; stroke:#fff; }
+  #stage[data-bg="paper"] #triad .aZ { stroke:#1f5fbf; } #stage[data-bg="paper"] #triad text.aZ { fill:#1f5fbf; stroke:#fff; }
   #measvg, #measlabels { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
   /* Measure's loupe: a finger aiming sees the point under it at 2x, beside it */
   #measloupe { position:absolute; width:120px; height:120px; border-radius:50%; pointer-events:none;
