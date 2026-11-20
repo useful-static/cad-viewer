@@ -3189,8 +3189,8 @@ function focusInPanel(f, wasInTree) {
   return !!to;
 }
 
-// A spacer at a scroll box's foot for height taken away (R48-1, R54-3), trimmed as it scrolls back:
-// dropped at once, a swipe threw the content 434 px (R55-3)
+// A spacer at a scroll box's foot for height taken away (R48-1, R54-3), trimmed as it scrolls back
+// (R55-3)
 const spacerOf = (box) => box._sp || 0;
 function setSpacer(box, s) {
   if (!box._sp) box._pb0 = parseFloat(getComputedStyle(box).paddingBottom);
@@ -3199,12 +3199,12 @@ function setSpacer(box, s) {
 }
 function trimSpacer(box) {
   if (!box._sp) return;
-  const need = box.scrollTop + box.clientHeight - (box.scrollHeight - box._sp);
+  // (none at the top: R57-1)
+  const need = box.scrollTop < 1 ? 0 : box.scrollTop + box.clientHeight - (box.scrollHeight - box._sp);
   if (need < box._sp - 1) setSpacer(box, Math.max(0, Math.ceil(need))); // (a px a wheel notch: R56-2)
 }
 
-// `change` keeps `el` in place, its box (the list, else the drawer) padded from its content's end:
-// scrollHeight is the box's own when the rest is shorter (R55-1)
+// `change` keeps `el` in place, its box padded from its content's end, not scrollHeight (R55-1)
 function keepRowPlace(el, change) {
   const tree = $('tree');
   const box = tree.scrollHeight > tree.clientHeight + 1 && getComputedStyle(tree).overflowY !== 'visible' ? tree : $('parts');
@@ -5071,9 +5071,10 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(gutter).observe(info);
   // (and the list's, for its rows: R53-2; read on a row opened or closed too)
   const treeGutter = () => { const w = tree.offsetWidth - tree.clientWidth; if (tree.offsetWidth) document.documentElement.style.setProperty('--treesb', `${Math.max(0, w)}px`); };
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(treeGutter).observe(tree);
-  // (spacers trimmed as it changes: R56-1)
-  new MutationObserver(() => { treeGutter(); trimSpacer(parts); trimSpacer(tree); }).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] });
+  // (spacers trimmed as it changes or resizes: R56-1, R57-1)
+  const onTree = () => { treeGutter(); trimSpacer(parts); trimSpacer(tree); };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(onTree).observe(tree);
+  new MutationObserver(onTree).observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] });
   const hold = () => {
     if (info.style.height || !info.offsetHeight) return;
     // (its height unrounded: 168 of a 168.17 px panel left it a scroll box, a Tab stop with the

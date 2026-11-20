@@ -630,10 +630,11 @@
   /* with nothing selected the picker has no colour to show: an empty dashed
      swatch, not a black one that reads as "black" */
   #colours input[type=color]:disabled { cursor:default; border-style:dashed; }
-  /* (the chip rounded inside the rounded outline, no second border: R56-3) */
+  /* (the chip rounded inside the rounded outline, R56-3; its edge the dim grey, 3:1 on the panel and
+     on black -- a black part's chip read as the empty swatch: R57-2) */
   #colours input[type=color]::-webkit-color-swatch-wrapper { padding:3px 1px; }
-  #colours input[type=color]::-webkit-color-swatch { border:none; border-radius:2px; }
-  #colours input[type=color]::-moz-color-swatch { border:none; border-radius:2px; }
+  #colours input[type=color]::-webkit-color-swatch { border:1px solid var(--dim); border-radius:2px; }
+  #colours input[type=color]::-moz-color-swatch { border:1px solid var(--dim); border-radius:2px; }
   #colours input[type=color]:disabled::-webkit-color-swatch { background:transparent !important; border:none; }
   #colours input[type=color]:disabled::-moz-color-swatch { background:transparent !important; border:none; }
   /* the swatch, Paint and Reset wrap as one, the row's gap between them (R54-4); Reset as wide as
