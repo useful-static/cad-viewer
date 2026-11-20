@@ -7838,16 +7838,13 @@ function wireInput() {
   app.recorder = createTourRecorder({
     capture: captureStep,
     captureNote: () => captureNote,
-    preview: (tour, from, play) => { endTour(); if (!startTourIn(tour, null)) return; if (from) showTourStep(from); setTourPlaying(play); },
-    stopPreview: () => endTour(),
+    preview: (tour, from, play) => { endTour(); if (!startTourIn(tour, null)) return; app.previewing = true; if (from) showTourStep(from); setTourPlaying(play); },
+    stopPreview: () => { if (app.previewing) endTour(); app.previewing = false; },
     modelUrl: () => {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
     orient: () => app.cam.orient || null,
-    // the model open now, by its content (the same file opened again is the same model)
-    // (and the unit it was read in: the same file read in inches is another size, which steps
-    // taken in mm do not fit)
-    // (and the unit it is read in, where it has a reading to choose: null for a STEP or a .cadmesh)
+    // the model open now, by its content, and the unit it is read in (null for a STEP or a .cadmesh)
     model: () => (app.header ? { key: modelKeyOf(app.header), unit: tourReading(), name: app.sourceName || 'another model' } : null),
     save: (text, name) => downloadText(text, name, 'application/json'),
     validate: (text) => parseTour(text, location.href),
@@ -7855,7 +7852,7 @@ function wireInput() {
     video: tourVideo,
     announce,
   });
-  $('tourmake').onclick = () => { closeMenus(); uncover(); app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
+  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = false; app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
