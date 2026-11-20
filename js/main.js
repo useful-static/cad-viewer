@@ -1689,7 +1689,9 @@ function setPaint(on) {
   if (on && app.tour) { tell('Paint is off while a tour plays: a tour step holds no face colours', 3000); on = false; }
   if (on && app.measure && app.measure.on) app.measure.setOn(false);
   if (on && app.explode.on) setExplode(false);
+  const was = app.paintFaces;
   app.paintFaces = on && !!(app.baseMesh && app.baseMesh.faces);
+  if (was && !app.paintFaces) tell('paint off'); // (R65-1)
   $('paintbtn').setAttribute('aria-pressed', String(app.paintFaces));
   if (on && !app.paintFaces) tell('this model has no b-rep faces to paint', 3000);
   else if (on) tell(`Paint: ${tapWord()} a face to paint it in the swatch's colour`, 3000);
@@ -4173,7 +4175,6 @@ function updateButtons() {
   $('paintbtn').hidden = $('paintbtn').disabled; // (no faces: R55-4)
   const all = !sel.length;
   $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
-  // (kept in place, disabled: R54-2)
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
   $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
     : 'Give the selected parts their scheme colour again';
@@ -7344,8 +7345,7 @@ function wireInput() {
     // view: a press on them is theirs. Capturing it for an orbit retargeted
     // the click to the view, so "Choose a file…" and Cancel never received it.
     if (e.target.closest(OVER_VIEW)) return;
-    // (a finger Chrome moved here from beside the view -- the sidebar, under the toolbar -- neither
-    // picks nor orbits, but counts toward a pinch: R59-2, R60-2, R60-4)
+    // (a finger from beside the view: no pick or orbit, but a pinch's -- R59-2, R60-2, R60-4)
     const r = stage.getBoundingClientRect();
     const out = e.pointerType === 'touch' && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
     // embedded and not yet active: no capture, no gesture; a press that

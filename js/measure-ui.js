@@ -879,7 +879,7 @@ export function createMeasure(deps) {
     // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     const plain = on && scene.mesh && !scene.mesh.faces;
-    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : '', plain ? 6000 : 3000, on ? 'measure on' : 'measure off');
+    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : 'measure off', plain ? 6000 : 3000, on ? 'measure on' : 'measure off'); // (R65-1)
     if (focus) (on ? $('measoff') : offFocus()).focus();
   }
 
