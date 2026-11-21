@@ -414,6 +414,8 @@
   #tourcard .tourbar button { min-width:32px; min-height:26px; display:inline-flex; align-items:center; justify-content:center; }
   #tourcount { color:var(--dim); font-size:12px; min-width:3.5em; text-align:center; }
   #tourcard.one :is(#tourplay, #tourprev, #tourcount, #tournext) { display:none; } /* (one step: nothing to play or step to -- R83-2) */
+  /* (and its × at the top right, not alone on a row of its own: R84-3) */
+  #tourcard.one { padding-right:52px; } #tourcard.one .tourbar { display:contents; } #tourcard.one #tourexit { position:absolute; top:6px; right:6px; }
   #tourexit { margin-left:auto; }
   #tourcard .tourbar svg, #secsel svg, #measundo svg { vertical-align:-2px; }
   #tourplay .tp-pause, #tourplay.playing .tp-play { display:none; }

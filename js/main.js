@@ -2106,7 +2106,7 @@ function holdStep() {
     if (now - t0 >= s.hold * 1000) {
       app.tourRaf = 0;
       if (t.i < t.tour.steps.length - 1) showTourStep(t.i + 1);
-      else if (t.tour.loop && !t.recording) showTourStep(0); // (a video plays it once)
+      else if (t.tour.loop && !t.recording && t.i > 0) showTourStep(0); // (a video plays it once; one step does not loop: R84-1)
       else setTourPlaying(false);
       return;
     }
@@ -2189,7 +2189,9 @@ function showTourStep(i) {
   // (not right after the tour's start, which told every part it lacks: r46 A4, r47 A7)
   tellStepMissing(t);
   // (a step with no text read without a trailing space: r49 Q7)
-  announce(`Step ${t.i + 1} of ${n}${$('tourtitle').textContent ? `: ${$('tourtitle').textContent}` : ''}.${s.text ? ` ${s.text}` : ''}`);
+  // (one step: no count said, as none is shown -- R84-4)
+  const head = [n > 1 ? `Step ${t.i + 1} of ${n}` : '', $('tourtitle').textContent].filter(Boolean).join(': ');
+  announce(head ? `${head}.${s.text ? ` ${s.text}` : ''}` : s.text || '');
 }
 
 // only: a step id (?step=<id>, a v2 tour): that step alone, held, with no
@@ -2698,7 +2700,11 @@ function wireLooks() {
   // any input is the visitor taking the view: the turntable waits -- but not a press on a tour's
   // card, whose Pause it paused and whose click then played again (R79-1)
   for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
-    window.addEventListener(t, (e) => { if (!(e.target instanceof Element && e.target.closest('#tourcard'))) app.lastInput = performance.now(); }, { capture: true, passive: true });
+    window.addEventListener(t, (e) => {
+      // (nor a tour's step key: R84-2)
+      if (app.tour && /^(Arrow(Left|Right)|Page(Up|Down))$/.test(e.key)) return;
+      if (!(e.target instanceof Element && e.target.closest('#tourcard'))) app.lastInput = performance.now();
+    }, { capture: true, passive: true });
   }
   const mq = matchMedia('(prefers-reduced-motion: reduce)');
   const sync = () => {
