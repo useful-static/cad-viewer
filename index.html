@@ -370,14 +370,12 @@
   #tourcard { position:absolute; left:12px; bottom:calc(12px + max(var(--optbar-h, 0px), var(--tour-floor, 0px))); z-index:2;
     width:min(440px, calc(100% - 24px)); box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px;
     background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px;
-    max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); display:flex; flex-direction:column; }
+    max-height:min(50%, calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); display:flex; flex-direction:column; }
   #tourcard > * { flex:none; }
   #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; } /* (a long caption scrolls, title and buttons kept: R70-2) */
-  /* (half the view while the maker shares a narrow one: a tall caption left it a strip -- R71-3;
-     below an embed's Fit and Open: R71-4) */
-  #stage.tournarrow:has(#touredit:not([hidden])) #tourcard { max-height:50%; }
-  #stage.tourshort #tourcard { max-height:50%; } /* (a long caption on a short view scrolls, the model kept in sight: R80-2) */
-  #stage:has(#embedbar:not([hidden])) #tourcard { max-height:calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
+  /* (at most half the view at any size, the model kept in sight -- R71-3, R80-2, R81-3; and below an
+     embed's Fit and Open: R71-4, R81-1) */
+  #stage:has(#embedbar:not([hidden])) #tourcard { max-height:min(50%, calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); }
   #tourcard[hidden] { display:none; }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
   /* the tour maker: a panel at the right of the view */

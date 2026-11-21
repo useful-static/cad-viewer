@@ -2154,8 +2154,12 @@ function showTourStep(i) {
   const s = t.tour.steps[t.i];
   $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '');
   $('tourtitle').hidden = !$('tourtitle').textContent;
-  $('tourbody').textContent = s.text;
-  $('tourbody').hidden = !s.text;
+  const cb = $('tourbody'), had = document.activeElement === cb;
+  cb.textContent = s.text;
+  cb.hidden = !s.text;
+  cb.scrollTop = 0; // (each caption from its start: R81-2)
+  // (a focused caption that no longer scrolls cannot keep the focus: to the step buttons -- R81-5)
+  if (had && !(cb.scrollHeight > cb.clientHeight)) $(t.i === n - 1 ? 'tourprev' : 'tournext').focus();
   $('tourcount').textContent = `${t.i + 1} / ${n}`;
   $('tourprev').disabled = t.i === 0;
   $('tournext').disabled = t.i === n - 1;
@@ -7168,8 +7172,7 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
-    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); st.classList.toggle('tourshort', st.clientHeight < 600);
-    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
+    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth);    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   });
   ro.observe(c); ro.observe(st); ro.observe(te);
 }

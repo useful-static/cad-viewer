@@ -29,7 +29,7 @@ await test('tourPictures: the tour ended while step 2\'s picture is taken -- no 
   const app = { tour: null, header: { meshes: [1] }, explode: { on: false }, renderer: {}, measure: null, tourRaf: 0, cam: { ortho: false } };
   let renders = 0, zipped = null, saved = null, endTourRef = null;
   const env = {
-    $: (id) => (els[id] ||= el()), app,
+    $: (id) => (els[id] ||= el()), app, document: { activeElement: null },
     startTourIn: (tour) => { app.tour = { tour, i: 0, saved: null, base: { styleChoice: null, explode: { t: 0, mode: null } }, playing: false }; },
     setTourPlaying() {}, applyStepState() {}, stepPose: () => null, flyTo() {}, tellStepMissing() {}, announce() {},
     cancelFlight() {}, setExplode() {}, setExplodeMode() {}, holdStep() {}, topOfBox() {}, drawnBox() {}, tourParts: () => ({ ids: [] }),
