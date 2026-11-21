@@ -149,9 +149,11 @@ export function createTourRecorder(api) {
   }
 
   function select(i) {
+    const inList = el.list.contains && el.list.contains(document.activeElement);
     draft.sel = i;
     renderList();
     fillEditor();
+    if (inList && rows[i]) rows[i][0].focus(); // (the rebuilt list keeps the focus on the step: R80-1)
   }
 
   function move(i, by) {

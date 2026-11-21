@@ -5430,18 +5430,10 @@ function syncUnitParam() {
 }
 // which model a list's tour auto-played for: the URL it was opened from (else its data)
 const autoTourKey = () => app.sourceUrl || app.header;
-// An entry's tour, File > "Tour: X" and the one the entry plays itself, by one rule (r68 A2: the
-// menu's did not wait for the ?add=s, so the model joining ended it and the entry's first tour
-// started in its place): it first waits for the address's ?add=s -- a model joining ends a tour
-// over the scene (showScene) -- and starts only over the model it was asked for, by its URL's key
-// and its open, and not while the model is on its way out: the visitor's pick downloading, or its
-// re-read in another unit, which ends the tour as it lands (it started, scaled to the old reading,
-// and was gone without a word: r69 A3)
-// (and for the shown model's re-read in another unit: a File > "Tour: X" clicked during it was
-// dropped without a word when its tour came first, and played when the re-read did -- r70 A1)
-// (and for the visitor's own Add model…: its model joining ended the entry's tour when the tour's
-// read came first, and the tour played when the add did -- the one act, two end states: r71, the
-// differential's src+late list run)
+// An entry's tour, File > "Tour: X" and the one the entry plays itself, by one rule (r68 A2): it
+// first waits for the address's ?add=s, the shown model's re-read in another unit and the visitor's
+// own Add model… (a model joining ends a tour: r69 A3, r70 A1, r71), and starts only over the model
+// it was asked for, by its URL's key and its open, not while that model is on its way out.
 const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain, app.addLoad].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
 // The tour's file read, and then every load it waits for ended -- one begun during the read too, a few
 // rounds, each a load's end: the menu's and the entry's own by one helper (the entry's waited once,
@@ -6005,7 +5997,7 @@ function tessellate(buf, format, seq, name, threads) {
       if (stale(seq)) return;
       const now = performance.now();
       const clock = fmt((now - t0) / 1000);
-      let frac = null, detail = `${stage} · ${clock}`;
+      let frac = null, detail = `${stage} · ${clock}`, almost = false;
       if (!conv && tStart && forecastTotal(fc) > 3) {
         // the stock converter reports nothing: the forecast alone, never shown as done
         const run = (now - tStart) / 1000, tot = forecastTotal(fc);
@@ -6036,11 +6028,12 @@ function tessellate(buf, format, seq, name, threads) {
         const early = now - t0 < 3000;
         const leftText = typeof left !== 'number' ? (early ? '' : 'taking longer than expected')
           : left < 1 ? 'almost done' : `~${fmt(left)} left (estimate)`;
-        const pct = (st === 1 || st === 2) && f < 1 && leftText !== 'almost done' ? ` · ${Math.round(f * 100)}%` : '';
+        almost = leftText === 'almost done';
+        const pct = (st === 1 || st === 2) && f < 1 && !almost ? ` · ${Math.round(f * 100)}%` : '';
         detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 ? ` ${Math.round(conv.fraction * 100)}%` : ''} · ${clock}`
+        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''} · ${clock}` // (as the card: R80-5)
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
     };
@@ -7175,7 +7168,7 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
-    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth);
+    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); st.classList.toggle('tourshort', st.clientHeight < 600);
     const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   });
   ro.observe(c); ro.observe(st); ro.observe(te);
@@ -7965,7 +7958,9 @@ function wireInput() {
     // a tour: → / PageDown the next step, ← / PageUp the one before, Esc
     // leaves it (ahead of the camera's arrows; a control's own arrows win)
     if (app.tour && !e.defaultPrevented && !(t.type === 'range' || (t instanceof Node && $('tree').contains(t)))) {
-      const go = { ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[e.key];
+      // (PageDown / PageUp page a focused caption that scrolls, as its arrows do: R80-3)
+      const cap = t.id === 'tourbody' && t.scrollHeight > t.clientHeight;
+      const go = cap && /^Page/.test(e.key) ? 0 : { ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[e.key];
       if (go) { e.preventDefault(); showTourStep(app.tour.i + go); return; }
       if (e.key === 'Escape') { e.preventDefault(); endTour(); return; }
       // Space plays / pauses (a focused button's own Space presses it)

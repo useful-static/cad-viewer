@@ -376,6 +376,7 @@
   /* (half the view while the maker shares a narrow one: a tall caption left it a strip -- R71-3;
      below an embed's Fit and Open: R71-4) */
   #stage.tournarrow:has(#touredit:not([hidden])) #tourcard { max-height:50%; }
+  #stage.tourshort #tourcard { max-height:50%; } /* (a long caption on a short view scrolls, the model kept in sight: R80-2) */
   #stage:has(#embedbar:not([hidden])) #tourcard { max-height:calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
   #tourcard[hidden] { display:none; }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
@@ -405,7 +406,7 @@
   #testeps .tename { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* (a stand-in name, and the title field's placeholder that repeats it: R74-5, at 4.5:1 -- R79-2) */
   #testeps .tename.untitled, #touredit input::placeholder { color:#aab3bf; opacity:1; } #testeps .tename.untitled { font-style:italic; }
-  html.light :is(#testeps .tename.untitled, #touredit input::placeholder) { color:var(--dim); }
+  html.light #testeps .tename.untitled { color:var(--dim); } html.light #touredit input::placeholder { color:var(--dim); } /* (a pseudo-element is not allowed in :is(): R80-4) */
   #testeps li button:not(.tename) { padding:3px 6px; } /* (the height of the step name beside it) */
   #touredit .terow label { display:inline-flex; align-items:center; gap:4px; } /* (Loop's box on its word's line) */
   #tourcard b { display:block; font-size:15px; margin-bottom:2px; }
