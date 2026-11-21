@@ -105,8 +105,10 @@ export function createTourRecorder(api) {
   const toJSON = () => draftToTour({ ...draft, orient: draft.orient || (api.orient ? api.orient() : null) }, draft.modelUrl || api.modelUrl());
   const text = () => JSON.stringify(toJSON(), null, 1);
 
+  const rows = []; // each step's [name, ↑, ↓, ×], as last drawn
   function renderList() {
     el.list.textContent = '';
+    rows.length = 0;
     draft.steps.forEach((s, i) => {
       const li = document.createElement('li');
       li.className = i === draft.sel ? 'sel' : '';
@@ -126,6 +128,7 @@ export function createTourRecorder(api) {
       del.textContent = '×'; del.setAttribute('aria-label', `Delete step ${i + 1}`);
       del.onclick = () => remove(i);
       li.append(name, up, down, del);
+      rows.push([name, up, down, del]);
       el.list.append(li);
     });
     el.step.hidden = draft.sel < 0;
@@ -157,6 +160,11 @@ export function createTourRecorder(api) {
     [draft.steps[i], draft.steps[j]] = [draft.steps[j], draft.steps[i]];
     if (draft.sel === i) draft.sel = j; else if (draft.sel === j) draft.sel = i;
     renderList();
+    fillEditor(); // (its stand-in name in the title field: R79-6)
+    // (the focus follows the step to its new row, on the same arrow if it can still move: R79-3)
+    const b = rows[j];
+    (b[by < 0 ? 1 : 2].disabled ? b[by < 0 ? 2 : 1] : b[by < 0 ? 1 : 2]).focus();
+    note(`step ${i + 1} moved to ${j + 1}`);
   }
 
   function remove(i) {
@@ -167,6 +175,9 @@ export function createTourRecorder(api) {
     if (draft.sel >= draft.steps.length) draft.sel = draft.steps.length - 1;
     renderList();
     fillEditor();
+    // (the focus to the × of the step now in its place, else the one above, else Add step: R79-3)
+    const row = rows[Math.min(i, draft.steps.length - 1)];
+    (row ? row[3] : el.add).focus();
     note(`step ${i + 1} deleted`);
   }
 

@@ -678,7 +678,7 @@ await test('tour-recorder.js: a tour names its model; Add numbers its steps from
   try {
     const els = new Map();
     const $ = (id) => { if (!els.has(id)) els.set(id, stub()); return els.get(id); };
-    const plain = (tag) => ({ tag, kids: [], textContent: '', append(...c) { this.kids.push(...c); }, setAttribute() {} });
+    const plain = (tag) => ({ tag, kids: [], textContent: '', append(...c) { this.kids.push(...c); }, setAttribute() {}, focus() {} });
     const list = plain('ol');
     Object.defineProperty(list, 'textContent', { set() { list.kids = []; }, get() { return ''; } });
     els.set('testeps', list);

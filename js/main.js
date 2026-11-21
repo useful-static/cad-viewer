@@ -2456,11 +2456,11 @@ const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
 // the GPU, rendered at twice the view's size with its caption painted in;
 // the pictures zipped, in order. -> the number of pictures
 // the maker's tour (Show, Preview, an export); its close gives back the watched one (R74-2, R76-1)
-function makerTour(tour) {
+function makerTour(tour, at = 0) {
   const t = app.tour;
   if (t && t !== app.previewing) app.watched = { t: t.full || t.tour, u: t.url, i: t.i, p: t.playing, h: app.header, o: t.full && t.tour !== t.full ? t.tour.steps[0].id : null };
   endTour(); app.inMaker = true;
-  startTourIn(tour, null); // (scaled to the reading: js/tour.js tourAt)
+  startTourIn(tour, null, null, at); // (scaled to the reading: js/tour.js tourAt)
   app.inMaker = false;
   return (app.previewing = app.tour);
 }
@@ -2689,9 +2689,10 @@ function wireLooks() {
     queueFrame();
   };
   $('turntable').onclick = () => { app.turntable = !app.turntable && !reducedMotion(); press(); turn(); };
-  // any input is the visitor taking the view: the turntable waits
+  // any input is the visitor taking the view: the turntable waits -- but not a press on a tour's
+  // card, whose Pause it paused and whose click then played again (R79-1)
   for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
-    window.addEventListener(t, () => { app.lastInput = performance.now(); }, { capture: true, passive: true });
+    window.addEventListener(t, (e) => { if (!(e.target instanceof Element && e.target.closest('#tourcard'))) app.lastInput = performance.now(); }, { capture: true, passive: true });
   }
   const mq = matchMedia('(prefers-reduced-motion: reduce)');
   const sync = () => {
@@ -2891,21 +2892,11 @@ function undoVisibility() {
 }
 
 // ---------- toolbar menus ----------
-// The view presets, the Save group, the rest of View and Show stand in the
-// toolbar row where it has room for them and fold behind a menu button where
-// it has not, in that order (FOLD_ORDER): the seven presets are the widest
-// and the least needed in the row (the number keys reach four of them), so
-// they go first, and the modes (Ortho, Z up, Section, Style) stay in view on
-// a laptop-width window. The presets are a menu inside View: once View folds
-// they are unfolded again, into its panel. Whether the row fits is MEASURED
-// (one row on a wrapping desktop toolbar, no sideways scroll on the narrow
-// one), so a width breakpoint cannot go stale as labels or fonts change.
-// It is measured with
-// Save .cadmesh counted as shown, so a load that enables it never refolds
-// the row. The toolbar holds only modes and actions; a tool's own controls
-// are in the options bar, so turning a tool on never refolds it either.
-// In the narrow layout the Save group is File: Open… moves into it, and it
-// is always folded.
+// The view presets, the Save group, the rest of View and Show stand in the toolbar row where it
+// has room and fold behind a menu button where it has not, in FOLD_ORDER (the presets first, the
+// modes kept in view on a laptop). Whether the row fits is MEASURED, never a width breakpoint,
+// with Save .cadmesh counted as shown so a load never refolds it; a tool's own controls are in the
+// options bar. In the narrow layout the Save group is File, always folded, Open… inside it.
 
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
@@ -7811,12 +7802,12 @@ function wireInput() {
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
   // a press in a caption that scrolls takes the focus there, so the keys scroll it (R72-3)
-  $('tourbody').addEventListener('mousedown', (e) => { const b = e.currentTarget; if (b.scrollHeight > b.clientHeight) b.focus({ preventScroll: true, focusVisible: false }); });
+  $('tourbody').addEventListener('click', (e) => { const b = e.currentTarget; if (b.scrollHeight > b.clientHeight) b.focus({ preventScroll: true, focusVisible: false }); });
   // the tour maker: File > Make a tour… (a tour playing is opened in it)
   app.recorder = createTourRecorder({
     capture: captureStep,
     captureNote: () => captureNote,
-    preview: (tour, from, play) => { if (!makerTour(tour)) return; if (from) showTourStep(from); setTourPlaying(play); },
+    preview: (tour, from, play) => { if (makerTour(tour, from || 0)) setTourPlaying(play); }, // (at its step: R79-5)
     stopPreview: () => { // (R73-1, R74-1)
       const w = app.watched;
       if (app.tour && app.tour === app.previewing) endTour(); // (R75-1..3: its step, its play, on its model only)

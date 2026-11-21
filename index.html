@@ -403,7 +403,9 @@
   #testeps li::before { content:counter(step); color:var(--dim); min-width:1.6em; text-align:right; padding-right:2px; }
   #testeps li.sel .tename { border-color:var(--acc); }
   #testeps .tename { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #testeps .tename.untitled { color:var(--dim); font-style:italic; } /* (a stand-in name: R74-5) */
+  /* (a stand-in name, and the title field's placeholder that repeats it: R74-5, at 4.5:1 -- R79-2) */
+  #testeps .tename.untitled, #touredit input::placeholder { color:#aab3bf; opacity:1; } #testeps .tename.untitled { font-style:italic; }
+  html.light :is(#testeps .tename.untitled, #touredit input::placeholder) { color:var(--dim); }
   #testeps li button:not(.tename) { padding:3px 6px; } /* (the height of the step name beside it) */
   #touredit .terow label { display:inline-flex; align-items:center; gap:4px; } /* (Loop's box on its word's line) */
   #tourcard b { display:block; font-size:15px; margin-bottom:2px; }
