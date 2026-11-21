@@ -22,7 +22,7 @@ const cut = (head) => { const i = src.indexOf(head); if (i < 0) throw new Error(
 const line = (head) => { const i = src.indexOf(head); if (i < 0) throw new Error(`main.js has no ${head}`); return src.slice(i, src.indexOf('\n', i)); };
 
 await test('tourPictures: the tour ended while step 2\'s picture is taken -- no throw, step 1\'s picture zipped and saved (r117 M1)', async () => {
-  const code = [cut('function makerTour(tour, at = 0) {'), cut('async function tourPictures(tour) {'), cut('function showTourStep(i) {'), cut('function endTour(restore = true) {')].join('\n')
+  const code = [line('const stepTitle = '), line('const markScrolls = '), cut('function makerTour(tour, at = 0) {'), cut('async function tourPictures(tour) {'), cut('function showTourStep(i) {'), cut('function endTour(restore = true) {')].join('\n')
     .replace("await import('./export-mesh.js')", 'await importExport()');
   const el = () => ({ textContent: '', hidden: false, disabled: false, classList: { add() {}, remove() {}, toggle() {} } });
   const els = {};

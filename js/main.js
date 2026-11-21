@@ -2147,20 +2147,22 @@ function markStarted(t, told) {
   setTimeout(() => { t.startedNow = false; }, 0);
 }
 
+// a step's title on the card, a picture and a video (R87-5, R88-2, R88-3)
+const stepTitle = (tour, i) => { const s = tour.steps[i]; return s.title || (i === 0 ? tour.title : '') || (s.text || tour.steps.length > 1 ? '' : 'Step 1'); };
+// (R87-1, R88-1)
+const markScrolls = (cb) => { cb.classList.remove('scrolls'); cb.classList.toggle('scrolls', cb.scrollHeight > cb.clientHeight); };
 function showTourStep(i) {
   const t = app.tour;
   const n = t.tour.steps.length;
   t.i = Math.max(0, Math.min(n - 1, i));
   const s = t.tour.steps[t.i];
-  // (a wordless step named as the maker names it: R87-5)
-  $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '') || (s.text ? '' : `Step ${t.i + 1}`);
+  $('tourtitle').textContent = stepTitle(t.tour, t.i);
   $('tourtitle').hidden = !$('tourtitle').textContent;
   const cb = $('tourbody'), had = document.activeElement === cb, ring = had && cb.matches(':focus-visible');
   cb.textContent = s.text;
   cb.hidden = !s.text;
   cb.scrollTop = 0; // (each caption from its start: R81-2)
-  // (R87-1)
-  cb.classList.remove('scrolls'); cb.classList.toggle('scrolls', cb.scrollHeight > cb.clientHeight);
+  markScrolls(cb);
   $('tourcount').textContent = `${t.i + 1} / ${n}`;
   $('tourcard').classList.toggle('one', n === 1);
   $('tourprev').disabled = t.i === 0;
@@ -2497,7 +2499,7 @@ async function tourPictures(tour) {
       const pic = await renderPicture({ scale: 2, bg: 'view', sel: false });
       if (!pic || app.tour !== t) break;
       const s = tour.steps[i];
-      paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, s.title || (i === 0 ? tour.title : ''), s.text);
+      paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, stepTitle(tour, i), s.text);
       const png = await new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
       files.push([`${String(i + 1).padStart(2, '0')}-${slugOf(s.title || `step ${i + 1}`)}.png`, new Uint8Array(await png.arrayBuffer())]);
     }
@@ -2540,7 +2542,7 @@ async function tourVideo(tour) {
     const scale = out.width / Math.max(1, box.clientWidth);
     app.measure.paint(ctx, scale, !!currentStyle().paper);
     const s = app.tour === t ? t.tour.steps[t.i] : null;
-    if (s) paintCaption(ctx, out.width, out.height, scale, s.title || (t.i === 0 ? t.tour.title : ''), s.text);
+    if (s) paintCaption(ctx, out.width, out.height, scale, stepTitle(t.tour, t.i), s.text);
     raf = requestAnimationFrame(draw);
   };
   rec.start(250);
@@ -7173,7 +7175,7 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
-    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth);    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
+    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); if (!c.hidden) markScrolls($('tourbody'));    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   });
   ro.observe(c); ro.observe(st); ro.observe(te);
 }
@@ -8177,11 +8179,8 @@ function startUpLoad(url) {
 // address that names a model -- ?src=, or a place in its list (?model=, ?index=, a relative ?src=) --
 // is for that model, the one its list has there once read, and for nothing while the list has not
 // answered, has failed, or lacks the place; an address that names none is for a model opened from
-// the device, never a list's first (review r16 M2: a link made over a file from the device names no
-// model, and carries the page's lists). The one rule for the view a page opens with, a #view= edited
-// in, Back's, and the view waiting on ?add=s. (Decided by the resolved URL alone, a named place the
-// list had not resolved read as naming none, and its view went to the visitor's file: r59 A1; the
-// edit took the list's first: r57 A2; the lacking place's view went to the list's first: r58 A4.)
+// the device, never a list's first (review r16 M2). The one rule for the view a page opens with, a
+// #view= edited in, Back's, and the view waiting on ?add=s (r57 A2, r58 A4, r59 A1).
 function viewIsFor(search) {
   const names = !!(search.get('src') || modelNameIn(search));
   if (!names) return !app.sourceUrl;
