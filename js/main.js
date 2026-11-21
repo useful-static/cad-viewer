@@ -2154,15 +2154,16 @@ function showTourStep(i) {
   const s = t.tour.steps[t.i];
   $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '');
   $('tourtitle').hidden = !$('tourtitle').textContent;
-  const cb = $('tourbody'), had = document.activeElement === cb;
+  const cb = $('tourbody'), had = document.activeElement === cb, ring = had && cb.matches(':focus-visible');
   cb.textContent = s.text;
   cb.hidden = !s.text;
   cb.scrollTop = 0; // (each caption from its start: R81-2)
-  // (a focused caption that no longer scrolls cannot keep the focus: to the step buttons -- R81-5)
-  if (had && !(cb.scrollHeight > cb.clientHeight)) $(t.i === n - 1 ? 'tourprev' : 'tournext').focus();
   $('tourcount').textContent = `${t.i + 1} / ${n}`;
   $('tourprev').disabled = t.i === 0;
   $('tournext').disabled = t.i === n - 1;
+  // (a focused caption that no longer scrolls cannot keep the focus: to the step buttons, once they
+  // are enabled, with a ring only after a key -- R81-5, R82-2, R82-3)
+  if (had && !(cb.scrollHeight > cb.clientHeight)) $(t.i === n - 1 ? 'tourprev' : 'tournext').focus({ focusVisible: ring || !!app.stepKey });
   app.tourMissing = [];
   // the emphasis first (a dim that hides parts changes what "all" frames),
   // then the camera; the card is already filled: its height is what the
@@ -7964,7 +7965,12 @@ function wireInput() {
       // (PageDown / PageUp page a focused caption that scrolls, as its arrows do: R80-3)
       const cap = t.id === 'tourbody' && t.scrollHeight > t.clientHeight;
       const go = cap && /^Page/.test(e.key) ? 0 : { ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[e.key];
-      if (go) { e.preventDefault(); showTourStep(app.tour.i + go); return; }
+      if (go) {
+        // (a step button the key disabled hands the focus to the other one, as its press does: R82-1)
+        e.preventDefault(); app.stepKey = true; showTourStep(app.tour.i + go); app.stepKey = false;
+        if (t.disabled && (t.id === 'tourprev' || t.id === 'tournext')) $(t.id === 'tourprev' ? 'tournext' : 'tourprev').focus();
+        return;
+      }
       if (e.key === 'Escape') { e.preventDefault(); endTour(); return; }
       // Space plays / pauses (a focused button's own Space presses it)
       if (e.key === ' ' && !(t instanceof Element && t.closest('button, a, summary'))) { e.preventDefault(); setTourPlaying(!app.tour.playing); return; }
@@ -8471,20 +8477,12 @@ async function startFromAddress(early) {
   // none named, the next one opened from the device, never the model list's first): viewIsFor, by
   // the address. (A bad escape decodeURIComponent throws on is no view: it stopped the model loading.)
   setPendingView(params, location.hash);
-  // ?src opens at once; ?list= (one or more) is read beside it, never in its
-  // way. With no ?src the list's first model opens, unless the visitor opened
-  // something meanwhile (untouched). Through loadListed, so a list read
-  // meanwhile names it while it opens and a pick of it does not start it
-  // again: review r19.
-  // ?embed=1&poster=<image>: the picture, and the model only when the visitor
-  // asks for it (View in 3D) -- a page of several embeds downloads none of
-  // their models until one is wanted. Asked by js/model-list.js posterAsked, the rule js/early.js
-  // holds its download back by; for a ?src= and for a list's first model alike (a ?list= embed
-  // opened its first at once, poster or not: r53 Q2), and for a tour's own model (it was not held:
-  // r54 Q2). View in 3D then opens what the start-up would: ?src=, the tour's model, the list's first.
-  // ?tour=<url> (js/tour.js): read beside the model; with no ?src the
-  // tour's own model opens (ahead of a list's first), and the tour starts
-  // once a model is shown
+  // ?src opens at once; ?list= (one or more) is read beside it, never in its way; with no ?src the
+  // list's first model opens, unless the visitor opened something meanwhile (loadListed: r19).
+  // ?embed=1&poster=<image>: the picture, and the model only on View in 3D (js/model-list.js
+  // posterAsked, js/early.js) -- for a ?src=, a list's first and a tour's own model alike (r53 Q2,
+  // r54 Q2). ?tour=<url> (js/tour.js): read beside the model; with no ?src the tour's own model
+  // opens (ahead of a list's first), and the tour starts once a model is shown
   const tourUrl = params.get('tour');
   const touring = tourUrl ? readTour(tourUrl) : null;
   app.tourRead = touring; // (View in 3D on a poster reads it too)
