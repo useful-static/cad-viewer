@@ -34,7 +34,7 @@ export function draftToTour(draft, modelUrl = null) {
   if (draft.orient) out.orient = draft.orient;
   if (draft.unit && draft.unit !== 'mm') out.unit = draft.unit;
   out.mode = draft.mode;
-  if (draft.loop) out.loop = true;
+  if (draft.loop && draft.steps.length > 1) out.loop = true; // (one step does not loop: R86-3)
   // (each field as the file writes it: a section turned off is "off" in a file, { axis: 'off' }
   // once read)
   const asFile = (k, v) => (k === 'section' && v && v.axis === 'off' ? 'off' : v);
@@ -136,6 +136,7 @@ export function createTourRecorder(api) {
     // (one step does not loop: R84-1, R85-1)
     el.loop.disabled = draft.steps.length < 2;
     el.loop.title = el.loop.disabled ? 'Loop needs two steps or more' : '';
+    if (el.loop.parentNode) el.loop.parentNode.title = el.loop.title; // (on the word too: R86-4)
   }
 
   function fillEditor() {
@@ -262,6 +263,8 @@ export function createTourRecorder(api) {
   el.title.addEventListener('input', () => { draft.title = el.title.value; });
   el.mode.onchange = () => { draft.mode = el.mode.value; };
   el.loop.onchange = () => { draft.loop = el.loop.checked; };
+  // (a press on the disabled Loop says why, where touch shows no title: R86-4)
+  if (el.loop.parentNode && el.loop.parentNode.addEventListener) el.loop.parentNode.addEventListener('click', () => { if (el.loop.disabled) note('Loop needs two steps or more'); });
 
   // play the draft: from the step being edited, paused there (Show), or all
   // of it from the start as it will play (Preview)

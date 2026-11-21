@@ -4767,16 +4767,10 @@ function fileEdgesValue(base, cap) {
     facts: factsCurrent(base.header) ? base.header.facts : null, source: 'file', ms: 0 };
 }
 
-// The status line's word that the shown model or scene has no facts (app.noFacts, its text): kept,
-// and so in every ready line (readyText), after the missing faces and the list's note (r40 Q8),
-// until the shown model or scene changes -- showBase, its one owner, takes it back then (a model's
-// facts arrive only in a build of its own, which a model or scene shown is given once: no other
-// take-back can meet it -- r44 A5, Q4).
-// sayNoFacts: the word kept whatever the line says now (a failure met while a load was under way,
-// the load then cancelled, read "ready": r42 Q3), and told at once when it is new, whatever the line
-// is (one that came during an export waited for the export's end, whose ready-to-ready line no one
-// hears: r46 A1); written into the line in place only when it is the ready line, its own words
-// after the ready text kept (a tour's note was lost: r43 A2) -- an export's progress is left alone.
+// The status line's word that the shown model or scene has no facts (app.noFacts): kept in every
+// ready line (readyText, r40 Q8) until the shown model or scene changes -- showBase, its one owner,
+// takes it back (r44 A5, Q4). sayNoFacts: kept whatever the line says now (r42 Q3), told at once
+// when new (r46 A1), and written into the line only when it is the ready line (r43 A2).
 function sayNoFacts(text) {
   const fresh = app.noFacts !== text; // (with a word said before, if any)
   if (fresh) tell(text, 6000);
