@@ -24,7 +24,7 @@ const line = (head) => { const i = src.indexOf(head); if (i < 0) throw new Error
 await test('tourPictures: the tour ended while step 2\'s picture is taken -- no throw, step 1\'s picture zipped and saved (r117 M1)', async () => {
   const code = [cut('function makerTour(tour, at = 0) {'), cut('async function tourPictures(tour) {'), cut('function showTourStep(i) {'), cut('function endTour(restore = true) {')].join('\n')
     .replace("await import('./export-mesh.js')", 'await importExport()');
-  const el = () => ({ textContent: '', hidden: false, disabled: false, classList: { add() {}, remove() {} } });
+  const el = () => ({ textContent: '', hidden: false, disabled: false, classList: { add() {}, remove() {}, toggle() {} } });
   const els = {};
   const app = { tour: null, header: { meshes: [1] }, explode: { on: false }, renderer: {}, measure: null, tourRaf: 0, cam: { ortho: false } };
   let renders = 0, zipped = null, saved = null, endTourRef = null;

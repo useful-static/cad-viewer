@@ -2159,6 +2159,7 @@ function showTourStep(i) {
   cb.hidden = !s.text;
   cb.scrollTop = 0; // (each caption from its start: R81-2)
   $('tourcount').textContent = `${t.i + 1} / ${n}`;
+  $('tourcard').classList.toggle('one', n === 1);
   $('tourprev').disabled = t.i === 0;
   $('tournext').disabled = t.i === n - 1;
   // (a focused caption that no longer scrolls cannot keep the focus: to the step buttons, once they
@@ -3787,13 +3788,9 @@ async function unwindPick(c) {
 // Back / Forward between list picks: the entry's model opened again (and its #view=, applied when it
 // has), unless it is the model shown; and a #view= edited in. Both listeners here, one rule for the
 // view (viewIsFor, by the entry's address) -- they were wired apart: r59 A8.
-// (app.entrySearch: the address of the entry shown. A browser fires popstate for a change of the
-// fragment alone too, before hashchange: that is an edit of the view, not another entry, and opening
-// the model again cancelled its download and every ?add= -- r59 Q2.)
-// This page's id, in every history entry it writes (cadvEntry: wireHistory): a history entry's
-// state outlives a reload, and the entries before it carry the marks of a page that is gone -- read
-// as this page's, Back after a reload kept the pick's model under the list's first's address (r64
-// Q3). A number counted from 1 told no page from another; nothing read it but as "there" (r64 Q6).
+// (app.entrySearch: the entry shown's address; a popstate for the fragment alone is an edit of the
+// view, not another entry -- r59 Q2.) This page's id, in every history entry it writes (cadvEntry:
+// wireHistory): an entry's state outlives a reload, and a gone page's marks are not this one's (r64 Q3, Q6).
 const newPageId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const ownEntry = (s) => !!(s && s.cadvEntry && s.cadvEntry === app.pageId);
 // (an entry another page wrote -- before a reload --: its marks are not this page's)
@@ -7966,14 +7963,17 @@ function wireInput() {
       const cap = t.id === 'tourbody' && t.scrollHeight > t.clientHeight;
       const go = cap && /^Page/.test(e.key) ? 0 : { ArrowRight: 1, PageDown: 1, ArrowLeft: -1, PageUp: -1 }[e.key];
       if (go) {
-        // (a step button the key disabled hands the focus to the other one, as its press does: R82-1)
-        e.preventDefault(); app.stepKey = true; showTourStep(app.tour.i + go); app.stepKey = false;
+        // (a step button the key disabled: the focus to the other one -- R82-1)
+        e.preventDefault();
+        const to = app.tour.i + go; // (past either end: nothing -- R83-1)
+        if (to < 0 || to >= app.tour.tour.steps.length) return;
+        app.stepKey = true; showTourStep(to); app.stepKey = false;
         if (t.disabled && (t.id === 'tourprev' || t.id === 'tournext')) $(t.id === 'tourprev' ? 'tournext' : 'tourprev').focus();
         return;
       }
       if (e.key === 'Escape') { e.preventDefault(); endTour(); return; }
       // Space plays / pauses (a focused button's own Space presses it)
-      if (e.key === ' ' && !(t instanceof Element && t.closest('button, a, summary'))) { e.preventDefault(); setTourPlaying(!app.tour.playing); return; }
+      if (e.key === ' ' && app.tour.tour.steps.length > 1 && !(t instanceof Element && t.closest('button, a, summary'))) { e.preventDefault(); setTourPlaying(!app.tour.playing); return; }
     }
     // number keys: the digit row by the character typed (AZERTY types a
     // digit with Shift), the numpad by its key code (whatever NumLock says)
