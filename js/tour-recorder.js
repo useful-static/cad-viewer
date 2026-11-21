@@ -111,7 +111,7 @@ export function createTourRecorder(api) {
       const li = document.createElement('li');
       li.className = i === draft.sel ? 'sel' : '';
       const name = document.createElement('button');
-      name.className = 'tename';
+      name.className = s.title ? 'tename' : 'tename untitled'; // (a stand-in name, dimmed: R74-5)
       name.textContent = s.title || `Step ${i + 1}`;
       name.title = 'Edit this step';
       name.setAttribute('aria-current', String(i === draft.sel));
@@ -136,6 +136,7 @@ export function createTourRecorder(api) {
     const s = draft.steps[draft.sel];
     if (!s) return;
     el.sTitle.value = s.title || '';
+    el.sTitle.placeholder = `Step ${draft.sel + 1}`; // (the name the list shows for it)
     el.sText.value = s.text || '';
     el.sCam.value = s.frame ? 'frame' : 'exact';
     el.sDim.value = s.dim || DEFAULTS.dim;
@@ -271,6 +272,7 @@ export function createTourRecorder(api) {
     if (!sameModel(kind === 'video' ? 'recorded' : 'pictured')) return;
     let tour;
     try { tour = api.validate(text()); } catch (e) { note(`not ready: ${e.message}`); return; }
+    const btn = kind === 'video' ? el.video : el.pics, had = document.activeElement === btn;
     busy = true;
     renderList();
     note(kind === 'video' ? `recording the tour: it plays once through (a drag${typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse) and (not (any-pointer: fine))').matches ? '' : ' or a key'} stops it)…` /* (no keys on a touch-only device) */ : 'taking a picture of each step…');
@@ -281,6 +283,9 @@ export function createTourRecorder(api) {
     } finally {
       busy = false;
       renderList();
+      // (the button disabled itself while busy, dropping the focus out of the maker: back on it -- R76-4)
+      const f = document.activeElement;
+      if (had && !el.panel.hidden && (!f || f === document.body || !el.panel.contains(f))) btn.focus();
     }
   }
   el.pics.onclick = () => exportAs('pictures');
@@ -321,13 +326,15 @@ export function createTourRecorder(api) {
     try { load(api.validate(await f.text())); note(`${f.name}: ${draft.steps.length} steps`); } catch (e) { note(`${f.name}: ${e.message}`); }
   };
 
-  function show(on, tour = null) {
+  // at: the step a tour being watched is on, selected (its card and the list agree: R74-4)
+  function show(on, tour = null, at = 0) {
     el.panel.hidden = !on;
     if (on) {
       if (tour) load(tour);
+      if (tour && at > 0 && at < draft.steps.length) draft.sel = at;
       renderList();
       fillEditor();
-      (draft.steps.length ? el.list.querySelector('.tename') : el.add).focus();
+      (draft.steps.length ? el.list.querySelector('li.sel .tename') || el.list.querySelector('.tename') : el.add).focus();
     } else api.stopPreview();
   }
   el.close.onclick = () => show(false);

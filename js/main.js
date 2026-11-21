@@ -262,26 +262,14 @@ const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
 // asked app.mesh alone, and a drawing read as nothing shown: r47 A2, Q3)
 function somethingShown() { return !!(app.mesh || app.dxf); }
 
-// A failure that is not the running or shown load's own -- a file refused for its size, a tour
-// that could not be read, a GPU error: told while something is shown or a load runs, their state
-// and line kept; else the page's error (the card shows it), read out again when it repeats. One
-// rule: the tour's end asked app.header and the GPU error set 'error' whatever ran, so a tour
-// unread over a drawing, or a GPU error under a load's "convert it?" question, made the page's
-// error -- the question and its buttons hidden, the load hung (r48 A1, Q1, Q2, Q10)
-// (the page's error only when nothing is shown and nothing runs: an error up -- a load's own, on the
-// card -- is kept, the new failure told beside it, and a recovery is left to end: the card lost why
-// the model failed, and a recovery ended on an error with a working renderer -- r49 Q3, Q4, A5)
-// (an embed's poster counts as shown: its card hidden behind the poster, the error was heard only and
-// then replaced unseen by View in 3D -- r50 Q5)
-// (the GPU still starting is nothing running: a file over the size picked then, opened first since
-// r51 A11, was told and then lost under the idle line)
-// (a list read for the model it names hides the card: a failure then is told -- shown and read
-// out -- not left to a card no one sees: r52 Q3)
-// (own: the start's own read failed -- a list's, a tour's -- the page's error when nothing is shown;
-// any other failure while the start still reads is told, the start's load coming over the card --
-// a file refused while a ?list= or a ?tour= was read was the page's error, which the address's model
-// then replaced, the refusal shown nowhere: r57, the start-up sweep's I2)
-// (held while the start runs: at its end, with nothing shown, the page's error -- startFromUrl, r58 Q7)
+// A failure that is not the running or shown load's own (a file refused for its size, a tour
+// unread, a GPU error): told while something is shown or a load runs, their state and line kept;
+// else the page's error (the card shows it), read out again when it repeats (r48 A1, Q1, Q2, Q10).
+// An error already up is kept and the new one told beside it (r49 Q3, Q4, A5); an embed's poster
+// counts as shown (r50 Q5); the GPU starting is nothing running (r51 A11); a list read for its
+// model tells the failure (r52 Q3). own: the start's own read failed -- the page's error when
+// nothing is shown; any other failure while the start reads is told (r57 I2), and the page's error
+// is held to the start's end (startFromUrl, r58 Q7).
 function failApart(msg, own = false) {
   if (somethingShown() || posterUp() || !(app.status === 'idle' || app.status === 'init') || (!own && (app.readingList || app.starting))) {
     tellReady(msg);
@@ -2201,7 +2189,7 @@ function showTourStep(i) {
 // only: a step id (?step=<id>, a v2 tour): that step alone, held, with no
 // card (the page around the viewer says what it shows). A tour without it
 // leaves the model as it is; returns whether the tour started.
-function startTour(tour, url, only = null) {
+function startTour(tour, url, only = null, at = 0) {
   if (!app.header) return false;
   if (!app.inMaker) app.watched = null;
   // (the whole tour, kept beside a ?step= one-step copy: the maker edits the whole)
@@ -2267,7 +2255,7 @@ function startTour(tour, url, only = null) {
   const missing = tourParts(tourNames(tour)).missing;
   if (missing.length) tellReady(`the tour names parts this model lacks: ${missing.join(', ')}`);
   markStarted(app.tour, missing.length > 0);
-  showTourStep(0);
+  showTourStep(at < tour.steps.length ? at : 0); // (a tour given back opens at its step alone: R77-2)
   return true;
 }
 
@@ -3159,23 +3147,11 @@ function focusBeside(el) {
   (after.find(live) || before.reverse().find(live))?.focus();
 }
 
-// The one net under all of them (review r19 L8): a focused control that
-// disables itself or is hidden (a card's Cancel or "Choose a file…" when the
-// card goes, a toolbar button its own action disables) drops the focus to the
-// page, and the next Tab starts over. Fixing that control by control left one
-// new case a round; this watches for it anywhere and gives the focus to the
-// nearest usable toolbar control. Not after a pointer press: there the user
-// put the focus where they meant to.
-// The control watched is the one that HAS the focus: one the focus left for
-// the page while still usable (a click on the footer or the view, a select
-// blurred after a pick) is forgotten, and so is one a pointer press disabled.
-// Remembered, a Hide clicked with the mouse took the focus long after, at the
-// next button any key enabled or disabled (A, Esc): the focus ring jumped to
-// Undo or Section, which the next Enter or Space pressed (review r20).
-// In the parts panel the focus stays in the panel: a Reset (hidden once used)
-// or a colour swatch Esc disabled sent it to the toolbar's Open…, a dozen Tabs
-// from where the user was; the row of a tree a new model replaced, to the new
-// tree's row (r20).
+// The one net under all of them (review r19 L8): a focused control that disables itself or is
+// hidden drops the focus to the page; this watches for it anywhere and gives the focus to the
+// nearest usable toolbar control -- not after a pointer press, where the user put it. The control
+// watched is the one that HAS the focus, never one remembered (a Hide clicked long before took the
+// focus at the next key: review r20). In the parts panel the focus stays in the panel (r20).
 function focusInPanel(f, wasInTree) {
   // (the info block's Details fold is not a place to land: it is rebuilt
   // with the values on every selection)
@@ -5563,9 +5539,9 @@ function setMeshUnit(u) {
 // (whether the first model has a reading at all -- a unit-less mesh, alone or in a scene -- not
 // whether it can be re-read now, meshSource: a scene's tour was saved with no unit and played 25.4x off)
 const tourReading = () => (app.scene && app.scene[0] && app.scene[0].unitless ? readUnit() : null);
-function startTourIn(tour, url, only = null) {
+function startTourIn(tour, url, only = null, at = 0) {
   uncover(); // (R67-1)
-  return startTour(tourAt(tour, tourReading()), url, only);
+  return startTour(tourAt(tour, tourReading()), url, only, at);
 }
 // A zip (feature review item 24): the first model in it that the viewer
 // opens is opened, with its companions (an .mtl, a .bin) beside it
@@ -6065,10 +6041,12 @@ function tessellate(buf, format, seq, name, threads) {
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
         barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));
         frac = barMax;
-        const leftText = typeof left !== 'number' ? 'taking longer than expected'
+        // (no "longer than expected" in the first 3 s, and no step % beside "almost done": R73-3)
+        const early = now - t0 < 3000;
+        const leftText = typeof left !== 'number' ? (early ? '' : 'taking longer than expected')
           : left < 1 ? 'almost done' : `~${fmt(left)} left (estimate)`;
-        const pct = (st === 1 || st === 2) && f < 1 ? ` · ${Math.round(f * 100)}%` : '';
-        detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct} · ${leftText} · ${clock} so far`;
+        const pct = (st === 1 || st === 2) && f < 1 && leftText !== 'almost done' ? ` · ${Math.round(f * 100)}%` : '';
+        detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
         ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 ? ` ${Math.round(conv.fraction * 100)}%` : ''} · ${clock}`
@@ -7832,6 +7810,8 @@ function wireInput() {
   $('tournext').onclick = stepBy(1, $('tournext'), $('tourprev'));
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
+  // a press in a caption that scrolls takes the focus there, so the keys scroll it (R72-3)
+  $('tourbody').addEventListener('mousedown', (e) => { const b = e.currentTarget; if (b.scrollHeight > b.clientHeight) b.focus({ preventScroll: true, focusVisible: false }); });
   // the tour maker: File > Make a tour… (a tour playing is opened in it)
   app.recorder = createTourRecorder({
     capture: captureStep,
@@ -7840,7 +7820,7 @@ function wireInput() {
     stopPreview: () => { // (R73-1, R74-1)
       const w = app.watched;
       if (app.tour && app.tour === app.previewing) endTour(); // (R75-1..3: its step, its play, on its model only)
-      if (!app.tour && w && w.h === app.header && startTourIn(w.t, w.u, w.o)) { if (!w.o) showTourStep(w.i); setTourPlaying(w.p); }
+      if (!app.tour && w && w.h === app.header && startTourIn(w.t, w.u, w.o, w.o ? 0 : w.i)) setTourPlaying(w.p);
       app.previewing = app.watched = null;
     },
     modelUrl: () => {
@@ -7855,7 +7835,10 @@ function wireInput() {
     video: tourVideo,
     announce,
   });
-  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = app.watched = null; app.recorder.show(true, app.tour ? app.tour.full || app.tour.tour : null); };
+  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = app.watched = null;
+    const t = app.tour, f = t && (t.full || t.tour);
+    app.recorder.show(true, f, f ? f.steps.indexOf(t.tour.steps[t.i]) : 0);
+  };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
   $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });

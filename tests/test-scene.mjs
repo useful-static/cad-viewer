@@ -1144,8 +1144,9 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.ok(writers.length >= 7, `ready writers found: ${writers.length}`);
   // (a tour's step tells its missing parts but right after the start, which told them all: keyed on
   // that, not on the step's index -- r46 A4, r47 A7)
-  // (the tour's start marks its moment, then shows step 1: r49 A3 -- the behaviour in its own arm below)
-  assert.match(src, /markStarted\(app\.tour, missing\.length > 0\);\n {2}showTourStep\(0\);/);
+  // (the tour's start marks its moment, then shows its first step -- step 1, or the step a tour given
+  // back opens at: r49 A3, R77-2 -- the behaviour in its own arm below)
+  assert.match(src, /markStarted\(app\.tour, missing\.length > 0\);\n {2}showTourStep\(at < tour\.steps\.length \? at : 0\);/);
   assert.match(src, /\n {2}tellStepMissing\(t\);\n/);
   // (a GPU error and a tour unread go through failApart, the one rule for a failure apart from the load -- r48 A1, Q1, Q2)
   assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; failApart\(`GPU error: \$\{msg\}`\); \} \};/);
