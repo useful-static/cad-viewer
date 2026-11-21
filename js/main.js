@@ -2152,18 +2152,20 @@ function showTourStep(i) {
   const n = t.tour.steps.length;
   t.i = Math.max(0, Math.min(n - 1, i));
   const s = t.tour.steps[t.i];
-  $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '');
+  // (a wordless step named as the maker names it: R87-5)
+  $('tourtitle').textContent = s.title || (t.i === 0 ? t.tour.title : '') || (s.text ? '' : `Step ${t.i + 1}`);
   $('tourtitle').hidden = !$('tourtitle').textContent;
   const cb = $('tourbody'), had = document.activeElement === cb, ring = had && cb.matches(':focus-visible');
   cb.textContent = s.text;
   cb.hidden = !s.text;
   cb.scrollTop = 0; // (each caption from its start: R81-2)
+  // (R87-1)
+  cb.classList.remove('scrolls'); cb.classList.toggle('scrolls', cb.scrollHeight > cb.clientHeight);
   $('tourcount').textContent = `${t.i + 1} / ${n}`;
   $('tourcard').classList.toggle('one', n === 1);
   $('tourprev').disabled = t.i === 0;
   $('tournext').disabled = t.i === n - 1;
-  // (a focused caption that no longer scrolls cannot keep the focus: to the step buttons, once they
-  // are enabled, with a ring only after a key -- R81-5, R82-2, R82-3)
+  // (a focused caption that no longer scrolls hands the focus on, ringed after a key: R81-5, R82-2, R82-3)
   if (had && !(cb.scrollHeight > cb.clientHeight)) $(t.i === n - 1 ? 'tourprev' : 'tournext').focus({ focusVisible: ring || !!app.stepKey });
   app.tourMissing = [];
   // the emphasis first (a dim that hides parts changes what "all" frames),

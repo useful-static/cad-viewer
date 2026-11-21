@@ -415,14 +415,14 @@
   #tourcount { color:var(--dim); font-size:12px; min-width:3.5em; text-align:center; }
   #tourcard.one :is(#tourplay, #tourprev, #tourcount, #tournext) { display:none; } /* (one step: nothing to play or step to -- R83-2) */
   /* (and its × at the top right, not alone on a row of its own: R84-3) */
-  #touredit label:has(> #teloop:disabled) { opacity:.5; } /* (Loop with one step: R85-1, R86-2) */
+  #touredit label:has(> #teloop:disabled) { color:var(--fg); opacity:.4; } /* (Loop with one step, as a disabled button: R85-1, R87-4) */
   #tourcard.one .tourbar { display:contents; } #tourcard.one #tourexit { position:absolute; top:6px; right:6px; }
-  /* (only what sits beside the × clears it -- the title row, or a caption's first lines past a float;
-     no gap for the gone button row; the × inside the card even with no words: R85-2..4, R86-1, R86-5) */
+  /* (only what sits beside the × clears it: R85-2..4, R86-1, R86-5, R87-1) */
   #tourcard.one { min-height:40px; } #tourcard.one #tourtitle { padding-right:40px; } #tourcard.one #tourbody { margin-bottom:0; }
   #tourcard.one #tourtitle[hidden] + #tourbody::before { content:''; float:right; width:40px; height:26px; }
+  #tourcard.one #tourtitle[hidden] + #tourbody.scrolls { padding-right:40px; } #tourcard.one #tourtitle[hidden] + #tourbody.scrolls::before { display:none; }
   @media (any-pointer: coarse) { #tourcard.one { min-height:54px; } #tourcard.one #tourtitle { padding-right:44px; }
-    #tourcard.one #tourtitle[hidden] + #tourbody::before { width:44px; height:40px; }
+    #tourcard.one #tourtitle[hidden] + #tourbody::before { width:44px; height:40px; } #tourcard.one #tourtitle[hidden] + #tourbody.scrolls { padding-right:44px; }
     /* (the caption below the 40 px ×, the title centred on it: R86-6) */
     #tourcard.one #tourtitle:not([hidden]) { min-height:36px; display:flex; align-items:center; } }
   #tourexit { margin-left:auto; }

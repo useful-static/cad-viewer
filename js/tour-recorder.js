@@ -264,7 +264,7 @@ export function createTourRecorder(api) {
   el.mode.onchange = () => { draft.mode = el.mode.value; };
   el.loop.onchange = () => { draft.loop = el.loop.checked; };
   // (a press on the disabled Loop says why, where touch shows no title: R86-4)
-  if (el.loop.parentNode && el.loop.parentNode.addEventListener) el.loop.parentNode.addEventListener('click', () => { if (el.loop.disabled) note('Loop needs two steps or more'); });
+  if (el.loop.parentNode && el.loop.parentNode.addEventListener) el.loop.parentNode.addEventListener('pointerdown', () => { if (el.loop.disabled) note('Loop needs two steps or more'); });
 
   // play the draft: from the step being edited, paused there (Show), or all
   // of it from the start as it will play (Preview)
