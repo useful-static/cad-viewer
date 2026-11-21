@@ -133,6 +133,9 @@ export function createTourRecorder(api) {
     });
     el.step.hidden = draft.sel < 0;
     el.play.disabled = el.save.disabled = el.pics.disabled = el.video.disabled = !draft.steps.length || busy;
+    // (one step does not loop: R84-1, R85-1)
+    el.loop.disabled = draft.steps.length < 2;
+    el.loop.title = el.loop.disabled ? 'Loop needs two steps or more' : '';
   }
 
   function fillEditor() {

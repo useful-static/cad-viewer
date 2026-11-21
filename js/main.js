@@ -2283,6 +2283,7 @@ function restoreExplode(bx) {
 function endTour(restore = true) {
   if (!app.tour) return;
   cancelFlight();
+  app.lastInput = performance.now(); // (the turntable waits after a tour, as after any input: R85-6)
   const { saved, base } = app.tour;
   app.tour = null;
   app.tourGhost = false;
@@ -2702,7 +2703,7 @@ function wireLooks() {
   for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
     window.addEventListener(t, (e) => {
       // (nor a tour's step key: R84-2)
-      if (app.tour && /^(Arrow(Left|Right)|Page(Up|Down))$/.test(e.key)) return;
+      if (app.tour && /^(Arrow(Left|Right)|Page(Up|Down))$/.test(e.key) && !(e.target instanceof Element && e.target.closest('input, select, textarea, #tree'))) return; // (R85-5)
       if (!(e.target instanceof Element && e.target.closest('#tourcard'))) app.lastInput = performance.now();
     }, { capture: true, passive: true });
   }
@@ -8322,12 +8323,8 @@ function lackingNote(place, opened) {
 // rule (tourPlaysHere) -- but only while it is still the address's (a list pick ends it, and it still
 // played over the model picked, ending that model's own: r57 A1, Q1); with no model to play over,
 // said ready, unless its own model failed; then over. The start-up's and View in 3D's ending.
-// (after the loads an entry's tour waits for, by the same rounds: the visitor's Add model… begun
-// while ?tour= was read ended it as it joined, when the tour came first -- the third tour, which
-// round 71's one wait did not reach: r72 A1. With none under way it runs at once, as before)
-// (its callers do not wait for it -- the start's own end is not held by the tour's wait --, so a
-// failure here is said here, apart from the load, as a tour's is: dropped, it was an unhandled
-// rejection, the tour neither played nor said -- r73 A8)
+// (after the loads an entry's tour waits for, as the others do: r72 A1; and a failure here is said
+// here, its callers not waiting for it: r73 A8)
 async function addressTourEnds(r, ownFailed) {
   try {
     if (r?.tour && app.urlTourPending && entryTourWait()) await entryTourSettled();
