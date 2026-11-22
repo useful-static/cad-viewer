@@ -15,7 +15,7 @@ import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList,
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
-import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, qRotate, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -178,10 +178,7 @@ const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || 
 // nothing newer was said meanwhile -- else a queued "loading x" could land
 // after "ready" or an error (a fast failure, or a background tab, where frames
 // do not run), and be the last thing said.
-// (What is said in one moment is said together, in order: a later write in the same task replaced
-// an earlier one unheard -- the tour's "lacks parts", a scene's missing faces, a drawing's unit
-// -- r45 Q2. The moment is the task, awaits within it included: a microtask's flush let a write
-// after an await replace the one before -- a re-read's "read in inch", a ?tour='s lines -- r46 Q2.)
+// (What is said in one task, awaits included, is said together, in order: r45 Q2, r46 Q2.)
 let saySeq = 0, sayParts = null;
 function announce(text) {
   if (sayParts) { if (!sayParts.includes(text)) sayParts.push(text); return; }
@@ -610,17 +607,10 @@ function gpuSync() {
 const edgeData = new WeakMap();
 
 // ---------- Explode (plan feature 8) ----------
-// Each body's direction, summed down the assembly tree: (a node's centre -
-// its parent's) at each level, then (the body's centre - its node's), so
-// subassemblies part first and their bodies then part within them. A flat
-// tree (no subassembly) gives the radial direction from the model's centre,
-// which suits few models, so it starts along the view's up axis instead.
-// X / Y / Z keep one file axis of it. Scaled so the farthest-moving body
-// travels one model diagonal at 100 %. The directions go in the body table
-// (js/edges.js bodyTable's slot 0..2, which the vertex shaders read); the
-// fraction is the frame's `explode`. Every renderer offers it: a WebGL1 with
-// no vertex textures takes the directions as a vertex attribute instead
-// (js/renderer-webgl.js aXd).
+// Each body's direction, summed down the assembly tree, so subassemblies part
+// first; a flat tree starts along the view's up axis. X / Y / Z keep one axis.
+// The farthest body travels one diagonal at 100 %. Directions: bodyTable slots
+// 0..2 (aXd on a WebGL1 with no vertex textures); the fraction: `explode`.
 app.explode = { on: false, t: 0.4, mode: null, dirs: null, len: 0, flat: false, for: null };
 const cen = (b) => [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
 
@@ -1103,18 +1093,20 @@ function viewChanged() {
 // bar, a tour's caption card): fit in the part above them (a narrower
 // vertical angle, the same width), and centre there by moving the target down
 // by half of them, so the model sits above.
-function fitPose(bbox, q, margin = 1.05, cover = optbarHeight()) {
+// (side: the px a panel covers at the right; pad: the least px kept clear on each side -- R81-6, R82-4)
+function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), side = 0, pad = 0) {
   const c = { ...app.cam, q };
   const box = $('stage');
-  const h = Math.max(1, box.clientHeight);
+  const h = Math.max(1, box.clientHeight), w = Math.max(1, box.clientWidth);
   const bar = Math.max(0, Math.min(cover, h - 1));
-  const vis = h - bar;
-  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), box.clientWidth / vis, margin);
+  const vis = h - bar, wide = Math.max(1, w - Math.max(0, Math.min(side, w - 1)));
+  const m = pad > 0 ? Math.max(margin, Math.min(vis, wide) / Math.max(1, Math.min(vis, wide) - 2 * pad)) : margin;
+  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), wide / vis, m);
   let target = f.target;
-  if (bar > 0) {
+  if (bar > 0 || wide < w) {
     const perPx = (2 * f.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
-    const up = camUp(c);
-    target = target.map((v, k) => v - up[k] * (bar / 2) * perPx);
+    const up = camUp(c), right = wide < w ? qRotate(q, [1, 0, 0]) : [0, 0, 0];
+    target = target.map((v, k) => v - up[k] * (bar / 2) * perPx + right[k] * ((w - wide) / 2) * perPx);
   }
   return { target, dist: f.dist, bar };
 }
@@ -1832,6 +1824,11 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 
 // the bottom of the view the caption card covers (frames sit above it)
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
+// the right of the view an open maker covers, when it sits beside the model, not across it (R81-6)
+const makerCover = () => {
+  const te = $('touredit'), w = $('stage').clientWidth;
+  return te && !te.hidden && te.offsetLeft > w * 0.4 ? w - te.offsetLeft + 8 : 0;
+};
 
 // a name with its owner, as compared: lower case, one space either side of each ›
 const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' › ');
@@ -1917,7 +1914,7 @@ function stepPose(s) {
     const box = s.frame && s.frame.min ? { min: s.frame.min.slice(), max: s.frame.max.slice() } : drawnBox(ids) || drawnBox(null);
     if (!box) return null;
     if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
-    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover());
+    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), makerCover(), s.margin === undefined ? 16 : 0);
     pose = { target: f.target, dist: f.dist, q };
   }
   return pose ? { pose, ortho } : null;
@@ -2501,7 +2498,7 @@ async function tourPictures(tour) {
       const s = tour.steps[i];
       paintCaption(pic.canvas.getContext('2d'), pic.canvas.width, pic.canvas.height, pic.scale, stepTitle(tour, i), s.text);
       const png = await new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
-      files.push([`${String(i + 1).padStart(2, '0')}-${slugOf(s.title || `step ${i + 1}`)}.png`, new Uint8Array(await png.arrayBuffer())]);
+      files.push([`${String(i + 1).padStart(2, '0')}-${slugOf(stepTitle(tour, i) || `step ${i + 1}`)}.png`, new Uint8Array(await png.arrayBuffer())]);
     }
   } finally {
     // (its own tour only: one the visitor started meanwhile is theirs to leave -- r118 L2)
@@ -2565,15 +2562,10 @@ async function tourVideo(tour) {
 }
 
 // ---------- ?embed=1 ----------
-// The model alone in another site's page: no toolbar, parts panel or footer;
-// Fit, full screen and "Open in cad.place ↗" (the full viewer at this view)
-// over the view. Until a click or tap makes it active it takes nothing from
-// the page around it: the wheel and a finger's drag scroll the page, and a
-// hint says how to start; Esc gives the wheel back.
-// &active=1: active from the start (a page that shows the model as an
-// overlay of its own, not in a scrolling page, has no page to give the wheel
-// to). &noopen=1: no "Open in cad.place ↗" (a page in an app, where a new tab
-// has nowhere to open).
+// The model alone in another site's page, with Fit, full screen and "Open in
+// cad.place ↗". Until a click or tap it takes nothing from the page (the wheel
+// and a drag scroll it); Esc gives the wheel back. &active=1: active from the
+// start. &noopen=1: no "Open in cad.place ↗".
 const embedParams = new URLSearchParams(location.search);
 app.embed = embedParams.get('embed') === '1';
 app.embedActive = !app.embed || embedParams.get('active') === '1';
@@ -4891,15 +4883,9 @@ async function moveModel(i, k, v) {
 const STOPPED = Symbol('stopped');
 
 // One run of a module worker (the facts' js/edges-worker.js, Clearance's js/clearance-worker.js):
-// make() builds the message and its transfer list (the model's copies: in a try -- they may not
-// fit, a big model on a small device: said, not a rejected promise); the worker says it has
-// started, so a failure before that is one that cannot start and after it the run's own. Settles
-// once, the worker ended: { ok: data } | { error, transient? } (transient: a failure of the
-// moment -- no room for the copy, a worker that died, a failure the worker says the moment's
-// (js/edges.js momentaryFailure) -- tried again at the next ask, edgesOf up to MOMENT_TRIES) |
-// { stopped: why } | { noWorker: why }; each
-// caller says what no worker means for its job. (Each worker had its own launch, and a copy that
-// failed had to be fixed in each.)
+// make() builds the message and transfer list (in a try: the copies may not fit). Settles once:
+// { ok: data } | { error, transient? } (transient: tried again at the next ask, up to
+// MOMENT_TRIES) | { stopped: why } | { noWorker: why }.
 function workerJob(file, make) {
   let stopIt = () => {};
   const promise = new Promise((resolve) => {
@@ -7172,11 +7158,17 @@ function noSurface(ids, then) {
 const uncover = () => { if (panelOpen()) setPanel(false, true); };
 if (self.ResizeObserver) { // (R69-1..R71-3)
   let h = 0, open = false;
-  const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
+  // (the writes wait a frame, so they never resize what is being observed mid-callback: R89-4)
+  let raf = 0;
+  const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(sync); });
+  const sync = () => {
+    raf = 0;
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
-    st.style.setProperty('--tourcard-h', `${h}px`); st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); if (!c.hidden) markScrolls($('tourbody'));    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
-  });
+    if (st.style.getPropertyValue('--tourcard-h') !== `${h}px`) st.style.setProperty('--tourcard-h', `${h}px`);
+    st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); if (!c.hidden) markScrolls($('tourbody'));
+    const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
+  };
   ro.observe(c); ro.observe(st); ro.observe(te);
 }
 function fitParts(ids) {

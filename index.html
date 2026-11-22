@@ -424,7 +424,9 @@
   @media (any-pointer: coarse) { #tourcard.one { min-height:54px; } #tourcard.one #tourtitle { padding-right:44px; }
     #tourcard.one #tourtitle[hidden] + #tourbody::before { width:44px; height:40px; } #tourcard.one #tourtitle[hidden] + #tourbody.scrolls { padding-right:44px; }
     /* (the caption below the 40 px ×, the title centred on it: R86-6) */
-    #tourcard.one #tourtitle:not([hidden]) { min-height:36px; display:flex; align-items:center; } }
+    #tourcard.one #tourtitle:not([hidden]) { min-height:36px; display:flex; align-items:center; }
+    /* (a title-less caption's first line on the ×'s middle too: R87-2) */
+    #tourcard.one #tourtitle[hidden] + #tourbody { padding-top:7px; } #tourcard.one #tourtitle[hidden] + #tourbody::before { height:33px; } }
   #tourexit { margin-left:auto; }
   #tourcard .tourbar svg, #secsel svg, #measundo svg { vertical-align:-2px; }
   #tourplay .tp-pause, #tourplay.playing .tp-play { display:none; }

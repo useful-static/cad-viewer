@@ -106,6 +106,8 @@ export function createTourRecorder(api) {
   const text = () => JSON.stringify(toJSON(), null, 1);
 
   const rows = []; // each step's [name, ↑, ↓, ×], as last drawn
+  // an untitled step's stand-in name: step 1 takes the tour's title, as on the card (R89-3)
+  const standIn = (i) => (i === 0 && draft.title ? draft.title : `Step ${i + 1}`);
   function renderList() {
     el.list.textContent = '';
     rows.length = 0;
@@ -114,7 +116,7 @@ export function createTourRecorder(api) {
       li.className = i === draft.sel ? 'sel' : '';
       const name = document.createElement('button');
       name.className = s.title ? 'tename' : 'tename untitled'; // (a stand-in name, dimmed: R74-5)
-      name.textContent = s.title || `Step ${i + 1}`;
+      name.textContent = s.title || standIn(i);
       name.title = 'Edit this step';
       name.setAttribute('aria-current', String(i === draft.sel));
       name.onclick = () => select(i);
@@ -143,7 +145,7 @@ export function createTourRecorder(api) {
     const s = draft.steps[draft.sel];
     if (!s) return;
     el.sTitle.value = s.title || '';
-    el.sTitle.placeholder = `Step ${draft.sel + 1}`; // (the name the list shows for it)
+    el.sTitle.placeholder = standIn(draft.sel); // (the name the list shows for it)
     el.sText.value = s.text || '';
     el.sCam.value = s.frame ? 'frame' : 'exact';
     el.sDim.value = s.dim || DEFAULTS.dim;
@@ -260,7 +262,12 @@ export function createTourRecorder(api) {
   for (const [input, k] of [[el.sFly, 'transition'], [el.sHold, 'hold'], [el.sOrbit, 'orbit']]) { input.min = RANGES[k][0]; input.max = RANGES[k][1]; }
   el.sDim.onchange = () => { const s = draft.steps[draft.sel]; if (s) s.dim = el.sDim.value; };
   el.sCam.onchange = () => note('"Update from the view" takes the camera this way');
-  el.title.addEventListener('input', () => { draft.title = el.title.value; });
+  el.title.addEventListener('input', () => {
+    draft.title = el.title.value;
+    // (an untitled step 1 is named by the tour's title: R89-3)
+    if (rows[0] && !draft.steps[0]?.title) rows[0][0].textContent = standIn(0);
+    if (draft.sel === 0) el.sTitle.placeholder = standIn(0);
+  });
   el.mode.onchange = () => { draft.mode = el.mode.value; };
   el.loop.onchange = () => { draft.loop = el.loop.checked; };
   // (a press on the disabled Loop says why, where touch shows no title: R86-4)
@@ -297,7 +304,8 @@ export function createTourRecorder(api) {
     note(kind === 'video' ? `recording the tour: it plays once through (a drag${typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse) and (not (any-pointer: fine))').matches ? '' : ' or a key'} stops it)…` /* (no keys on a touch-only device) */ : 'taking a picture of each step…');
     try {
       const r = kind === 'video' ? await api.video(tour) : await api.pictures(tour);
-      if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved the video, ${(r / 1048576).toFixed(1)} MB` : `saved ${r} pictures`);
+      // (KB under a megabyte, one picture singular: R89-1, R89-2)
+      if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved the video, ${r < 1048576 ? `${Math.max(1, Math.round(r / 1024))} KB` : `${(r / 1048576).toFixed(1)} MB`}` : `saved ${r} picture${r === 1 ? '' : 's'}`);
       else note(`no ${kind === 'video' ? 'video' : 'pictures'}: ${typeof r === 'string' ? r : 'nothing came back from the GPU'}`);
     } finally {
       busy = false;
