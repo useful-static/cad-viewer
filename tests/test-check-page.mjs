@@ -21,6 +21,7 @@ function el(tag) {
     get textContent() { return this._text; },
     set textContent(v) { this._text = String(v); this.kids = []; },
     append(...c) { this.kids.push(...c); },
+    setAttribute(k, v) { (this.attrs ||= {})[k] = String(v); },
     remove() { this.removed = true; },
   };
 }
@@ -85,9 +86,9 @@ await test('a model\'s checks fill a row each: its name and id on the first row 
   assert.equal(p.calls[0].href, 'http://x/check.html?list=L1&list=L2');
   assert.equal(p.els.lists.value, 'L1\nL2', 'the box holds the address\'s lists');
   assert.deepEqual(p.cells(), [
-    'ok: ✓[ok].mark / Bolt[id b1].model / read / fine.res / u1.url',
-    'warn more: ▲[look at].mark / .model / size / big.res / u2.url',
-    'bad: ✗[failed].mark / Nut.model / fetch / HTTP 404.res / u3.url',
+    'ok: [✓,ok].mark / Bolt[id b1].model / read / fine.res / u1.url',
+    'warn more: [▲,look at].mark / .model / size / big.res / u2.url',
+    'bad: [✗,failed].mark / Nut.model / fetch / HTTP 404.res / u3.url',
   ], `the rows: ${JSON.stringify(p.cells())}`);
   assert.deepEqual(p.inserted, [0, 1], 'each model\'s rows put at its place in the list');
   assert.equal(p.els.results.hidden, false, 'the table shown once a model is in it');

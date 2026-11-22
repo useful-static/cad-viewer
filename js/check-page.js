@@ -19,16 +19,18 @@ function row(entry) {
     const cells = [MARK[c.level] || '', k === 0 ? entry.name : '', c.what, c.detail, c.url];
     cells.forEach((text, j) => {
       const td = document.createElement('td');
-      td.textContent = text;
       if (j === 0) {
         td.className = 'mark';
-        td.title = WORD[c.level] || '';
-        // (the word read and shown to a screen reader, not only a title: R100-8)
+        // (the glyph seen, its word read: the reader said "check mark" and a title the word again --
+        // R100-8, R101-6)
+        const g = document.createElement('span');
+        g.setAttribute('aria-hidden', 'true');
+        g.textContent = text;
         const w = document.createElement('span');
         w.className = 'sr';
         w.textContent = WORD[c.level] || '';
-        td.append(w);
-      }
+        td.append(g, w);
+      } else td.textContent = text;
       if (j === 1) {
         td.className = 'model';
         if (k === 0 && entry.id) {
@@ -47,6 +49,9 @@ function row(entry) {
 }
 
 async function run(urls) {
+  // (the header's link opens the viewer with the list being checked, from the start: R100-12, R101-9)
+  const home = document.querySelector?.('header a');
+  if (home) home.href = `./?${urls.map((l) => `list=${encodeURIComponent(l)}`).join('&')}`;
   const body = $('results').tBodies[0];
   body.textContent = '';
   $('listnotes').textContent = '';
@@ -76,9 +81,6 @@ async function run(urls) {
     const f = document.activeElement;
     // (without scrolling a reader of the results back up to it: R100-1)
     if (!f || f === document.body) $('go').focus?.({ preventScroll: true });
-    // (the header's link opens the viewer with the list checked: R100-12)
-    const home = document.querySelector?.('header a');
-    if (home) home.href = `./?${urls.map((l) => `list=${encodeURIComponent(l)}`).join('&')}`;
   }
 }
 
