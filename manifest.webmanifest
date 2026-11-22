@@ -1,6 +1,6 @@
 {
-  "name": "CAD viewer",
-  "short_name": "CAD viewer",
+  "name": "cad.place",
+  "short_name": "cad.place",
   "description": "View STEP, IGES, BREP, mesh, DXF and DWG files in the browser. Files stay on your device.",
   "start_url": "./",
   "scope": "./",

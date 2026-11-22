@@ -13,14 +13,14 @@
 <!-- a link's address never leaves with more than this site's origin -->
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CAD viewer — view STEP, IGES and BREP files in your browser</title>
+<title>cad.place — view STEP, IGES and BREP files in your browser</title>
 <meta name="description" content="Free online 3D CAD viewer for STEP, IGES and BREP assemblies. Runs in your browser with WebGPU or WebGL; your file is opened locally and never uploaded. Parts tree, section planes, isolate and hide.">
 <meta name="theme-color" content="#1d2127">
 <link rel="canonical" href="https://cad.place/">
 <meta property="og:site_name" content="Useful Static">
 <meta property="og:url" content="https://cad.place/">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"CAD viewer","url":"https://cad.place/",
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"cad.place","url":"https://cad.place/",
 "description":"Browser-based 3D viewer for STEP, IGES and BREP assemblies, rendered with WebGPU or WebGL. Files are opened locally and never uploaded.",
 "applicationCategory":"DesignApplication","operatingSystem":"Any (web browser)","isAccessibleForFree":true,
 "offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
@@ -31,7 +31,7 @@
 <!-- a link preview's title and words (no picture: the page is static, so it
      could not show the linked model, and a fixed one would mislead) -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="CAD viewer — STEP, IGES and BREP in your browser">
+<meta property="og:title" content="cad.place — STEP, IGES and BREP in your browser">
 <meta property="og:description" content="Open a 3D CAD assembly in the browser: parts tree, measure, section, explode, clearance. The file stays on your device.">
 <meta name="twitter:card" content="summary">
 <!-- (without one, every visit asked for /favicon.ico and got a 404) -->
@@ -323,7 +323,7 @@
   #info b { color:var(--dim); font-weight:500; }
   /* (a row's value wrapped hangs under itself, not under its name: a long part's name ran on under
      "selection" -- R39-1) */
-  #infovals div, #infomass, #infounits, #refline { padding-left:12px; text-indent:-12px; }
+  #infovals div, #infomass, #infounits, #refline, #clearval { padding-left:12px; text-indent:-12px; }
   /* (the Details, mass and units rows too, flush under indented ones: R40-4; "measured from" a row
      like the rest, its × kept on its name's last line by main.js -- a column of its own wrapped at
      x 103 under rows at 22: R41-3) */
@@ -524,11 +524,15 @@
   /* the file, graphics backend, triangles: folded at the foot of the values */
   #infomore summary { cursor:pointer; color:var(--dim); font-size:11px; margin-top:2px; }
   #scenelist { list-style:none; margin:2px 0; padding:0; }
-  #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #scenelist input { width:5.5em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; } /* (no spinners over the value: R96-6) */
+  #scenelist li { margin:2px 0; }
+  /* (the name cut with an ellipsis, not the row: the li clipped the Z field's focus ring -- R97-3) */
+  #scenelist li > span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #scenelist input { width:4.4em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; } /* (no spinners over the value: R96-6) */
   #scenelist input::-webkit-inner-spin-button, #scenelist input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
   /* (the offsets wrap in a narrow panel, each letter with its field; the name keeps its ellipsis; a gap between models: R95-1, R96-1) */
-  #scenelist li > div { white-space:normal; } #scenelist li > div > span { white-space:nowrap; } #scenelist li + li { margin-top:6px; }
+  /* (a wrapped line hangs in as the panel's other values do, a few px under the one above: R97-6, R97-7) */
+  #scenelist li > div { padding-left:12px; text-indent:-12px; }
+  #scenelist li > div > span { display:inline-block; white-space:nowrap; text-indent:0; margin:2px 4px 2px 0; } #scenelist li > div > span:last-child { margin-right:0; } /* (one line at 1280: R97-1) */ #scenelist li + li { margin-top:6px; }
   #clearval { color:var(--fg); }
   #unitsel, #material { font-size:12px; padding:1px 4px; } /* (one size for the panel's inline selects) */
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
@@ -828,7 +832,7 @@
      the 21st (UI organization review rank 9) -->
 <button id="skipview" class="skip">Skip to the 3D view</button>
 <header><div id="tb">
-  <span class="title">CAD viewer</span>
+  <span class="title">cad.place</span>
   <!-- narrow layout: an icon, named by aria-label -->
   <button id="panelbtn" aria-expanded="false" aria-controls="parts" aria-label="Parts" title="Parts list"><span aria-hidden="true">☰</span><span class="lbl">Parts</span></button>
   <label class="btn" tabindex="0" role="button">Open…<input id="open" type="file" multiple hidden></label>

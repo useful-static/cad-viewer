@@ -4861,11 +4861,12 @@ function syncScene() {
           if (!Number.isFinite(v)) return;
           moveModel(i, k, v);
         });
-        // (a letter, its field and Z's "mm" never parted: R96-1)
+        // (the wheel scrolls the panel, not a focused value the model never took: R97-2)
+        inp.addEventListener('wheel', () => inp.blur(), { passive: true });
         const u = document.createElement('span');
         u.append(`${ax} `, inp, k === 2 ? ' mm' : '');
-        at.append(u, k === 2 ? '' : ' ');
-        /* ) */
+        at.append(u);
+        /* (a letter, its field and Z's "mm" never parted: R96-1)  */
       });
       li.append(at);
     }
