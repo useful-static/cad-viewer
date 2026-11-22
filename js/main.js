@@ -1089,14 +1089,15 @@ function viewChanged() {
 // vertical angle, the same width), and centre there by moving the target down
 // by half of them, so the model sits above.
 // (pad >= 0, a tour's step: fitted exactly into the window above the bar, each corner at its own
-// depth, at least pad px clear of every edge -- R82-4, R90-1)
-function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1) {
-  const c = { ...app.cam, q };
+// depth, at least pad px clear of every edge, top px covered at the top -- R82-4, R90-1, R91-2;
+// in the projection the step lands in, not the one the camera flies from -- R91-1)
+function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1, ortho = app.cam.ortho, top = 0) {
+  const c = { ...app.cam, q, ortho };
   const box = $('stage');
   const h = Math.max(1, box.clientHeight), w = Math.max(1, box.clientWidth);
   const bar = Math.max(0, Math.min(cover, h - 1));
-  const vis = h - bar;
-  if (pad >= 0) return { ...fitWindow(c, bbox, margin, w, h, bar, vis < 200 ? Math.min(pad, 8) : pad), bar };
+  const vis = h - bar - top;
+  if (pad >= 0) return { ...fitWindow(c, bbox, margin, w, h, bar, vis < 200 ? Math.min(pad, 8) : pad, top), bar };
   const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), w / vis, margin);
   let target = f.target;
   if (bar > 0) {
@@ -1110,7 +1111,7 @@ function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1) {
 // the window [pad, w - pad] x [pad, h - bar - pad], and the target that centres it there. A corner
 // at depth D - z from the eye, its eye offset (e) sideways: (x - e) / (D - z) between the window's
 // two tangents -- linear in e and D, so each axis gives D >= (max(x + hi z) - min(x + lo z)) / (hi - lo).
-function fitWindow(c, bbox, margin, w, h, bar, pad) {
+function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   const d = camDir(c), u = camUp(c);
   const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
   const ctr = [0, 1, 2].map((k) => (bbox.min[k] + bbox.max[k]) / 2);
@@ -1122,8 +1123,8 @@ function fitWindow(c, bbox, margin, w, h, bar, pad) {
     pts.push([dot(r) * margin, dot(u) * margin, c.ortho ? 0 : dot(d)]);
   }
   // each axis's window as tangents: x across the width, y from the bar's top to the view's top
-  const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar) / 4));
-  const ax = [[-th * (1 - 2 * p2 / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * p2 / h)]];
+  const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar - top) / 4));
+  const ax = [[-th * (1 - 2 * p2 / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * (top + p2) / h)]];
   let D = 0;
   const need = ax.map(([lo, hi], j) => {
     const a = Math.max(...pts.map((p) => p[j] + hi * p[2])), b = Math.min(...pts.map((p) => p[j] + lo * p[2]));
@@ -1930,7 +1931,8 @@ function stepPose(s) {
     const box = s.frame && s.frame.min ? { min: s.frame.min.slice(), max: s.frame.max.slice() } : drawnBox(ids) || drawnBox(null);
     if (!box) return null;
     if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
-    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), s.margin === undefined ? 16 : 0);
+    const eb = $('embedbar'), top = eb && !eb.hidden ? eb.offsetTop + eb.offsetHeight : 0; // (R91-2)
+    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), s.margin === undefined ? 16 : 0, ortho, top);
     pose = { target: f.target, dist: f.dist, q };
   }
   return pose ? { pose, ortho } : null;
@@ -3519,12 +3521,8 @@ function listEntry(src) {
 // What the list says of the model on screen: its step, page, author,
 // license, labels, style; the info panel, File and the tree show them. Run
 // on a load and when a list arrives after its model opened.
-// Whether a view link's view is over the model shown: applied to it (the load cleared the pending
-// view as it applied it, and the entry's tour then played over it), or still to come to it, after
-// the address's ?add=s. A pending view for another model -- a device file's -- is not over this one,
-// and held its own tour back (r58 A3). viewIsFor is the rule for which model a view is for.
-// (keyed by the model's URL, as the entry's other keys are: the header is replaced by every Add
-// model…, move and re-read in another unit, and the list's hide went over the link's view: r59 A6, Q4)
+// Whether a view link's view is over the model shown, applied or still to come (r58 A3); keyed by
+// the model's URL, as the entry's other keys are (r59 A6, Q4).
 const linkViewOver = () => (!!app.header && app.viewLinkedFor === autoTourKey()) || pendingViewIsFor();
 function applyListEntry() {
   const e = app.header ? listEntry(app.sourceUrl) : null;
