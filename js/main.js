@@ -1110,11 +1110,12 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
   const ctr = [0, 1, 2].map((k) => (bbox.min[k] + bbox.max[k]) / 2);
   const tv = Math.tan(c.fov / 2), th = tv * (w / h);
-  const pts = [];
+  const pts = [], raw = []; // (raw: the box itself, which is centred; pts: with the margin, which fits -- R93-5)
   for (let i = 0; i < 8; i++) {
     const p = [0, 1, 2].map((k) => ((i >> k) & 1 ? bbox.max[k] : bbox.min[k]) - ctr[k]);
     const dot = (a) => p[0] * a[0] + p[1] * a[1] + p[2] * a[2];
     pts.push([dot(r) * margin, dot(u) * margin, c.ortho ? 0 : dot(d)]);
+    raw.push([dot(r), dot(u), c.ortho ? 0 : dot(d)]);
   }
   // each axis's window as tangents: x across the width, y from the bar's top to the view's top
   const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar - top) / 4));
@@ -1132,7 +1133,7 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   const e = need.map(([a, b, lo, hi], j) => {
     let e0 = a - hi * D, e1 = b - lo * D;
     for (let k = 0; k < 40; k++) {
-      const m = (e0 + e1) / 2, s = pts.map((p) => (p[j] - m) / (D - p[2]));
+      const m = (e0 + e1) / 2, s = raw.map((p) => (p[j] - m) / (D - p[2]));
       if (Math.max(...s) + Math.min(...s) > lo + hi) e0 = m; else e1 = m;
     }
     return (e0 + e1) / 2;
@@ -2049,7 +2050,7 @@ function outsideQuat(box, ids = null, step = null) {
 
 function cancelFlight() {
   if (app.tourRaf) cancelAnimationFrame(app.tourRaf);
-  app.tourRaf = 0;
+  app.tourRaf = 0; app.tourFlying = false;
 }
 
 // Fly the camera to `to` over `secs` (eased), and Explode to `explodeTo`
@@ -2081,7 +2082,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   };
   const frame = (now) => {
     if (app.lastInput !== input0) { // the visitor took the camera: a playing tour pauses
-      app.tourRaf = 0; explodeAt(1); if (ex1 === 0 && x.on) setExplode(false); settle();
+      app.tourRaf = 0; app.tourFlying = false; explodeAt(1); if (ex1 === 0 && x.on) setExplode(false); settle();
       setTourPlaying(false);
       return;
     }
@@ -2091,7 +2092,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
     if (t >= 1 && ex1 === 0 && x.on) setExplode(false);
     if (!to) { // no camera of its own: the explode alone
       viewChanged();
-      if (t < 1) app.tourRaf = requestAnimationFrame(frame); else { app.tourRaf = 0; if (done) done(); }
+      if (t < 1) app.tourRaf = requestAnimationFrame(frame); else { app.tourRaf = 0; app.tourFlying = false; if (done) done(); }
       return;
     }
     const p = poseAt(from, to, e);
@@ -2100,8 +2101,10 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
     if (!!c.ortho !== ortho && t >= 0.5) { c.ortho = ortho; updateButtons(); }
     viewChanged();
     if (t < 1) app.tourRaf = requestAnimationFrame(frame);
-    else { app.tourRaf = 0; settle(); if (done) done(); }
+    else { app.tourRaf = 0; app.tourFlying = false; settle(); if (done) done(); }
   };
+  // (a flight, apart from a step's hold, which also runs on tourRaf: R93-1)
+  app.tourFlying = true;
   app.tourRaf = requestAnimationFrame(frame);
 }
 
@@ -7739,10 +7742,12 @@ function wireInput() {
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => {
-    const c = app.cam, t = app.tour, L = t && !app.tourRaf && t.landed;
-    // (on a step's own fitted view, untouched: the step fitted again in the new projection -- R92-3)
-    const tol = L ? L.dist * 1e-6 : 0;
-    const still = L && Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol);
+    const c = app.cam, t = app.tour, L = t && !app.tourFlying && t.landed;
+    // (on a step's own fitted view, untouched -- held or paused, not turned: the step fitted again in
+    // the new projection -- R92-3, R93-1, R93-2)
+    const tol = L ? L.dist * 1e-6 : 0, q = camQ(c);
+    const still = L && Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol)
+      && L.q.every((v, k) => Math.abs(v - q[k]) <= 1e-6);
     c.ortho = !c.ortho;
     const to = still && stepPose(t.tour.steps[t.i], c.ortho);
     if (to) { c.target = to.pose.target.slice(); c.dist = to.pose.dist; t.landed = to.pose; }
@@ -8390,10 +8395,8 @@ function addPicked(files) {
 // ?list= (and the ?model= / ?index= of it), ?src=, an embed's ?poster=, ?add=, ?tour=. Its contract
 // is the generated sweep, tests/test-startup-sweep.mjs (r57), with the start-up table, tests/test-scene.mjs
 // START_CASES (r51), for the decisions no invariant states; both run it through tests/startup-harness.mjs.
-// The start's own end: app.starting cleared whatever it threw (a ?list= that is not a URL threw
-// building the list check's link, and it stayed set for good: r58 Q6), and a failure apart from it,
-// told while it ran, made the page's error when the start ended with nothing shown (a refusal
-// during a tour's read was told, then the tour's note replaced it, the card empty: r58 Q7).
+// Its end clears app.starting whatever it threw (r58 Q6), and a failure told while it ran is the
+// page's error when it ends with nothing shown (r58 Q7).
 async function startFromUrl(early) {
   try {
     await startFromAddress(early);
