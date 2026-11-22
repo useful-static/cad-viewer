@@ -1101,10 +1101,8 @@ function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1, ortho
   }
   return { target, dist: f.dist, bar };
 }
-// The least distance at which every corner of the box (scaled by margin about its centre) lies in
-// the window [pad, w - pad] x [pad, h - bar - pad], and the target that centres it there. A corner
-// at depth D - z from the eye, its eye offset (e) sideways: (x - e) / (D - z) between the window's
-// two tangents -- linear in e and D, so each axis gives D >= (max(x + hi z) - min(x + lo z)) / (hi - lo).
+// The box centred in the window [pad, w - pad] x [top + pad, h - bar - pad], at the least distance its
+// margin-scaled corners fit; a corner at depth D - z, eye offset e, draws at (x - e) / (D - z).
 function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   const d = camDir(c), u = camUp(c);
   const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
@@ -1120,24 +1118,32 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   // each axis's window as tangents: x across the width, y from the bar's top to the view's top
   const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar - top) / 4));
   const ax = [[-th * (1 - 2 * p2 / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * (top + p2) / h)]];
+  // the least D any offset could fit (each axis's bound), the eye in front of every corner
   let D = 0;
-  const need = ax.map(([lo, hi], j) => {
+  ax.forEach(([lo, hi], j) => {
     const a = Math.max(...pts.map((p) => p[j] + hi * p[2])), b = Math.min(...pts.map((p) => p[j] + lo * p[2]));
     D = Math.max(D, (a - b) / Math.max(1e-9, hi - lo));
-    return [a, b, lo, hi];
   });
-  // (in perspective, the eye kept in front of every corner)
   if (!c.ortho) D = Math.max(D, ...pts.map((p) => p[2] * 1.01 + 1e-6));
-  // each axis's eye offset, in what the window allows: the one whose drawn extents sit evenly about
-  // the window's middle (bisected: a nearer corner draws larger, so not the offsets' midpoint -- R92-2)
-  const e = need.map(([a, b, lo, hi], j) => {
-    let e0 = a - hi * D, e1 = b - lo * D;
-    for (let k = 0; k < 40; k++) {
+  // each axis's offset centring the box itself, bisected (R92-2, R93-5); then the least D at which the
+  // margin's corners fit, so centred (R94-2)
+  const R = Math.max(...raw.map((p) => Math.hypot(...p))) + 1e-9;
+  const centre = (D) => ax.map(([lo, hi], j) => {
+    let e0 = -R - 4 * D * (hi - lo), e1 = -e0;
+    for (let k = 0; k < 50; k++) {
       const m = (e0 + e1) / 2, s = raw.map((p) => (p[j] - m) / (D - p[2]));
       if (Math.max(...s) + Math.min(...s) > lo + hi) e0 = m; else e1 = m;
     }
     return (e0 + e1) / 2;
   });
+  const fits = (D) => { const e = centre(D); return ax.every(([lo, hi], j) => pts.every((p) => { const s = (p[j] - e[j]) / (D - p[2]); return s >= lo - 1e-9 && s <= hi + 1e-9; })); };
+  if (!fits(D)) {
+    let D0 = D, D1 = D * 1.05 + 1e-9;
+    for (let k = 0; k < 40 && !fits(D1); k++) { D0 = D1; D1 *= 1.25; }
+    for (let k = 0; k < 40; k++) { const m = (D0 + D1) / 2; if (fits(m)) D1 = m; else D0 = m; }
+    D = D1;
+  }
+  const e = centre(D);
   return { target: [0, 1, 2].map((k) => ctr[k] + r[k] * e[0] + u[k] * e[1]), dist: D > 0 ? D : 1 };
 }
 
@@ -2095,7 +2101,8 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
       if (t < 1) app.tourRaf = requestAnimationFrame(frame); else { app.tourRaf = 0; app.tourFlying = false; if (done) done(); }
       return;
     }
-    const p = poseAt(from, to, e);
+    // (landing exactly on the step's pose, not -q: R94-1)
+    const p = t >= 1 ? { target: to.target.slice(), dist: to.dist, q: to.q.slice() } : poseAt(from, to, e);
     c.target = p.target; c.dist = p.dist; c.q = p.q;
     // projection changes at the midpoint (it cannot be blended)
     if (!!c.ortho !== ortho && t >= 0.5) { c.ortho = ortho; updateButtons(); }
@@ -7747,7 +7754,7 @@ function wireInput() {
     // the new projection -- R92-3, R93-1, R93-2)
     const tol = L ? L.dist * 1e-6 : 0, q = camQ(c);
     const still = L && Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol)
-      && L.q.every((v, k) => Math.abs(v - q[k]) <= 1e-6);
+      && Math.abs(L.q.reduce((s, v, k) => s + v * q[k], 0)) >= 1 - 1e-9; // (q and -q one turn: R94-1)
     c.ortho = !c.ortho;
     const to = still && stepPose(t.tour.steps[t.i], c.ortho);
     if (to) { c.target = to.pose.target.slice(); c.dist = to.pose.dist; t.landed = to.pose; }
@@ -8253,13 +8260,8 @@ function applyLinkView(view) {
   applyView(view, true);
   app.viewLinkedFor = autoTourKey();
 }
-// View in 3D on an embed's poster: the model and its adds, then a ?tour= read while the poster was up
-// (it was told "open its 3D model" and never played, urlTourPending left set -- r50 Q3)
-// (src null: the list's first model, once the list has been read -- a ?list= embed's poster waits
-// for View in 3D too: r53 Q2)
-// The model behind the poster is the start-up's own order: ?src=, else the tour's own model, else the
-// list's first (behind the poster the list's first opened over a tour's model: r54 Q2). The tour, read
-// meanwhile, plays over it here, View in 3D owning it for a poster page.
+// View in 3D on an embed's poster: the model and its adds in the start-up's order (?src=, the
+// tour's model, the list's first), then a ?tour= read meanwhile (r50 Q3, r53 Q2, r54 Q2).
 async function viewIn3D(src) {
   $('poster').hidden = true;
   setEmbedActive(true);
