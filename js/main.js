@@ -15,7 +15,7 @@ import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList,
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
-import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, qRotate, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -393,15 +393,10 @@ function setPanel(open, focusBack = false) {
 const partsStop = () => [$('tree').querySelector('.label[tabindex="0"]'),
   ...$('parts').querySelectorAll('button, select, input, summary')].find((c) => c && !c.disabled && c.getClientRects().length);
 
-// Filter parts while typing: a browser that shrinks the page for the
-// on-screen keyboard took a tablet's window under 500 px tall, the sidebar
-// became the closed slide-out, the field lost the focus (to ☰), the keyboard
-// closed and the layout came back: nothing could be typed there (review r22).
-// The slide-out opens around the field instead. (Every other way the slide-out
-// closes moves the focus out of it first.) Returns whether it did.
-// It closes again once the window is wide (refold): left open, the next
-// narrow window (a tablet turned to portrait) showed it over the view, which
-// the user had never opened (review r23).
+// Filter parts while typing: an on-screen keyboard that shrinks the window
+// under 500 px opens the slide-out around the field rather than closing it
+// under the typing (review r22); it closes once the window is wide (r23).
+// Returns whether it did.
 function keepFilter(f) {
   if (f !== $('treefilter') || f.hidden || !narrowLayout() || document.body.classList.contains('panel-open')) return false;
   setPanel(true);
@@ -1093,22 +1088,53 @@ function viewChanged() {
 // bar, a tour's caption card): fit in the part above them (a narrower
 // vertical angle, the same width), and centre there by moving the target down
 // by half of them, so the model sits above.
-// (side: the px a panel covers at the right; pad: the least px kept clear on each side -- R81-6, R82-4)
-function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), side = 0, pad = 0) {
+// (pad >= 0, a tour's step: fitted exactly into the window above the bar, each corner at its own
+// depth, at least pad px clear of every edge -- R82-4, R90-1)
+function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1) {
   const c = { ...app.cam, q };
   const box = $('stage');
   const h = Math.max(1, box.clientHeight), w = Math.max(1, box.clientWidth);
   const bar = Math.max(0, Math.min(cover, h - 1));
-  const vis = h - bar, wide = Math.max(1, w - Math.max(0, Math.min(side, w - 1)));
-  const m = pad > 0 ? Math.max(margin, Math.min(vis, wide) / Math.max(1, Math.min(vis, wide) - 2 * pad)) : margin;
-  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), wide / vis, m);
+  const vis = h - bar;
+  if (pad >= 0) return { ...fitWindow(c, bbox, margin, w, h, bar, vis < 200 ? Math.min(pad, 8) : pad), bar };
+  const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), w / vis, margin);
   let target = f.target;
-  if (bar > 0 || wide < w) {
+  if (bar > 0) {
     const perPx = (2 * f.dist * Math.tan(c.fov / 2)) / h; // world units per CSS px at the target
-    const up = camUp(c), right = wide < w ? qRotate(q, [1, 0, 0]) : [0, 0, 0];
-    target = target.map((v, k) => v - up[k] * (bar / 2) * perPx + right[k] * ((w - wide) / 2) * perPx);
+    const up = camUp(c);
+    target = target.map((v, k) => v - up[k] * (bar / 2) * perPx);
   }
   return { target, dist: f.dist, bar };
+}
+// The least distance at which every corner of the box (scaled by margin about its centre) lies in
+// the window [pad, w - pad] x [pad, h - bar - pad], and the target that centres it there. A corner
+// at depth D - z from the eye, its eye offset (e) sideways: (x - e) / (D - z) between the window's
+// two tangents -- linear in e and D, so each axis gives D >= (max(x + hi z) - min(x + lo z)) / (hi - lo).
+function fitWindow(c, bbox, margin, w, h, bar, pad) {
+  const d = camDir(c), u = camUp(c);
+  const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
+  const ctr = [0, 1, 2].map((k) => (bbox.min[k] + bbox.max[k]) / 2);
+  const tv = Math.tan(c.fov / 2), th = tv * (w / h);
+  const pts = [];
+  for (let i = 0; i < 8; i++) {
+    const p = [0, 1, 2].map((k) => ((i >> k) & 1 ? bbox.max[k] : bbox.min[k]) - ctr[k]);
+    const dot = (a) => p[0] * a[0] + p[1] * a[1] + p[2] * a[2];
+    pts.push([dot(r) * margin, dot(u) * margin, c.ortho ? 0 : dot(d)]);
+  }
+  // each axis's window as tangents: x across the width, y from the bar's top to the view's top
+  const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar) / 4));
+  const ax = [[-th * (1 - 2 * p2 / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * p2 / h)]];
+  let D = 0;
+  const need = ax.map(([lo, hi], j) => {
+    const a = Math.max(...pts.map((p) => p[j] + hi * p[2])), b = Math.min(...pts.map((p) => p[j] + lo * p[2]));
+    D = Math.max(D, (a - b) / Math.max(1e-9, hi - lo));
+    return [a, b, lo, hi];
+  });
+  // (in perspective, the eye kept in front of every corner)
+  if (!c.ortho) D = Math.max(D, ...pts.map((p) => p[2] * 1.01 + 1e-6));
+  // each axis's eye offset: midway between the least and the most the window allows
+  const e = need.map(([a, b, lo, hi]) => ((a - hi * D) + (b - lo * D)) / 2);
+  return { target: [0, 1, 2].map((k) => ctr[k] + r[k] * e[0] + u[k] * e[1]), dist: D > 0 ? D : 1 };
 }
 
 function fitTo(bbox) {
@@ -1577,16 +1603,11 @@ app.pic = { scale: 2, bg: 'view', sel: false };
   if (p && typeof p.sel === 'boolean') app.pic.sel = p.sel;
 }
 
-// The view rendered at app.pic.scale x its CSS size, in tiles of at most
-// 2048 px: each tile is the whole picture's projection cropped to it
-// (frameState's pic), drawn on the view's own canvas at the tile's size and
-// copied into the picture in the same task, before the browser presents or
-// clears the canvas. Hover is always left out, the selection unless
-// app.pic.sel. Background: the view's, white, or transparent -- each tile
-// drawn on black and on white (the canvas has no alpha), alpha = 1 - (white
-// - black), colour = black / alpha, so antialiased edges and X-ray come out
-// partly transparent. -> { canvas, scale, cssW, cssH, tiles, capped } or
-// null when the GPU could not give a tile its size.
+// The view at app.pic.scale x its CSS size, in tiles of at most 2048 px (the
+// picture's projection cropped), each copied out in the same task. No hover;
+// the selection only if app.pic.sel. Transparent: each tile on black and on
+// white, alpha = 1 - (white - black). -> { canvas, scale, cssW, cssH, tiles,
+// capped } or null.
 async function renderPicture(opts = app.pic) {
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
@@ -1824,11 +1845,6 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 
 // the bottom of the view the caption card covers (frames sit above it)
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
-// the right of the view an open maker covers, when it sits beside the model, not across it (R81-6)
-const makerCover = () => {
-  const te = $('touredit'), w = $('stage').clientWidth;
-  return te && !te.hidden && te.offsetLeft > w * 0.4 ? w - te.offsetLeft + 8 : 0;
-};
 
 // a name with its owner, as compared: lower case, one space either side of each ›
 const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' › ');
@@ -1914,7 +1930,7 @@ function stepPose(s) {
     const box = s.frame && s.frame.min ? { min: s.frame.min.slice(), max: s.frame.max.slice() } : drawnBox(ids) || drawnBox(null);
     if (!box) return null;
     if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
-    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), makerCover(), s.margin === undefined ? 16 : 0);
+    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), s.margin === undefined ? 16 : 0);
     pose = { target: f.target, dist: f.dist, q };
   }
   return pose ? { pose, ortho } : null;
@@ -2147,7 +2163,8 @@ function markStarted(t, told) {
 // a step's title on the card, a picture and a video (R87-5, R88-2, R88-3)
 const stepTitle = (tour, i) => { const s = tour.steps[i]; return s.title || (i === 0 ? tour.title : '') || (s.text || tour.steps.length > 1 ? '' : 'Step 1'); };
 // (R87-1, R88-1)
-const markScrolls = (cb) => { cb.classList.remove('scrolls'); cb.classList.toggle('scrolls', cb.scrollHeight > cb.clientHeight); };
+// (and .lines past one -- measured as one line would be laid: R90-3)
+const markScrolls = (cb) => { cb.classList.remove('scrolls', 'lines'); cb.classList.toggle('lines', cb.scrollHeight > 41); cb.classList.toggle('scrolls', cb.scrollHeight > cb.clientHeight); };
 function showTourStep(i) {
   const t = app.tour;
   const n = t.tour.steps.length;
@@ -3070,15 +3087,9 @@ function refold(keep = focusNow()) {
   refoldFocus(keep, narrow);
 }
 
-// A refold folds or unfolds what has the focus, and the focus watcher sees
-// only disabled / hidden: Hide folded into a closed Show menu, the View button
-// gone as View unfolds (a rotation with View open), a tree row in a sidebar
-// that became the closed slide-out, all dropped the focus to the page; a menu
-// a rotation unfolded left it on that menu's button, not on the item that was
-// focused and now stands in the row (review r21). The model list too: the
-// measuring moves it, and a move takes the focus.
-// So: the control itself where it is still shown, else the folded menu's
-// button (focusBeside), else ☰ for the parts panel.
+// A refold folds or unfolds what has the focus (review r21): the focus goes to
+// the control itself where still shown, else the folded menu's button
+// (focusBeside), else ☰ for the parts panel.
 function refoldFocus(keep, narrow) {
   if (!keep || keep === document.body || !keep.isConnected) return;
   const inParts = $('parts').contains(keep);
@@ -4187,15 +4198,9 @@ function stale(seq) {
   return seq !== app.loadSeq;
 }
 
-// Give the GPU back to the model the UI shows, if `mesh` (a load that failed or
-// was superseded) still holds the claim. If even that re-upload fails -- e.g.
-// out of memory, since an upload builds before it frees -- the UI and the GPU
-// would disagree with no error shown, so drop the model and say why.
-// Show the model in colour scheme id (js/palettes.js) and remember the choice.
-// Only the colours change: the drawn model becomes a copy of the converted
-// one with the scheme's colours, uploaded as a load's model would be (and so
-// re-uploaded the same way after a GPU loss). While a load is under way it
-// only records the choice: that load draws in it.
+// Show the model in colour scheme id (js/palettes.js), remembered: a copy of
+// the converted model in its colours, uploaded as a load's would be. During a
+// load it only records the choice.
 function setPalette(id) {
   if (!PALETTES.some((p) => p.id === id)) return;
   app.palette = id;
@@ -7160,13 +7165,17 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   let h = 0, open = false;
   // (the writes wait a frame, so they never resize what is being observed mid-callback: R89-4)
   let raf = 0;
-  const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(sync); });
+  const st = $('stage'), c = $('tourcard'), te = $('touredit'), ro = new ResizeObserver(() => {
+    // (the classes at once, so the triad never shows a frame under the card: R90-4)
+    st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth);
+    if (!raf) raf = requestAnimationFrame(sync);
+  });
   const sync = () => {
     raf = 0;
     if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
     if (st.style.getPropertyValue('--tourcard-h') !== `${h}px`) st.style.setProperty('--tourcard-h', `${h}px`);
-    st.classList.toggle('tournarrow', st.clientWidth < 798); st.classList.toggle('tourtriad', c.offsetWidth + 102 > st.clientWidth); if (!c.hidden) markScrolls($('tourbody'));
+    if (!c.hidden) markScrolls($('tourbody'));
     const f = document.activeElement; if (te.contains(f)) f.scrollIntoView({ block: 'nearest' });
   };
   ro.observe(c); ro.observe(st); ro.observe(te);

@@ -426,7 +426,7 @@
     /* (the caption below the 40 px ×, the title centred on it: R86-6) */
     #tourcard.one #tourtitle:not([hidden]) { min-height:36px; display:flex; align-items:center; }
     /* (a title-less caption's first line on the ×'s middle too: R87-2) */
-    #tourcard.one #tourtitle[hidden] + #tourbody { padding-top:7px; } #tourcard.one #tourtitle[hidden] + #tourbody::before { height:33px; } }
+    #tourcard.one #tourtitle[hidden] + #tourbody:not(.lines) { padding-top:7px; } #tourcard.one #tourtitle[hidden] + #tourbody:not(.lines)::before { height:33px; } }
   #tourexit { margin-left:auto; }
   #tourcard .tourbar svg, #secsel svg, #measundo svg { vertical-align:-2px; }
   #tourplay .tp-pause, #tourplay.playing .tp-play { display:none; }
