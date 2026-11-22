@@ -4861,9 +4861,12 @@ function syncScene() {
           if (!Number.isFinite(v)) return;
           moveModel(i, k, v);
         });
-        at.append(`${ax} `, inp, ' '); // (R95-1)
+        // (a letter, its field and Z's "mm" never parted: R96-1)
+        const u = document.createElement('span');
+        u.append(`${ax} `, inp, k === 2 ? ' mm' : '');
+        at.append(u, k === 2 ? '' : ' ');
+        /* ) */
       });
-      at.append('mm');
       li.append(at);
     }
     list.append(li);
@@ -8087,13 +8090,8 @@ function wireInput() {
 
 // ---------- the ? box ----------
 //
-// The controls and shortcuts, and the renderer (WebGPU / WebGL 2 / WebGL 1)
-// with why a faster one was skipped, in a box that opens from ? in the view's
-// top right, beside Full screen (they were a fold at the foot of the parts panel, which took the
-// list's room, and a badge whose explanation was a tooltip a touch screen
-// never shows). ? (the button or the key) opens and closes it; so do Esc and
-// a press anywhere else. Opened from the keyboard it takes the focus, and
-// closing it gives the focus back to ?.
+// The controls and shortcuts, and the renderer with why a faster one was skipped, in a box from ?
+// (the button or the key; Esc or a press elsewhere closes it, the focus back to ?).
 const helpOpen = () => !$('helppop').hidden;
 function setHelp(open, focus = false) {
   const pop = $('helppop'), btn = $('helpbtn');

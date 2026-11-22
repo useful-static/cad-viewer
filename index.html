@@ -525,8 +525,10 @@
   #infomore summary { cursor:pointer; color:var(--dim); font-size:11px; margin-top:2px; }
   #scenelist { list-style:none; margin:2px 0; padding:0; }
   #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #scenelist input { width:4.2em; font:inherit; font-size:11px; }
-  #scenelist li > div { white-space:normal; } /* (the offsets wrap in a narrow panel; the name keeps its ellipsis: R95-1) */
+  #scenelist input { width:5.5em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; } /* (no spinners over the value: R96-6) */
+  #scenelist input::-webkit-inner-spin-button, #scenelist input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  /* (the offsets wrap in a narrow panel, each letter with its field; the name keeps its ellipsis; a gap between models: R95-1, R96-1) */
+  #scenelist li > div { white-space:normal; } #scenelist li > div > span { white-space:nowrap; } #scenelist li + li { margin-top:6px; }
   #clearval { color:var(--fg); }
   #unitsel, #material { font-size:12px; padding:1px 4px; } /* (one size for the panel's inline selects) */
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
