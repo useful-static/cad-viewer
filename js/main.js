@@ -4861,7 +4861,7 @@ function syncScene() {
           if (!Number.isFinite(v)) return;
           moveModel(i, k, v);
         });
-        at.append(`${ax} `, inp, ' ');
+        at.append(`${ax} `, inp, ' '); // (R95-1)
       });
       at.append('mm');
       li.append(at);

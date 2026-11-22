@@ -6,15 +6,15 @@
 <title>How do I list the holes in a STEP part? -- cad.place</title>
 <meta name="description" content="List every hole in a STEP part, with its diameter, position and depth, in your browser with cad.place. Your file stays on your device.">
 <link rel="canonical" href="https://cad.place/help/list-holes">
-<style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;color:#1d2127}a{color:#0b5cad}h1{font-size:1.6rem;line-height:1.3}code{background:#eef1f5;padding:0 .25em;border-radius:3px}.lead{font-size:1.1rem}</style>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:38rem;margin:2rem auto;padding:0 1rem;color:#1d2127}a{color:#0b5cad}h1{font-size:1.6rem;line-height:1.3}code{background:#eef1f5;padding:0 .25em;border-radius:3px;overflow-wrap:anywhere}.nav a{display:inline-block;padding:10px 2px}.lead{font-size:1.1rem}</style>
 </head>
 <body>
-<p><a href="/help/">Help</a> · <a href="/">Open cad.place</a></p>
+<p class="nav"><a href="/help/">Help</a> · <a href="/">Open cad.place</a></p>
 <h1>How do I list the holes in a STEP part?</h1>
 <p class="lead"><strong>Your file stays on your device.</strong> <a href="/">cad.place</a> finds the holes in your browser; nothing is uploaded.</p>
 <ol>
 <li>Open the STEP file and select the part, for example a circuit board or a plate, in the view or the parts list.</li>
-<li>In the info panel, press <strong>List holes</strong>.</li>
+<li>In the info panel (beside the parts list; on a phone, open it with <strong>☰</strong>), press <strong>List holes</strong>.</li>
 </ol>
 <p>The table lists each hole: its diameter, its centre measured from a corner of the model (or of the parts you chose with <strong>Measure from selection</strong>), and its depth. A through-hole is one row however many faces it crosses, and a countersunk or chamfered hole is one row with its bore and its wider rim.</p>
 <p>Holes are found from the circles in the file's faces, so this needs a STEP, IGES or BREP file. A mesh (STL, OBJ) has no circles to find.</p>

@@ -526,6 +526,7 @@
   #scenelist { list-style:none; margin:2px 0; padding:0; }
   #scenelist li { margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scenelist input { width:4.2em; font:inherit; font-size:11px; }
+  #scenelist li > div { white-space:normal; } /* (the offsets wrap in a narrow panel; the name keeps its ellipsis: R95-1) */
   #clearval { color:var(--fg); }
   #unitsel, #material { font-size:12px; padding:1px 4px; } /* (one size for the panel's inline selects) */
   /* (22em: a product name of about 28 characters whole: at 12em and at 16em
