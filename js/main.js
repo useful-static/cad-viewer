@@ -1081,16 +1081,10 @@ function viewChanged() {
   queueFrame();
 }
 
-// Where the camera goes to frame bbox seen with orientation q, for the stage
-// as it is now: -> { target, dist, bar }. The box as this view sees it
-// (js/camera.js fitBox), not its bounding sphere: the portrait Iso of a board
-// needs it. `cover` px at the bottom of the view are covered (the options
-// bar, a tour's caption card): fit in the part above them (a narrower
-// vertical angle, the same width), and centre there by moving the target down
-// by half of them, so the model sits above.
-// (pad >= 0, a tour's step: fitted exactly into the window above the bar, each corner at its own
-// depth, at least pad px clear of every edge, top px covered at the top -- R82-4, R90-1, R91-2;
-// in the projection the step lands in, not the one the camera flies from -- R91-1)
+// Where the camera goes to frame bbox seen with orientation q: -> { target, dist, bar }. `cover` px
+// at the bottom are covered (the options bar, a tour's card). pad >= 0 (a tour's step): fitted
+// exactly above them by fitWindow, pad px clear, top px covered at the top, in the given projection
+// (R82-4, R90-1, R91-1, R91-2); pad < 0 (Fit): fitBox, the target moved down half the bar.
 function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1, ortho = app.cam.ortho, top = 0) {
   const c = { ...app.cam, q, ortho };
   const box = $('stage');
@@ -1133,8 +1127,16 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   });
   // (in perspective, the eye kept in front of every corner)
   if (!c.ortho) D = Math.max(D, ...pts.map((p) => p[2] * 1.01 + 1e-6));
-  // each axis's eye offset: midway between the least and the most the window allows
-  const e = need.map(([a, b, lo, hi]) => ((a - hi * D) + (b - lo * D)) / 2);
+  // each axis's eye offset, in what the window allows: the one whose drawn extents sit evenly about
+  // the window's middle (bisected: a nearer corner draws larger, so not the offsets' midpoint -- R92-2)
+  const e = need.map(([a, b, lo, hi], j) => {
+    let e0 = a - hi * D, e1 = b - lo * D;
+    for (let k = 0; k < 40; k++) {
+      const m = (e0 + e1) / 2, s = pts.map((p) => (p[j] - m) / (D - p[2]));
+      if (Math.max(...s) + Math.min(...s) > lo + hi) e0 = m; else e1 = m;
+    }
+    return (e0 + e1) / 2;
+  });
   return { target: [0, 1, 2].map((k) => ctr[k] + r[k] * e[0] + u[k] * e[1]), dist: D > 0 ? D : 1 };
 }
 
@@ -1156,6 +1158,8 @@ function fitTo(bbox) {
   const box = $('stage');
   const h = Math.max(1, box.clientHeight);
   const aspect = box.clientWidth / h;
+  // (the target at the box's middle, the model's turning point, though its nearer corner draws
+  // larger: the exact fit would move the pivot off the model -- R92-1)
   const { target, dist, bar } = fitPose(bbox, c.q);
   c.dist = dist;
   c.target = target;
@@ -1904,7 +1908,8 @@ async function readTour(url) {
 
 // The camera a step asks for -> { pose: { target, dist, q }, ortho } or null
 // (a step with no camera of its own)
-function stepPose(s) {
+// (proj: the visitor's projection, when Ortho is pressed on a step -- R92-3)
+function stepPose(s, proj) {
   const c = app.cam;
   let q = camQ(c);
   // the projection: the step's own ("ortho", or its view's camera), else the visitor's as the
@@ -1920,11 +1925,12 @@ function stepPose(s) {
     if (s.view.cam.ortho !== undefined) ortho = s.view.cam.ortho;
   }
   if (s.from) q = Array.isArray(s.from) ? s.from.slice() : s.from === 'outside' ? preset('iso') : preset(s.from);
+  if (proj !== undefined) ortho = proj;
   if (s.frame || typeof s.view === 'string' || (s.from && !pose)) {
     let ids = null;
     if (Array.isArray(s.frame)) {
       const r = tourParts(s.frame);
-      if (r.missing.length) app.tourMissing.push(...r.missing);
+      if (r.missing.length && proj === undefined) app.tourMissing.push(...r.missing);
       ids = r.ids.length ? r.ids : null;
     }
     // (a frame given as a box: the box itself)
@@ -2200,6 +2206,7 @@ function showTourStep(i) {
   const exNow = x.t;
   if (x.on) x.t = ex1;
   const to = stepPose(s);
+  t.landed = to ? to.pose : null; // (where the step leaves the camera: R92-3)
   // callouts at the top of their parts as they will be drawn (exploded too)
   if (app.measure && s.callouts) {
     app.measure.setNotes(s.callouts.map((c) => ({ p: c.at || topOfBox(drawnBox(tourParts([c.part]).ids)), text: c.text })).filter((c) => c.p));
@@ -3648,14 +3655,8 @@ function syncModelList() {
   sel.title = i >= 0 ? sel.options[i].textContent : 'Open another model from the list this page was given';
 }
 
-// The model the list stands for: the one being opened from a URL while a
-// load runs (a pick, or the list's first), else the one on screen. Against
-// the model on screen alone, a pick of it during another's download did
-// nothing (and the pending one replaced it), and the list's first model
-// showed as no entry while it opened (review r17)
-// (pending: the list's own load, held from its start to its end and only
-// while no newer load has begun; read from the status line, a GPU error or a
-// recovery mid-download made it look settled: review r18)
+// The model the list stands for: the one being opened from a URL while a load runs, else the one
+// on screen (review r17); pending: the list's own load, until a newer one begins (r18).
 function listedNow() {
   const p = app.listPending;
   const u = p && p.seq === app.loadSeq ? p.url : app.sourceUrl;
@@ -4364,9 +4365,7 @@ function checkFits(r, mesh) {
 // conversion (a conversion only): { unmeshedFaces, threads } -- the faces the
 // converter returned without triangles, named in the info panel and read out
 // with the ready line, and whether it ran on the multi-core converter.
-// (reading: a unit-less mesh's { unit, unitless }, set on the scene as it is made -- set after the
-// load, as it was, everything the load runs (its list entry's notes, syncUnitParam) saw no reading:
-// a list's notes on an STL read in inches sat 25.4 times off their parts -- r117 M3)
+// (reading: a unit-less mesh's { unit, unitless }, set on the scene as it is made -- r117 M3)
 async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, reading = null) {
   const unmeshedFaces = conversion?.unmeshedFaces || 0;
   // Each step names itself (the loading card) and lets that paint first:
@@ -7210,10 +7209,7 @@ function devicePx(e) {
 // answer is available (GPU lost): callers must not treat null as "nothing".
 // An answer computed against a model that has since been replaced is also null:
 // its id would index the new model's bodies.
-// A pick is valid only if the VIEW it was aimed at still stands when it
-// answers: app.viewGen moves whenever the shown model, its camera/state, or
-// the renderer changes, so a click made on model A that resolves after model B
-// took over (even though the GPU drew B for it) is dropped, not applied to B.
+// A pick counts only while the view it was aimed at stands (app.viewGen).
 app.pickAt = async (x, y) => {
   const gen = app.viewGen;
   try {
@@ -7742,7 +7738,16 @@ function wireInput() {
   };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
-  $('proj').onclick = () => { app.cam.ortho = !app.cam.ortho; updateButtons(); viewChanged(); };
+  $('proj').onclick = () => {
+    const c = app.cam, t = app.tour, L = t && !app.tourRaf && t.landed;
+    // (on a step's own fitted view, untouched: the step fitted again in the new projection -- R92-3)
+    const tol = L ? L.dist * 1e-6 : 0;
+    const still = L && Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol);
+    c.ortho = !c.ortho;
+    const to = still && stepPose(t.tour.steps[t.i], c.ortho);
+    if (to) { c.target = to.pose.target.slice(); c.dist = to.pose.dist; t.landed = to.pose; }
+    updateButtons(); viewChanged();
+  };
   // Z up: the file's +z up and -y toward the viewer, or back to its own frame
   // (y up); the choice holds for the next model that names no orientation
   $('up').onclick = () => {

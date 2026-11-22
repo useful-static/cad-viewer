@@ -107,7 +107,7 @@
   /* a toggle that is on, in the light frame: the dark theme's brown fill lost
      to the rule above and left its pale text at 1.16:1 */
   html.light button[aria-pressed=true] { background:#ffe9d4; border-color:#b35a00; color:#7a3d00; }
-  html.light :is(button, label.btn, a.btn):hover { border-color:#9aa3af; }
+  @media (hover: hover) { html.light :is(button, label.btn, a.btn):hover { border-color:#9aa3af; } } /* (no hover left on a tapped button: R92-6) */
   html.light :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(255,255,255,.9); }
   html.light #helpbtn[aria-expanded=true], html.light #stage > #hdend #helpbtn[aria-expanded=true] { background:#dfe3e8; border-color:#9aa3af; }
   html.light button[aria-pressed=true]:focus-visible { outline-offset:2px; } /* (the ring is the pressed edge's colour) */
@@ -122,7 +122,7 @@
   html.dark { --bg:#0f172a; --panel:#1e293b; --line:#334155; --fg:#e2e8f0; --dim:#94a3b8; --field:#0f172a; }
   html.dark :is(button, select, label.btn, a.btn) { background:#273449; }
   html.dark button[aria-pressed=true] { background:#4a3420; color:#ffd9b0; } /* (on: the same fill as the viewer's own dark) */
-  html.dark :is(button, label.btn, a.btn):hover { border-color:#64748b; }
+  @media (hover: hover) { html.dark :is(button, label.btn, a.btn):hover { border-color:#64748b; } }
   html.dark :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(30,41,59,.88); }
   html.dark #tourcard { background:rgba(30,41,59,.95); }
   html.dark #embedhint { background:rgba(15,23,42,.88); }
@@ -153,7 +153,7 @@
   header .title { font-weight:600; margin-right:8px; }
   #tb.notitle .title { display:none; } /* (main.js refold: the row had no room for it) */
   button, select, label.btn, a.btn { background:#313844; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
-  button:hover, label.btn:hover, a.btn:hover { border-color:#566173; }
+  @media (hover: hover) { button:hover, label.btn:hover, a.btn:hover { border-color:#566173; } }
   a.btn { text-decoration:none; }
   a.btn[hidden] { display:none; }
   button:disabled { opacity:.4; cursor:default; }
