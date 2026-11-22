@@ -89,8 +89,9 @@ async function run(urls) {
       const g = document.createElement('span');
       g.setAttribute('aria-hidden', 'true');
       g.textContent = `${l.error ? MARK.bad : MARK.ok} `;
-      // (with no model at all, a list read had none: said, not a bare "was read" -- R105-3)
-      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : result.entries.length ? ' was read' : ' was read: it has no models');
+      // (a list read with no models says so, beside others or alone -- R105-3, R106-5)
+      const none = l.models === 0 || (l.models == null && !result.entries.length);
+      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : none ? ' was read: it has no models' : ' was read');
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);
@@ -113,28 +114,50 @@ $('lists').addEventListener?.('blur', () => { $('lists').scrollLeft = 0; });
 // A left press in the box's padding as a press in the field at the nearest point: focus without a
 // scroll, the caret where pressed, a drag selecting from there (R104-2; it put the caret back where it
 // last was and a drag selected nothing -- R105-1, R105-2). The field is monospace, so a point's line
-// and column come from its line height and one character's width.
-function caretAt(ta, x, y) {
-  const r = ta.getBoundingClientRect(), cs = getComputedStyle(ta);
-  const ctx = document.createElement('canvas').getContext('2d');
+// and column come from its measured line pitch and one character's width, within the box the text
+// shows in (not under its scrollbars). A drag past the edge goes on and scrolls the field; Shift extends
+// the selection, a double press takes the word, a triple the line (R106-1, R106-3, R106-4).
+function charWidth(ta) {
+  const cs = getComputedStyle(ta), ctx = document.createElement('canvas').getContext('2d');
   ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
-  const cw = ctx.measureText('0').width || 8;
-  const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+  return ctx.measureText('0').width || 8;
+}
+function caretAt(ta, x, y, free = false) {
+  const r = ta.getBoundingClientRect(), cw = charWidth(ta);
   const lines = ta.value.split('\n');
-  const cx = Math.min(Math.max(x, r.left), r.right - 1) - r.left + ta.scrollLeft;
-  const cy = Math.min(Math.max(y, r.top), r.bottom - 1) - r.top + ta.scrollTop;
+  const lh = ta.scrollHeight / lines.length || parseFloat(getComputedStyle(ta).lineHeight) || 16;
+  const px = free ? x - r.left : Math.min(Math.max(x - r.left, 0), ta.clientWidth - 1);
+  const cy = Math.min(Math.max(y - r.top, 0), ta.clientHeight - 1) + ta.scrollTop;
   const line = Math.min(lines.length - 1, Math.max(0, Math.floor(cy / lh)));
-  const col = Math.min(lines[line].length, Math.max(0, Math.round(cx / cw)));
+  const col = Math.min(lines[line].length, Math.max(0, Math.round((px + ta.scrollLeft) / cw)));
   return lines.slice(0, line).reduce((n, l) => n + l.length + 1, 0) + col;
+}
+function showCaret(ta, at) {
+  const cw = charWidth(ta), col = at - ta.value.lastIndexOf('\n', at - 1) - 1, x = col * cw;
+  if (x < ta.scrollLeft) ta.scrollLeft = x;
+  else if (x > ta.scrollLeft + ta.clientWidth - cw) ta.scrollLeft = x - ta.clientWidth + cw;
 }
 $('lists').parentElement?.addEventListener('mousedown', (e) => {
   const ta = $('lists');
   if (e.target === ta || e.button !== 0) return;
   e.preventDefault();
   const at = caretAt(ta, e.clientX, e.clientY);
+  const focused = document.activeElement === ta;
   ta.focus({ preventScroll: true });
-  ta.setSelectionRange(at, at);
-  const move = (m) => { const to = caretAt(ta, m.clientX, m.clientY); ta.setSelectionRange(Math.min(at, to), Math.max(at, to), to < at ? 'backward' : 'forward'); };
+  const v = ta.value;
+  if (e.detail === 2 || e.detail >= 3) {
+    const word = e.detail === 2, stop = word ? /[\s/.:?&=#]/ : /\n/;
+    let a = at, b = at;
+    while (a > 0 && !stop.test(v[a - 1])) a--;
+    while (b < v.length && !stop.test(v[b])) b++;
+    ta.setSelectionRange(a, b);
+    return;
+  }
+  const anchor = e.shiftKey && focused ? (ta.selectionDirection === 'backward' ? ta.selectionEnd : ta.selectionStart) : at;
+  // (the press itself leaves the field where it is, as a press in the text does; a drag follows its end)
+  const pick = (to, follow) => { ta.setSelectionRange(Math.min(anchor, to), Math.max(anchor, to), to < anchor ? 'backward' : 'forward'); if (follow) showCaret(ta, to); };
+  pick(at, false);
+  const move = (m) => pick(caretAt(ta, m.clientX, m.clientY, true), true);
   const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
   addEventListener('mousemove', move);
   addEventListener('mouseup', up);

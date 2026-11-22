@@ -388,5 +388,6 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
       return { entries: [], error: { url: url || u, message } };
     }
   }));
-  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error) };
+  // (counts: each list's own models, in the order given -- the list check says which list had none: R106-5)
+  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error), counts: got.map((g) => g.entries.length) };
 }

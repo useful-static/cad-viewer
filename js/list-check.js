@@ -1071,13 +1071,13 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
   // a model file's check is not, as cad.place's own download of it is not)
   const readFn = fetchFn === fetch ? timedFetch : fetchFn;
   const r = await fetchModelLists(urls, base, readFn);
-  const lists = urls.map((u) => {
+  const lists = urls.map((u, i) => {
     let abs = u;
     try { abs = new URL(u, base).href; } catch { /* as given */ }
     // (a list named by a share page is read -- and its error filed -- under the file's own
     // address, js/open-url.js fileUrl: matched under it too)
     const err = r.errors.find((e) => e.url === abs || e.url === u || e.url === fileUrl(abs));
-    return { url: abs, error: err ? err.message || String(err.error || err) : null };
+    return { url: abs, error: err ? err.message || String(err.error || err) : null, models: err ? 0 : r.counts?.[i] ?? null };
   });
   const n = r.entries.length;
   const entries = await pool(r.entries.map((e, i) => async () => {
