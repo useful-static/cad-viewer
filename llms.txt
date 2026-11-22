@@ -16,11 +16,11 @@ Example: `https://cad.place/?src=https://example.com/parts/bracket.step`
 
 Example: `https://cad.place/?list=https://example.com/models/models.json`
 
-## Check a list before publishing it: `check.html?list=`
+## Check a list before publishing it: `check?list=`
 
-`https://cad.place/check.html?list=<url of a JSON list>` fetches each entry's model, picture, STEP file and tours the way the viewer does, and reports each check with its verdict and the URL tried (answered, CORS, found, size, format).
+`https://cad.place/check?list=<url of a JSON list>` (also reached as `check.html?list=`) fetches each entry's model, picture, STEP file and tours the way the viewer does, and reports each check with its verdict and the URL tried (answered, CORS, found, size, format).
 
-Example: `https://cad.place/check.html?list=https://example.com/models/models.json`
+Example: `https://cad.place/check?list=https://example.com/models/models.json`
 
 ## Share a view: `#view=`
 
@@ -48,13 +48,13 @@ Example: `<iframe src="https://cad.place/?embed=1&src=https://example.com/parts/
 
 ## Help pages
 
-- [Open a STEP file online without installing CAD](https://cad.place/help/open-step-file.html)
-- [Measure distances in a STEP assembly](https://cad.place/help/measure.html)
-- [See a section (cut) view](https://cad.place/help/section.html)
-- [List the holes in a STEP part](https://cad.place/help/list-holes.html)
-- [Check the clearance between two models](https://cad.place/help/clearance.html)
-- [Share a link to a view](https://cad.place/help/share-view.html)
-- [Show your models on your own site](https://cad.place/help/models-on-your-site.html)
+- [Open a STEP file online without installing CAD](https://cad.place/help/open-step-file)
+- [Measure distances in a STEP assembly](https://cad.place/help/measure)
+- [See a section (cut) view](https://cad.place/help/section)
+- [List the holes in a STEP part](https://cad.place/help/list-holes)
+- [Check the clearance between two models](https://cad.place/help/clearance)
+- [Share a link to a view](https://cad.place/help/share-view)
+- [Show your models on your own site](https://cad.place/help/models-on-your-site)
 
 ## Source
 

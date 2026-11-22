@@ -2,13 +2,13 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://cad.place/</loc></url>
   <url><loc>https://cad.place/help/</loc></url>
-  <url><loc>https://cad.place/help/open-step-file.html</loc></url>
-  <url><loc>https://cad.place/help/measure.html</loc></url>
-  <url><loc>https://cad.place/help/section.html</loc></url>
-  <url><loc>https://cad.place/help/list-holes.html</loc></url>
-  <url><loc>https://cad.place/help/clearance.html</loc></url>
-  <url><loc>https://cad.place/help/share-view.html</loc></url>
-  <url><loc>https://cad.place/help/models-on-your-site.html</loc></url>
-  <url><loc>https://cad.place/check.html</loc></url>
+  <url><loc>https://cad.place/help/open-step-file</loc></url>
+  <url><loc>https://cad.place/help/measure</loc></url>
+  <url><loc>https://cad.place/help/section</loc></url>
+  <url><loc>https://cad.place/help/list-holes</loc></url>
+  <url><loc>https://cad.place/help/clearance</loc></url>
+  <url><loc>https://cad.place/help/share-view</loc></url>
+  <url><loc>https://cad.place/help/models-on-your-site</loc></url>
+  <url><loc>https://cad.place/check</loc></url>
   <url><loc>https://cad.place/llms.txt</loc></url>
 </urlset>
