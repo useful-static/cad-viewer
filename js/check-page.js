@@ -109,6 +109,8 @@ $('lists').value = given.join('\n');
 // (the field back at each line's start once left: scrolled to its end it showed only the tails, a
 // shorter second URL out of view -- R103-1)
 $('lists').addEventListener?.('blur', () => { $('lists').scrollLeft = 0; });
+// (a press in the box's padding focuses the field, which only its inner row took: R104-2)
+$('lists').parentElement?.addEventListener('mousedown', (e) => { if (e.target !== $('lists')) { e.preventDefault(); $('lists').focus(); } });
 $('form').onsubmit = (ev) => {
   ev.preventDefault();
   $('lists').scrollLeft = 0;

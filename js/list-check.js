@@ -672,6 +672,12 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     if (download) return { level: 'warn', detail: `not readable from this page (its site sends no CORS, which a download link does not need), so not checked: ${e && e.message ? e.message : e}`, url };
     return { level: 'bad', detail: refused(e), url };
   }
+  // (a ranged read from byte 0 refused with 416 is a file of no bytes, as RFC 9110 has it -- its
+  // Content-Range may be hidden from this page: asked again plainly, it reads as empty, not
+  // "refused (416)" -- R104-4)
+  if (res.status === 416) {
+    try { res = await fetchFn(fetchUrl, { cache: 'no-store' }); } catch (e) { return { level: 'bad', detail: refused(e), url }; }
+  }
   if (!res.ok) {
     return { level: 'bad', detail: `${res.status === 404 ? 'not found' : 'refused'} (${res.status})`, url };
   }
@@ -1109,8 +1115,11 @@ export function summary(result) {
   const warn = all.filter((c) => c.level === 'warn').length;
   const badLists = result.lists.filter((l) => l.error).length;
   const n = result.entries.length;
-  // (no model read: not "0 failed", which reads as a pass -- R103-2)
-  if (!n && badLists) return `nothing checked: ${badLists} list${badLists > 1 ? 's' : ''} not read`;
+  // (no model read: not "0 failed", which reads as a pass -- R103-2; a list read but empty too: R104-3)
+  if (!n) {
+    return `nothing checked: ${badLists ? `${badLists} list${badLists > 1 ? 's' : ''} not read`
+      : `the list${result.lists.length > 1 ? 's have' : ' has'} no models`}`;
+  }
   return `${n} model${n === 1 ? '' : 's'}, ${all.length} check${all.length === 1 ? '' : 's'}: ${bad} failed, ${warn} to look at`
     + `${badLists ? `; ${badLists} list${badLists > 1 ? 's' : ''} not read` : ''}`;
 }
