@@ -10,6 +10,18 @@ const $ = (id) => document.getElementById(id);
 const MARK = { ok: '✓', warn: '▲', bad: '✗' };
 const WORD = { ok: 'ok', warn: 'look at', bad: 'failed' };
 
+// A URL in parts that each stay whole, a break offered only after each "/": a <wbr> alone still let
+// it split at a hyphen inside a part ("…/cad-" / "viewer/") -- R102-3, R103-3
+function urlParts(text) {
+  if (!text.includes('/')) return [text];
+  return text.split(/(?<=\/)/).flatMap((part, n) => {
+    const s = document.createElement('span');
+    s.className = 'up';
+    s.textContent = part;
+    return n ? [document.createElement('wbr'), s] : [s];
+  });
+}
+
 function row(entry) {
   const frag = document.createDocumentFragment();
   entry.checks.forEach((c, k) => {
@@ -43,10 +55,7 @@ function row(entry) {
       if (j === 4) {
         td.className = 'url';
         // (a break offered after each "/", so a URL wraps between its parts, not inside a word: R102-3)
-        if (text.includes('/')) {
-          td.textContent = '';
-          text.split(/(?<=\/)/).forEach((part, n) => { if (n) td.append(document.createElement('wbr')); td.append(part); });
-        }
+        if (text.includes('/')) { td.textContent = ''; td.append(...urlParts(text)); }
       }
       tr.append(td);
     });
@@ -80,7 +89,7 @@ async function run(urls) {
       const g = document.createElement('span');
       g.setAttribute('aria-hidden', 'true');
       g.textContent = `${l.error ? MARK.bad : MARK.ok} `;
-      p.append(g, l.error ? `the list ${l.url} was not read: ${l.error}` : `the list ${l.url} was read`);
+      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : ' was read');
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);
@@ -97,8 +106,12 @@ async function run(urls) {
 
 const given = new URLSearchParams(location.search).getAll('list');
 $('lists').value = given.join('\n');
+// (the field back at each line's start once left: scrolled to its end it showed only the tails, a
+// shorter second URL out of view -- R103-1)
+$('lists').addEventListener?.('blur', () => { $('lists').scrollLeft = 0; });
 $('form').onsubmit = (ev) => {
   ev.preventDefault();
+  $('lists').scrollLeft = 0;
   const urls = $('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
   if (!urls.length) { $('summary').textContent = 'give the list\'s URL'; return; }
   const u = new URL(location.href);

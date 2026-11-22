@@ -172,7 +172,8 @@ const gunzipStart = (bytes, n = 65536) => inflateHead(bytes, n);
 // (a tenth from 1 MB, the page's own figure: js/formats.js mbTenth -- r73 Q4; a hundredth under it)
 const mb = (n) => (n < 2 ** 20 ? (n / 2 ** 20).toFixed(2) : mbTenth(n));
 // (a size in words: under 0.1 MB in KB, so a small file never reads "0.00 MB", as if empty -- R99-8)
-const sizeWords = (n) => (n === 0 ? '0 bytes' : n < 0.1 * 2 ** 20 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${mb(n)} MB`);
+// (under 1 KB in bytes: a 29-byte file read "1 KB" -- R103-5)
+const sizeWords = (n) => (n < 1024 ? `${n} byte${n === 1 ? '' : 's'}` : n < 0.1 * 2 ** 20 ? `${Math.round(n / 1024)} KB` : `${mb(n)} MB`);
 
 // What a failed fetch means, as cad.place would meet it
 function refused(e) {
@@ -1108,6 +1109,8 @@ export function summary(result) {
   const warn = all.filter((c) => c.level === 'warn').length;
   const badLists = result.lists.filter((l) => l.error).length;
   const n = result.entries.length;
+  // (no model read: not "0 failed", which reads as a pass -- R103-2)
+  if (!n && badLists) return `nothing checked: ${badLists} list${badLists > 1 ? 's' : ''} not read`;
   return `${n} model${n === 1 ? '' : 's'}, ${all.length} check${all.length === 1 ? '' : 's'}: ${bad} failed, ${warn} to look at`
     + `${badLists ? `; ${badLists} list${badLists > 1 ? 's' : ''} not read` : ''}`;
 }

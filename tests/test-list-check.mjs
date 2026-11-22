@@ -133,7 +133,7 @@ await test('formats', () => {
 await test('file-good', async () => {
   const r = await checkFile(`${B}good.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(r.level, 'ok', r.detail);
-  assert.match(r.detail, /(MB|KB) · gzip · cadmesh/); // (KB under 0.1 MB: R99-8)
+  assert.match(r.detail, /(MB|KB|bytes) · gzip · cadmesh/); // (KB under 0.1 MB, bytes under 1 KB: R99-8, R103-5)
   assert.equal(r.url, `${B}good.cadmesh.gz`);
 });
 
@@ -639,7 +639,7 @@ await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gz
     // A3: its size hidden -- said, or judged from the whole body in hand (must fire: "ok · size not given · zip")
     ['A3 size hidden', 'part.zip', bzBig, hidden, 'warn:its size was not given'],
     // (r79 A4: a short part, the whole file, gives its size and is judged: must fire, "size not given")
-    ['r79 A4 a short part, size hidden', 'part.zip', bz, hidden, 'bad:1 KB · zip · zip entry part.stl uses compression method 12'],
+    ['r79 A4 a short part, size hidden', 'part.zip', bz, hidden, 'bad:122 bytes · zip · zip entry part.stl uses compression method 12'],
     ['r79 A4 a 3-byte STL, size hidden', 'b.stl', Buffer.from('abc'), hidden, 'bad:neither a binary STL'],
     ['r79 A4 a cut STL, no length', 'c.stl', (() => { const b = Buffer.alloc(134); b.writeUInt32LE(2, 80); return b; })(), whole, 'bad:damaged'],
     ['A3 size hidden, whole in hand', 'part.zip', bz, whole, 'bad:compression method 12'],
@@ -1396,6 +1396,8 @@ await test('list-not-read', async () => {
   assert.equal(r.entries.length, 0);
   assert.ok(r.lists[0].error, 'the list says why it was not read');
   assert.match(summary(r), /1 list not read/);
+  // (no model read: "nothing checked", never "0 failed", which reads as a pass -- R103-2)
+  assert.equal(summary(r), 'nothing checked: 1 list not read');
 });
 
 await test('the list and its tours are read as cad.place reads them: given up after its 20 s, said as it says it (r54 A2)', async () => {
