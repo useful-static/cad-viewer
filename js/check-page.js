@@ -14,12 +14,21 @@ function row(entry) {
   const frag = document.createDocumentFragment();
   entry.checks.forEach((c, k) => {
     const tr = document.createElement('tr');
-    tr.className = c.level;
+    // (a model's later checks joined to its first, not blocks of their own with no name: R100-3)
+    tr.className = k ? `${c.level} more` : c.level;
     const cells = [MARK[c.level] || '', k === 0 ? entry.name : '', c.what, c.detail, c.url];
     cells.forEach((text, j) => {
       const td = document.createElement('td');
       td.textContent = text;
-      if (j === 0) { td.className = 'mark'; td.title = WORD[c.level] || ''; }
+      if (j === 0) {
+        td.className = 'mark';
+        td.title = WORD[c.level] || '';
+        // (the word read and shown to a screen reader, not only a title: R100-8)
+        const w = document.createElement('span');
+        w.className = 'sr';
+        w.textContent = WORD[c.level] || '';
+        td.append(w);
+      }
       if (j === 1) {
         td.className = 'model';
         if (k === 0 && entry.id) {
@@ -54,6 +63,7 @@ async function run(urls) {
     });
     for (const l of result.lists) {
       const p = document.createElement('p');
+      p.className = l.error ? 'bad' : 'ok'; // (its colour as the table's: R100-2)
       p.textContent = l.error ? `${MARK.bad} the list ${l.url} was not read: ${l.error}` : `${MARK.ok} the list ${l.url} was read`;
       $('listnotes').append(p);
     }
@@ -64,7 +74,11 @@ async function run(urls) {
     $('go').disabled = false;
     // (the button disabled itself while it ran, dropping the focus to the page: back on it -- R99-4)
     const f = document.activeElement;
-    if (!f || f === document.body) $('go').focus?.();
+    // (without scrolling a reader of the results back up to it: R100-1)
+    if (!f || f === document.body) $('go').focus?.({ preventScroll: true });
+    // (the header's link opens the viewer with the list checked: R100-12)
+    const home = document.querySelector?.('header a');
+    if (home) home.href = `./?${urls.map((l) => `list=${encodeURIComponent(l)}`).join('&')}`;
   }
 }
 
