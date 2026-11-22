@@ -85,13 +85,13 @@ await test('a model\'s checks fill a row each: its name and id on the first row 
   assert.equal(p.calls[0].href, 'http://x/check.html?list=L1&list=L2');
   assert.equal(p.els.lists.value, 'L1\nL2', 'the box holds the address\'s lists');
   assert.deepEqual(p.cells(), [
-    'ok: 🟢 / Bolt[id b1].model / read / fine.res / u1.url',
-    'warn: 🟡 / .model / size / big.res / u2.url',
-    'bad: 🔴 / Nut.model / fetch / HTTP 404.res / u3.url',
+    'ok: ✓.mark / Bolt[id b1].model / read / fine.res / u1.url',
+    'warn: ▲.mark / .model / size / big.res / u2.url',
+    'bad: ✗.mark / Nut.model / fetch / HTTP 404.res / u3.url',
   ], `the rows: ${JSON.stringify(p.cells())}`);
   assert.deepEqual(p.inserted, [0, 1], 'each model\'s rows put at its place in the list');
   assert.equal(p.els.results.hidden, false, 'the table shown once a model is in it');
-  assert.deepEqual(p.notes(), ['🟢 the list L1 was read', '🔴 the list L2 was not read: HTTP 404']);
+  assert.deepEqual(p.notes(), ['✓ the list L1 was read', '✗ the list L2 was not read: HTTP 404']);
   assert.equal(p.els.summary.textContent, 'SUMMARY of 2', 'the verdict: list-check.js summary');
   assert.deepEqual(p.seen.summaries, ['reading the list…', 'checked 1 of 2 models…', 'checked 2 of 2 models…', 'SUMMARY of 2']);
   assert.equal(p.calls[0].goDisabled, true, 'the button off while it runs');

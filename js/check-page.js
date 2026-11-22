@@ -6,7 +6,9 @@
 import { checkLists, insertInOrder, summary } from './list-check.js';
 
 const $ = (id) => document.getElementById(id);
-const MARK = { ok: '🟢', warn: '🟡', bad: '🔴' };
+// (a shape per state, not a colour alone, and its word for a title: R99-3)
+const MARK = { ok: '✓', warn: '▲', bad: '✗' };
+const WORD = { ok: 'ok', warn: 'look at', bad: 'failed' };
 
 function row(entry) {
   const frag = document.createDocumentFragment();
@@ -17,6 +19,7 @@ function row(entry) {
     cells.forEach((text, j) => {
       const td = document.createElement('td');
       td.textContent = text;
+      if (j === 0) { td.className = 'mark'; td.title = WORD[c.level] || ''; }
       if (j === 1) {
         td.className = 'model';
         if (k === 0 && entry.id) {
@@ -51,7 +54,7 @@ async function run(urls) {
     });
     for (const l of result.lists) {
       const p = document.createElement('p');
-      p.textContent = l.error ? `🔴 the list ${l.url} was not read: ${l.error}` : `🟢 the list ${l.url} was read`;
+      p.textContent = l.error ? `${MARK.bad} the list ${l.url} was not read: ${l.error}` : `${MARK.ok} the list ${l.url} was read`;
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);
@@ -59,6 +62,9 @@ async function run(urls) {
     $('summary').textContent = `the check stopped: ${e.message || e}`;
   } finally {
     $('go').disabled = false;
+    // (the button disabled itself while it ran, dropping the focus to the page: back on it -- R99-4)
+    const f = document.activeElement;
+    if (!f || f === document.body) $('go').focus?.();
   }
 }
 
