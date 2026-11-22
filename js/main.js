@@ -4866,7 +4866,7 @@ function syncScene() {
         const u = document.createElement('span');
         u.append(`${ax} `, inp, k === 2 ? ' mm' : '');
         at.append(u);
-        /* (a letter, its field and Z's "mm" never parted: R96-1)  */
+        /* (u, above: a letter, its field and Z's "mm" never parted -- R96-1)  */
       });
       li.append(at);
     }
