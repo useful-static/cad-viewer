@@ -46,6 +46,16 @@ Example: `https://cad.place/?src=https://example.com/parts/bracket.step&backend=
 
 Example: `<iframe src="https://cad.place/?embed=1&src=https://example.com/parts/bracket.step" width="800" height="600"></iframe>`
 
+## Help pages
+
+- [Open a STEP file online without installing CAD](https://cad.place/help/open-step-file.html)
+- [Measure distances in a STEP assembly](https://cad.place/help/measure.html)
+- [See a section (cut) view](https://cad.place/help/section.html)
+- [List the holes in a STEP part](https://cad.place/help/list-holes.html)
+- [Check the clearance between two models](https://cad.place/help/clearance.html)
+- [Share a link to a view](https://cad.place/help/share-view.html)
+- [Show your models on your own site](https://cad.place/help/models-on-your-site.html)
+
 ## Source
 
 - [Source code](https://github.com/useful-static/cad-viewer)

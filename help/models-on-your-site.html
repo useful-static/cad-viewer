@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How can I show 3D CAD models of my products on my website? -- cad.place</title>
+<meta name="description" content="Show your product models on your own site with cad.place: a model list, a link per model, or an embedded viewer. Free, with no upload and no account.">
+<link rel="canonical" href="https://cad.place/help/models-on-your-site.html">
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;color:#1d2127}a{color:#0b5cad}h1{font-size:1.6rem;line-height:1.3}code{background:#eef1f5;padding:0 .25em;border-radius:3px}pre{background:#eef1f5;padding:.6em;border-radius:4px;overflow:auto}.lead{font-size:1.1rem}</style>
+</head>
+<body>
+<p><a href="/help/">Help</a> · <a href="/">Open cad.place</a></p>
+<h1>How can I show 3D CAD models of my products on my website?</h1>
+<p class="lead"><strong>Your files stay on your site.</strong> Visitors' browsers fetch them from you and show them in cad.place; nothing is copied to cad.place.</p>
+<h2>1. Let the files be read</h2>
+<p>Put the models (STEP, IGES, STL, glTF and the rest) on your site, and have it send the CORS header <code>Access-Control-Allow-Origin</code> for them, so a page on another site may read them.</p>
+<h2>2. Link one model</h2>
+<p><code>https://cad.place/?src=https://example.com/models/bracket.step</code> opens it.</p>
+<h2>3. Offer them all as a list</h2>
+<p>Write a JSON list of your models, each file (relative to the list) with the name to show, and put it beside them:</p>
+<pre>{"bracket.step": "Bracket", "case.stl": "Case"}</pre>
+<p><code>https://cad.place/?list=https://example.com/models/models.json</code> opens the first, and <strong>File › Browse models</strong> shows the rest. An entry can also carry a picture, a link to its product page, the source STEP file to download, its author and licence.</p>
+<p>Before you publish, open <code>https://cad.place/check.html?list=https://example.com/models/models.json</code>. It fetches every entry the way the viewer does and tells you what fails and why.</p>
+<h2>4. Embed the viewer in your page</h2>
+<pre>&lt;iframe src="https://cad.place/?embed=1&amp;src=https://example.com/models/bracket.step" width="800" height="600"&gt;&lt;/iframe&gt;</pre>
+<p>The embedded view shows the model alone, with Fit, full screen and a link to open it in cad.place. Add <code>&amp;poster=&lt;picture address&gt;</code> to show a picture first and load the model only when a visitor asks for it.</p>
+</body>
+</html>
