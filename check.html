@@ -13,8 +13,10 @@
 <link rel="canonical" href="https://cad.place/check">
 <meta property="og:site_name" content="Useful Static">
 <meta property="og:url" content="https://cad.place/check">
+<meta property="og:type" content="website">
 <meta property="og:title" content="Check a model list — cad.place">
 <meta property="og:description" content="Check a model list: each model, picture, STEP file and tour fetched as the viewer fetches it, with the reason for any it cannot open.">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <!-- Before the modules, listening as they are fetched: a page whose check-page.js never ran says so,
      with a Reload button, where its owner saw the form and nothing else (r74 A4; js/boot-check.js) -->
@@ -42,14 +44,15 @@
   /* (the list notes, coloured as the table's marks: the rule named the field -- R100-2) */
   #listnotes p { margin:4px 0; color:var(--dim); } #listnotes p.ok { color:#7bd88f; } #listnotes p.bad { color:#ff8f8f; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
-  html { scrollbar-gutter:stable; } /* (the column still when results bring a scrollbar: R100-6) */
-  textarea { resize:none; } /* (it grows with its lists: R100-10) */
+  /* (the column still when results come, R100-6: a scrollbar always shown, not an empty gutter, which
+     the page could not draw its header's rule across -- R101-3, R102-1) */
+  html { overflow-y:scroll; }
+  textarea { resize:none; white-space:pre; overflow-x:auto; min-width:0; max-width:100%; } /* (it grows with its lists, one URL a line: R100-10, R100-11) */
   td.mark { text-align:center; } /* (R100-15) */
   /* (names whole beside the URL column, from where that column still has room: R100-4, R101-1) */
   @media (min-width: 761px) { td.model { white-space:nowrap; } }
   /* (a model's later checks under its first, no rule between, at every width: R100-3, R101-4) */
   #results tr:has(+ tr.more) td { border-bottom:0; }
-  header { margin-right:calc(100% - 100vw); } /* (its rule to the window's edge past the scrollbar's gutter: R101-3) */
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--dim); font-weight:600; }
@@ -104,7 +107,7 @@
     a gzip of up to about 4 MB is read whole, to know what it unpacks to (and a larger one's last four bytes);
     a zip or a 3MF by ranges, its directory and the parts the viewer opens, and a gzip or zip inside it whole,
     up to 64 MB unpacked.
-    The list format: <a href="/help/models-on-your-site">model lists</a>.</p>
+    The list format: <a href="/help/models-on-your-site#list">model lists</a>.</p>
 </main>
 <script type="module" src="js/check-page.js"></script>
 </body>

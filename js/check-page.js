@@ -40,7 +40,14 @@ function row(entry) {
         }
       }
       if (j === 3) td.className = 'res';
-      if (j === 4) td.className = 'url';
+      if (j === 4) {
+        td.className = 'url';
+        // (a break offered after each "/", so a URL wraps between its parts, not inside a word: R102-3)
+        if (text.includes('/')) {
+          td.textContent = '';
+          text.split(/(?<=\/)/).forEach((part, n) => { if (n) td.append(document.createElement('wbr')); td.append(part); });
+        }
+      }
       tr.append(td);
     });
     frag.append(tr);
@@ -69,7 +76,11 @@ async function run(urls) {
     for (const l of result.lists) {
       const p = document.createElement('p');
       p.className = l.error ? 'bad' : 'ok'; // (its colour as the table's: R100-2)
-      p.textContent = l.error ? `${MARK.bad} the list ${l.url} was not read: ${l.error}` : `${MARK.ok} the list ${l.url} was read`;
+      // (the symbol seen, not read aloud before the words, as the table's marks: R102-2)
+      const g = document.createElement('span');
+      g.setAttribute('aria-hidden', 'true');
+      g.textContent = `${l.error ? MARK.bad : MARK.ok} `;
+      p.append(g, l.error ? `the list ${l.url} was not read: ${l.error}` : `the list ${l.url} was read`);
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);

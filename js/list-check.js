@@ -171,6 +171,8 @@ const gunzipStart = (bytes, n = 65536) => inflateHead(bytes, n);
 // 2 GiB limit read 2147.5 MB here and 2,048 MB on the page -- r71 A11)
 // (a tenth from 1 MB, the page's own figure: js/formats.js mbTenth -- r73 Q4; a hundredth under it)
 const mb = (n) => (n < 2 ** 20 ? (n / 2 ** 20).toFixed(2) : mbTenth(n));
+// (a size in words: under 0.1 MB in KB, so a small file never reads "0.00 MB", as if empty -- R99-8)
+const sizeWords = (n) => (n === 0 ? '0 bytes' : n < 0.1 * 2 ** 20 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${mb(n)} MB`);
 
 // What a failed fetch means, as cad.place would meet it
 function refused(e) {
@@ -700,7 +702,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
       if (!ends) total = null;
     }
   }
-  const bits = [total !== null ? `${mb(total)} MB` : 'size not given'];
+  const bits = [total !== null ? sizeWords(total) : 'size not given'];
   let level = 'ok';
   let sizeFormat = namedFormat(url), sizeStart = null, sizeGz = fileNameOfUrl(url).toLowerCase().endsWith('.gz'), unpacked = null, counted = false, unpackError = null;
   let zipBytes = null, zipNotRead = false, wholeStart = null, gzKept = null, uncounted = false;
@@ -726,7 +728,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     if (!start.length) return { level: 'bad', detail: [...bits, EMPTY_WORDS].join(' · '), url };
     // (past what is counted, its size not known here: said, a warning -- never "ok" by a length that
     // may be an encoding's, nor "bad" by one)
-    if (body && body.count > READ_HERE_BYTES) { total = null; bits[0] = 'size not given'; uncounted = true; } else if (body) { total = body.count; bits[0] = `${mb(total)} MB`; }
+    if (body && body.count > READ_HERE_BYTES) { total = null; bits[0] = 'size not given'; uncounted = true; } else if (body) { total = body.count; bits[0] = sizeWords(total); }
     // (a part decoded past its length -- a ranged answer of an encoding: its size then not given)
     else if (total !== null && (encoded || start.length > total)) { total = null; bits[0] = 'size not given'; }
     // (the whole counted and kept: the file itself, in hand)
@@ -738,7 +740,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
     // naming the file's 200 KB, had its first part read as the whole zip -- r82 Q3)
     if ((res.status === 200 || res.status === 206) && start.length < 65536 && (total === null || total === start.length)) {
       wholeStart = start;
-      if (total === null) { total = start.length; bits[0] = `${mb(total)} MB`; }
+      if (total === null) { total = start.length; bits[0] = sizeWords(total); }
     }
     const gz = isGzip(start);
     const inner = gz ? await gunzipStart(start) : start;

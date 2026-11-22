@@ -133,7 +133,7 @@ await test('formats', () => {
 await test('file-good', async () => {
   const r = await checkFile(`${B}good.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(r.level, 'ok', r.detail);
-  assert.match(r.detail, /MB · gzip · cadmesh/);
+  assert.match(r.detail, /(MB|KB) · gzip · cadmesh/); // (KB under 0.1 MB: R99-8)
   assert.equal(r.url, `${B}good.cadmesh.gz`);
 });
 
@@ -590,8 +590,8 @@ await test('a zip by the page\'s rule, a 3MF\'s rels read whole, a zip\'s compan
     ['r78 Q2 stored companions, claimed 1.5 GB', 'part.zip', miniZip([['part.obj', OBJ_TRI], ['a.png', 'x', 1.5 * 2 ** 30], ['b.png', 'x', 1.5 * 2 ** 30]]), 'ok'],
     // A4: an empty file, a 3-byte STL, a zip of an empty part (must fire: "ok")
     // (its size said: 0 is one, not "size not given")
-    ['A4 empty', 'a.stl', Buffer.alloc(0), 'bad:0.00 MB · it is empty'],
-    ['A4 empty, no range', 'a.stl', Buffer.alloc(0), 'bad:0.00 MB · it is empty', 'plain'],
+    ['A4 empty', 'a.stl', Buffer.alloc(0), 'bad:0 bytes · it is empty'],
+    ['A4 empty, no range', 'a.stl', Buffer.alloc(0), 'bad:0 bytes · it is empty', 'plain'],
     ['A4 empty OBJ', 'c.obj', Buffer.alloc(0), 'bad:empty'],
     ['A4 3 bytes', 'b.stl', Buffer.from('abc'), 'bad:neither a binary STL'],
     ['A4 zipped empty', 'part.zip', miniZip([['part.stl', '']]), 'bad:empty'],
@@ -639,7 +639,7 @@ await test('a zip whose size is hidden, a corrupt entry or 3MF root, an empty gz
     // A3: its size hidden -- said, or judged from the whole body in hand (must fire: "ok · size not given · zip")
     ['A3 size hidden', 'part.zip', bzBig, hidden, 'warn:its size was not given'],
     // (r79 A4: a short part, the whole file, gives its size and is judged: must fire, "size not given")
-    ['r79 A4 a short part, size hidden', 'part.zip', bz, hidden, 'bad:0.00 MB · zip · zip entry part.stl uses compression method 12'],
+    ['r79 A4 a short part, size hidden', 'part.zip', bz, hidden, 'bad:1 KB · zip · zip entry part.stl uses compression method 12'],
     ['r79 A4 a 3-byte STL, size hidden', 'b.stl', Buffer.from('abc'), hidden, 'bad:neither a binary STL'],
     ['r79 A4 a cut STL, no length', 'c.stl', (() => { const b = Buffer.alloc(134); b.writeUInt32LE(2, 80); return b; })(), whole, 'bad:damaged'],
     ['A3 size hidden, whole in hand', 'part.zip', bz, whole, 'bad:compression method 12'],
@@ -1470,7 +1470,7 @@ await test('a ranged GLB whose JSON is its 65th chunk: "more than 64 chunks", a 
     return new Response(b.subarray(a, e + 1), { status: 206, headers: { 'content-length': String(Math.max(0, e - a + 1)), 'content-range': `bytes ${a}-${e}/${b.length}` } });
   };
   const r = await checkFile('https://example.org/m/many.glb', { fetchFn, sniff: true });
-  assert.deepEqual([r.level, r.detail], ['warn', '0.07 MB · GLB · many.glb has more than 64 chunks: its JSON was not read here']);
+  assert.deepEqual([r.level, r.detail], ['warn', '69 KB · GLB · many.glb has more than 64 chunks: its JSON was not read here']);
 });
 
 await test('a binary part.stl.gz sent with Content-Encoding: gzip arrives unpacked, which the page opens: ok, not "to look at" (r117)', async () => {

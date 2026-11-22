@@ -71,7 +71,8 @@ async function page(query, { entries = [], lists = [], throws = null } = {}) {
   return {
     els, body, calls, inserted, replaced, seen, settle, started: globalThis.window.__checkStarted,
     cells: () => body.rows.map((tr) => `${tr.className}: ${tr.kids.map(cellText).join(' / ')}`),
-    notes: () => els.listnotes.kids.map((p) => p.textContent),
+    // (a note: its hidden symbol, then its words -- R102-2)
+    notes: () => els.listnotes.kids.map((p) => p.textContent + p.kids.map((k) => (typeof k === 'string' ? k : k.textContent)).join('')),
   };
 }
 

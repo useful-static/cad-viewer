@@ -17,7 +17,7 @@
 <p>Put the models (STEP, IGES, STL, glTF and the rest) on your site, and have it send the CORS header <code>Access-Control-Allow-Origin</code> for them, so a page on another site may read them.</p>
 <h2>2. Link one model</h2>
 <p><code>https://cad.place/?src=https://example.com/models/bracket.step</code> opens it.</p>
-<h2>3. Offer them all as a list</h2>
+<h2 id="list">3. Offer them all as a list</h2>
 <p>Write a JSON list of your models, each file (relative to the list) with the name to show, and put it beside them:</p>
 <pre>{"bracket.step": "Bracket", "case.stl": "Case"}</pre>
 <p><code>https://cad.place/?list=https://example.com/models/models.json</code> opens the first; the others are in the model list in the toolbar (in the <strong>File</strong> menu, under <strong>Open…</strong>, on a phone). When the entries have pictures, <strong>File › Browse models…</strong> shows them as a grid. An entry can also carry a picture, a link to its product page, the source STEP file to download, its author and licence.</p>

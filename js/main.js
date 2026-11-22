@@ -259,14 +259,8 @@ const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
 // asked app.mesh alone, and a drawing read as nothing shown: r47 A2, Q3)
 function somethingShown() { return !!(app.mesh || app.dxf); }
 
-// A failure that is not the running or shown load's own (a file refused for its size, a tour
-// unread, a GPU error): told while something is shown or a load runs, their state and line kept;
-// else the page's error (the card shows it), read out again when it repeats (r48 A1, Q1, Q2, Q10).
-// An error already up is kept and the new one told beside it (r49 Q3, Q4, A5); an embed's poster
-// counts as shown (r50 Q5); the GPU starting is nothing running (r51 A11); a list read for its
-// model tells the failure (r52 Q3). own: the start's own read failed -- the page's error when
-// nothing is shown; any other failure while the start reads is told (r57 I2), and the page's error
-// is held to the start's end (startFromUrl, r58 Q7).
+// A failure not the running or shown load's own: told while something is shown or a load runs,
+// else the page's error (r48-r52); own: the start's own read failed (r57 I2, r58 Q7).
 function failApart(msg, own = false) {
   if (somethingShown() || posterUp() || !(app.status === 'idle' || app.status === 'init') || (!own && (app.readingList || app.starting))) {
     tellReady(msg);
@@ -1144,7 +1138,9 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
     D = D1;
   }
   const e = centre(D);
-  return { target: [0, 1, 2].map((k) => ctr[k] + r[k] * e[0] + u[k] * e[1]), dist: D > 0 ? D : 1 };
+  // (the drawn box's left and right edges in px, for what it must keep clear of: R92-4)
+  const xs = raw.map((p) => w / 2 + ((p[0] - e[0]) / (D - p[2]) / th) * (w / 2));
+  return { target: [0, 1, 2].map((k) => ctr[k] + r[k] * e[0] + u[k] * e[1]), dist: D > 0 ? D : 1, xs: [Math.min(...xs), Math.max(...xs)] };
 }
 
 function fitTo(bbox) {
@@ -1945,7 +1941,14 @@ function stepPose(s, proj) {
     if (!box) return null;
     if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
     const eb = $('embedbar'), top = eb && !eb.hidden ? eb.offsetTop + eb.offsetHeight : 0; // (R91-2)
-    const f = fitPose(box, q, s.margin ?? 1.05, optbarHeight() + tourCover(), s.margin === undefined ? 16 : 0, ortho, top);
+    const pad = s.margin === undefined ? 16 : 0, cover = optbarHeight() + tourCover();
+    let f = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, top);
+    if (top) {
+      // (the space under the embed's bars kept only where the model meets them, not the full width: R92-4)
+      const f0 = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, 0), he = $('hdend');
+      const left = eb.offsetLeft + eb.offsetWidth + 8, right = he && he.offsetWidth ? he.offsetLeft - 8 : Infinity;
+      if (f0.xs && f0.xs[0] > left && f0.xs[1] < right) f = f0;
+    }
     pose = { target: f.target, dist: f.dist, q };
   }
   return pose ? { pose, ortho } : null;
@@ -6976,12 +6979,8 @@ function setRef(on) {
   announce(app.ref ? `positions measured from ${app.ref.name}` : 'positions measured from the whole model');
 }
 
-// The info block leads with what a visitor asks of a part (the selection, its
-// size and position, volume and mass); the file, the graphics backend, the
-// triangle count and the converter are in a Details fold at its foot (UI
-// organization review rank 3: the panel opened on "graphics WebGL 2 --
-// WebGPU not available" and pushed the parts list down). The fold is rebuilt
-// with the values, so whether it is open is kept here.
+// The info block leads with the selection, its size, position, volume and mass; the file and
+// graphics facts are in a Details fold at its foot, its open state kept here.
 // a name as shown: " #2" kept with it (R39-1; its "-" left breakable, a copy pasting as typed: R40-2)
 const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1');
 // (a copy of text alone pastes plain spaces, R40-2; over controls, the browser's own, R41-2)
