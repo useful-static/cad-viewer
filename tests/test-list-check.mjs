@@ -1401,6 +1401,8 @@ await test('list-not-read', async () => {
   // (a list read but empty: not "0 failed" either -- R104-3)
   assert.equal(summary({ entries: [], lists: [{ url: 'a' }] }), 'nothing checked: the list has no models');
   assert.equal(summary({ entries: [], lists: [{ url: 'a' }, { url: 'b' }] }), 'nothing checked: the lists have no models');
+  // (one not read, one read but empty: both said -- R105-3)
+  assert.equal(summary({ entries: [], lists: [{ url: 'a', error: 'x' }, { url: 'b' }] }), 'nothing checked: 1 list not read, 1 with no models');
 });
 
 await test('the list and its tours are read as cad.place reads them: given up after its 20 s, said as it says it (r54 A2)', async () => {

@@ -53,7 +53,7 @@ async function page(query, { entries = [], lists = [], throws = null } = {}) {
       calls.push({ urls, href, goDisabled: els.go.disabled, hidden: els.results.hidden });
       if (throws) throw new Error(throws);
       entries.forEach((e, i) => onEntry(e, i, entries.length));
-      return { lists: lists.map((l) => ({ ...l })) };
+      return { lists: lists.map((l) => ({ ...l })), entries }; // (as list-check.js returns: R105-3 reads entries)
     },
     insertInOrder(tbody, frag, i) { assert.equal(tbody, body); assert.equal(frag.tag, 'frag', 'a fragment of rows'); inserted.push(i); tbody.rows.push(...frag.kids); }, // (entries reported in order here)
     summary(result) { return `SUMMARY of ${result.lists.length}`; },

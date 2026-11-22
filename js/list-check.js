@@ -301,7 +301,7 @@ function gltfVerdict(json, file, found = () => false, hasBin = false) {
   return null;
 }
 // (an empty file: no reader opens one -- "ok" of a 0-byte STL, an empty OBJ and a zip of one: r77 A4)
-const EMPTY_WORDS = 'it is empty (0 bytes), which no reader of the viewer opens';
+const EMPTY_WORDS = 'it is empty, which no reader of the viewer opens'; // (its size said once, before it: R105-4)
 
 // What the page does with a zip or a 3MF, from its directory and the parts it reads -- by the page's
 // own rules: js/zip-dir.js zipDirectory (and its zip64 refusal), js/formats.js zipModel (the entry
@@ -1117,8 +1117,10 @@ export function summary(result) {
   const n = result.entries.length;
   // (no model read: not "0 failed", which reads as a pass -- R103-2; a list read but empty too: R104-3)
   if (!n) {
-    return `nothing checked: ${badLists ? `${badLists} list${badLists > 1 ? 's' : ''} not read`
-      : `the list${result.lists.length > 1 ? 's have' : ' has'} no models`}`;
+    // (with no model at all, every list read had none: said beside those not read -- R105-3)
+    const empty = result.lists.length - badLists;
+    if (!badLists) return `nothing checked: the list${empty > 1 ? 's have' : ' has'} no models`;
+    return `nothing checked: ${badLists} list${badLists > 1 ? 's' : ''} not read${empty ? `, ${empty} with no models` : ''}`;
   }
   return `${n} model${n === 1 ? '' : 's'}, ${all.length} check${all.length === 1 ? '' : 's'}: ${bad} failed, ${warn} to look at`
     + `${badLists ? `; ${badLists} list${badLists > 1 ? 's' : ''} not read` : ''}`;

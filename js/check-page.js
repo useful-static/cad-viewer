@@ -89,7 +89,8 @@ async function run(urls) {
       const g = document.createElement('span');
       g.setAttribute('aria-hidden', 'true');
       g.textContent = `${l.error ? MARK.bad : MARK.ok} `;
-      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : ' was read');
+      // (with no model at all, a list read had none: said, not a bare "was read" -- R105-3)
+      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : result.entries.length ? ' was read' : ' was read: it has no models');
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);
@@ -109,8 +110,35 @@ $('lists').value = given.join('\n');
 // (the field back at each line's start once left: scrolled to its end it showed only the tails, a
 // shorter second URL out of view -- R103-1)
 $('lists').addEventListener?.('blur', () => { $('lists').scrollLeft = 0; });
-// (a press in the box's padding focuses the field, which only its inner row took: R104-2)
-$('lists').parentElement?.addEventListener('mousedown', (e) => { if (e.target !== $('lists')) { e.preventDefault(); $('lists').focus(); } });
+// A left press in the box's padding as a press in the field at the nearest point: focus without a
+// scroll, the caret where pressed, a drag selecting from there (R104-2; it put the caret back where it
+// last was and a drag selected nothing -- R105-1, R105-2). The field is monospace, so a point's line
+// and column come from its line height and one character's width.
+function caretAt(ta, x, y) {
+  const r = ta.getBoundingClientRect(), cs = getComputedStyle(ta);
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+  const cw = ctx.measureText('0').width || 8;
+  const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+  const lines = ta.value.split('\n');
+  const cx = Math.min(Math.max(x, r.left), r.right - 1) - r.left + ta.scrollLeft;
+  const cy = Math.min(Math.max(y, r.top), r.bottom - 1) - r.top + ta.scrollTop;
+  const line = Math.min(lines.length - 1, Math.max(0, Math.floor(cy / lh)));
+  const col = Math.min(lines[line].length, Math.max(0, Math.round(cx / cw)));
+  return lines.slice(0, line).reduce((n, l) => n + l.length + 1, 0) + col;
+}
+$('lists').parentElement?.addEventListener('mousedown', (e) => {
+  const ta = $('lists');
+  if (e.target === ta || e.button !== 0) return;
+  e.preventDefault();
+  const at = caretAt(ta, e.clientX, e.clientY);
+  ta.focus({ preventScroll: true });
+  ta.setSelectionRange(at, at);
+  const move = (m) => { const to = caretAt(ta, m.clientX, m.clientY); ta.setSelectionRange(Math.min(at, to), Math.max(at, to), to < at ? 'backward' : 'forward'); };
+  const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+  addEventListener('mousemove', move);
+  addEventListener('mouseup', up);
+});
 $('form').onsubmit = (ev) => {
   ev.preventDefault();
   $('lists').scrollLeft = 0;
