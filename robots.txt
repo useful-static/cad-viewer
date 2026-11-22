@@ -1,0 +1,6 @@
+# cad.place: every page may be crawled, indexed, used in answers and used for training.
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+
+Sitemap: https://cad.place/sitemap.xml
