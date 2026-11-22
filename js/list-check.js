@@ -1077,7 +1077,7 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
     // (a list named by a share page is read -- and its error filed -- under the file's own
     // address, js/open-url.js fileUrl: matched under it too)
     const err = r.errors.find((e) => e.url === abs || e.url === u || e.url === fileUrl(abs));
-    return { url: abs, error: err ? err.message || String(err.error || err) : null, models: err ? 0 : r.counts?.[i] ?? null };
+    return { url: abs, error: err ? err.message || String(err.error || err) : null, models: err ? 0 : r.counts?.[i] ?? null, repeats: err ? 0 : r.repeats?.[i] ?? 0 };
   });
   const n = r.entries.length;
   const entries = await pool(r.entries.map((e, i) => async () => {

@@ -91,7 +91,9 @@ async function run(urls) {
       g.textContent = `${l.error ? MARK.bad : MARK.ok} `;
       // (a list read with no models says so, beside others or alone -- R105-3, R106-5)
       const none = l.models === 0 || (l.models == null && !result.entries.length);
-      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : none ? ' was read: it has no models' : ' was read');
+      // (a model an earlier list already named is checked there, as the viewer keeps it there: said -- R107-4)
+      const rep = l.repeats ? `: ${l.repeats === l.models ? (l.models === 1 ? 'its model is' : `all ${l.models} of its models are`) : `${l.repeats} of its ${l.models} models ${l.repeats === 1 ? 'is' : 'are'}`} already in an earlier list, checked there` : '';
+      p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : none ? ' was read: it has no models' : ` was read${rep}`);
       $('listnotes').append(p);
     }
     $('summary').textContent = summary(result);
@@ -127,7 +129,7 @@ function caretAt(ta, x, y, free = false) {
   const lines = ta.value.split('\n');
   const lh = ta.scrollHeight / lines.length || parseFloat(getComputedStyle(ta).lineHeight) || 16;
   const px = free ? x - r.left : Math.min(Math.max(x - r.left, 0), ta.clientWidth - 1);
-  const cy = Math.min(Math.max(y - r.top, 0), ta.clientHeight - 1) + ta.scrollTop;
+  const cy = (free ? y - r.top : Math.min(Math.max(y - r.top, 0), ta.clientHeight - 1)) + ta.scrollTop;
   const line = Math.min(lines.length - 1, Math.max(0, Math.floor(cy / lh)));
   const col = Math.min(lines[line].length, Math.max(0, Math.round((px + ta.scrollLeft) / cw)));
   return lines.slice(0, line).reduce((n, l) => n + l.length + 1, 0) + col;
@@ -157,8 +159,27 @@ $('lists').parentElement?.addEventListener('mousedown', (e) => {
   // (the press itself leaves the field where it is, as a press in the text does; a drag follows its end)
   const pick = (to, follow) => { ta.setSelectionRange(Math.min(anchor, to), Math.max(anchor, to), to < anchor ? 'backward' : 'forward'); if (follow) showCaret(ta, to); };
   pick(at, false);
-  const move = (m) => pick(caretAt(ta, m.clientX, m.clientY, true), true);
-  const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+  // (held still outside the field, the drag goes on scrolling it, sideways and up or down, each frame
+  // by how far outside it is -- as a drag from the text does: R107-1)
+  let last = null, raf = 0;
+  const out = (p, lo, size) => (p < lo ? p - lo : p > lo + size ? p - lo - size : 0);
+  const tick = () => {
+    raf = 0;
+    if (!last) return;
+    const r = ta.getBoundingClientRect();
+    const dx = out(last.x, r.left, ta.clientWidth), dy = out(last.y, r.top, ta.clientHeight);
+    if (!dx && !dy) return;
+    ta.scrollLeft += Math.max(-40, Math.min(40, dx));
+    ta.scrollTop += Math.max(-40, Math.min(40, dy));
+    pick(caretAt(ta, last.x, last.y, true), false);
+    raf = requestAnimationFrame(tick);
+  };
+  const move = (m) => {
+    last = { x: m.clientX, y: m.clientY };
+    pick(caretAt(ta, last.x, last.y, true), true);
+    if (!raf) raf = requestAnimationFrame(tick);
+  };
+  const up = () => { last = null; cancelAnimationFrame(raf); raf = 0; removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
   addEventListener('mousemove', move);
   addEventListener('mouseup', up);
 });

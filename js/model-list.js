@@ -33,7 +33,7 @@
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
 import { STYLE_IDS } from './styles.js';
-import { PART_NAME_MAX, PART_NAMES_MAX, STEP_ID, isPartName } from './tour.js';
+import { PART_NAME_MAX, PART_NAMES_MAX, STEP_ID, isPartName, notJson } from './tour.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, notePlace } from './view-link.js';
 import { fileUrl } from './open-url.js';
 
@@ -47,8 +47,8 @@ export function parseModelList(text, listUrl) {
   let data;
   try {
     data = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`not JSON (${e.message})`);
+  } catch {
+    throw new Error(notJson(text));
   }
   if (Array.isArray(data)) {
     // the array form: say which entry is wrong, as the object form does
@@ -388,6 +388,13 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
       return { entries: [], error: { url: url || u, message } };
     }
   }));
-  // (counts: each list's own models, in the order given -- the list check says which list had none: R106-5)
-  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error), counts: got.map((g) => g.entries.length) };
+  // (counts: each list's own models, in the order given -- the list check says which list had none:
+  // R106-5; repeats: how many of them an earlier list already named, kept in its place -- R107-4)
+  const seen = new Set();
+  const repeats = got.map((g) => {
+    const n = g.entries.filter((e) => seen.has(e.url)).length;
+    for (const e of g.entries) seen.add(e.url);
+    return n;
+  });
+  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error), counts: got.map((g) => g.entries.length), repeats };
 }

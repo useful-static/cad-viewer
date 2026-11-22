@@ -262,7 +262,7 @@ await test('a model whose body drops after its headers is that model\'s red row,
 await test('whole-list', async () => {
   const seen = [];
   const r = await checkLists([`${B}models.json`], 'https://cad.place/', { fetchFn: fakeFetch, onEntry: (e) => seen.push(e.name) });
-  assert.deepEqual(r.lists, [{ url: `${B}models.json`, error: null, models: 4 }]); // (its own count: R106-5)
+  assert.deepEqual(r.lists, [{ url: `${B}models.json`, error: null, models: 4, repeats: 0 }]); // (its own count: R106-5; none named before it: R107-4)
   assert.equal(r.entries.length, 4);
   assert.equal(seen.length, 4);
   const good = r.entries.find((e) => e.name === 'Good');

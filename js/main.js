@@ -1355,14 +1355,8 @@ function applyView(v, link = false) {
   if (v.section) Object.assign(app.section, { of: null, held: null }, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
-  // Explode as the link has it (a whole link without it: off), how far
-  // first, then on, then how
-  // (the link's cut is the link's, a fraction of the box its Explode draws: not kept through the
-  // Explode it lands -- read against the gathered box, it opened moved: r135)
-  // (only a link that sets its own cut: one without keeps the tab's, which its Explode keeps -- skipped,
-  // the cut moved, and the next Explode nudge put it back at the held place: r136 L2, r137 L1)
-  // (the amount set straight, before setExplode -- which, Explode on already, does nothing -- is kept
-  // through as a whole: set outside keepingCut, it moved the tab's cut -- r137 L1)
+  // Explode as the link has it (none: off), how far first, then on, then how; a link's own cut is
+  // the link's, not kept through its Explode (r135-r137)
   const landExplode = () => {
     if (v.explode && app.renderer) {
       app.explode.t = v.explode.t;
@@ -3037,15 +3031,8 @@ function refold(keep = focusNow()) {
   if ($('sheet').parentElement !== tb) $('tools').after($('sheet'));
   $('fhsheet').hidden = true;
   tb.classList.add('measuring');
-  // the model list is a step of its own, after View and before Show: it
-  // folds into File's panel (it stood outside every group, so the wide row
-  // could not shed it: review r16 L3). On a page given a list the list is
-  // how a visitor finds the other models, so View folds first: before View
-  // it folded on a 1024 px tablet whose row had room for it once View had
-  // (live end-to-end review). At 1280 px it fits beside a folded File.
-  // The tools (Measure, Section, Explode) show their names where the row has
-  // room; before View folds they drop to their icons (as on a phone), which
-  // keeps View and a model list in a 1280 px row and a 1024 px tablet's.
+  // the model list folds into File's panel, after View (r16 L3); the tools drop to their icons
+  // before View folds, keeping View and a list in a 1280 px row
   $('tools').classList.remove('compact');
   // The page's name goes next, before View: a 1280 px row with a model list
   // and ? and Full screen at its end had room for View only without it

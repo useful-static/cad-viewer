@@ -103,12 +103,20 @@ export function tourAt(tour, unit) {
   return { ...tour, unit, steps };
 }
 
+// A file that is not JSON, said in the page's words with how it begins (the browser's own message,
+// quotes inside quotes and a line break as a space, was shown: R107-3)
+export function notJson(text) {
+  const start = String(text ?? '').trim().replace(/\s+/g, ' ');
+  if (!start) return 'not JSON: it is empty';
+  return `not JSON: it begins “${start.length > 40 ? `${start.slice(0, 40)}…` : start}”`;
+}
+
 export function parseTour(text, base = undefined) {
   // (counted in BYTES, as the page's read counts them (readCapped): a CJK tour of 1.8 M characters
   // is 5 MB, which the maker saved and check-tour passed, and the page refused)
   if (typeof text === 'string' && utf8Length(text) > MAX_TOUR_BYTES) throw new Error(`over ${MAX_TOUR_BYTES / 2 ** 20} MB: not a tour this viewer reads`);
   let t;
-  try { t = JSON.parse(text); } catch (e) { throw new Error(`not JSON: ${e.message}`); }
+  try { t = JSON.parse(text); } catch { throw new Error(notJson(text)); }
   if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('a tour is a JSON object');
   const bad = (where, why) => new Error(`${where}: ${why}`);
   for (const k of Object.keys(t)) if (!TOP_FIELDS.includes(k)) throw bad(`"${k}"`, `not a tour field (${TOP_FIELDS.join(', ')})`);

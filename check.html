@@ -47,7 +47,7 @@
   /* (on touch: a 16 px field iOS does not zoom into, 40 px targets -- R98-1) */
   /* (the example at the page's 13 px, one line whole on a 320 phone: it was cut, then broken after
      its dot with the box jumping at the first key -- R105-5, R106-2) */
-  @media (any-pointer: coarse) { textarea { font-size:16px; } #lists::placeholder { font-size:13px; }button { min-height:40px; } header a { display:inline-block; padding:10px 0; } }
+  @media (any-pointer: coarse) { textarea { font-size:16px; } #lists::placeholder { font-size:13px; line-height:22.4px; /* (on the typed text's 16 px line: R107-2) */ } button { min-height:40px; } header a { display:inline-block; padding:10px 0; } }
   button:disabled { opacity:.5; cursor:default; }
   #summary { margin:10px 0; font-weight:600; }
   /* (the list notes, coloured as the table's marks: the rule named the field -- R100-2) */

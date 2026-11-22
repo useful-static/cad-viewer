@@ -36,6 +36,8 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('[["a.cadmesh", "A"], ["b.cadmesh"]]', L), /entry 2 is not a \[file, name\] pair/);
   assert.throws(() => parseModelList('{"a": 3}', L), /"a": its name must be a string/);
   assert.throws(() => parseModelList('{"a": ', L), /not JSON/);
+  // (in the page's words with how it begins, not the browser's message -- R107-3)
+  assert.throws(() => parseModelList('this is not json\nat all', L), { message: 'not JSON: it begins “this is not json at all”' });
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
 await test('an entry\'s picture, STEP and tours named by a share page are read from the file, as check.html checks them', () => {
@@ -101,6 +103,11 @@ await test('fetch: after a redirect, files resolve against the URL that answered
 await test('fetch: a timeout is said in plain words (review r17)', async () => {
   const r = await fetchModelLists(['l.json'], L, async () => { throw new DOMException('signal timed out', 'TimeoutError'); });
   assert.equal(r.errors[0].message, 'no answer in time');
+});
+await test('fetch: each list\'s own count, and how many an earlier list already named (R106-5, R107-4)', async () => {
+  const body = { 'a.json': '{"x.cadmesh": "X", "y.cadmesh": "Y"}', 'b.json': '{"y.cadmesh": "Y again", "z.cadmesh": "Z"}' };
+  const r = await fetchModelLists(['a.json', 'b.json'], L, async (u) => new Response(body[String(u).split('/').pop()]));
+  assert.deepEqual([r.counts, r.repeats, r.entries.length], [[2, 2], [0, 1], 3]);
 });
 await test('lists join in order; a file named again keeps its first place and name', () => {
   const a = [{ url: 'u1', name: 'one' }, { url: 'u2', name: 'two' }];
