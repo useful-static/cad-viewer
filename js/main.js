@@ -281,12 +281,8 @@ function recoveryStarts(why) {
   if (PROGRESS_STATES.has(app.status) || app.status === 'error') tell(text, 6000);
   else setStatus('recovering', text);
 }
-// The recovery's end on a renderer that cannot hold the shown model: the page's error -- but under a
-// load, which keeps its state, told, and noted (app.gpuLacks) so that a Cancel, which leaves the old
-// model shown, says it is not drawn rather than "ready" over an empty view (r50 A4, Q2: a third
-// copy of the rule, untested; Cancel then wrote "ready" over a model the renderer did not hold)
-// (noted with no load running too: the note follows the model, not the moment -- "cannot hold", a
-// load, then Cancel wrote "ready" over a model the renderer did not hold: r51 A1)
+// The recovery's end on a renderer that cannot hold the model: the page's error, or told under a load;
+// noted (app.gpuLacks) so a Cancel says the model is not drawn (r50 A4, Q2, r51 A1)
 function cannotHold() {
   const msg = `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`;
   app.gpuLacks = { mesh: app.mesh, msg };
@@ -677,12 +673,8 @@ function syncExplodeSphere() {
   app.sphere = x.on ? { center: base.center, radius: base.radius + x.t * x.len } : base;
 }
 
-// The visitor's cut kept where it is in the model across a change of Explode (fn): its t is a
-// fraction of the drawn box, which Explode grows and shrinks, so Explode off -- Measure turning on
-// turns it off -- moved the cut (r126 L3). A tour's step keeps its fraction: it is the step's.
-// (the position it keeps is the visitor's: held while t is still the one keepingCut wrote, so a
-// drag of the Explode slider down and back gives the cut back where it was -- each step clamped it
-// anew, and it ended on another part: r135 M1. A view link landing sets its own cut: viewLanding)
+// The visitor's cut kept in place across a change of Explode, held while t is keepingCut's own; a
+// tour step and a view link landing keep their fraction (r126 L3, r135 M1)
 let viewLanding = false;
 function keepingCut(fn) {
   const s = app.section;
@@ -7782,6 +7774,21 @@ function wireInput() {
   $('piccopy').hidden = typeof ClipboardItem !== 'function' || !navigator.clipboard?.write;
   $('piccopy').onclick = () => copyPicture();
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
+  // The browser's own Print printed a blank page, or the last File > Print's picture of another model
+  // (R116-1): Ctrl/Cmd+P is File > Print, and after a print the picture goes, its place the page's hint
+  const hint = $('printname').textContent;
+  addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'p' && !$('printbtn').disabled) {
+      e.preventDefault();
+      closeMenus();
+      savePicture(true);
+    }
+  });
+  addEventListener('afterprint', () => {
+    const img = $('printimg');
+    if (img.src) { URL.revokeObjectURL(img.src); img.removeAttribute('src'); }
+    $('printname').textContent = hint;
+  });
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => (app.dxf ? $('view2d') : $('view')).focus();
   // (Next greyed at the end, Previous at the start: the focus to the other, R43-3)

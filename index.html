@@ -303,7 +303,7 @@
   .seg button:first-child { border-radius:4px 0 0 4px; margin-left:0; }
   .seg button:last-child { border-radius:0 4px 4px 0; }
   .seg button[aria-pressed=true] { position:relative; } /* its orange border over the neighbours' */
-  #secpos { width:clamp(110px, 32vw, 360px); }
+  #secpos { width:clamp(110px, 32vw, 360px); touch-action:none; } /* (a short touch drag moves it, not the page: R116-4) */
   #secval { min-width:13ch; /* ("Z = -298.5 mm" kept from stepping ⌖ and Flip when the reference changes: R114-4) */ cursor:text; text-decoration:underline dotted; text-underline-offset:3px; }
   #secin { width:9ch; font:inherit; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   /* the parts list keeps room for about six rows however tall the info above
@@ -574,6 +574,7 @@
     body > *:not(#printout) { display:none !important; }
     #printout { display:block !important; }
     #printimg { max-width:100%; max-height:90vh; display:block; margin:0 auto; }
+    #printimg:not([src]) { display:none; } /* (the browser's own Print without File > Print: the hint alone, R116-1) */
     #printname { text-align:center; font:12px sans-serif; color:#000; }
   }
   body.mode2d #view { visibility:hidden; }
@@ -1124,7 +1125,7 @@
   </div>
 </div>
 <!-- File > Print: the view's picture alone on the printed page -->
-<div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname"></p></div>
+<div id="printout" aria-hidden="true"><img id="printimg" alt=""><p id="printname">To print the model, use Print… in the File menu.</p></div>
 <span id="announce" class="sr-only" role="status" aria-live="polite"></span>
 <footer hidden><span id="status">loading</span><span id="model"></span></footer>
 <!-- js/early.js first: the address's list and model downloads start with it, before main.js's
