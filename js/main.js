@@ -5610,6 +5610,11 @@ function dropAddressModel(u) {
 }
 
 // A drawing's tooltips for the controls it keeps; the 3D ones are put back on leaving (rounds 9-12)
+// Print's key in a title as this page has it: ⌘P on a Mac, none when framed (the host's: R118-1, R118-5)
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+let FRAMED = false;
+try { FRAMED = window.self !== window.top; } catch { FRAMED = true; }
+const keyTitle = (t) => (FRAMED ? t.replace(/ \((Ctrl|⌘)\+P\)/, '') : IS_MAC ? t.replace('Ctrl+P', '⌘P') : t);
 const TITLES_2D = [
   ['measure', 'Measure the drawing: two points, which snap to line ends, middles and circle centres (M)'],
   ['savepic', 'Save the drawing as a PNG picture, as it is shown without the selection and the hover (P)'],
@@ -5658,7 +5663,7 @@ function show2D(drawing, name, url) {
   $('view2d').dataset.fitInset = app.embed ? '44' : '0';
   // the kept controls' tooltips in a drawing's words (Measure's named faces and hole centres,
   // Save picture the options ▾ that 2D hides: UI design round 9 R9-9)
-  for (const [id, t] of TITLES_2D) { const b = $(id); if (b) { b.dataset.title3d ??= b.title; b.title = t; } } // (?noopen=1 removes embedopen)
+  for (const [id, t] of TITLES_2D) { const b = $(id); if (b) { b.dataset.title3d ??= b.title; b.title = keyTitle(t); } } // (?noopen=1 removes embedopen)
   modeWords(true);
   // (the row changed -- View out, the 2D badge and the sheet select in -- and the header's size
   // may not have: after the select is shown, so the fold counts it, UI design round 8 R8-1)
@@ -6803,12 +6808,8 @@ function syncUnitsRow() {
     $('meshunit').title = `This mesh file stores no unit: it is read as ${unitWord(unit)}. Pick the unit it was made in and it is read again at that size`;
   }
 }
-// The "this file is in" row: shown for a mesh that stores no unit, its select saying the unit it is
-// read in -- during a re-read, the unit being read, the one setMeshUnit compares a choice with (a
-// showInfo meanwhile, a part clicked, put the select back to the unit still shown: r69 A5) -- the
-// one writer of the select, at every showInfo and where a re-read is refused or ends without
-// landing (written in three places, r66 A2 and r67 Q3 each a mismatch among them: r68 A6; the
-// start-up harness runs this, main.js's own -- r68 Q6). -> the unit written, or null
+// The "this file is in" row for a unit-less mesh, its select the unit read in (or being read): its one
+// writer, at every showInfo and an unlanded re-read (r66-r69). -> the unit written, or null
 function syncMeshUnitRow() {
   const src = app.meshSource;
   $('meshunitrow').hidden = !src;
@@ -7769,24 +7770,36 @@ function wireInput() {
   // promise, so the gesture still holds when the render finishes)
   $('piccopy').hidden = typeof ClipboardItem !== 'function' || !navigator.clipboard?.write;
   $('piccopy').onclick = () => copyPicture();
-  $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
-  // Ctrl/Cmd+P is File > Print, once at a time, P by place on other layouts; a print's picture then
-  // dropped for the hint; framed, all left to the host page (R116-1, R117-1, -2, -4, -6, -7)
-  let framed = false;
-  try { framed = window.self !== window.top; } catch { framed = true; }
-  const hint = framed ? '' : $('printname').textContent;
+  // Ctrl/Cmd+P is File > Print, P by place on other layouts; one print at a time, by key or button, its
+  // note shown before the picture is drawn; a print's picture then dropped for the hint; framed, the key,
+  // its naming and the print are the host page's (R116-1, R117-1..7, R118-1..5)
+  const framed = FRAMED;
+  $('printbtn').title = keyTitle($('printbtn').title);
+  if (framed) {
+    for (const k of document.querySelectorAll('#helppop kbd')) if (/^(Ctrl|⌘)\+P$/.test(k.textContent)) { k.parentElement.nextElementSibling?.remove(); k.parentElement.remove(); }
+    $('printbtn').removeAttribute('aria-keyshortcuts');
+  } else if (IS_MAC) $('printbtn').setAttribute('aria-keyshortcuts', 'Meta+P Control+P');
   let printing = false;
+  const startPrint = () => {
+    if (printing || $('printbtn').disabled) return;
+    printing = true;
+    closeMenus();
+    tell('preparing the print…', 30000);
+    new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+      .then(() => savePicture(true))
+      .finally(() => { printing = false; if ($('hover').textContent === 'preparing the print…') tell('preparing the print…', 1, ''); });
+  };
+  $('printbtn').onclick = startPrint;
   addEventListener('keydown', (e) => {
     const pKey = e.key.toLowerCase() === 'p' || (nonLatinLetter(e.key) && e.code === 'KeyP');
     if (framed || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || !pKey || $('printbtn').disabled) return;
     e.preventDefault();
-    if (e.repeat || printing) return;
-    printing = true;
-    closeMenus();
-    tell('preparing the print…', 2000);
-    Promise.resolve(savePicture(true)).finally(() => { printing = false; });
+    if (!e.repeat) startPrint();
   });
-  const hintNow = () => (framed ? '' : app.header || app.dxf ? hint : 'Open a model to print it.');
+  const hintNow = () => (framed ? ''
+    : !app.header && !app.dxf ? 'Open a model to print it.'
+      : app.embed ? `To print the ${app.dxf ? 'drawing' : 'model'}, press Ctrl+P.`
+        : `To print the ${app.dxf ? 'drawing' : 'model'}, use Print… in the File menu.`);
   addEventListener('beforeprint', () => { if (!$('printimg').getAttribute('src')) $('printname').textContent = hintNow(); });
   addEventListener('afterprint', () => {
     const img = $('printimg');
@@ -7859,7 +7872,6 @@ function wireInput() {
   // Undo's key as this OS names it (both work everywhere)
   if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
     $('undo').title = $('undo').title.replace('Ctrl+Z', '⌘Z');
-    $('printbtn').title = $('printbtn').title.replace('Ctrl+P', '⌘P');
     for (const k of document.querySelectorAll('#helppop kbd')) k.textContent = k.textContent.replace(/^Ctrl\+([ZP])$/, '⌘$1');
   }
   pal.onchange = () => setPalette(pal.value);
@@ -8369,12 +8381,8 @@ function addPicked(files) {
   } else go();
 }
 
-// The page's start from its address, once the renderer is up: the file the visitor chose meanwhile,
-// ?list= (and the ?model= / ?index= of it), ?src=, an embed's ?poster=, ?add=, ?tour=. Its contract
-// is the generated sweep, tests/test-startup-sweep.mjs (r57), with the start-up table, tests/test-scene.mjs
-// START_CASES (r51), for the decisions no invariant states; both run it through tests/startup-harness.mjs.
-// Its end clears app.starting whatever it threw (r58 Q6), and a failure told while it ran is the
-// page's error when it ends with nothing shown (r58 Q7).
+// The page's start from its address once the renderer is up (?list=, ?src=, ?poster=, ?add=, ?tour=):
+// its contract tests/test-startup-sweep.mjs and START_CASES; app.starting cleared at its end (r51-r58)
 async function startFromUrl(early) {
   try {
     await startFromAddress(early);
@@ -8460,12 +8468,8 @@ async function startFromAddress(early) {
   // none named, the next one opened from the device, never the model list's first): viewIsFor, by
   // the address. (A bad escape decodeURIComponent throws on is no view: it stopped the model loading.)
   setPendingView(params, location.hash);
-  // ?src opens at once; ?list= (one or more) is read beside it, never in its way; with no ?src the
-  // list's first model opens, unless the visitor opened something meanwhile (loadListed: r19).
-  // ?embed=1&poster=<image>: the picture, and the model only on View in 3D (js/model-list.js
-  // posterAsked, js/early.js) -- for a ?src=, a list's first and a tour's own model alike (r53 Q2,
-  // r54 Q2). ?tour=<url> (js/tour.js): read beside the model; with no ?src the tour's own model
-  // opens (ahead of a list's first), and the tour starts once a model is shown
+  // ?src opens at once, ?list= read beside it (no ?src: its first, r19); a poster shows the picture
+  // until View in 3D (r53, r54); ?tour= read beside, its own model opened without a ?src
   const tourUrl = params.get('tour');
   const touring = tourUrl ? readTour(tourUrl) : null;
   app.tourRead = touring; // (View in 3D on a poster reads it too)
