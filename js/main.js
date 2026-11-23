@@ -15,7 +15,7 @@ import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList,
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
-import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qFromBasis, qMul, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
+import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qAxis, qFromBasis, qMul, qNorm, qRotate, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
@@ -1795,12 +1795,8 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 }
 
 // ---------- tours (js/tour.js) ----------
-// A .cadtour.json played over the model (?tour=<url>): each step flies the
-// camera to its view and shows its caption in a card over the view; ◀ ▶ (and
-// ← →) step, ✕ (Esc) leaves and puts back the view the visitor had. A step's
-// camera is a preset (the whole model framed from it), a fixed camera, or
-// "frame these parts from here", fitted to the window it plays in, above the
-// card; a step with none keeps the camera where it is. Reduced motion: a cut.
+// A .cadtour.json over the model (?tour=<url>): a step flies to its view (a preset, a camera, or
+// parts framed above the card) with its caption; ◀ ▶ step, ✕ (Esc) puts the view back.
 
 // the bottom of the view the caption card covers (frames sit above it)
 const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
@@ -2788,13 +2784,26 @@ function setWalk(on) {
     levelOrbitBy(c, orientUp(c.orient), 0, 0);
     viewChanged();
   } else {
-    // (the eye and its direction kept, the turning point moved out to the model's depth: the next
-    // orbit or turntable turned about a point a few mm ahead -- R124-2)
+    // (the eye kept, the turning point moved out to the model's depth: the next orbit or turntable
+    // turned about a point a few mm ahead -- R124-2; with the model's middle out of view, the view
+    // turned onto it, or every turn swung about empty space -- R125-1)
     const c = app.cam, d = camDir(c), s = app.sphereBase || app.sphere;
     const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
-    const ahead = [0, 1, 2].reduce((a, k) => a + (s.center[k] - eye[k]) * -d[k], 0);
-    c.dist = Math.max(s.radius * 0.05, ahead > 0 ? ahead : Math.hypot(...s.center.map((v, k) => v - eye[k])));
-    c.target = [0, 1, 2].map((k) => eye[k] - d[k] * c.dist);
+    const v = s.center.map((x, k) => x - eye[k]), far = Math.hypot(...v);
+    const ahead = [0, 1, 2].reduce((a, k) => a + v[k] * -d[k], 0);
+    if (far > 1e-9 && ahead < far * Math.cos(c.fov / 2)) {
+      const nd = v.map((x) => -x / far);
+      const ax = [d[1] * nd[2] - d[2] * nd[1], d[2] * nd[0] - d[0] * nd[2], d[0] * nd[1] - d[1] * nd[0]];
+      const n = Math.hypot(...ax), ang = Math.acos(Math.max(-1, Math.min(1, d[0] * nd[0] + d[1] * nd[1] + d[2] * nd[2])));
+      const axis = n > 1e-9 ? ax.map((x) => x / n) : qRotate(c.q, [0, 1, 0]);
+      c.q = qNorm(qMul(qAxis(axis, ang), c.q));
+      levelOrbitBy(c, orientUp(c.orient), 0, 0);
+      c.dist = Math.max(s.radius * 0.05, far);
+      c.target = s.center.slice();
+    } else {
+      c.dist = Math.max(s.radius * 0.05, ahead);
+      c.target = [0, 1, 2].map((k) => eye[k] - d[k] * c.dist);
+    }
     viewChanged();
   }
   tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000, on ? 'walk on' : 'walk off');
@@ -2914,11 +2923,8 @@ function undoVisibility() {
 }
 
 // ---------- toolbar menus ----------
-// The view presets, the Save group, the rest of View and Show stand in the toolbar row where it
-// has room and fold behind a menu button where it has not, in FOLD_ORDER (the presets first, the
-// modes kept in view on a laptop). Whether the row fits is MEASURED, never a width breakpoint,
-// with Save .cadmesh counted as shown so a load never refolds it; a tool's own controls are in the
-// options bar. In the narrow layout the Save group is File, always folded, Open… inside it.
+// Toolbar groups fold behind menu buttons in FOLD_ORDER when the row (MEASURED, never a
+// breakpoint) has no room; narrow, the Save group is File, always folded.
 
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
@@ -4522,7 +4528,7 @@ function askBigConversion(buf, name, seq) {
   const mins = Math.max(1, Math.ceil(secs / 60));
   setStatus('loading', `${name} is ${mbs.toFixed(0)} MB: convert it?`);
   showProgress(`Convert ${name}?`, 0, `${mbs.toFixed(0)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
-    'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.');
+    app.embed ? '' : 'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.'); // (an embed has no File menu: R125-6)
   $('pgo').hidden = false;
   announce(`${name} is ${mbs.toFixed(0)} MB: Convert anyway, or Cancel`);
   $('pgo').focus();
@@ -5321,7 +5327,7 @@ async function loadAny(buf, name, seq, extras = []) {
     // wrong kind (it was told to open a .cadmesh file: review r22)
     if (ext === 'cadmesh') throw new Error(`${name} is damaged or not a .cadmesh file inside: save it again from the viewer, or open the STEP it came from`);
     // (a tour this viewer saved: where it opens, not "not a file this viewer opens" -- R124-3)
-    if (/\.cadtour\.json$/i.test(name)) throw new Error(`${name} is a tour: open its model, then Make a tour… > Open… plays or edits it`);
+    if (/\.cadtour\.json$/i.test(name)) throw new Error(app.header ? `${name} is a tour: Make a tour… > Open… plays or edits it over this model` : `${name} is a tour: open its model, then Make a tour… > Open… plays or edits it`);
     throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: ${OPENS}`);
   }
   await loadBuffer(buf, name, seq);
@@ -8061,14 +8067,8 @@ function wireInput() {
         return;
       }
     }
-    // then an open parts panel (the narrow layout's slide-out); the next Esc
-    // clears the selection. Letters match in either case, so Caps Lock does
-    // not turn the shortcuts off.
-    // A layout whose keys type no Latin letter (Cyrillic, Greek) goes by the
-    // key's place, as QWERTY names it.
-    // Esc, one thing a press: the panel, then Measure's results list, its
-    // half-made point, Measure itself, then Paint, Walk, Explode and the
-    // Section (each a mode the view is in), then the selection
+    // Letters match in either case (Caps Lock), or by place on a non-Latin layout. Esc, one thing
+    // a press: the panel, Measure's list, point, Measure, Paint, Walk, Explode, Section, selection
     const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), true)) || (app.dxf.view.measuring ? (toggle2DMeasure(), true)

@@ -117,6 +117,7 @@
   html.light #embedhint { background:rgba(255,255,255,.92); box-shadow:0 0 0 1px var(--line); }
   html.light .pbar { background:#e2e6eb; }
   html.light #stage .card { box-shadow:0 8px 30px rgba(15,23,42,.18); }
+  html.light #stage .card .err { color:#c62828; } /* (the dark theme's pink was 2.51:1 on white: R125-2) */
   /* ?embed=1&theme=dark: the framing page's dark, a slate ground (the view
      draws on it too: styles.js EMBED_DARK_BG), in place of the viewer's own
      neutral dark; a page that passes no theme keeps the viewer's */
@@ -130,6 +131,7 @@
   html.dark #tourcard { background:rgba(30,41,59,.95); }
   html.dark #embedhint { background:rgba(15,23,42,.88); }
   html.dark .pbar { background:#273449; }
+  html.dark #stage:not([data-bg="paper"]) .mlabel { background:rgba(15,23,42,.92); } /* (the slate frame's, as the hover note: R125-7) */
   /* an embed, until main.js has something of its own to show: the viewer
      says it is coming (main.js adds html.started) */
   html.embed:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
@@ -310,7 +312,7 @@
   #secin { width:9ch; font:inherit; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   #secval:has(#secin) { text-decoration:none; } /* (no readout underline under the typed digits: R123-6) */
   #secin[aria-invalid=true] { border-color:#ff8f8f; } /* (not a position: R123-2) */
-  #secin[aria-invalid=true]:focus { outline-color:#ff8f8f; } /* (the ring itself says it, not a 1 px line inside it: R124-4) */
+  #secval #secin[aria-invalid=true]:is(:focus, :focus-visible) { outline-color:#ff8f8f; } /* (the ring itself says it: R124-4; over the ring rule's id, R125-3) */
   /* the parts list keeps room for about six rows however tall the info above
      it grows (a long graphics line, a selection's rows); past that the panel
      itself scrolls */
@@ -357,6 +359,9 @@
   #stage #poster { padding:10px; }
   /* (no Fit and no "turn and zoom" hint over a poster: no model is open yet -- R121-3) */
   body:has(#poster:not([hidden])) :is(#embedfit, #embedhint) { display:none !important; }
+  /* (no model shown in an embed: nothing to fit or turn, and the card's own Open link the one -- R125-4) */
+  body:has(#empty:not([hidden])) :is(#embedfit, #embedhint) { display:none !important; }
+  body:has(#emptyfull:not([hidden])) #embedopen { display:none !important; }
   #posterimg { display:block; max-width:100%; max-height:60vh; margin:0 auto 10px; }
   #pimg { display:block; max-width:100%; max-height:28vh; margin:0 auto 8px; }
   #pimg[hidden] { display:none; }
