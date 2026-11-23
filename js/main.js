@@ -41,12 +41,8 @@ import { WebGLRenderer } from './renderer-webgl.js';
 // (tests/test-first-phase.mjs, round 51); fetched once, a failure retried and said plainly (r52 A8, Q8)
 const once = (load, what) => {
   let p = null;
-  // (a failed download -- import()'s TypeError -- in those words; any other failure, a module that
-  // does not run, said as itself, and its cause kept in the console: every failure was "check the
-  // connection" -- r53 A6, Q7)
-  // (a download told by import()'s own words for one -- Chromium's, Firefox's, Safari's -- not by its
-  // TypeError alone, which a reader that downloaded and then threw raises too; "try again", which
-  // fits a file opened from a URL as well as one from the device: r54 A9, Q9)
+  // (a failed download told by import()'s own words for one, any other failure as itself, the cause
+  // in the console -- r53 A6, r54 A9)
   return () => (p ||= load().catch((e) => {
     p = null;
     console.error(e);
@@ -2774,6 +2770,7 @@ function walkKey(k, shift) {
 function setWalk(on) {
   app.walk = on;
   $('walk').setAttribute('aria-pressed', String(on));
+  let turned = false;
   if (on) {
     // stand where the eye is: a near orbit distance, so a look-around turns in place
     const c = app.cam, d = camDir(c);
@@ -2791,7 +2788,10 @@ function setWalk(on) {
     const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
     const v = s.center.map((x, k) => x - eye[k]), far = Math.hypot(...v);
     const ahead = [0, 1, 2].reduce((a, k) => a + v[k] * -d[k], 0);
-    if (far > 1e-9 && ahead < far * Math.cos(c.fov / 2)) {
+    // (the narrower of the view's half-angles: a portrait phone's sides are inside the vertical's -- R126-1)
+    const half = Math.atan(Math.tan(c.fov / 2) * Math.min(1, app.stageAspect || 1));
+    turned = far > 1e-9 && ahead < far * Math.cos(half);
+    if (turned) {
       const nd = v.map((x) => -x / far);
       const ax = [d[1] * nd[2] - d[2] * nd[1], d[2] * nd[0] - d[0] * nd[2], d[0] * nd[1] - d[1] * nd[0]];
       const n = Math.hypot(...ax), ang = Math.acos(Math.max(-1, Math.min(1, d[0] * nd[0] + d[1] * nd[1] + d[2] * nd[2])));
@@ -2806,7 +2806,8 @@ function setWalk(on) {
     }
     viewChanged();
   }
-  tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000, on ? 'walk on' : 'walk off');
+  const off = turned ? 'walk off: turned to the model' : 'walk off'; // (the cut said: R126-3)
+  tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : off, 3000, on ? 'walk on' : off);
 }
 
 // one animation frame of the turntable; runs only while it is on
@@ -5327,7 +5328,7 @@ async function loadAny(buf, name, seq, extras = []) {
     // wrong kind (it was told to open a .cadmesh file: review r22)
     if (ext === 'cadmesh') throw new Error(`${name} is damaged or not a .cadmesh file inside: save it again from the viewer, or open the STEP it came from`);
     // (a tour this viewer saved: where it opens, not "not a file this viewer opens" -- R124-3)
-    if (/\.cadtour\.json$/i.test(name)) throw new Error(app.header ? `${name} is a tour: Make a tour… > Open… plays or edits it over this model` : `${name} is a tour: open its model, then Make a tour… > Open… plays or edits it`);
+    if (/\.cadtour\.json$/i.test(name)) throw new Error(app.embed ? `${name} is a tour: open it in cad.place with its model` : app.header ? `${name} is a tour: Make a tour… > Open… plays or edits it over this model` : `${name} is a tour: open its model, then Make a tour… > Open… plays or edits it`);
     throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: ${OPENS}`);
   }
   await loadBuffer(buf, name, seq);

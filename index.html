@@ -360,7 +360,7 @@
   /* (no Fit and no "turn and zoom" hint over a poster: no model is open yet -- R121-3) */
   body:has(#poster:not([hidden])) :is(#embedfit, #embedhint) { display:none !important; }
   /* (no model shown in an embed: nothing to fit or turn, and the card's own Open link the one -- R125-4) */
-  body:has(#empty:not([hidden])) :is(#embedfit, #embedhint) { display:none !important; }
+  body:has(:is(#empty, #progress):not([hidden])) :is(#embedfit, #embedhint) { display:none !important; } /* (and while one loads: R126-7) */
   body:has(#emptyfull:not([hidden])) #embedopen { display:none !important; }
   #posterimg { display:block; max-width:100%; max-height:60vh; margin:0 auto 10px; }
   #pimg { display:block; max-width:100%; max-height:28vh; margin:0 auto 8px; }
@@ -486,14 +486,17 @@
   #measvg .msnaptext, #measvg .mholetext { fill:#fff; font:12px sans-serif; paint-order:stroke; stroke:#000; stroke-width:3px; }
   #measvg .mhole { fill:none; stroke:#5fd3ff; stroke-width:2; }
   #measvg .mhole.pick { stroke:#ffd23f; stroke-width:3; }
+  #stage[data-bg="paper"] #measvg .mhole { stroke:#0b6e99; } /* (the cyan 1.6:1, the yellow 1.3:1 on paper: R126-2) */
+  #stage[data-bg="paper"] #measvg .mhole.pick { stroke:#9a6b00; }
   .mlabel { position:absolute; transform:translate(-50%, -130%); background:rgba(20,24,30,.92); color:#fff; padding:2px 6px;
     border-radius:4px; font-size:12px; white-space:nowrap; box-shadow:0 0 0 1px #ffd23f; }
   .mlabel small { display:block; color:#c9d1db; font-size:10px; }
   .mlabel.note { box-shadow:0 0 0 1px #5fd3ff; white-space:normal; max-width:220px; }
   #measnotetext { background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 6px; font:inherit; width:16em; }
   #measnotetext[hidden] { display:none; }
-  #stage[data-bg="paper"] .mlabel { background:rgba(255,255,255,.95); color:#111; }
+  #stage[data-bg="paper"] .mlabel { background:rgba(255,255,255,.95); color:#111; box-shadow:0 0 0 1px #9a6b00; } /* (the 2D label's edge: R126-4) */
   #stage[data-bg="paper"] .mlabel small { color:#444; }
+  #stage[data-bg="paper"] .mlabel.note { box-shadow:0 0 0 1px #0b6e99; }
   #stage[data-bg="paper"] #measvg .mline, #stage[data-bg="paper"] #measvg .mdot { stroke:#9a6b00; }
   /* the snap ring and its words on paper: the yellow is 1.3:1 on #f4f4f2,
      so they take the line's dark gold (4.3:1), the words over a white halo */
@@ -581,6 +584,7 @@
   #tree .cbwrap { display:inline-flex; align-items:center; align-self:stretch; } /* (its column the row's height: R59-6) */
   #stage { position:relative; min-width:0; min-height:0; overflow:hidden; touch-action:none; }
   #stage.drop { outline:2px dashed var(--acc); outline-offset:-6px; }
+  #stage.drop[data-bg="paper"] { outline-color:#b35a00; } /* (the accent 2.1:1 on paper: R126-5) */
   #view { width:100%; height:100%; display:block; outline:none; }
   /* a DXF drawing (2D mode): its own canvas over the 3D one, and the 3D-only
      controls out of the way */
@@ -639,7 +643,7 @@
   a.primary { display:inline-block; text-decoration:none; }
   @media (hover: hover) { :is(button:not(:disabled), a).primary:hover { filter:brightness(1.08); border-color:var(--acc); } } /* (R123-5) */
   #empty .drop-now { display:none; font-size:15px; color:var(--acc); font-weight:600; }
-  #stage.drop #empty { display:block; } /* a drag over a loaded model shows it too */
+  #stage.drop #empty { display:block !important; } /* a drag over a loaded model shows it too (over [hidden]'s: R126-5) */
   #stage.drop #empty .drop-now { display:block; }
   #stage.drop #empty :is(.drop-hint, #emptyopen, .note, .err) { display:none; }
   #empty .drop-hint { text-wrap:balance; } /* (its lines even, not "here, or" alone: R123-8) */
