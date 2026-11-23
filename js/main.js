@@ -2788,9 +2788,11 @@ function setWalk(on) {
     const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
     const v = s.center.map((x, k) => x - eye[k]), far = Math.hypot(...v);
     const ahead = [0, 1, 2].reduce((a, k) => a + v[k] * -d[k], 0);
-    // (the narrower of the view's half-angles: a portrait phone's sides are inside the vertical's -- R126-1)
-    const half = Math.atan(Math.tan(c.fov / 2) * Math.min(1, app.stageAspect || 1));
-    turned = far > 1e-9 && ahead < far * Math.cos(half);
+    // (the middle against the view's own edges: a cone of the narrower half-angle turned a middle
+    // still on screen near the wide edge -- R126-1, R127-4)
+    const tv = Math.tan(c.fov / 2), sx = qRotate(c.q, [1, 0, 0]), sy = qRotate(c.q, [0, 1, 0]);
+    const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    turned = far > 1e-9 && (ahead <= 0 || Math.abs(dot3(v, sx)) > ahead * tv * (app.stageAspect || 1) || Math.abs(dot3(v, sy)) > ahead * tv);
     if (turned) {
       const nd = v.map((x) => -x / far);
       const ax = [d[1] * nd[2] - d[2] * nd[1], d[2] * nd[0] - d[0] * nd[2], d[0] * nd[1] - d[1] * nd[0]];
@@ -3377,6 +3379,7 @@ function setSection(axis, focus = false) {
   if (axis !== 'off') app.section.last = axis;
   updateButtons();
   viewChanged();
+  if ((was === 'off') !== (axis === 'off') && !app.tour) announce(`section ${axis === 'off' ? 'off' : 'on'}`); // (as Measure and Walk: R127-6)
   if (!focus) return;
   if (axis !== 'off' && was === 'off') $('secoff').focus();
   else if (axis === 'off') toolFocus('section').focus();
@@ -8075,7 +8078,8 @@ function wireInput() {
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), true)) || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
         // (then a selected layer, then an active embed lets the page have the wheel back, as in 3D: round 10 R10-2)
         : app.dxf.view.selected ? app.dxf.view.select(null) : app.embed && app.embedActive ? (setEmbedActive(false), true) : false)) : app.measure.escape()
-        || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false) || select([], false)),
+        || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false)
+        || (app.selected.size ? (select([], false), announce('selection cleared'), true) : select([], false))), // (said: R127-6)
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
       m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
       p: () => { if (!$('savepic').disabled) savePicture(); },

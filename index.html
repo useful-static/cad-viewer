@@ -488,6 +488,8 @@
   #measvg .mhole.pick { stroke:#ffd23f; stroke-width:3; }
   #stage[data-bg="paper"] #measvg .mhole { stroke:#0b6e99; } /* (the cyan 1.6:1, the yellow 1.3:1 on paper: R126-2) */
   #stage[data-bg="paper"] #measvg .mhole.pick { stroke:#9a6b00; }
+  #stage[data-bg="paper"] #measvg .mhole { filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff); } /* (a halo over a shaded model: 1.2:1 under Light background, R127-3) */
+  #progress:has(#pgo:not([hidden])) .pbar { display:none; } /* (no empty bar under a question: R127-7) */
   .mlabel { position:absolute; transform:translate(-50%, -130%); background:rgba(20,24,30,.92); color:#fff; padding:2px 6px;
     border-radius:4px; font-size:12px; white-space:nowrap; box-shadow:0 0 0 1px #ffd23f; }
   .mlabel small { display:block; color:#c9d1db; font-size:10px; }

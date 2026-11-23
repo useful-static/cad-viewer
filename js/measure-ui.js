@@ -1,15 +1,7 @@
-// Measure: Distance (two points: length
-// and ΔX ΔY ΔZ), Angle (three points, at the middle one) and Face to face
-// (two b-rep faces, the first planar: the gap along its normal). Points snap,
-// within 12 CSS px of the pointer (24 on a coarse pointer), to a b-rep corner
-// (◆), an edge's midpoint (▲), a circle's centre (⊙, with its Ø) or the
-// nearest point on an edge (―), from js/measure-geom.js; else the surface
-// under the pointer -- under a section, where a closed body's cut face is drawn,
-// the point on the cut (▪; Face to face and Paint take no face there). Only VISIBLE candidates are offered: nothing may cut the
-// segment from the eye to the point (js/raycast.js), except where the style
-// draws hidden edges (Wire, X-ray, Hidden grey). Points are kept in model
-// coordinates; results are drawn on an SVG layer over the view, projected
-// each frame, so every backend shows them the same.
+// Measure: Distance, Angle (at the middle of three points) and Face to face (the gap along the
+// first, planar face's normal). Points snap within 12 CSS px (24 coarse) to a VISIBLE corner ◆,
+// midpoint ▲, centre ⊙ or edge point ―, else the surface or a section's cut ▪; kept in model
+// coordinates and drawn on an SVG layer projected each frame.
 //
 // main.js owns the input; it calls hover / place, loupe (a finger aiming),
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
@@ -343,18 +335,9 @@ export function createMeasure(deps) {
         }
       }
     }
-    // nearest on screen; within a pixel, the one nearer the eye: a
-    // through-hole's two rims share a centre on screen, and the front one wins
-    // (the back one is seen through the hole, so the visibility test passes it)
-    // (by runs: sorted by distance, each run the points within a pixel of its first, a run's points
-    // nearest the eye first -- one comparator "within a pixel, else nearer" was not transitive, so
-    // the order could depend on the input's -- r122 L2)
-    // a corner, midpoint or centre before a point on an edge; the nearest
-    // visible one of each: the 24 nearest on screen tried, and past them more while the snap's 40 ms
-    // last. (On V2C, a part's hidden pins under the board, nearer on screen, were 24 and more, and a
-    // corner the view draws 3.4 px away read "surface": the order of the 24 alone had found it, by an
-    // unstable sort's luck; 96 was not enough either, ten hidden pins giving 200 -- r134 M3.)
-    // snapOrder orders each run of them.
+    // nearest on screen, within a pixel the one nearer the eye (a through-hole's front rim), by runs
+    // (r122 L2); a corner, midpoint or centre before an edge point, the nearest visible of each:
+    // the 24 nearest tried, then more while the snap's 40 ms last (hidden pins: r134 M3)
     const nearest = (list) => snapOrder(list, v.dir);
     const vis = (c) => visible(v, c.p, bodiesNear(v, ...v.toScreen(c.p), 0), skip);
     for (const list of [nearest(pts), nearest(edgePts)]) {
@@ -879,7 +862,7 @@ export function createMeasure(deps) {
     // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     const plain = on && scene.mesh && !scene.mesh.faces;
-    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : 'click points on the model (Esc to stop)'}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : 'measure off', plain ? 6000 : 3000, on ? 'measure on' : 'measure off'); // (R65-1)
+    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : `click points on the model${$('holes').hidden ? '' : ', or Enter on a hole row'} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : 'measure off', plain ? 6000 : 3000, on ? 'measure on' : 'measure off'); // (R65-1)
     if (focus) (on ? $('measoff') : offFocus()).focus();
   }
 
@@ -954,18 +937,9 @@ export function createMeasure(deps) {
       return { n: i + 1, d: h.diameter, at: v.join(', '), said: v.map((x, q) => `${'XYZ'[axes[q]]} ${x}`).join(', '), through: h.rims > 1, depth: h.depth, head: h.head || 0 };
     });
     const posHead = list.length ? `${axes.map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
-    // per diameter as shown: how many, and how far apart their centres spread
-    // (keyed on the printed value: 0.508 and 0.511 mm read as two "0.51" lines)
-    // (and its countersink: a countersunk Ø3 and a plain one read "Ø 3.00 mm × 2" -- r68 A8, Q11)
-    // (one size one line whatever it prints as: a Ø on a rounding half-step, 0.0215 in, read
-    // "0.021 in × 2" + "0.022 in × 3" -- r123 M2. A size: a Ø within 1e-4 of the one before it, as
-    // the list is ordered)
-    // (each size one line, under its mean Ø as printed; two sizes share a line only where their means
-    // print alike. Keyed on each hole's own printed Ø, a size whose holes print either side of a
-    // rounding step was split across that size's line and a smaller one's -- r124 L3; joined through
-    // the printed values as a union, a whole size was pulled into a smaller size's line, H3-CC's Ø0.55
-    // ×8 into Ø0.45's at 1 decimal -- r138 M1. Far out, where fit noise passes 1e-4 of the Ø -- the
-    // stored positions' rounding at the centre's distance -- the chain's step is that noise, r124 L5)
+    // per size (a Ø within 1e-4, or fit noise far out, of the one before it; a countersink apart),
+    // one line under its mean Ø as printed: how many, and their centres' spread
+    // (r68 A8, r123 M2, r124 L3 L5, r138 M1)
     const groups = new Map(), sums = [], counts = [];
     const sized = [];
     let sid = -1, prev = -Infinity;
@@ -1057,9 +1031,14 @@ export function createMeasure(deps) {
     note.textContent = note.hidden ? '' : untoldText(t.untold, t.unpaired);
     const tb = $('holesrows');
     tb.replaceChildren();
+    // (one Tab stop, ↑ ↓ Home End between rows, each named and the picked one current, as the parts
+    // list: 46 unnamed "row" stops -- R127-2)
+    const stop = st.holes.pick >= 0 && st.holes.pick < t.rows.length ? st.holes.pick : 0;
     for (const r of t.rows) {
       const tr = document.createElement('tr');
-      tr.tabIndex = 0;
+      tr.tabIndex = r.n - 1 === stop ? 0 : -1;
+      const said = `hole ${r.n}: Ø ${holeDia(r, deps.lenText)} at ${r.said} ${deps.unit()}`;
+      tr.setAttribute?.('aria-label', said);
       // depth: through holes' (rim to rim); "–" for one rim (blind, or a
       // sheet's hole)
       // (a countersunk or chamfered one: its wider rim's diameter after the bore's)
@@ -1068,17 +1047,34 @@ export function createMeasure(deps) {
         td.textContent = c;
         tr.append(td);
       }
-      const pick = () => {
+      const pick = (key) => {
         st.holes.pick = r.n - 1;
-        for (const x of tb.children) x.classList.toggle('pick', x === tr);
+        for (const x of tb.children) {
+          x.classList.toggle('pick', x === tr);
+          if (x === tr) x.setAttribute?.('aria-current', 'true'); else x.removeAttribute?.('aria-current');
+        }
         // (the coordinates named, not the column's head pasted in: R29-3)
-        const said = `hole ${r.n}: Ø ${holeDia(r, deps.lenText)} at ${r.said} ${deps.unit()}`;
-        deps.tell(said, 3000);
+        // (Enter while measuring a distance or an angle: the hole's centre is a point, the keyboard's
+        // one way to place one -- R127-1)
+        const h = st.holes.list[r.n - 1];
+        if (key && st.on && (st.mode === 'distance' || st.mode === 'angle') && h) {
+          st.pending.push({ p: h.centre.slice(), kind: 'centre' });
+          deps.tell(`${said}: point ${st.pending.length} of ${need()}`, 3000);
+          if (st.pending.length >= need()) finish(); else syncRow();
+        } else deps.tell(said, 3000);
         deps.queueFrame();
       };
-      tr.onclick = pick;
-      tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
-      if (st.holes.pick === r.n - 1) tr.classList.add('pick'); // (a kept pick: R26-1)
+      tr.onclick = () => pick(false);
+      tr.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(true); return; }
+        const rows = [...tb.children], i = rows.indexOf(tr);
+        const j = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: rows.length - 1 }[e.key];
+        if (j === undefined || !rows[j]) return;
+        e.preventDefault();
+        for (const x of rows) x.tabIndex = x === rows[j] ? 0 : -1;
+        rows[j].focus();
+      };
+      if (st.holes.pick === r.n - 1) { tr.classList.add('pick'); tr.setAttribute?.('aria-current', 'true'); } // (a kept pick: R26-1)
       tb.append(tr);
     }
     $('holescsv').onclick = () => {
@@ -1094,9 +1090,12 @@ export function createMeasure(deps) {
     $('holesfrom').hidden = $('holessumbox').hidden = none;
     $('holescsv').hidden = none;
     if (none && note.hidden) { note.hidden = false; note.textContent = 'No round holes found'; }
+    // (said as the table opens or its count changes, not again on every rebuild: R127-5)
+    const fresh = box.hidden || st.holesSaid !== t.list.length;
+    st.holesSaid = t.list.length;
     box.hidden = false;
     deps.queueFrame();
-    deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);
+    if (fresh) deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);
     return t;
   }
 
