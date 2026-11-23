@@ -1124,6 +1124,7 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
 
 function fitTo(bbox) {
   if (!bbox) return;
+  if (app.walk) setWalk(false); // (every fit ends Walk -- Fit, a view, a double-click: R121-2, R122-2)
   const c = app.cam;
   const s = sphereOf(bbox);
   // the zoom's limits follow the sphere: what is framed, whatever the view
@@ -2843,7 +2844,6 @@ const stageAspectNow = () => { const s = $('stage'); return s.clientWidth / Math
 const presetView = (v) => (v === 'iso' && app.header ? isoView(app.cam.orient, app.header.bbox, stageAspectNow()) : VIEWS[v]);
 
 function setView(v) {
-  if (app.walk) setWalk(false); // (R121-2)
   [app.cam.yaw, app.cam.pitch] = presetView(v);
   app.cam.q = presetQuat(app.cam.yaw, app.cam.pitch, app.cam.orient);
   fitTo(drawnBox(null));
@@ -3753,12 +3753,8 @@ function openListed(url, refocus = false, keepMenu = false) {
     syncModelList();
   });
 }
-// A failed pick's chain taken back: as many steps back as the entry shown is deep in it (its stamp),
-// to the entry before its first; then the chain's entries ahead dropped -- an entry pushed there
-// truncates them, a copy of the address before, and is left at once (Forward onto it, the same
-// address, is passed by). Counted by events, a Back across an edit made one step too many, past the
-// page's first entry and off the page (r62 A1, Q1); entries ahead were left for Forward to open the
-// failed model again (r61 A2, Q3).
+// A failed pick's chain taken back by its stamp's depth, to the entry before it, and the entries ahead
+// dropped by pushing a copy of the address before (r61 A2, Q3, r62 A1, Q1)
 async function unwindPick(c) {
   const step = (go) => new Promise((res) => {
     window.addEventListener('popstate', res, { once: true });
@@ -3997,8 +3993,9 @@ function secEdit() {
   const p = sectionPlane();
   if (!p || app.secEditing) return;
   const inp = document.createElement('input');
-  inp.type = 'number';
-  inp.step = 'any';
+  // (text, a decimal keypad: the wheel never steps it, and never blurs away what is typed -- R122-4)
+  inp.type = 'text';
+  inp.inputMode = 'decimal';
   inp.id = 'secin';
   inp.value = lenNum(secShown(p), 'section');
   inp.defaultValue = inp.value;
@@ -7711,12 +7708,13 @@ function wireInput() {
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => {
     if (app.dxf) { uncover(); return app.dxf.view.fit(); }
-    if (app.walk) setWalk(false); // (a fitted view is no walk's eye, as Ortho ends it: R121-2)
     fitParts([...app.selected]);
   };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
   // pressed look (and aria-pressed, for a screen reader) says whether it is on
   $('proj').onclick = () => {
+    // (a walk's eye is a few mm from the model: Ortho there ends Walk and fits -- R122-1)
+    if (app.walk) { app.cam.ortho = !app.cam.ortho; fitTo(drawnBox(null)); updateButtons(); viewChanged(); return; }
     const c = app.cam, t = app.tour, L = t && !app.tourFlying && t.landed;
     // (on a step's own fitted view, untouched -- held or paused, not turned: the step fitted again in
     // the new projection -- R92-3, R93-1, R93-2)
@@ -8256,6 +8254,7 @@ function applyLinkView(view) {
 async function viewIn3D(src) {
   $('poster').hidden = true;
   setEmbedActive(true);
+  $('view').focus?.({ preventScroll: true }); // (the poster's button gone: the focus to the view -- R122-8)
   // (the visitor's ask is the press: a file they open while the tour or list is read is theirs, and
   // nothing the address names opens over it -- the list's first did: r54 A1, Q3)
   app.startSeq = app.loadSeq;
