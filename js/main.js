@@ -1414,12 +1414,8 @@ function closedOf(mesh, mi) {
   const c = mesh?.edgeInfo?.value?.facts?.closed;
   return c ? !!c[mi] : false;
 }
-// What an export writes: the visitor's own parts shown and colours -- while a tour plays, those kept
-// under app.tour.base, not the step's (a step's highlight and its grey went into the file, and a part
-// it isolated others from was all that was written: r70 Q2. The tour keeps them as an Array --
-// startTour's base -- and .has on it threw, every export during a tour writing nothing: r71 A1)
-// (the visitor's own hidden parts, the one rule for an export and Save drawing -- which drew the
-// step's isolate, its subject alone: r72 A4)
+// What an export or Save drawing writes: the visitor's own parts and colours, a playing tour's kept
+// under app.tour.base, not the step's (r70 Q2, r71 A1, r72 A4)
 const ownHidden = () => (app.tour ? new Set(app.tour.base.hidden) : app.hidden);
 const exportState = () => (app.tour ? { hidden: ownHidden(), color: inScheme(app.baseMesh, ownOverrides(), ownFaces() || new Map()).color } : { hidden: app.hidden, color: app.mesh.color });
 async function exportMesh(fmt) {
@@ -1461,6 +1457,9 @@ async function exportMesh(fmt) {
   tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB${whole}`, whole ? 6000 : 3000);
 }
 
+// A note given a frame to draw before work that freezes the view (100 ms at most: a hidden tab)
+const notePainted = () => new Promise((r) => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 100); });
+
 // Save picture (P): the view as a PNG at the picture options' size and
 // background (renderPicture: in tiles, capped at 8192 px and 16.7 Mpx),
 // hover left out, the selection unless the options include it, with
@@ -1478,7 +1477,7 @@ async function savePicture(print = false) {
   }
   if (!app.header || !app.renderer) return;
   // (said, and a frame drawn to say it, before the view freezes for the picture: R119-3)
-  if (!print) { tell('preparing the picture…', 30000); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); }
+  if (!print) { tell('preparing the picture…', 30000); await notePainted(); }
   const pic = await renderPicture(print ? { ...app.pic, bg: 'white' } : app.pic); // (paper: R20-2)
   if (!pic) { tell('the picture could not be read from the GPU', 4000); return; }
   const out = pic.canvas;
@@ -2292,6 +2291,7 @@ function endTour(restore = true) {
   cancelFlight();
   app.lastInput = performance.now(); // (the turntable waits after a tour, as after any input: R85-6)
   const { saved, base } = app.tour;
+  const wasPreview = app.tour === app.previewing;
   app.tour = null;
   app.tourGhost = false;
   $('tourcard').hidden = true;
@@ -2317,6 +2317,9 @@ function endTour(restore = true) {
   // list entry's style, and its explode: the next Explode read "exploded 0 %")
   app.styleChoice = base.styleChoice;
   if (!restore) { app.explode.t = base.explode.t; app.explode.mode = base.explode.mode; }
+  // (a preview ended from its card, the maker still open: the focus back to Preview, not File or none
+  // -- R120-2)
+  if (wasPreview && app.recorder?.isOpen() && !$('touredit').contains(document.activeElement)) $('teplay').focus();
   announce('tour closed');
 }
 
@@ -2647,9 +2650,14 @@ function setStyle(id, remember) {
 }
 
 // the paper styles' overlay palette (#hover, notices): dark on a light chip
+const LIGHT_TITLE = document.getElementById('lightbg')?.title || '';
 function syncStyleBg() {
-  if (currentStyle().paper || app.lightBg) $('stage').dataset.bg = 'paper';
+  const paper = !!currentStyle().paper;
+  if (paper || app.lightBg) $('stage').dataset.bg = 'paper';
   else delete $('stage').dataset.bg;
+  // (off in the paper styles, where it changed nothing: R120-10)
+  $('lightbg').disabled = paper;
+  $('lightbg').title = paper ? 'The paper styles are always drawn light' : LIGHT_TITLE;
 }
 
 // ---------- looks (feature review item 22) ----------
@@ -3368,14 +3376,8 @@ function setSection(axis, focus = false) {
   else if (axis === 'off') toolFocus('section').focus();
 }
 
-// A select is blurred after a choice picked from its list, so a focused
-// select does not swallow the number keys. Not after a choice TYPED into it:
-// a closed select changes on each letter (type-ahead), and blurred there the
-// next letter fell through to a shortcut ("hi" for Hidden line picked it,
-// then I isolated the selection).
-// A key that typed a letter, but not a Latin one (Cyrillic, Greek, …): the
-// shortcuts then go by the key's place, as QWERTY names it
-// (Latin by script, so "ğ" on Turkish F or "é" keeps its own place: r19)
+// A select blurred after a choice picked from its list (not one typed into it: type-ahead); a
+// non-Latin letter's shortcut goes by the key's place, as QWERTY names it (r19)
 const nonLatinLetter = (k) => k.length === 1 && /\p{L}/u.test(k) && !/\p{Script=Latin}/u.test(k);
 
 // The inputs that take no typed text, so leave the shortcuts on (a focused
@@ -4992,7 +4994,7 @@ function sayClearance(lc) {
   const ranges = modelRanges(app.scene);
   const nm = (id) => `${meshLabel(id) || `body ${id}`} (${modelOfBody(ranges, id) + 1})`; // (unnamed: the tree's "body N")
   const text = lc.distance === 0
-    ? `0: ${nm(lc.a)} touches or overlaps ${nm(lc.b)}`
+    ? `0 ${lenUnit()}: ${nm(lc.a)} touches or overlaps ${nm(lc.b)}` // (its unit, as every length: R120-8)
     : `${lenNum(lc.distance, 'measure')} ${lenUnit()} from ${nm(lc.a)} to ${nm(lc.b)}${lc.noFacts ? ' (a part inside another not checked: no body facts)' : ''}`;
   $('clearval').textContent = `clearance ${text}`;
   $('clearval').title = `${lc.what} against the other models' shown parts: ${fmtInt(lc.pairs)} triangle pairs compared in ${lc.ms} ms`;
@@ -6067,12 +6069,8 @@ const converterBuild = () => converterBuildP || (converterBuildP = fetch(new URL
 // The file name a URL names: js/formats.js fileNameOfUrl (check.html reads the same)
 const fileName = fileNameOfUrl;
 
-// A fetch that throws had no usable answer. From another site, a HEAD in
-// "no-cors" mode then tells whether the site answered at all: if it did, it
-// did not let this page read the answer -- it sends no CORS for that file,
-// or the file is not there (a site that sends CORS only for files it has,
-// as libre.computer does, reports a missing file this way: the browser
-// hides the 404 too). If it did not, the site is down or unreachable.
+// A fetch that threw: from another site, a no-cors HEAD tells whether it answered at all (then no
+// CORS, or no such file -- the browser hides the 404) or is down or unreachable.
 // lead: how the sentence starts ("could not download part.stp"; a tour's: "could not be read")
 async function fetchFailedText(url, name, e, lead = `could not download ${name}`) {
   let host = null;
@@ -6880,7 +6878,8 @@ function syncMassRow() {
   // before: r84 A5)
   if (!geomMm()) { $('massval').textContent = notMmWords(app.header, 'a mass is'); return; }
   if (!f.closed) { $('massval').textContent = 'none closed: no volume'; return; }
-  if (d === null) { $('massval').textContent = 'type a density (g/cm³, water is 1)'; return; }
+  // (a value out of range said as such, not as an empty field: R120-6)
+  if (d === null) { $('massval').textContent = Number($('density').value) > 0 ? 'a density from 0.01 to 25 g/cm³' : 'type a density (g/cm³, water is 1)'; return; }
   const g = (f.vol / 1000) * d;
   $('massval').textContent = `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}`;
 }
@@ -7739,7 +7738,13 @@ function wireInput() {
     showInfo(); // above / below are along the new up
     setView('iso');
   };
-  $('undo').onclick = undoVisibility;
+  // (greyed by its own press, the focus to the view, not the next menu button an Enter would open: R120-5)
+  // (in a folded menu, the menu's own rule hands the focus on: r19)
+  $('undo').onclick = () => {
+    const kb = document.activeElement === $('undo') && !$('undo').closest('.menu.folded');
+    undoVisibility();
+    setTimeout(() => { if (kb && $('undo').disabled) (app.dxf ? $('view2d') : $('view')).focus({ preventScroll: true }); }, 0);
+  };
   $('isolate').onclick = () => {
     if (!app.selected.size) return;
     rememberVisibility();
@@ -7787,7 +7792,7 @@ function wireInput() {
     printing = true;
     closeMenus();
     tell('preparing the print…', 30000);
-    new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+    notePainted()
       .then(() => savePicture(true))
       .finally(() => { printing = false; if ($('hover').textContent === 'preparing the print…') tell('preparing the print…', 1, ''); });
   };
@@ -8302,12 +8307,8 @@ async function viewIn3D(src) {
   } else await opening;
   addressTourEnds(r, tourOwn && app.status === 'error');
 }
-// "The model list has no model X": said when the address names a place its list lacks and the start
-// opens something else there -- the list's first ("its first opens") or the tour's own model -- and
-// not when nothing the address names opens. `opened` is that model's URL, or null. One sentence and
-// one rule, for the start-up and View in 3D (the sentence was in one place, when to say it in two,
-// and View in 3D said nothing over the tour's model: r57 A7, r58 A5; nothing opens behind a poster,
-// so it has no poster wording: r58 Q8).
+// "The model list has no model X", when the address names a place its list lacks and something else
+// opens there (`opened`, or null); one rule for the start-up and View in 3D (r57 A7, r58 A5, Q8)
 function lackingNote(place, opened) {
   if (!place || !opened || modelUrlIn(params) || !app.listEntries?.length) return;
   tell(`the model list has no model ${place}${opened === app.listEntries[0].url ? ': its first opens' : ''}`, 6000);

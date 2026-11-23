@@ -1114,9 +1114,11 @@ export function createMeasure(deps) {
   // (in a drawing, its results: R44-4)
   $('measundo').onclick = handOn($('measundo'), () => { const v = deps.view2d?.(); if (v) { v.undoMeasure(); sync2D(v); } else undo(); });
   // the note's text: Enter pins it, Esc drops the note (and stays in Measure)
+  // (the field gone, the focus to the Note mode's button, not the header's first control: R120-3)
+  const noteBack = () => { if ($('measnotetext').hidden) $('measmode')?.querySelector?.('[data-mode="note"]')?.focus?.(); };
   $('measnotetext').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); }
+    if (e.key === 'Enter') { e.preventDefault(); addNote($('measnotetext').value); noteBack(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); st.pending = []; syncRow(); deps.queueFrame(); noteBack(); }
   });
   $('measclear').onclick = handOn($('measclear'), () => {
     const v = deps.view2d?.();

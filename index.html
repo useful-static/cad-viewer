@@ -333,7 +333,11 @@
   #parts { overflow-anchor:none; }
   #info[hidden], #infounits[hidden], #inforef[hidden], #inforef button[hidden], #infomass[hidden] { display:none; }
   #densitybox[hidden] { display:none; }
-  #density { width:6ch; font-size:12px; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
+  /* (no spinners over the value, as the scene's fields: a click at its centre stepped it, typing 1.85 made
+     0.01185 -- R120-1) */
+  #density { -moz-appearance:textfield; appearance:textfield; }
+  #density::-webkit-inner-spin-button, #density::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  #density { width:7ch; font-size:12px; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; }
   #inforef { margin-top:2px; }
   #info a { color:var(--acc-text); }
   /* the models' gallery and the poster: cards over the view */
@@ -599,7 +603,7 @@
      box-shadow is painted under a canvas's own pixels, so neither view ever showed one: round 12
      R12-1); on paper the dark orange, 4.4:1 (the bright one was 2.1:1 there) */
   #view2d { outline:none; }
-  :is(#view, #view2d, #info):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; } /* (the held panel, a scroll box: the app's ring, R48-2) */
+  :is(#view, #view2d, #info, #holesrows tr):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; } /* (the held panel, a scroll box: the app's ring, R48-2; a hole row, R120-4) */
   :is(#stage[data-bg="paper"] #view, body.mode2d #view2d):focus-visible { outline-color:#b35a00; }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
      over the view shows), and load progress. Centred, never wider than the view. */
@@ -860,7 +864,7 @@
       <!-- a drawing's sheet select, where the row is short (main.js refold) -->
       <span class="mhead" id="fhsheet" aria-hidden="true" hidden>Sheet</span>
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
-      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, beside the one shown (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
+      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, at its own origin (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
       <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <!-- Save: every file the viewer writes, under one verb -->
