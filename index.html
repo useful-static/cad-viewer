@@ -825,6 +825,9 @@
     .opt-row { flex-wrap:wrap; }
     #secpos { flex:1 1 110px; }
   }
+  /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
+     R115-2) */
+  @media (max-width: 359px) { #secpos { flex-basis:72px; min-width:72px; } }
 </style>
 </head>
 <body>

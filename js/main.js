@@ -6894,6 +6894,7 @@ function syncMassRow() {
   $('massval').textContent = `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}`;
 }
 
+const REFSET_TITLE = document.getElementById('refset')?.title || '';
 function syncRefRow() {
   $('inforef').hidden = !app.header;
   if (!app.header) return;
@@ -6907,8 +6908,11 @@ function syncRefRow() {
   // (a button about to hide hands the focus on, as the toolbar's do)
   if (hadX && !app.ref) $('refset').focus();
   $('refclear').hidden = !app.ref;
-  if (hadSet && same) $('refclear').focus();
   $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
+  // (after its line is shown: focused while hidden, the focus fell to List holes -- R115-1)
+  if (hadSet && same) $('refclear').focus();
+  // (the title says why it is off: R115-3)
+  $('refset').title = same ? 'Positions are already measured from the selection (× measures from the whole model again)' : REFSET_TITLE;
   syncHoles();
   // an open hole table follows the reference and the display unit
   if (app.holesFor && app.measure) showHoles(app.holesFor);
@@ -7054,7 +7058,7 @@ function fillInfo(el) {
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     // (from a key, the focus to Measure from selection: R42-1)
-    sel.onclick = () => { const kb = document.activeElement === sel; select(sameParts(ids[0]), false); if (kb) $('refset').focus(); };
+    sel.onclick = () => { const kb = document.activeElement === sel; select(sameParts(ids[0]), false); if (kb) ($('refset').disabled ? $('refclear') : $('refset')).focus(); }; // (off: the ×, R115-4)
     add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
@@ -8154,12 +8158,8 @@ function startUpLoad(url) {
     if (!app.addressUrl && !app.visitorFirst && app.header && app.sourceUrl === url) app.addressUrl = url;
   });
 }
-// Whether a view link's view (#view=) is for the model shown, by the link's ADDRESS (`search`): an
-// address that names a model -- ?src=, or a place in its list (?model=, ?index=, a relative ?src=) --
-// is for that model, the one its list has there once read, and for nothing while the list has not
-// answered, has failed, or lacks the place; an address that names none is for a model opened from
-// the device, never a list's first (review r16 M2). The one rule for the view a page opens with, a
-// #view= edited in, Back's, and the view waiting on ?add=s (r57 A2, r58 A4, r59 A1).
+// Whether a view link's #view= is for the model shown, by its address: one naming a model is for it
+// once its list has it; one naming none, for a model from the device (r16 M2, r57 A2, r58 A4, r59 A1)
 function viewIsFor(search) {
   const names = !!(search.get('src') || modelNameIn(search));
   if (!names) return !app.sourceUrl;
