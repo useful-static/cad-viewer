@@ -350,6 +350,8 @@
   #gallerygrid img { width:100%; aspect-ratio:4 / 3; object-fit:contain; background:#1b1f25; border-radius:4px; }
   #gallerygrid .noimg { width:100%; aspect-ratio:4 / 3; display:grid; place-items:center; background:#1b1f25; border-radius:4px; color:var(--dim); font-size:28px; }
   #stage #poster { padding:10px; }
+  /* (no Fit and no "turn and zoom" hint over a poster: no model is open yet -- R121-3) */
+  body:has(#poster:not([hidden])) :is(#embedfit, #embedhint) { display:none !important; }
   #posterimg { display:block; max-width:100%; max-height:60vh; margin:0 auto 10px; }
   #pimg { display:block; max-width:100%; max-height:28vh; margin:0 auto 8px; }
   #pimg[hidden] { display:none; }
@@ -412,6 +414,8 @@
   html.light #testeps .tename.untitled { color:var(--dim); } html.light #touredit input::placeholder { color:var(--dim); } /* (a pseudo-element is not allowed in :is(): R80-4) */
   #testeps li button:not(.tename) { padding:3px 6px; } /* (the height of the step name beside it) */
   #touredit .terow label { display:inline-flex; align-items:center; gap:4px; } /* (Loop's box on its word's line) */
+  #touredit input[type=number] { -moz-appearance:textfield; appearance:textfield; } /* (no spinners, as every number field: R121-6) */
+  #touredit input[type=number]::-webkit-inner-spin-button, #touredit input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
   #tourcard b { display:block; font-size:15px; margin-bottom:2px; }
   #tourcard b[hidden], #tourcard p[hidden] { display:none; }
   #tourcard p { margin:0 0 8px; line-height:1.4; white-space:pre-line; }

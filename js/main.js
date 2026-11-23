@@ -1230,13 +1230,8 @@ function viewKey(digit) {
   tell(name, 1500, `${name} view`);
 }
 
-// A short note where the hovered part's name goes, for 1.5 s (or ms; or until
-// the next hover replaces it)
-// (a note of 4 s or more -- a failure, a link's note, the touch hint -- holds the line for its time:
-// the next part under the pointer or a tap erased it, never to come back -- r46 Q5)
-// (a note's end puts back the last label a view handed hoverLabel -- the 3D part under the pointer
-// or the 2D view's layer or snap: it read app.hover, 3D only, and a drawing's label, sent once on a
-// change, never came back -- r47 A3, Q5)
+// A short note where the hovered part's name goes, for ms (1.5 s); one of 4 s or more holds the line
+// for its time, and its end puts back the last label a view gave (r46 Q5, r47 A3, Q5)
 let noteHeldUntil = 0, lastLabel = '';
 function flashHover(text, ms = 1500) {
   const hov = $('hover');
@@ -2681,6 +2676,9 @@ function readLooks() {
   app.lastInput = performance.now();
 }
 function wireLooks() {
+  // (the wheel over a focused number field scrolls, never steps its value unsaid -- a density
+  // 1.84 became 1.85: R97-2, R121-1)
+  addEventListener('wheel', (e) => { if (e.target.matches?.('input[type=number]') && e.target === document.activeElement) e.target.blur(); }, { capture: true, passive: true });
   const press = () => {
     $('lightbg').setAttribute('aria-pressed', String(!!app.lightBg));
     $('ghost').setAttribute('aria-pressed', String(!!app.ghostHidden));
@@ -2845,6 +2843,7 @@ const stageAspectNow = () => { const s = $('stage'); return s.clientWidth / Math
 const presetView = (v) => (v === 'iso' && app.header ? isoView(app.cam.orient, app.header.bbox, stageAspectNow()) : VIEWS[v]);
 
 function setView(v) {
+  if (app.walk) setWalk(false); // (R121-2)
   [app.cam.yaw, app.cam.pitch] = presetView(v);
   app.cam.q = presetQuat(app.cam.yaw, app.cam.pitch, app.cam.orient);
   fitTo(drawnBox(null));
@@ -4825,8 +4824,7 @@ function syncScene() {
           if (!Number.isFinite(v)) return;
           moveModel(i, k, v);
         });
-        // (the wheel scrolls the panel, not a focused value the model never took: R97-2)
-        inp.addEventListener('wheel', () => inp.blur(), { passive: true });
+        // (the wheel over it: the page-wide rule, wireLooks -- R97-2)
         const u = document.createElement('span');
         u.append(`${ax} `, inp, k === 2 ? ' mm' : '');
         at.append(u);
@@ -6855,7 +6853,7 @@ function showInfo() {
 function density() {
   if ($('material').value !== 'custom') return Number($('material').value);
   const d = Number($('density').value);
-  return Number.isFinite(d) && d > 0 && d <= 25 ? d : null;
+  return Number.isFinite(d) && d >= 0.01 && d <= 25 ? d : null; // (the field's own range: 0.005 weighed -- R121-4)
 }
 
 function syncMassRow() {
@@ -6879,7 +6877,7 @@ function syncMassRow() {
   if (!geomMm()) { $('massval').textContent = notMmWords(app.header, 'a mass is'); return; }
   if (!f.closed) { $('massval').textContent = 'none closed: no volume'; return; }
   // (a value out of range said as such, not as an empty field: R120-6)
-  if (d === null) { $('massval').textContent = Number($('density').value) > 0 ? 'a density from 0.01 to 25 g/cm³' : 'type a density (g/cm³, water is 1)'; return; }
+  if (d === null) { $('massval').textContent = Number($('density').value) ? 'a density from 0.01 to 25 g/cm³' : 'type a density (g/cm³, water is 1)'; return; }
   const g = (f.vol / 1000) * d;
   $('massval').textContent = `${fmtMass(g, lenUnit())}${f.closed < f.of ? ` (the ${fmtInt(f.closed)} closed of ${fmtInt(f.of)})` : ''}`;
 }
@@ -7713,6 +7711,7 @@ function wireInput() {
   document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
   $('fit').onclick = () => {
     if (app.dxf) { uncover(); return app.dxf.view.fit(); }
+    if (app.walk) setWalk(false); // (a fitted view is no walk's eye, as Ortho ends it: R121-2)
     fitParts([...app.selected]);
   };
   // Ortho, Z up and Flip are on/off toggles: the label names the option, the
@@ -8313,12 +8312,8 @@ function lackingNote(place, opened) {
   if (!place || !opened || modelUrlIn(params) || !app.listEntries?.length) return;
   tell(`the model list has no model ${place}${opened === app.listEntries[0].url ? ': its first opens' : ''}`, 6000);
 }
-// The address's tour, once read and its model's load done: played over the model shown by the one
-// rule (tourPlaysHere) -- but only while it is still the address's (a list pick ends it, and it still
-// played over the model picked, ending that model's own: r57 A1, Q1); with no model to play over,
-// said ready, unless its own model failed; then over. The start-up's and View in 3D's ending.
-// (after the loads an entry's tour waits for, as the others do: r72 A1; and a failure here is said
-// here, its callers not waiting for it: r73 A8)
+// The address's tour, once read and its model loaded: played (tourPlaysHere) while still the address's,
+// else said ready; the start-up's and View in 3D's ending (r57 A1, Q1, r72 A1, r73 A8)
 async function addressTourEnds(r, ownFailed) {
   try {
     if (r?.tour && app.urlTourPending && entryTourWait()) await entryTourSettled();
