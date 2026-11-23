@@ -150,7 +150,15 @@ export const isTimeout = (e) => !!e && e.name === 'TimeoutError';
 export const answeredFrom = (res, asked) => (res && res.url) || asked;
 // (check.html's list check reads lists and tours by it too: without it, a list that answers in 21 s
 // read 🟢 there and "no answer in time" on cad.place -- r54 A2)
-export const timedFetch = (u, init = {}) => fetch(u, typeof AbortSignal.timeout === 'function' ? { ...init, signal: AbortSignal.timeout(READ_TIMEOUT_MS) } : init);
+// (the signal kept on the answer: a body that stalls past the time throws the reader's own "aborted",
+// which readCapped says as the timeout it is -- R109-1)
+export const timedFetch = async (u, init = {}) => {
+  if (typeof AbortSignal.timeout !== 'function') return fetch(u, init);
+  const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+  const res = await fetch(u, { ...init, signal });
+  try { res.timedSignal = signal; } catch { /* a frozen answer: the reader's own error stands */ }
+  return res;
+};
 export function modelUrlFrom(search, lists, entries, base) {
   const listed = lists.length > 0;
   if (listed && search.get('model')) return entryByName(entries, search.get('model'))?.url || null;
@@ -337,8 +345,10 @@ export function joinModelLists(lists) {
 // gzipped tour unpacked to 172 MB on the page's thread)
 export async function readCapped(res, max) {
   const over = () => new Error(`over ${max / 2 ** 20} MB`);
+  const timedOut = (e) => (res.timedSignal?.aborted && isTimeout(res.timedSignal.reason) ? res.timedSignal.reason : e);
   if (!res.body || typeof res.body.getReader !== 'function') {
-    const text = await res.text();
+    let text;
+    try { text = await res.text(); } catch (e) { throw timedOut(e); }
     if (new TextEncoder().encode(text).length > max) throw over();
     return text;
   }
@@ -346,7 +356,9 @@ export async function readCapped(res, max) {
   const chunks = [];
   let got = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try { step = await reader.read(); } catch (e) { throw timedOut(e); }
+    const { done, value } = step;
     if (done) break;
     got += value.length;
     if (got > max) { reader.cancel().catch(() => {}); throw over(); }

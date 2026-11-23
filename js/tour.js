@@ -103,17 +103,20 @@ export function tourAt(tour, unit) {
   return { ...tour, unit, steps };
 }
 
-// A file that is not JSON, said in the page's words with how it begins (the browser's own message,
-// quotes inside quotes and a line break as a space, was shown: R107-3)
-// (a binary file, a model given as a list, said so -- not its bytes as text; cut at whole characters,
-// an emoji not split: R108-1, R108-7)
-export function notJson(text) {
+// A file that is not JSON in the page's words: its start, or what it is (R107-3, R108-1, R109-2..4)
+export function notJson(text, what = 'list') {
   const all = String(text ?? '');
+  const hint = ` (a model, not a ${what}?)`;
+  const h = all.replace(/^��/, '').slice(0, 16);
+  const zeros = (odd) => [...h].filter((c, i) => i % 2 === (odd ? 1 : 0)).every((c) => c === '\x00');
+  if (h.length >= 8 && (zeros(true) || zeros(false))) return 'not JSON: it is UTF-16 text -- save it as UTF-8';
   // eslint-disable-next-line no-control-regex
-  if (/[\x00-\x08\x0e-\x1f�]/.test(all.slice(0, 512))) return 'not JSON: it is a binary file (a model, not a list?)';
+  if (/[\x00-\x08\x0e-\x1f]/.test(all.slice(0, 512))) return `not JSON: it is a binary file${hint}`;
+  if (all.slice(0, 512).includes('�')) return 'not JSON: it is not UTF-8 text -- save it as UTF-8';
   const start = [...all.trim().replace(/\s+/g, ' ')];
   if (!start.length) return 'not JSON: it is empty';
-  return `not JSON: it begins “${start.length > 40 ? `${start.slice(0, 40).join('')}…` : start.join('')}”`;
+  const model = /^(ISO-10303-21|solid\s|ply\s|0\s*\r?\n\s*SECTION)/.test(all.trim()) ? hint : '';
+  return `not JSON: it begins “${start.length > 40 ? `${start.slice(0, 40).join('')}…` : start.join('')}”${model}`;
 }
 
 export function parseTour(text, base = undefined) {
@@ -121,7 +124,7 @@ export function parseTour(text, base = undefined) {
   // is 5 MB, which the maker saved and check-tour passed, and the page refused)
   if (typeof text === 'string' && utf8Length(text) > MAX_TOUR_BYTES) throw new Error(`over ${MAX_TOUR_BYTES / 2 ** 20} MB: not a tour this viewer reads`);
   let t;
-  try { t = JSON.parse(text); } catch { throw new Error(notJson(text)); }
+  try { t = JSON.parse(text); } catch { throw new Error(notJson(text, 'tour')); }
   if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('a tour is a JSON object');
   const bad = (where, why) => new Error(`${where}: ${why}`);
   for (const k of Object.keys(t)) if (!TOP_FIELDS.includes(k)) throw bad(`"${k}"`, `not a tour field (${TOP_FIELDS.join(', ')})`);

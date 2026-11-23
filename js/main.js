@@ -1472,13 +1472,8 @@ async function exportMesh(fmt) {
   }
   const name = `${base}.${fmt}`;
   downloadBlob(new Blob([bytes], { type: EXPORTS[fmt].type }), name);
-  // (the cut and the explode are the view's: the parts are written whole and in place, which the
-  // saved line says when either is on -- nothing said it, r128 L2)
-  // (a cut that removes something: a cut at the model's end, nothing on its cut side, is no cut --
-  // "uncut" was said of it: r134 3D L2)
-  // (against the bodies written, as drawn: the section's box is a tour step's first model's, and a cut
-  // at its end still cut the models added past it -- r138 L1; every body's box took in the hidden ones,
-  // and a cut through those alone said "uncut" of a file it left whole -- r139 L2)
+  // (the parts written whole, said when a cut or explode is on; a cut only if it removes something
+  // of the bodies written, as drawn -- r128 L2, r134 3D L2, r138 L1, r139 L2)
   const pl = sectionPlane(), sb = pl && drawnBox(ids);
   const cuts = !!pl && !!sb && [0, 1, 2].reduce((m, k) => m + Math.max(pl[k] * sb.min[k], pl[k] * sb.max[k]), 0) > pl[3] + 1e-9 * (1 + Math.abs(pl[3]));
   const viewOnly = [cuts ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
@@ -3553,7 +3548,7 @@ function applyListEntry() {
   for (const t of (e && e.tours) || []) {
     const b = document.createElement('button');
     b.textContent = `Tour: ${t.name}`;
-    b.title = `Play the tour "${t.name}" of this model`;
+    b.title = `Play the tour “${t.name}” of this model`;
     b.onclick = async () => {
       closeMenus();
       // (the model the tour is for, by its open, as the entry's own tour checks it: picked away
@@ -7982,15 +7977,8 @@ function wireInput() {
       // Space plays / pauses (a focused button's own Space presses it)
       if (e.key === ' ' && app.tour.tour.steps.length > 1 && !(t instanceof Element && t.closest('button, a, summary'))) { e.preventDefault(); setTourPlaying(!app.tour.playing); return; }
     }
-    // number keys: the digit row by the character typed (AZERTY types a
-    // digit with Shift), the numpad by its key code (whatever NumLock says)
-    // A digit row that types other digits (Persian, Arabic-Indic) goes by the
-    // key's place (review r19)
-    // With NumLock off a numpad key types End, PageUp, an arrow…: a view key
-    // then only where no control has the focus (End on the section slider
-    // jumped to Front; PageUp in the tree: review r20)
-    // (controls that move by those keys: a slider, a select, the parts tree;
-    // a focused button, as after a click on a view preset, does not)
+    // number keys: the digit row by the character typed, other digit scripts by place, the numpad by
+    // its code -- with NumLock off, only where no slider, select or tree has the focus (r19, r20)
     const navKey = e.key.length > 1;
     // (t may be the window itself, for a key sent to it: not a Node)
     const onControl = t.type === 'range' || t.tagName === 'SELECT' || (t instanceof Node && $('tree').contains(t));

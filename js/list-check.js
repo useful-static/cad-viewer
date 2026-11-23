@@ -179,7 +179,10 @@ const sizeWords = (n) => (n < 1024 ? `${n} byte${n === 1 ? '' : 's'}` : n < 0.1 
 function refused(e) {
   // (given up after cad.place's own time: said as it says it -- r54 A2)
   if (isTimeout(e)) return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
-  return `not fetched: the site sent no CORS header for it, or did not answer (${e && e.message ? e.message : e})`;
+  // (the browser's own failure -- a TypeError, "Failed to fetch" -- in the page's words, as cad.place's;
+  // any other error, a cut gzip's included, is its own reason, not a CORS one: R109-7)
+  if (e instanceof TypeError) return 'not fetched: the file is not there, the site does not let other web pages load it (no CORS), or it did not answer -- the browser does not say which';
+  return `could not be read: ${e && e.message ? e.message : e}`;
 }
 
 // A file's format against its name, from its unpacked start: { level, words } -- the one reading, a

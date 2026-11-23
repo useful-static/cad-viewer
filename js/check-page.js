@@ -108,7 +108,7 @@ async function run(urls) {
   }
 }
 
-const given = new URLSearchParams(location.search).getAll('list');
+const given = [...new Set(new URLSearchParams(location.search).getAll('list'))]; // (each once: R109-6)
 $('lists').value = given.join('\n');
 // (the field back at each line's start once left: scrolled to its end it showed only the tails, a
 // shorter second URL out of view -- R103-1)
@@ -197,7 +197,8 @@ $('lists').parentElement?.addEventListener('mousedown', (e) => {
 $('form').onsubmit = (ev) => {
   ev.preventDefault();
   $('lists').scrollLeft = 0;
-  const urls = $('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  // (a list given twice read once: its second note called its models "already in an earlier list" -- R109-6)
+  const urls = [...new Set($('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean))];
   if (!urls.length) { $('summary').textContent = 'give the list\'s URL'; return; }
   const u = new URL(location.href);
   u.search = '';

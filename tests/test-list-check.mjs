@@ -158,7 +158,7 @@ await test('file-missing-refused-mislabelled', async () => {
   assert.match(gone.detail, /not found \(404\)/);
   const cors = await checkFile('https://other.example/x.cadmesh.gz', { fetchFn: fakeFetch, sniff: true });
   assert.equal(cors.level, 'bad');
-  assert.match(cors.detail, /no CORS header/);
+  assert.match(cors.detail, /does not let other web pages load it \(no CORS\)/); // (the page's words: R109-7)
   const liar = await checkFile(`${B}liar.cadmesh.gz`, { fetchFn: fakeFetch, sniff: true });
   assert.equal(liar.level, 'bad');
   assert.match(liar.detail, /named cadmesh, but it starts as STEP/);
@@ -1389,7 +1389,7 @@ await test('a ranged read that fails where a plain one opens the file is asked a
   assert.match(r.detail, /OBJ/);
   // must reject still: one that fails both ways
   const gone = await checkFile(`${B}cube.obj`, { fetchFn: async () => { throw new TypeError('Failed to fetch'); }, sniff: true });
-  assert.match(gone.detail, /not fetched: the site sent no CORS header/);
+  assert.match(gone.detail, /not fetched: the file is not there, the site does not let other web pages load it \(no CORS\)/);
 });
 await test('list-not-read', async () => {
   const r = await checkLists([`${B}missing.json`], 'https://cad.place/', { fetchFn: fakeFetch });

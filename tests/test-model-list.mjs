@@ -41,6 +41,13 @@ await test('anything else is refused, saying why', () => {
   // (a binary file -- a model given as a list -- said so, and a cut never splits a character: R108-1, R108-7)
   assert.throws(() => parseModelList('\x1f\x8b\x08\x00binary', L), { message: 'not JSON: it is a binary file (a model, not a list?)' });
   assert.throws(() => parseModelList(`${'a'.repeat(39)}😀tail`, L), { message: `not JSON: it begins “${'a'.repeat(39)}😀…”` });
+  // (UTF-16 and another encoding named, not "binary"; a model's own start hinted -- R109-2, R109-4)
+  const u16 = new TextDecoder().decode(new Uint8Array([0xff, 0xfe, ...[...'{"a": "b"}'].flatMap((c) => [c.charCodeAt(0), 0])]));
+  assert.throws(() => parseModelList(u16, L), { message: 'not JSON: it is UTF-16 text -- save it as UTF-8' });
+  const latin1 = new TextDecoder().decode(new Uint8Array([...'caf'].map((c) => c.charCodeAt(0)).concat([0xe9, 0x20, 0x78])));
+  assert.throws(() => parseModelList(latin1, L), { message: 'not JSON: it is not UTF-8 text -- save it as UTF-8' });
+  assert.throws(() => parseModelList('ISO-10303-21;\nHEADER;', L), { message: 'not JSON: it begins “ISO-10303-21; HEADER;” (a model, not a list?)' });
+  assert.throws(() => parseModelList('{\t"a":\f}', L), /not JSON: it begins/);
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
 await test('an entry\'s picture, STEP and tours named by a share page are read from the file, as check.html checks them', () => {
