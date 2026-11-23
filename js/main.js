@@ -296,13 +296,8 @@ function cannotHold() {
 // Whether the shown model is the one the recovered renderer could not hold (a drawing is no model:
 // a note of none matched it, and Cancel over a drawing said its model could not be held -- r51 Q3 c)
 const shownLacksGpu = () => !!app.mesh && !!app.gpuLacks && app.gpuLacks.mesh === app.mesh;
-// The GPU recovery's end: back to ready, or idle when nothing is shown, and "recovered on …" told
-// (it was written into the undrawn line, and with nothing shown the line read the bare word
-// "idle": r48 A7). A load that started meanwhile owns the state: nothing is written over it, and
-// it is told all the same (r49 Q1).
-// (a recovery that holds the model ends an earlier one's "cannot hold" -- its note, and the page's
-// error it made: the page stayed 'error' over a drawn model, and a Cancel said it was not drawn --
-// r51 A2, Q3 a, b; the idle words those of the page: r51 Q5)
+// The GPU recovery's end: ready, or idle with nothing shown, "recovered on …" told; a load started
+// meanwhile keeps its state; an earlier "cannot hold" and its error ended (r48 A7, r49 Q1, r51)
 function recovered() {
   const lacked = app.gpuLacks;
   app.gpuLacks = null;
@@ -6906,10 +6901,13 @@ function syncRefRow() {
   // (its × on the name's last line, as "all N" -- R40-3, R41-3; its focus read before it moves: R42-2)
   const hadX = document.activeElement === $('refclear');
   $('refname').replaceChildren(...nameWithButton(!app.ref ? 'the whole model' : isSel(app.ref.ids) ? 'the selection' : app.ref.name, $('refclear')));
-  $('refset').disabled = !app.selected.size;
+  // (off while the selection is the reference, its focus to the ×: R114-1)
+  const hadSet = document.activeElement === $('refset'), same = !!app.ref && isSel(app.ref.ids);
+  $('refset').disabled = !app.selected.size || same;
   // (a button about to hide hands the focus on, as the toolbar's do)
   if (hadX && !app.ref) $('refset').focus();
   $('refclear').hidden = !app.ref;
+  if (hadSet && same) $('refclear').focus();
   $('refline').hidden = !app.ref; // (the whole model: the selection row already says it)
   syncHoles();
   // an open hole table follows the reference and the display unit

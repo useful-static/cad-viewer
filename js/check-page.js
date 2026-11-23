@@ -224,6 +224,11 @@ $('form').onsubmit = (ev) => {
     $('listnotes').textContent = '';
     $('results').hidden = true;
     $('summary').textContent = 'give the list\'s URL';
+    // (and the old lists out of the address, the field's blank lines out of the field: a reload brought
+    // the old check back, and the blanks hid the example -- R114-2)
+    $('lists').value = '';
+    const u = new URL(location.href);
+    if (u.searchParams.has('list')) { u.searchParams.delete('list'); history.replaceState(null, '', u); }
     return;
   }
   $('lists').value = urls.join('\n');
