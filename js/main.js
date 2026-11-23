@@ -3789,12 +3789,8 @@ async function unwindPick(c) {
   app.entrySearch = new URL(c.before).search;
 }
 
-// Back / Forward between list picks: the entry's model opened again (and its #view=, applied when it
-// has), unless it is the model shown; and a #view= edited in. Both listeners here, one rule for the
-// view (viewIsFor, by the entry's address) -- they were wired apart: r59 A8.
-// (app.entrySearch: the entry shown's address; a popstate for the fragment alone is an edit of the
-// view, not another entry -- r59 Q2.) This page's id, in every history entry it writes (cadvEntry:
-// wireHistory): an entry's state outlives a reload, and a gone page's marks are not this one's (r64 Q3, Q6).
+// Back / Forward between list picks reopen the entry's model and #view= (viewIsFor), a fragment alone
+// an edit of the view; every entry carries this page's id (r59 A8, Q2, r64 Q3, Q6)
 const newPageId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const ownEntry = (s) => !!(s && s.cadvEntry && s.cadvEntry === app.pageId);
 // (an entry another page wrote -- before a reload --: its marks are not this page's)
@@ -4007,6 +4003,13 @@ function setSectionAt(at) {
 
 // The readout turned into a field: type the cut position in the unit its readout shows (lenUnit),
 // Enter puts the cut there, Esc (or leaving it) keeps it where it was
+// The cut's position from the reference's corner, as the info panel's (rangesFrom): R112-1
+function secOrigin() {
+  const ref = app.ref ? bboxOf(app.ref.ids) : app.header?.bbox;
+  return ref ? ref.min[{ x: 0, y: 1, z: 2 }[app.section.axis]] || 0 : 0;
+}
+const secShown = (p) => p[3] * (app.section.flip ? -1 : 1) - secOrigin();
+
 function secEdit() {
   const p = sectionPlane();
   if (!p || app.secEditing) return;
@@ -4014,7 +4017,7 @@ function secEdit() {
   inp.type = 'number';
   inp.step = 'any';
   inp.id = 'secin';
-  inp.value = lenNum(p[3] * (app.section.flip ? -1 : 1), 'section');
+  inp.value = lenNum(secShown(p), 'section');
   inp.defaultValue = inp.value;
   inp.setAttribute('aria-label', `Cut position along ${app.section.axis.toUpperCase()}, in ${lenUnit()} (Enter puts the cut there)`);
   app.secEditing = true;
@@ -4029,7 +4032,7 @@ function secEdit() {
     const v = Number(inp.value);
     // (Enter on the readout as it was filled in keeps the cut: the rounded readout put it up to its
     // rounding away -- r126 L3)
-    if (apply && inp.value.trim() && Number.isFinite(v) && inp.value !== inp.defaultValue) setSectionAt(lenBack(v));
+    if (apply && inp.value.trim() && Number.isFinite(v) && inp.value !== inp.defaultValue) setSectionAt(lenBack(v) + secOrigin());
     else updateButtons();
     $('secval').focus();
   };
@@ -4125,7 +4128,7 @@ function updateButtons() {
   syncOptbar();
   const p = sectionPlane();
   // (not while its position is being typed: secEdit)
-  if (!app.secEditing) $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(p[3] * (app.section.flip ? -1 : 1), 'section')} ${lenUnit()}` : '';
+  if (!app.secEditing) $('secval').textContent = p ? `${app.section.axis.toUpperCase()} = ${lenNum(secShown(p), 'section')} ${lenUnit()}` : '';
   $('secsel').disabled = !on || !app.selected.size;
   // a screen reader speaks the cut position, not the slider's 0-1000 step
   if (p) $('secpos').setAttribute('aria-valuetext', $('secval').textContent);

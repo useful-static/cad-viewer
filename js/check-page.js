@@ -113,6 +113,7 @@ async function run(urls) {
 function once(list) {
   const seen = new Set();
   return list.filter((s) => {
+    if (!s.trim()) return false; // (a blank ?list= read the page itself as a list: R112-4)
     let k = s;
     try { k = new URL(s, location.href).href; } catch { /* as given */ }
     if (seen.has(k)) return false;
@@ -220,7 +221,7 @@ $('form').onsubmit = (ev) => {
   if (!urls.length) { $('summary').textContent = 'give the list\'s URL'; return; }
   $('lists').value = urls.join('\n');
   const u = new URL(location.href);
-  u.search = '';
+  u.searchParams.delete('list'); // (the lists replaced, the address's other parameters kept, as on load: R112-4)
   for (const l of urls) u.searchParams.append('list', l);
   history.replaceState(null, '', u);
   run(urls);

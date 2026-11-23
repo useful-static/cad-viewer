@@ -110,7 +110,8 @@ export function notJson(text, what = 'list') {
   // (a byte-order mark and NULs: UTF-16. Without one, one half mostly NUL and the other none -- a
   // non-Latin letter's high byte is not NUL; a file of NULs, a binary STL's empty header, is binary:
   // R110-1, R111-1)
-  const bom = all.startsWith('��');
+  // (a mark is two undecodable bytes then text: a JPEG's FF D8 FF … starts with three -- R112-2)
+  const bom = all.startsWith('��') && all[2] !== '�';
   const h = all.slice(bom ? 2 : 0, 66);
   const half = (odd) => [...h].filter((c, i) => i % 2 === (odd ? 1 : 0));
   const nuls = (a) => a.filter((c) => c === '\x00').length;
