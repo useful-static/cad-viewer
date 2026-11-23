@@ -218,7 +218,14 @@ $('form').onsubmit = (ev) => {
   ev.preventDefault();
   $('lists').scrollLeft = 0;
   const urls = once($('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean));
-  if (!urls.length) { $('summary').textContent = 'give the list\'s URL'; return; }
+  if (!urls.length) {
+    // (the last check's results cleared: they stood under the request, as if for nothing given -- R113-4)
+    $('results').tBodies[0].textContent = '';
+    $('listnotes').textContent = '';
+    $('results').hidden = true;
+    $('summary').textContent = 'give the list\'s URL';
+    return;
+  }
   $('lists').value = urls.join('\n');
   const u = new URL(location.href);
   u.searchParams.delete('list'); // (the lists replaced, the address's other parameters kept, as on load: R112-4)

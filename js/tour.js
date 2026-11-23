@@ -118,7 +118,7 @@ export function notJson(text, what = 'list') {
   const utf16 = (odd) => nuls(half(odd)) * 2 >= half(odd).length && !nuls(half(!odd));
   if (h.length >= 8 && ((bom && h.includes('\x00')) || utf16(true) || utf16(false))) return 'not JSON: it is UTF-16 text -- save it as UTF-8';
   // eslint-disable-next-line no-control-regex
-  if (/[\x00-\x08\x0e-\x1f]/.test(all.slice(0, 512))) return `not JSON: it is a binary file${hint}`;
+  if (/[\x00-\x08\x0e-\x1f]/.test(all.slice(0, 512)) || all.startsWith('%PDF-')) return `not JSON: it is a binary file${hint}`;
   if (all.slice(0, 512).includes('�')) return 'not JSON: it is not UTF-8 text -- save it as UTF-8';
   const start = [...all.trim().replace(/\s+/g, ' ')];
   if (!start.length) return 'not JSON: it is empty';

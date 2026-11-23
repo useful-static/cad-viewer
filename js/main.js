@@ -6949,6 +6949,7 @@ function setRef(on) {
     app.ref = { ids, name: app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) };
   } else app.ref = null;
   showInfo();
+  updateButtons(); // (the Section readout in the new corner's frame, as the panel: R113-1)
   announce(app.ref ? `positions measured from ${app.ref.name}` : 'positions measured from the whole model');
 }
 
