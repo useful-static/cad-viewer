@@ -2812,7 +2812,8 @@ function turn() {
     turnLast = t;
     // (not while a tour is shown: a step's camera is the step's -- a static step spun off it, an
     // orbit step turned faster than recorded, and its pictures were taken off it)
-    if (app.header && !app.tour && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
+    // (nor walking: it turned about a point just ahead of the eye -- R123-1)
+    if (app.header && !app.tour && !app.walk && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
       turnAbout(app.cam, orientUp(app.cam.orient), TURN_RAD_S * dt);
       viewChanged();
     }
@@ -3888,13 +3889,8 @@ function landPendingView() {
   }
 }
 
-// A pointer pick opens at once. A keyboard change does not: a closed select
-// changes on each arrow, Home / End and type-ahead letter, and each would be
-// a download (or a conversion). It opens on Enter, on leaving the list, or
-// after a pause in the keys. Esc before then drops the choice (it opened the
-// model anyway: the 1 s pause, or in the File menu the blur as Esc closed
-// it). Enter gives the focus back like a pointer pick: left on the list,
-// the next letter (F to fit) picked a model by type-ahead and opened it.
+// A pointer pick opens at once; a keyboard change on Enter, on leaving the list or after a pause
+// (each arrow would be a download); Esc first drops it; Enter gives the focus back as a pick does.
 function wireModelList() {
   const ml = $('modellist');
   let typing = false;
@@ -3996,6 +3992,8 @@ function secEdit() {
   // (text, a decimal keypad: the wheel never steps it, and never blurs away what is typed -- R122-4)
   inp.type = 'text';
   inp.inputMode = 'decimal';
+  inp.autocomplete = 'off';
+  inp.spellcheck = false; // (as the other typed fields: R123-7)
   inp.id = 'secin';
   inp.value = lenNum(secShown(p), 'section');
   inp.defaultValue = inp.value;
@@ -4005,19 +4003,33 @@ function secEdit() {
   inp.focus();
   inp.select();
   let over = false;
+  // (a lone comma a decimal point: R123-2)
+  const val = () => Number(inp.value.trim().replace(/^(-?\d*),(\d*)$/, '$1.$2'));
   const done = (apply) => {
     if (over) return;
+    const v = val();
+    // (not a number: the field kept open and said so, not closed with nothing done -- R123-2)
+    if (apply && inp.value.trim() && !Number.isFinite(v)) {
+      inp.setAttribute('aria-invalid', 'true');
+      tell(`type a position in ${lenUnit()}, e.g. 12.5`, 4000);
+      return;
+    }
     over = true;
     app.secEditing = false;
-    const v = Number(inp.value);
     // (Enter on the readout as it was filled in keeps the cut: the rounded readout put it up to its
     // rounding away -- r126 L3)
-    if (apply && inp.value.trim() && Number.isFinite(v) && inp.value !== inp.defaultValue) setSectionAt(lenBack(v) + secOrigin());
+    if (apply && inp.value.trim() && inp.value !== inp.defaultValue) setSectionAt(lenBack(v) + secOrigin());
     else updateButtons();
     $('secval').focus();
   };
   inp.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
+    // (the arrows step it, as the number fields: 1, Shift 10 -- R123-3)
+    else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && Number.isFinite(val())) {
+      e.preventDefault();
+      inp.value = String(+(val() + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1)).toFixed(6));
+      inp.removeAttribute('aria-invalid');
+    } else inp.removeAttribute('aria-invalid');
   });
   inp.addEventListener('blur', () => done(false));
 }
@@ -5157,12 +5169,8 @@ function stopEdgeJobs(keep, why) {
   for (const [b, j] of [...app.edgeJobs]) if (!keep.has(b)) j.stop(why);
 }
 
-// "ready", or with faces the conversion could not mesh, what is missing; the list's note; and while
-// the shown model or scene has no facts and has said so, why (sayNoFacts) -- every writer of the
-// ready line keeps it (only sayNoFacts carried it, and an export's end, the model list's note or
-// the tour's dropped it with the facts still missing: r41 A4, Q2)
-// (a 2D drawing's word too: its own line, written apart, became plain "ready" when the model list
-// arrived, and dropped the list's note in the other order -- r42 A6)
+// "ready" with what is missing, the list's note, a drawing's word and why facts are missing
+// (sayNoFacts): every writer of the ready line keeps them (r41 A4, Q2, r42 A6)
 function readyText() {
   const d = app.dxf;
   return (d ? `ready · 2D drawing${d.drawing.units ? '' : ' (its unit is not stored)'}` : app.unmeshedFaces
