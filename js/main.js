@@ -37,12 +37,8 @@ import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
 import { WebGLRenderer } from './renderer-webgl.js';
 
-// The format readers and the 2D view, loaded when a file needs them, not before the page's first
-// card: a .cadmesh.gz shown in an embed loaded the DWG, DXF and mesh-format readers first (1.16 MB
-// in 46 modules, "Loading the 3D viewer…" for 33.9 s on a throttled 3G link from a server that does
-// not compress: tests/test-first-phase.mjs, the round-51 review). Each is fetched once; a failed
-// fetch is tried again by the next file that needs it, and said in plain words (the browser's
-// "Failed to fetch dynamically imported module: …/js/mesh-formats.js" was the card's error: r52 A8, Q8).
+// The format readers and the 2D view, loaded when a file needs them, not before the first card
+// (tests/test-first-phase.mjs, round 51); fetched once, a failure retried and said plainly (r52 A8, Q8)
 const once = (load, what) => {
   let p = null;
   // (a failed download -- import()'s TypeError -- in those words; any other failure, a module that
@@ -5621,7 +5617,7 @@ const TITLES_2D = [
   ['embedfit', 'Fit the drawing in view'],
   ['embedopen', 'Open this drawing in the full viewer, in a new tab'],
   ['sharelink', 'Copy a link that opens this drawing'],
-  ['printbtn', 'Print the drawing, without the selection and the hover, with its name'],
+  ['printbtn', 'Print the drawing, without the selection and the hover, with its name (Ctrl+P)'],
   ['panelbtn', 'Layers list'],
 ];
 
@@ -7774,21 +7770,30 @@ function wireInput() {
   $('piccopy').hidden = typeof ClipboardItem !== 'function' || !navigator.clipboard?.write;
   $('piccopy').onclick = () => copyPicture();
   $('printbtn').onclick = () => { closeMenus(); savePicture(true); };
-  // The browser's own Print printed a blank page, or the last File > Print's picture of another model
-  // (R116-1): Ctrl/Cmd+P is File > Print, and after a print the picture goes, its place the page's hint
-  const hint = $('printname').textContent;
+  // Ctrl/Cmd+P is File > Print, once at a time, P by place on other layouts; a print's picture then
+  // dropped for the hint; framed, all left to the host page (R116-1, R117-1, -2, -4, -6, -7)
+  let framed = false;
+  try { framed = window.self !== window.top; } catch { framed = true; }
+  const hint = framed ? '' : $('printname').textContent;
+  let printing = false;
   addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'p' && !$('printbtn').disabled) {
-      e.preventDefault();
-      closeMenus();
-      savePicture(true);
-    }
+    const pKey = e.key.toLowerCase() === 'p' || (nonLatinLetter(e.key) && e.code === 'KeyP');
+    if (framed || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || !pKey || $('printbtn').disabled) return;
+    e.preventDefault();
+    if (e.repeat || printing) return;
+    printing = true;
+    closeMenus();
+    tell('preparing the print…', 2000);
+    Promise.resolve(savePicture(true)).finally(() => { printing = false; });
   });
+  const hintNow = () => (framed ? '' : app.header || app.dxf ? hint : 'Open a model to print it.');
+  addEventListener('beforeprint', () => { if (!$('printimg').getAttribute('src')) $('printname').textContent = hintNow(); });
   addEventListener('afterprint', () => {
     const img = $('printimg');
     if (img.src) { URL.revokeObjectURL(img.src); img.removeAttribute('src'); }
-    $('printname').textContent = hint;
+    $('printname').textContent = hintNow();
   });
+  if (framed) $('printname').textContent = '';
   $('savedrawing').onclick = () => { closeMenus(); saveDrawing(); };
   $('skipview').onclick = () => (app.dxf ? $('view2d') : $('view')).focus();
   // (Next greyed at the end, Previous at the start: the focus to the other, R43-3)
@@ -7854,7 +7859,8 @@ function wireInput() {
   // Undo's key as this OS names it (both work everywhere)
   if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
     $('undo').title = $('undo').title.replace('Ctrl+Z', '⌘Z');
-    for (const k of document.querySelectorAll('#helppop kbd')) if (k.textContent === 'Ctrl+Z') k.textContent = '⌘Z';
+    $('printbtn').title = $('printbtn').title.replace('Ctrl+P', '⌘P');
+    for (const k of document.querySelectorAll('#helppop kbd')) k.textContent = k.textContent.replace(/^Ctrl\+([ZP])$/, '⌘$1');
   }
   pal.onchange = () => setPalette(pal.value);
   wireModelList();

@@ -868,7 +868,7 @@
         <span class="optrow" role="group" aria-label="Size"><span class="optlab">size</span><button data-scale="1" aria-pressed="false">1×</button><button data-scale="2" aria-pressed="true">2×</button><button data-scale="4" aria-pressed="false">4×</button></span>
         <span class="optrow" role="group" aria-label="Background"><span class="optlab">background</span><button data-bg="view" aria-pressed="true" id="picbgview">View</button><button data-bg="white" aria-pressed="false">White</button><button data-bg="transparent" aria-pressed="false">Transparent</button></span>
         <span class="optrow"><button id="picsel" aria-pressed="false" title="Draw the selected parts as selected in the picture">Include selection</button><button id="piccopy" hidden title="Copy the picture to the clipboard instead of saving a file">Copy image</button></span>
-      </div><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name">Print…</button><button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
+      </div><button id="printbtn" autocomplete="off" disabled title="Print the view: the picture Save picture makes, with the model's name (Ctrl+P)" aria-keyshortcuts="Control+P">Print…</button><button id="export" autocomplete="off" disabled title="Save the converted model as a .cadmesh file, which opens without converting">Save .cadmesh</button><a id="download" class="btn" hidden download>Download STEP</a><button id="savedrawing" autocomplete="off" disabled title="Save the selected parts (else all shown) as a 1:1 SVG drawing in mm, seen straight along the nearest view (Top, Front, …): their edges, holes as circles; hidden edges are not removed, so select what you want drawn (the board alone: its outline and holes)">Save drawing (SVG)</button>
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program, turned as the view is oriented, whole (not cut or exploded)">Save as <!-- one button per format: main.js builds them from js/export-mesh.js EXPORTS --></span>
     </div></div>
   <span class="sep"></span>
@@ -1026,6 +1026,7 @@
         <dt><kbd>F</kbd></dt><dd>Fit the drawing</dd>
         <dt><kbd>M</kbd></dt><dd>Measure</dd>
         <dt><kbd>P</kbd></dt><dd>Save a picture</dd>
+        <dt><kbd>Ctrl+P</kbd></dt><dd>Print</dd>
         <dt><kbd>Esc</kbd></dt><dd>Drop a half-taken measurement, then stop measuring</dd>
         <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
       <section class="keys help-mouse"><h3>Mouse</h3><dl>
@@ -1050,6 +1051,7 @@
         <dt><kbd>M</kbd></dt><dd>Measure: click points; they snap to corners, edges and hole centres</dd>
         <dt><kbd>X</kbd></dt><dd>Explode</dd>
         <dt><kbd>P</kbd></dt><dd>Save a picture</dd>
+        <dt><kbd>Ctrl+P</kbd></dt><dd>Print</dd>
         <dt><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dt><dd>Walk (when on): move; <kbd>Q</kbd> <kbd>E</kbd> down / up</dd></dl></section>
       <section class="keys"><h3>Parts</h3><dl>
         <dt><kbd>I</kbd></dt><dd>Isolate the selection</dd>
