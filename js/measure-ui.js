@@ -86,14 +86,10 @@ const INK = {
 };
 const HOLE = '#5fd3ff';
 
-// deps: { $, scene: { mesh, header, hidden, sphere } (the model as converted,
-//   its header, the hidden body ids, its bounding sphere: read when used),
-//   view() -> { vp, eye, dir, right, up, ortho, tanV, w, h, target, dist },
-//   sectionPlane(), lenText(mm) "4.00 mm", num(mm) "4.00", unit() "mm", announce(text),
-//   tell(text, ms, said) (shown where the view's notes go and read out -- `said` if it differs;
-//   main.js's one rule, not a second kept here: r46 A3), queueFrame(), syncOptbar(),
-//   coarse(), showsHidden(), closed(mi) (the body is closed: closedOf), beforeOn() (run as
-//   Measure turns on) }
+// deps: { $, scene: { mesh, header, hidden, sphere }, view() -> { vp, eye, dir, right, up, ortho,
+//   tanV, w, h, target, dist }, sectionPlane(), lenText(mm), num(mm), unit(), announce(text),
+//   tell(text, ms, said) (main.js's: r46 A3), queueFrame(), syncOptbar(), coarse(), showsHidden(),
+//   closed(mi), beforeOn() }
 // The point of segment a-b nearest the ray { o, d }: the edge point under the pointer, in perspective
 // as in ortho. Parallel to the ray (an edge seen end on), t: the screen parameter's point.
 export function nearestOnRay(a, b, ray, t) {
@@ -239,14 +235,9 @@ export function createMeasure(deps) {
     const tp = den ? (pl[3] - dot(pl, o)) / den : -1;
     return !(tp > 0 && tp < 1 - eps && insideClosed(add(o, mul(d, tp)), bodies, pl, skip));
   }
-  // a point inside a closed body among these, by the parity of the walls a ray from it crosses, into
-  // the section's kept side (its normal reversed) -- each body walked on its own: walked together, a
-  // part's bottom in the plane of the board's top was stepped past uncounted, the part read as solid
-  // there and its visible edges as hidden (r127 H1)
-  // A walk whose ray meets a triangle on its border (an edge, a corner) cannot tell a crossing from
-  // a graze -- a ridge touched from outside counted once, the point read as inside -- so the body is
-  // walked again along two rays tilted by about 1/100 rad, the first walk without a border hit
-  // deciding, else the three by majority (r127 L1, r128 L3)
+  // a point inside a closed body, by the parity of the walls a ray into the section's kept side
+  // crosses, each body on its own (r127 H1); a border hit walked again on two tilted rays, by
+  // majority (r127 L1, r128 L3)
   function insideClosed(q, bodies, pl, skip) {
     const dir = [-pl[0], -pl[1], -pl[2]], step = Math.max(1e-6, scene.sphere.radius * 1e-7);
     const P = st.model.position, I = st.model.index;
@@ -861,9 +852,16 @@ export function createMeasure(deps) {
     deps.queueFrame();
     // (a mesh with no b-rep faces -- an STL, an OBJ, a .cadmesh written without them -- has no
     // corners, edges or circles to snap to, which nothing said: r121 L2)
-    const plain = on && scene.mesh && !scene.mesh.faces;
-    deps.tell(on ? `Measure: ${touchOnly() ? 'tap points on the model' : `click points on the model${$('holes').hidden ? '' : ', or Enter on a hole row'} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}` : 'measure off', plain ? 6000 : 3000, on ? 'measure on' : 'measure off'); // (R65-1)
+    if (on) onNote(true); else deps.tell('measure off', 3000, 'measure off');
     if (focus) (on ? $('measoff') : offFocus()).focus();
+  }
+  // Measure's note; again, unsaid, as the hole table opens or closes (its "or Enter on a hole row"
+  // kept to the table, and said with "measure on": R128-4)
+  function onNote(say = false) {
+    if (!st.on) return;
+    const plain = scene.mesh && !scene.mesh.faces, row = !touchOnly() && !$('holes').hidden;
+    deps.tell(`Measure: ${touchOnly() ? 'tap points on the model' : `click points on the model${row ? ', or Enter on a hole row' : ''} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}`,
+      plain ? 6000 : 3000, say ? `measure on${row ? ', or Enter on a hole row for a point' : ''}` : ''); // (R65-1)
   }
 
   function undo() {
@@ -876,7 +874,7 @@ export function createMeasure(deps) {
   // Esc: the results list, a half-made measurement, then Measure itself
   function escape() {
     if (st.listOpen) { setList(false); return true; }
-    if (st.pending.length) { st.pending = []; syncRow(); deps.queueFrame(); return true; }
+    if (st.pending.length) { st.pending = []; syncRow(); deps.tell('point dropped', 2000); deps.queueFrame(); return true; } // (said: R128-5)
     if (st.on) { setOn(false, true); return true; }
     return false;
   }
@@ -988,7 +986,7 @@ export function createMeasure(deps) {
   }
   function showHoles(ids, ref = null, name = '') {
     const box = $('holes');
-    if (!ids || !ids.length) { st.holes = null; box.hidden = true; deps.queueFrame(); return null; }
+    if (!ids || !ids.length) { const was = !box.hidden; st.holes = null; box.hidden = true; if (was) onNote(); deps.queueFrame(); return null; }
     const t = holeRows(ids, ref);
     // (the same holes shown again keep their pick: a picture's redraw un-picked it, R26-1)
     const key = ids.join(','), keep = st.holes && st.holes.key === key && st.holes.pick < t.list.length ? st.holes.pick : -1;
@@ -1051,6 +1049,7 @@ export function createMeasure(deps) {
         st.holes.pick = r.n - 1;
         for (const x of tb.children) {
           x.classList.toggle('pick', x === tr);
+          x.tabIndex = x === tr ? 0 : -1; // (Tab back in lands on the pick: R128-3)
           if (x === tr) x.setAttribute?.('aria-current', 'true'); else x.removeAttribute?.('aria-current');
         }
         // (the coordinates named, not the column's head pasted in: R29-3)
@@ -1091,9 +1090,10 @@ export function createMeasure(deps) {
     $('holescsv').hidden = none;
     if (none && note.hidden) { note.hidden = false; note.textContent = 'No round holes found'; }
     // (said as the table opens or its count changes, not again on every rebuild: R127-5)
-    const fresh = box.hidden || st.holesSaid !== t.list.length;
+    const fresh = box.hidden || st.holesSaid !== t.list.length, opened = box.hidden;
     st.holesSaid = t.list.length;
     box.hidden = false;
+    if (opened) onNote();
     deps.queueFrame();
     if (fresh) deps.announce(`${t.list.length} holes${t.untold || t.unpaired ? `; ${untoldText(t.untold, t.unpaired)}` : ''}`);
     return t;

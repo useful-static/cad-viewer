@@ -4930,12 +4930,8 @@ function clearanceOffPage(base, trisA, trisB, solidA, solidB) {
   });
 }
 
-// Clearance: the smallest gap between the selected parts (when they all lie in one model; else
-// the first model) and the other models' shown parts, on the tessellation (js/clearance.js), drawn
-// as a Measure distance.
-// The model's facts, waited for when they are on their way: on the facts, not the value -- a scene's
-// edges in hand are its value before its facts arrive, and a run on the value alone knew no body
-// closed, a pin inside a block read as its gap (round 40 Q3; the wait had no test: r67)
+// Clearance: the smallest gap from the selected parts to the other models' shown parts
+// (js/clearance.js), a Measure distance; after the model's facts, not its edges alone (r40 Q3, r67)
 const factsReady = (base) => (!base.edgeInfo?.value?.facts && base.edgeInfo?.ready ? base.edgeInfo.ready.then(() => {}, () => {}) : Promise.resolve());
 async function runClearance() {
   if (!app.scene || app.scene.length < 2 || !app.baseMesh) return;
@@ -6016,7 +6012,7 @@ function tessellate(buf, format, seq, name, threads) {
         detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''} · ${clock}` // (as the card: R80-5)
+        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
     };
@@ -7947,6 +7943,11 @@ function wireInput() {
     // (its head in view; from a key, the focus to its Copy: R44-2)
     if (!$('holes').hidden) {
       $('holestitle').scrollIntoView({ block: 'nearest' });
+      // (and a first row with it: a landscape phone's drawer showed the head alone -- R128-2)
+      const r0 = $('holesrows').firstElementChild;
+      let sc = $('holes').parentElement; // (the panel's scroll, not the table's own)
+      while (sc && !(sc.scrollHeight > sc.clientHeight && /auto|scroll/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
+      if (r0 && sc && r0.getBoundingClientRect().bottom > sc.getBoundingClientRect().bottom) $('holestitle').scrollIntoView({ block: 'start' });
       if (kb) $('holescsv').focus({ preventScroll: true });
     }
   };

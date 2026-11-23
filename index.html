@@ -403,6 +403,14 @@
   /* (a maker too wide to sit beside the card ends above it while its draft plays, by the card's own
      height: it covered the card -- R68-1, R69-1, R69-2) */
   #stage.touring.tournarrow #touredit { max-height:calc(100% - 28px - var(--tourcard-h, 62px) - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
+  /* (an upright phone: a sheet over the view's lower half, above the options bar, the model kept in
+     sight to turn for a step; while its draft plays, only its head and Preview row, at the top --
+     it covered the whole view, R128-1) */
+  @media (max-width:519px) {
+    #touredit { top:auto; bottom:calc(8px + var(--optbar-h, 0px)); max-height:min(50%, calc(100% - 16px - var(--optbar-h, 0px))); }
+    #stage.touring #touredit, #stage.touring.tournarrow #touredit { top:8px; bottom:auto; max-height:none; }
+    #stage.touring #touredit > :not(.tehead, .terow:has(#teplay)) { display:none; }
+  }
   #touredit .tehead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
   #touredit .tehead b { font-size:14px; }
   #touredit .tehint { color:var(--dim); margin:0 0 8px; }
