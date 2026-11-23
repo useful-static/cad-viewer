@@ -92,7 +92,7 @@ async function run(urls) {
       // (a list read with no models says so, beside others or alone -- R105-3, R106-5)
       const none = l.models === 0 || (l.models == null && !result.entries.length);
       // (a model an earlier list already named is checked there, as the viewer keeps it there: said -- R107-4)
-      const rep = l.repeats ? `: ${l.repeats === l.models ? (l.models === 1 ? 'its model is' : `all ${l.models} of its models are`) : `${l.repeats} of its ${l.models} models ${l.repeats === 1 ? 'is' : 'are'}`} already in an earlier list, checked there` : '';
+      const rep = l.repeats ? `: ${l.repeats === l.models ? (l.models === 1 ? 'its model is' : l.models === 2 ? 'both of its models are' : `all ${l.models} of its models are`) : `${l.repeats} of its ${l.models} models ${l.repeats === 1 ? 'is' : 'are'}`} already in an earlier list, checked there` : '';
       p.append(g, 'the list ', ...urlParts(l.url), l.error ? ` was not read: ${l.error}` : none ? ' was read: it has no models' : ` was read${rep}`);
       $('listnotes').append(p);
     }
@@ -161,27 +161,38 @@ $('lists').parentElement?.addEventListener('mousedown', (e) => {
   pick(at, false);
   // (held still outside the field, the drag goes on scrolling it, sideways and up or down, each frame
   // by how far outside it is -- as a drag from the text does: R107-1)
-  let last = null, raf = 0;
+  // (its speed by time, not by frame -- a 120 Hz screen scrolled twice as fast -- up to about 1200 px a
+  // second; it stops when the button is no longer held or the window is left, a release it never
+  // heard included: R108-3, R108-4)
+  let last = null, raf = 0, then = 0;
   const out = (p, lo, size) => (p < lo ? p - lo : p > lo + size ? p - lo - size : 0);
-  const tick = () => {
+  const step = (d, dt) => Math.sign(d) * Math.min(Math.abs(d) * 1.2, 20) * dt / 16.7;
+  const tick = (now) => {
     raf = 0;
     if (!last) return;
+    const dt = Math.min(50, then ? now - then : 16.7);
+    then = now;
     const r = ta.getBoundingClientRect();
     const dx = out(last.x, r.left, ta.clientWidth), dy = out(last.y, r.top, ta.clientHeight);
-    if (!dx && !dy) return;
-    ta.scrollLeft += Math.max(-40, Math.min(40, dx));
-    ta.scrollTop += Math.max(-40, Math.min(40, dy));
+    if (!dx && !dy) { then = 0; return; }
+    ta.scrollLeft += step(dx, dt);
+    ta.scrollTop += step(dy, dt);
     pick(caretAt(ta, last.x, last.y, true), false);
     raf = requestAnimationFrame(tick);
   };
   const move = (m) => {
+    if (!(m.buttons & 1)) { up(); return; }
     last = { x: m.clientX, y: m.clientY };
     pick(caretAt(ta, last.x, last.y, true), true);
     if (!raf) raf = requestAnimationFrame(tick);
   };
-  const up = () => { last = null; cancelAnimationFrame(raf); raf = 0; removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+  function up() {
+    last = null; then = 0; cancelAnimationFrame(raf); raf = 0;
+    removeEventListener('mousemove', move); removeEventListener('mouseup', up); removeEventListener('blur', up);
+  }
   addEventListener('mousemove', move);
   addEventListener('mouseup', up);
+  addEventListener('blur', up);
 });
 $('form').onsubmit = (ev) => {
   ev.preventDefault();

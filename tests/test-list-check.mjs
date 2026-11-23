@@ -268,8 +268,8 @@ await test('whole-list', async () => {
   const good = r.entries.find((e) => e.name === 'Good');
   assert.equal(good.id, 'good');
   assert.deepEqual(good.checks.map((c) => [c.what, c.level]),
-    [['model', 'ok'], ['picture', 'ok'], ['STEP', 'ok'], ['tour "Good tour"', 'ok']]);
-  assert.match(good.checks[3].detail, /2 steps, "A tour"/);
+    [['model', 'ok'], ['picture', 'ok'], ['STEP', 'ok'], ['tour “Good tour”', 'ok']]); // (curly: R108-5)
+  assert.match(good.checks[3].detail, /2 steps, “A tour”/);
   const liar = r.entries.find((e) => e.name === 'Liar');
   assert.equal(liar.checks[1].level, 'bad');
   assert.match(liar.checks[1].detail, /not a tour cad.place reads/);

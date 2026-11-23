@@ -1417,13 +1417,8 @@ app.playTour = (t) => startTourIn(parseTour(JSON.stringify(t), location.href), n
 app.playTourIn = app.playTour;
 app.captureStep = (o) => captureStep(o);
 app.openUrl = (u) => loadUrl(u);
-// Export the parts shown (not hidden) as STL, 3MF or GLB (js/export-mesh.js),
-// in their drawn colours, turned by the orientation shown (app.cam.orient: the Z up toggle as set
-// now, a playing tour's): Z up for STL and 3MF (a printer's convention), Y up for GLB (glTF's).
-// Whole and in place: the section and Explode are the view's, not the parts' (said when on)
-// A saved file's name from the model's: its .gz, then its extension, off ("board.stp.gz" ->
-// "board"). The one rule for exports and Save .cadmesh (which named it "board.stp.cadmesh")
-// (a scene of several models, "a.stp + b.stl": each name's base, joined -- "a.stp + b" before)
+// Export the parts shown as STL, 3MF (Z up) or GLB (Y up), in their colours, whole (js/export-mesh.js).
+// A saved file's name: the model's without .gz and extension, a scene's bases joined
 const saveBase = (name) => (name || 'model').split(' + ').map((n) => n.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '')).filter(Boolean).join('+') || 'model';
 // a picture's name: the model's or the drawing's, and when it was taken (a drawing's had its own
 // rule, no time and its .gz kept)
@@ -1886,12 +1881,13 @@ async function readTour(url) {
   let text, from = abs;
   try {
     const r = await timedFetch(abs);
-    if (!r.ok) return { error: `${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
+    // (each error a verb's clause after "the tour": it read "the tour not JSON: …" -- R108-2)
+    if (!r.ok) return { error: `could not be read: ${r.status === 404 ? 'not found' : 'refused'} (${r.status}): ${abs}` };
     // (its model resolves against the URL that answered, as a list's files do: r56 A1)
     from = answeredFrom(r, abs);
     // (read up to its limit, as it arrives: js/model-list.js readCapped, js/tour.js MAX_TOUR_BYTES)
     // (the time running out while the body still came is the same timeout: r55 A5, Q7)
-    try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: isTimeout(e) ? `gave no answer in time: ${abs}` : `${e.message}: ${abs}` }; }
+    try { text = await readCapped(r, MAX_TOUR_BYTES); } catch (e) { return { error: isTimeout(e) ? `gave no answer in time: ${abs}` : `could not be read: ${e.message}: ${abs}` }; }
   } catch (e) {
     // (given up after its time: said so, as a list's read says it -- it read "not there, or no
     // CORS": r54 A5)
@@ -1900,7 +1896,7 @@ async function readTour(url) {
     // shared -- or did not answer: fetchFailedText tells which)
     return { error: await fetchFailedText(abs, 'the tour', e, 'could not be read') };
   }
-  try { return { tour: parseTour(text, from) }; } catch (e) { return { error: e.message }; }
+  try { return { tour: parseTour(text, from) }; } catch (e) { return { error: `could not be read: ${e.message}` }; }
 }
 
 // The camera a step asks for -> { pose: { target, dist, q }, ortho } or null

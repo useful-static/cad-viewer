@@ -570,14 +570,15 @@ function check(c0, r) {
     v('I28', `the units row says ${r.dom.meshunit.value}, the model read in ${r.app.meshSource.unit}`);
   }
   // I26: the start's tour, failing after a pick left its address, is not the picked model's line
-  if (qp.get('tour') && !new URL(r.href).searchParams.get('tour') && r.status === 'ready' && /the tour (not found|gave no answer)/.test(r.msg || '')) {
+  if (qp.get('tour') && !new URL(r.href).searchParams.get('tour') && r.status === 'ready' && /the tour (could not be read: not found|gave no answer)/.test(r.msg || '')) {
     v('I26', `the start's tour's failure in the ready line of an address naming no tour: ${r.msg}`);
   }
   // (and told: the line's half alone passed a page that said nothing -- r67 A2)
   // (when the visitor left during the start, before the tour's answer; one made after, the failure
   // was said on the card or the line before it)
   if (qp.get('tour') && /^tour (fails|times out)/.test(c.outcome) && [].concat(c.during || []).some((d) => d.pick || d.file || d.early) && !new URL(r.href).searchParams.get('tour') && r.status === 'ready'
-    && !/the tour (not found|gave no answer)/.test(r.msg || '') && !r.shown.some((t) => /^the tour (not found|gave no answer)/.test(t))) {
+    // (the 404 said "the tour could not be read: not found" since R108-2)
+    && !/the tour (could not be read: not found|gave no answer)/.test(r.msg || '') && !r.shown.some((t) => /^the tour (could not be read: not found|gave no answer)/.test(t))) {
     v('I26', `the start's tour failed, the visitor elsewhere, and nothing said: ${JSON.stringify(r.shown)}`);
   }
   // I25: "this file is in" chosen while another model opens is refused, and said so

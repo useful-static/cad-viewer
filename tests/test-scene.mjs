@@ -1797,7 +1797,7 @@ const LISTED = JSON.stringify({ 'a.stl': 'A', 'b.stl': 'B' });
 const TOUR = (model) => JSON.stringify({ cadtour: 1, ...(model ? { model } : {}), steps: [{ title: 'one' }] });
 const A404 = 'could not download a.stl: not found (404)';
 const L404 = `model list ${SITE}l.json: not found (404)`, LNONE = 'the model list names no models';
-const T404 = `the tour not found (404): ${SITE}t.json`;
+const T404 = `the tour could not be read: not found (404): ${SITE}t.json`; // (with a verb: R108-2)
 const READY_T = 'the tour is ready: open its 3D model';
 const BIG = { name: 'big.stl', size: 3e9 }, BIGO = 'big.stl is over 2 GB, more than this viewer opens';
 const POSTER = 'View in 3D loads the model';

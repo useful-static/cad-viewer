@@ -38,6 +38,9 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList('{"a": ', L), /not JSON/);
   // (in the page's words with how it begins, not the browser's message -- R107-3)
   assert.throws(() => parseModelList('this is not json\nat all', L), { message: 'not JSON: it begins “this is not json at all”' });
+  // (a binary file -- a model given as a list -- said so, and a cut never splits a character: R108-1, R108-7)
+  assert.throws(() => parseModelList('\x1f\x8b\x08\x00binary', L), { message: 'not JSON: it is a binary file (a model, not a list?)' });
+  assert.throws(() => parseModelList(`${'a'.repeat(39)}😀tail`, L), { message: `not JSON: it begins “${'a'.repeat(39)}😀…”` });
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
 await test('an entry\'s picture, STEP and tours named by a share page are read from the file, as check.html checks them', () => {

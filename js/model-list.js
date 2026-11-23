@@ -390,11 +390,13 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
   }));
   // (counts: each list's own models, in the order given -- the list check says which list had none:
   // R106-5; repeats: how many of them an earlier list already named, kept in its place -- R107-4)
+  // (each model counted once in its list, as the join keeps it once: R108-8)
   const seen = new Set();
-  const repeats = got.map((g) => {
-    const n = g.entries.filter((e) => seen.has(e.url)).length;
-    for (const e of g.entries) seen.add(e.url);
+  const own = got.map((g) => [...new Set(g.entries.map((e) => e.url))]);
+  const repeats = own.map((urls) => {
+    const n = urls.filter((u) => seen.has(u)).length;
+    for (const u of urls) seen.add(u);
     return n;
   });
-  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error), counts: got.map((g) => g.entries.length), repeats };
+  return { entries: joinModelLists(got.map((g) => g.entries)), errors: got.filter((g) => g.error).map((g) => g.error), counts: own.map((u) => u.length), repeats };
 }

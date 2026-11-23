@@ -1041,12 +1041,13 @@ export async function checkTour(url, fetchFn = timedFetch) {
     const t = parseTour(await readCapped(res, MAX_TOUR_BYTES), answeredFrom(res, url));
     // (and the model it opens, as the page resolves it -- against the URL that answered: r57 Q8, the
     // base otherwise unseen)
-    return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, "${t.title}"` : ''}${t.model ? `; its model ${t.model}` : ''}`, url };
+    return { level: 'ok', detail: `${t.steps.length} steps${t.title ? `, “${t.title}”` : ''}${t.model ? `; its model ${t.model}` : ''}`, url };
   } catch (e) {
     // (the time given up while the body still came: a timeout, not a fault of the tour -- it read
     // "not a tour cad.place reads: The operation was aborted due to timeout": r55 A5, Q7)
     if (isTimeout(e)) return { level: 'bad', detail: refused(e), url };
-    return { level: 'bad', detail: `not a tour cad.place reads: ${e.message}`, url };
+    // (a file that is not JSON said once: "not a tour cad.place reads: not JSON: …" -- R108-6)
+    return { level: 'bad', detail: /^not JSON: /.test(e.message) ? `not a tour: not JSON, ${e.message.slice(10)}` : `not a tour cad.place reads: ${e.message}`, url };
   }
 }
 
@@ -1091,7 +1092,8 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
     await add('model', e.url, () => checkFile(e.url, { fetchFn, sniff: true }));
     if (e.image) await add('picture', e.image, () => checkFile(e.image, { fetchFn, method: 'HEAD' }));
     if (e.step) await add('STEP', e.step, () => checkFile(e.step, { fetchFn, method: 'HEAD', download: true }));
-    for (const t of e.tours || []) await add(`tour "${t.name}"`, t.url, () => checkTour(t.url, readFn));
+    // (the name in curly quotes, as the results' quotes: R108-5)
+    for (const t of e.tours || []) await add(`tour “${t.name}”`, t.url, () => checkTour(t.url, readFn));
     const out = { name: e.name, url: e.url, id: e.id || null, checks };
     if (onEntry) onEntry(out, i, n);
     return out;

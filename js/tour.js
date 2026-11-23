@@ -105,10 +105,15 @@ export function tourAt(tour, unit) {
 
 // A file that is not JSON, said in the page's words with how it begins (the browser's own message,
 // quotes inside quotes and a line break as a space, was shown: R107-3)
+// (a binary file, a model given as a list, said so -- not its bytes as text; cut at whole characters,
+// an emoji not split: R108-1, R108-7)
 export function notJson(text) {
-  const start = String(text ?? '').trim().replace(/\s+/g, ' ');
-  if (!start) return 'not JSON: it is empty';
-  return `not JSON: it begins “${start.length > 40 ? `${start.slice(0, 40)}…` : start}”`;
+  const all = String(text ?? '');
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x08\x0e-\x1f�]/.test(all.slice(0, 512))) return 'not JSON: it is a binary file (a model, not a list?)';
+  const start = [...all.trim().replace(/\s+/g, ' ')];
+  if (!start.length) return 'not JSON: it is empty';
+  return `not JSON: it begins “${start.length > 40 ? `${start.slice(0, 40).join('')}…` : start.join('')}”`;
 }
 
 export function parseTour(text, base = undefined) {
