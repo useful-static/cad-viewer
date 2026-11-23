@@ -3802,12 +3802,8 @@ const otherPages = (s) => !!(s && s.cadvEntry && s.cadvEntry !== app.pageId);
 function wireHistory() {
   app.pageId = newPageId();
   app.entrySearch = location.search;
-  // (the page as first opened, marked in its own entry's state: its address is rewritten under it --
-  // syncUnitParam moves ?unit= while its model loads, forgetAddressModel drops its model --, and a
-  // Back compared by its text found the first entry no longer and reopened its model alone: r61 A1)
-  // (every entry the page knows carries its id, cadvEntry = app.pageId: an entry without one is a
-  // #view= edit just made, and takes its marks from the entry it was made on: r63 A1, Q1, Q3.)
-  // (a reloaded entry's own marks were the page before's -- a pick's depth -- and are dropped)
+  // (the first page marked in its entry's state, its address rewritten under it; every entry carries
+  // app.pageId, a #view= edit takes its entry's marks; a reload's old marks dropped -- r61 A1, r63)
   const { cadvFirst: _f, cadvEntry: _e, cadvPick: _p, depth: _d, ...kept } = history.state || {};
   history.replaceState({ ...kept, cadvFirst: true, cadvEntry: app.pageId }, '', location.href);
   app.entryState = history.state;

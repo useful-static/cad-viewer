@@ -48,6 +48,13 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList(latin1, L), { message: 'not JSON: it is not UTF-8 text -- save it as UTF-8' });
   assert.throws(() => parseModelList('ISO-10303-21;\nHEADER;', L), { message: 'not JSON: it begins “ISO-10303-21; HEADER;” (a model, not a list?)' });
   assert.throws(() => parseModelList('{\t"a":\f}', L), /not JSON: it begins/);
+  // (UTF-16 with non-Latin letters first, with and without its mark: R111-1)
+  const le = (s, mark) => new TextDecoder().decode(new Uint8Array([...(mark ? [0xff, 0xfe] : []), ...[...s].flatMap((c) => [c.charCodeAt(0) & 255, c.charCodeAt(0) >> 8])]));
+  for (const mark of [true, false]) {
+    for (const s of ['["Łódź.stl", "Ł"]', '["Привет.stl", "x"]', '["中文模型.stl", "中"]']) {
+      assert.throws(() => parseModelList(le(s, mark), L), { message: 'not JSON: it is UTF-16 text -- save it as UTF-8' }, `${s} mark ${mark}`);
+    }
+  }
   // (a file starting with NULs -- a binary STL's empty header -- is binary, not UTF-16: R110-1)
   assert.throws(() => parseModelList(`${'\x00'.repeat(80)}\x05\x00\x00\x00`, L), { message: 'not JSON: it is a binary file (a model, not a list?)' });
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);

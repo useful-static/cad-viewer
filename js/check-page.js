@@ -122,6 +122,13 @@ function once(list) {
 }
 const given = once(new URLSearchParams(location.search).getAll('list'));
 $('lists').value = given.join('\n');
+// (the address as read: it kept every spelling until Check, so a copy shared them -- R111-4)
+if (given.length < new URLSearchParams(location.search).getAll('list').length) {
+  const u = new URL(location.href);
+  u.searchParams.delete('list');
+  for (const l of given) u.searchParams.append('list', l);
+  history.replaceState(null, '', u);
+}
 // (the field back at each line's start once left: scrolled to its end it showed only the tails, a
 // shorter second URL out of view -- R103-1)
 $('lists').addEventListener?.('blur', () => { $('lists').scrollLeft = 0; });
