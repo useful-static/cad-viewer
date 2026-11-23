@@ -11,7 +11,7 @@
 // the URL it tried. Pure apart from fetch, which the caller passes (tests
 // pass a fake): tests/test-list-check.mjs.
 
-import { READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
+import { NOT_FETCHED, READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, takesCompanions, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
@@ -181,7 +181,7 @@ function refused(e) {
   if (isTimeout(e)) return `no answer in time (${READ_TIMEOUT_MS / 1000} s, as cad.place waits)`;
   // (the browser's own failure -- a TypeError, "Failed to fetch" -- in the page's words, as cad.place's;
   // any other error, a cut gzip's included, is its own reason, not a CORS one: R109-7)
-  if (e instanceof TypeError) return 'not fetched: the file is not there, the site does not let other web pages load it (no CORS), or it did not answer -- the browser does not say which';
+  if (e instanceof TypeError) return `not fetched: ${NOT_FETCHED}`;
   return `could not be read: ${e && e.message ? e.message : e}`;
 }
 
@@ -672,7 +672,7 @@ export async function checkFile(url, { fetchFn = fetch, sniff = false, method = 
   } catch (e) {
     // a file the viewer only links to (Download STEP: a plain download, which needs no CORS)
     // is not at fault for refusing this page; that it is there cannot be read from here
-    if (download) return { level: 'warn', detail: `not readable from this page (its site sends no CORS, which a download link does not need), so not checked: ${e && e.message ? e.message : e}`, url };
+    if (download) return { level: 'warn', detail: `not readable from this page (its site sends no CORS, which a download link does not need), so not checked${e instanceof TypeError ? '' : `: ${e && e.message ? e.message : e}`}`, url }; // (no "Failed to fetch": R110-4)
     return { level: 'bad', detail: refused(e), url };
   }
   // (a ranged read from byte 0 refused with 416 is a file of no bytes, as RFC 9110 has it -- its

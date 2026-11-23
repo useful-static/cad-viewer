@@ -892,7 +892,7 @@ await test('a gzip of several members is read whole, member after member, where 
       assert.ok(gap < 500, `${gap} ms with no ask among the tries, of ${times[times.length - 1] - times[0]} ms`);
     }
     // must reject still: junk that is no member after the first
-    await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated \(Junk found after end of compressed data\.\)/);
+    await assert.rejects(gunzip(Buffer.concat([gzipSync(a), Buffer.from('not a gzip member at all')])), /the gzip data is corrupt or truncated$/); // (the stream's own words not shown: R110-5)
   } finally {
     globalThis.DecompressionStream = real;
   }

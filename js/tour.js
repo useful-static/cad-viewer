@@ -108,8 +108,10 @@ export function notJson(text, what = 'list') {
   const all = String(text ?? '');
   const hint = ` (a model, not a ${what}?)`;
   const h = all.replace(/^��/, '').slice(0, 16);
-  const zeros = (odd) => [...h].filter((c, i) => i % 2 === (odd ? 1 : 0)).every((c) => c === '\x00');
-  if (h.length >= 8 && (zeros(true) || zeros(false))) return 'not JSON: it is UTF-16 text -- save it as UTF-8';
+  // (one half NUL and the other none: a file of NULs, a binary STL's empty header, is binary -- R110-1)
+  const half = (odd) => [...h].filter((c, i) => i % 2 === (odd ? 1 : 0));
+  const utf16 = (odd) => half(odd).every((c) => c === '\x00') && !half(!odd).includes('\x00');
+  if (h.length >= 8 && (utf16(true) || utf16(false))) return 'not JSON: it is UTF-16 text -- save it as UTF-8';
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x08\x0e-\x1f]/.test(all.slice(0, 512))) return `not JSON: it is a binary file${hint}`;
   if (all.slice(0, 512).includes('�')) return 'not JSON: it is not UTF-8 text -- save it as UTF-8';

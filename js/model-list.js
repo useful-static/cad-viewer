@@ -143,6 +143,9 @@ export const READ_TIMEOUT_MS = 20000;
 // Whether a read failed by that time running out -- at the headers or while the body still came (the
 // signal covers both): one test for the page's list and tour reads and check.html's (r55 A5, Q7)
 export const isTimeout = (e) => !!e && e.name === 'TimeoutError';
+// The browser's own fetch failure ("Failed to fetch"), in the page's words: one sentence for a list,
+// a tour and a file on the check page (a list's read its own older words -- R109-7, R110-2)
+export const NOT_FETCHED = 'the file is not there, the site does not let other web pages load it (no CORS), or it did not answer -- the browser does not say which';
 // The URL a fetched file was read from, which what it names resolves against: the one that answered
 // (a redirect's target), else the one asked. The one rule for a list's files and a tour's model, on
 // the page and in check.html (a tour resolved against the URL asked, a list against the one that
@@ -395,7 +398,7 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
     } catch (e) {
       // fetch's own TypeError says only "Failed to fetch": no CORS, or no answer
       const message = e instanceof TypeError && !url ? 'not a URL'
-        : e instanceof TypeError ? 'could not be fetched (no answer, or the site does not allow it: CORS)'
+        : e instanceof TypeError ? NOT_FETCHED
           : isTimeout(e) ? 'no answer in time' : e.message;
       return { entries: [], error: { url: url || u, message } };
     }

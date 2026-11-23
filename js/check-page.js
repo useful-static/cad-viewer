@@ -108,7 +108,19 @@ async function run(urls) {
   }
 }
 
-const given = [...new Set(new URLSearchParams(location.search).getAll('list'))]; // (each once: R109-6)
+// A list given twice read once, however spelled (relative, ./, whole): its second note called its
+// models "already in an earlier list" -- R109-6, R110-6
+function once(list) {
+  const seen = new Set();
+  return list.filter((s) => {
+    let k = s;
+    try { k = new URL(s, location.href).href; } catch { /* as given */ }
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+const given = once(new URLSearchParams(location.search).getAll('list'));
 $('lists').value = given.join('\n');
 // (the field back at each line's start once left: scrolled to its end it showed only the tails, a
 // shorter second URL out of view -- R103-1)
@@ -197,9 +209,9 @@ $('lists').parentElement?.addEventListener('mousedown', (e) => {
 $('form').onsubmit = (ev) => {
   ev.preventDefault();
   $('lists').scrollLeft = 0;
-  // (a list given twice read once: its second note called its models "already in an earlier list" -- R109-6)
-  const urls = [...new Set($('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean))];
+  const urls = once($('lists').value.split(/\s+/).map((s) => s.trim()).filter(Boolean));
   if (!urls.length) { $('summary').textContent = 'give the list\'s URL'; return; }
+  $('lists').value = urls.join('\n');
   const u = new URL(location.href);
   u.search = '';
   for (const l of urls) u.searchParams.append('list', l);

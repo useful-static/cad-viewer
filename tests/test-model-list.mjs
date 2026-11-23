@@ -48,6 +48,8 @@ await test('anything else is refused, saying why', () => {
   assert.throws(() => parseModelList(latin1, L), { message: 'not JSON: it is not UTF-8 text -- save it as UTF-8' });
   assert.throws(() => parseModelList('ISO-10303-21;\nHEADER;', L), { message: 'not JSON: it begins “ISO-10303-21; HEADER;” (a model, not a list?)' });
   assert.throws(() => parseModelList('{\t"a":\f}', L), /not JSON: it begins/);
+  // (a file starting with NULs -- a binary STL's empty header -- is binary, not UTF-16: R110-1)
+  assert.throws(() => parseModelList(`${'\x00'.repeat(80)}\x05\x00\x00\x00`, L), { message: 'not JSON: it is a binary file (a model, not a list?)' });
   assert.throws(() => parseModelList('{"javascript:alert(1)": "x"}', L), /not an http\(s\) URL/);
 });
 await test('an entry\'s picture, STEP and tours named by a share page are read from the file, as check.html checks them', () => {

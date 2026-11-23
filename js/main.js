@@ -5505,12 +5505,8 @@ function setMeshUnit(u) {
   });
 }
 
-// A tour over a unit-less mesh read in another unit than the tour was made in plays at this
-// reading's size: its cameras, frames and callouts scaled (js/tour.js tourAt). The file is not read
-// again: that reset the visitor's view before the tour saved it, and left the model in the tour's
-// unit after ✕. A model with no reading to choose (no meshSource: a STEP, a .cadmesh) plays it as made.
-// (whether the first model has a reading at all -- a unit-less mesh, alone or in a scene -- not
-// whether it can be re-read now, meshSource: a scene's tour was saved with no unit and played 25.4x off)
+// A tour over a unit-less mesh plays at this reading's size, scaled (tourAt), not re-read; the first
+// model's reading, alone or in a scene (a scene's tour played 25.4x off)
 const tourReading = () => (app.scene && app.scene[0] && app.scene[0].unitless ? readUnit() : null);
 function startTourIn(tour, url, only = null, at = 0) {
   uncover(); // (R67-1)

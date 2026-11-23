@@ -598,7 +598,8 @@ async function readMembers(buf, format, max, take, head = 0, stop = null) {
     }
     if (next < 0) {
       if (head) return n;
-      throw new Error(`the ${what} data is corrupt or truncated (${stopped.message || stopped})`);
+      // (the stream's own words -- "Failed to execute 'close' on …" -- not shown: R110-5)
+      throw new Error(`the ${what} data is corrupt or truncated`);
     }
     off = next;
   }
