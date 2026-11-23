@@ -168,13 +168,8 @@ app.refreshState = () => pushState(); // for tests that change a body's facts
 const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || new Map()) => (app.palette === 'file' && overrides.size === 0 && !faces.size
   ? base : { ...base, color: schemeColours(base, app.palette, overrides, faces) });
 
-// The ONE writer of the #announce live region. Every write takes a sequence
-// number; a write deferred to the next frame (to repeat the last text, which a
-// screen reader only hears again after the region was emptied) lands only if
-// nothing newer was said meanwhile -- else a queued "loading x" could land
-// after "ready" or an error (a fast failure, or a background tab, where frames
-// do not run), and be the last thing said.
-// (What is said in one task, awaits included, is said together, in order: r45 Q2, r46 Q2.)
+// The ONE writer of #announce: each write numbered, a deferred repeat landing only if nothing newer
+// was said; one task's words together, in order (r45 Q2, r46 Q2)
 let saySeq = 0, sayParts = null;
 function announce(text) {
   if (sayParts) { if (!sayParts.includes(text)) sayParts.push(text); return; }
@@ -1129,13 +1124,8 @@ function fitTo(bbox) {
   const s = sphereOf(bbox);
   // the zoom's limits follow the sphere: what is framed, whatever the view
   c.viewRadius = s.radius;
-  // the header as it will be drawn: a row that a load's changes made wrap
-  // is refolded by an observer only after this task, so the stage measured
-  // here was the two-line header's, and the view, back at its own size by
-  // the next frame, never reported a change (a tour's first step framed for
-  // 980 x 729 in a 980 x 761 view). Only a WRAPPING row: the narrow one
-  // scrolls, never changes the header's height, and may overflow on purpose
-  // (a refold on every Fit there reset its scroll and could move the focus)
+  // the header as it will be drawn: a wrapping row refolded now, not after this task (a step framed
+  // for the two-line header's view); a scrolling row left alone (its scroll and focus kept)
   const tb = $('tb');
   if (getComputedStyle(tb).flexWrap !== 'nowrap' && !toolbarFits(tb)) refold();
   const box = $('stage');
@@ -2797,6 +2787,15 @@ function setWalk(on) {
     c.target = [0, 1, 2].map((k) => eye[k] - d[k] * c.dist);
     levelOrbitBy(c, orientUp(c.orient), 0, 0);
     viewChanged();
+  } else {
+    // (the eye and its direction kept, the turning point moved out to the model's depth: the next
+    // orbit or turntable turned about a point a few mm ahead -- R124-2)
+    const c = app.cam, d = camDir(c), s = app.sphereBase || app.sphere;
+    const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
+    const ahead = [0, 1, 2].reduce((a, k) => a + (s.center[k] - eye[k]) * -d[k], 0);
+    c.dist = Math.max(s.radius * 0.05, ahead > 0 ? ahead : Math.hypot(...s.center.map((v, k) => v - eye[k])));
+    c.target = [0, 1, 2].map((k) => eye[k] - d[k] * c.dist);
+    viewChanged();
   }
   tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : 'walk off', 3000, on ? 'walk on' : 'walk off');
 }
@@ -4016,6 +4015,8 @@ function secEdit() {
     }
     over = true;
     app.secEditing = false;
+    // (its note gone with it: R124-5)
+    if ($('hover').textContent.startsWith('type a position')) tell($('hover').textContent, 1, '');
     // (Enter on the readout as it was filled in keeps the cut: the rounded readout put it up to its
     // rounding away -- r126 L3)
     if (apply && inp.value.trim() && inp.value !== inp.defaultValue) setSectionAt(lenBack(v) + secOrigin());
@@ -4029,8 +4030,10 @@ function secEdit() {
       e.preventDefault();
       inp.value = String(+(val() + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1)).toFixed(6));
       inp.removeAttribute('aria-invalid');
-    } else inp.removeAttribute('aria-invalid');
+    }
   });
+  // (the refused mark cleared by an edit only: an arrow on "abc" cleared it -- R124-6)
+  inp.addEventListener('input', () => inp.removeAttribute('aria-invalid'));
   inp.addEventListener('blur', () => done(false));
 }
 
@@ -4782,13 +4785,8 @@ function showBase(next, keep, why) {
   app.baseMesh = next;
 }
 
-// the info panel's volume while there are no facts: a build that failed or was stopped said, not
-// "computing…" for good
-// (the advice only where a try can work: a failure of the moment, not remembered -- a move builds
-// the scene's stale models again, a model alone is opened again. None for a failure remembered --
-// the model's own, no module worker, or the moment's past its tries -- which fails the same way
-// again; "add the model again" left the failed one in the scene, whose facts need every model: r40
-// A4, Q5)
+// the info panel's volume with no facts: a failed or stopped build said, its advice only where a try
+// can work (r40 A4, Q5)
 const pendingVolume = (info, inScene) => (info?.error
   ? `not computed: ${info.error}${!info.failed && !info.stopped ? (inScene ? ' (move a model to try again)' : ' (open the file again to try again)') : ''}`
   : 'computing…');
@@ -5322,6 +5320,8 @@ async function loadAny(buf, name, seq, extras = []) {
     // a .cadmesh by name that is not one by its bytes is damaged, not of the
     // wrong kind (it was told to open a .cadmesh file: review r22)
     if (ext === 'cadmesh') throw new Error(`${name} is damaged or not a .cadmesh file inside: save it again from the viewer, or open the STEP it came from`);
+    // (a tour this viewer saved: where it opens, not "not a file this viewer opens" -- R124-3)
+    if (/\.cadtour\.json$/i.test(name)) throw new Error(`${name} is a tour: open its model, then Make a tour… > Open… plays or edits it`);
     throw new Error(`${name} is not a file this viewer opens${ext ? ` (.${ext})` : ''}: ${OPENS}`);
   }
   await loadBuffer(buf, name, seq);

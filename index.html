@@ -108,7 +108,7 @@
   /* a toggle that is on, in the light frame: the dark theme's brown fill lost
      to the rule above and left its pale text at 1.16:1 */
   html.light button[aria-pressed=true] { background:#ffe9d4; border-color:#b35a00; color:#7a3d00; }
-  @media (hover: hover) { html.light :is(button:not(:disabled), label.btn, a.btn):hover { border-color:#9aa3af; } } /* (no hover left on a tapped button: R92-6) */
+  @media (hover: hover) { html.light :is(button:not(:disabled, .primary), label.btn, a.btn):hover { border-color:#9aa3af; } } /* (no hover left on a tapped button: R92-6) */
   html.light :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(255,255,255,.9); }
   html.light #helpbtn[aria-expanded=true], html.light #stage > #hdend #helpbtn[aria-expanded=true] { background:#dfe3e8; border-color:#9aa3af; }
   html.light button[aria-pressed=true]:focus-visible { outline-offset:2px; } /* (the ring is the pressed edge's colour) */
@@ -123,7 +123,9 @@
   html.dark { --bg:#0f172a; --panel:#1e293b; --line:#334155; --fg:#e2e8f0; --dim:#94a3b8; --field:#0f172a; }
   html.dark :is(button, select, label.btn, a.btn) { background:#273449; }
   html.dark button[aria-pressed=true] { background:#4a3420; color:#ffd9b0; } /* (on: the same fill as the viewer's own dark) */
-  @media (hover: hover) { html.dark :is(button:not(:disabled), label.btn, a.btn):hover { border-color:#64748b; } }
+  @media (hover: hover) { html.dark :is(button:not(:disabled, .primary), label.btn, a.btn):hover { border-color:#64748b; } }
+  /* (the primary button the accent's in either embed theme: View in 3D was dark text on slate, 1.29:1 -- R124-1) */
+  html:is(.light, .dark) :is(button, a).primary { background:var(--acc); border-color:var(--acc); color:#1d2127; }
   html.dark :is(#stage > #hdend, #embedbar) :is(button, a.btn) { background:rgba(30,41,59,.88); }
   html.dark #tourcard { background:rgba(30,41,59,.95); }
   html.dark #embedhint { background:rgba(15,23,42,.88); }
@@ -308,6 +310,7 @@
   #secin { width:9ch; font:inherit; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   #secval:has(#secin) { text-decoration:none; } /* (no readout underline under the typed digits: R123-6) */
   #secin[aria-invalid=true] { border-color:#ff8f8f; } /* (not a position: R123-2) */
+  #secin[aria-invalid=true]:focus { outline-color:#ff8f8f; } /* (the ring itself says it, not a 1 px line inside it: R124-4) */
   /* the parts list keeps room for about six rows however tall the info above
      it grows (a long graphics line, a selection's rows); past that the panel
      itself scrolls */
