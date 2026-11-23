@@ -200,12 +200,8 @@ function tell(text, ms = 1500, said = text) {
   if (said) announce(said);
 }
 
-// A note added to the ready line: the line is the ready text with these words after it -- written
-// only while the page is ready (a load, an error or a GPU recovery keeps its own state and line:
-// one of these met during a load set 'ready' under it, hid its progress and put the old model's
-// line back; one during a recovery stopped "recovered on …" -- r46 A2, Q1) -- and the words, only
-// they, not what the ready line always carries, told either way (the whole line after "ready · "
-// was shown and read again on every rewrite: r45 A2, Q4)
+// A note added to the ready line, written only while the page is ready (a load, an error or a
+// recovery keeps its own line), and the words alone told (r45 A2, Q4, r46 A2, Q1)
 function tellReady(words, ms = 6000) {
   if (app.status === 'ready') setStatus('ready', `${readyText()} · ${words}`);
   tell(words, ms);
@@ -1481,11 +1477,14 @@ async function savePicture(print = false) {
     return offerPicture(png, name, () => { downloadBlob(png, name); tell(`saved ${name}`, 3000); });
   }
   if (!app.header || !app.renderer) return;
+  // (said, and a frame drawn to say it, before the view freezes for the picture: R119-3)
+  if (!print) { tell('preparing the picture…', 30000); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))); }
   const pic = await renderPicture(print ? { ...app.pic, bg: 'white' } : app.pic); // (paper: R20-2)
   if (!pic) { tell('the picture could not be read from the GPU', 4000); return; }
   const out = pic.canvas;
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
   if (print) return printPng(png);
+  if ($('hover').textContent === 'preparing the picture…') tell('preparing the picture…', 1, ''); // (its note ended)
   const name = pictureName(app.sourceName);
   offerPicture(png, name, () => {
     const url = downloadBlob(png, name);
@@ -5891,12 +5890,8 @@ async function convert(buf, format, seq, name) {
   }
 }
 
-// A mesh or 2D file read off the page's thread (js/read-worker.js), so no file -- a damaged one,
-// a hostile one, one too big -- freezes the tab: past READ_LIMIT_S the worker is terminated and
-// the file refused in words; one that runs the worker out of memory takes only the worker; Cancel
-// (and any newer load) terminates it through app.cancelTess, as a conversion's. -> the worker's
-// answer, or null where no module worker can be made (an old browser: read here, as before)
-// (?readlimit=<s> shortens it, for tests/ui-checks.py read-worker only)
+// A mesh or 2D file read off the page's thread (js/read-worker.js): past READ_LIMIT_S (?readlimit= in
+// tests) the worker is ended and the file refused; Cancel ends it. -> its answer, or null (no worker)
 const READ_LIMIT_S = Number(params.get('readlimit')) > 0 ? Number(params.get('readlimit')) : 60;
 function readInWorker(msg, name) {
   return new Promise((resolve, reject) => {
@@ -6488,7 +6483,7 @@ function buildTree() {
       // own bodies (19 "COMPONENTn" rows would push every other part away);
       // a pick inside it opens it (revealRow)
       setOpen(depth < 2 && node.children.length > 0);
-      tw.onclick = () => { setOpen(ul.hidden); keepTabStop(); };
+      tw.onclick = () => { label._byFilter = false; setOpen(ul.hidden); keepTabStop(); }; // (the visitor's: kept after a filter)
       label._setOpen = setOpen;
       label.setAttribute('aria-keyshortcuts', 'ArrowRight ArrowLeft');
     } else {
@@ -6554,6 +6549,7 @@ function buildTree() {
   }
   $('treefilter').value = '';
   $('treefilter').hidden = !top;
+  $('treenone').hidden = true;
 }
 
 // Show only the rows whose name contains q (case-insensitive), with their
@@ -6567,11 +6563,17 @@ function filterTree(q) {
     let any = false;
     if (ul) for (const c of ul.children) any = walk(c, hit && !!q) || any;
     li.hidden = !(hit || any);
-    if (q && any && lab._setOpen) lab._setOpen(true);
+    // (a branch the filter opened is closed again when it is cleared, one the visitor opened kept:
+    // 3 rows became 22 -- R119-6)
+    if (q && any && lab._setOpen && ul.hidden) { lab._byFilter = true; lab._setOpen(true); }
+    if (!q && lab._byFilter) { lab._byFilter = false; lab._setOpen(false); }
     return hit || any;
   };
   const top = $('tree').firstElementChild;
-  if (top) walk(top, false);
+  const found = top ? walk(top, false) : true;
+  // (no match said, not an empty list: R119-2)
+  $('treenone').hidden = !q || found;
+  $('treenone').textContent = q && !found ? `No part's name contains “${q}”` : '';
   keepTabStop();
 }
 
@@ -7797,8 +7799,8 @@ function wireInput() {
     if (!e.repeat) startPrint();
   });
   const hintNow = () => (framed ? ''
-    : !app.header && !app.dxf ? 'Open a model to print it.'
-      : app.embed ? `To print the ${app.dxf ? 'drawing' : 'model'}, press Ctrl+P.`
+    : !app.header && !app.dxf ? (app.embed ? 'There is no model to print.' : 'Open a model to print it.')
+      : app.embed ? `To print the ${app.dxf ? 'drawing' : 'model'}, press ${IS_MAC ? '⌘P' : 'Ctrl+P'}.` // (R119-4)
         : `To print the ${app.dxf ? 'drawing' : 'model'}, use Print… in the File menu.`);
   addEventListener('beforeprint', () => { if (!$('printimg').getAttribute('src')) $('printname').textContent = hintNow(); });
   addEventListener('afterprint', () => {
@@ -7833,6 +7835,7 @@ function wireInput() {
       if (!app.tour && w && w.h === app.header && startTourIn(w.t, w.u, w.o, w.o ? 0 : w.i)) setTourPlaying(w.p);
       app.previewing = app.watched = null;
     },
+    isPreviewing: () => !!app.tour && app.tour === app.previewing,
     modelUrl: () => {
       try { const u = app.sourceUrl ? new URL(app.sourceUrl, location.href) : null; return u && samePlace(u.href, location.href) ? u.href : null; } catch { return null; }
     },
@@ -8198,12 +8201,8 @@ function linkViewOf(hash) {
   if (!hash.startsWith('#view=')) return null;
   try { return decodeView(decodeURIComponent(hash.slice(6))); } catch { return null; }
 }
-// The model the page as first opened shows from its address -- its start's first load (?src=, the
-// tour's own model, the list's first: the start-up's order), else the list's first. What Back to the
-// first entry and a #view= on it mean by "the page as first opened" (both took the list's first, and
-// a page that had opened the tour's model went back to a model it never showed: r56 A2)
-// (a file of the visitor's own, or a pick, shown before any of the address's: none -- Back then keeps
-// the model shown, not one the page never showed: r57 Q4)
+// The model the page as first opened shows from its address (its start's first load, else the list's
+// first): Back's and a #view='s first page; none for a file or pick shown first (r56 A2, r57 Q4)
 const addressModel = () => app.addressUrl || (app.visitorFirst ? null : app.listEntries?.[0]?.url) || null;
 // ?src= and then its ?add=s (each with an optional ?addat=x,y,z in mm, in the same order), and a view
 // link (#view=) that waits for them, its part ids the scene's: the one chain, at start-up or from
@@ -8369,12 +8368,8 @@ function addPicked(files) {
     startAdd(() => loadFile(f));
     if (was) app.startSeq = app.loadSeq;
   };
-  // (while the address's ?add=s still load: after them, neither cancelling the other -- the visitor's
-  // add aborted one of them, then the next aborted the visitor's: r57 A5, Q3)
-  // (and dropped if the visitor opened something else meanwhile -- a file, a list pick: the newer ask
-  // wins, as it does over an add in flight; the queued add cancelled it -- r58 A1, Q2)
-  // (a Cancel of the address's ?add= is no newer ask: the model it was asked over still shown, and no
-  // load under way, it joins -- a Cancel dropped it unsaid: r59 Q5)
+  // (after the address's ?add=s, neither cancelling the other; dropped for a newer open, not for a
+  // Cancel of an ?add= -- r57 A5, Q3, r58 A1, Q2, r59 Q5)
   const over = app.sourceUrl;
   if (app.addsPending && app.addsChain) {
     app.addsChain.then(() => { if (untouched() || (app.sourceUrl === over && app.scene && !PROGRESS_STATES.has(app.status))) go(); });

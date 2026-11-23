@@ -10,6 +10,7 @@
 //   captureNote()          what that capture had to change ('' nothing), said with the step
 //   preview(tour, from, play)  show the draft from step `from`, playing or paused
 //   stopPreview()          leave the preview
+//   isPreviewing()         whether the draft is being previewed now
 //   modelUrl()             the model's URL, when it was opened from one
 //   model()                the model open now: { key, unit, name } (the draft is tied to one), or null
 //   orient()               the view's orientation ("+z-y"), written into a new tour
@@ -365,7 +366,15 @@ export function createTourRecorder(api) {
     } else api.stopPreview();
   }
   el.close.onclick = () => show(false);
-  el.panel.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); show(false); } });
+  // (Esc during a preview leaves the preview only, as its card's × says; the next Esc closes the maker:
+  // one Esc closed both, the focus to File -- R119-1)
+  el.panel.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (api.isPreviewing?.()) api.stopPreview();
+    else show(false);
+  });
 
   renderList();
   return { show, isOpen: () => !el.panel.hidden, toJSON, load };
