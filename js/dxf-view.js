@@ -1157,7 +1157,13 @@ export function createDxfView(canvas, drawing, cb = {}) {
     get results() { return st.results; }, get pending() { return st.pending; },
     clearMeasure() { st.results = []; st.pending = null; draw(); },
     // the pending point, else the last result (Measure's Undo in a drawing: UI design round 44 R44-4)
-    undoMeasure() { if (st.pending) st.pending = null; else st.results.pop(); draw(); },
+    // (returns what it took back, to be said as 3D's is: R137-2)
+    undoMeasure() {
+      let said = '';
+      if (st.pending) { st.pending = null; said = 'point dropped'; } else { const r = st.results.pop(); if (r) said = `removed: ${r.text.split(' · ')[0]}`; }
+      draw();
+      return said;
+    },
     escapeMeasure() { if (st.pending) { st.pending = null; draw(); return true; } return false; },
     measureClick, snapAt,
     layerOn: (name) => !st.off.has(name),

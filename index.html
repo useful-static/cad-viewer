@@ -574,7 +574,9 @@
   #scenelist { list-style:none; margin:2px 0; padding:0; }
   #scenelist li { margin:2px 0; }
   /* (the name cut with an ellipsis, not the row: the li clipped the Z field's focus ring -- R97-3) */
-  #scenelist li > span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #scenelist li > span { display:flex; align-items:center; gap:4px; }
+  #scenelist li > span > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* (its × beside it: R137-4) */
+  @media (max-width:519px) { #scenelist input { width:3.6em; } } /* (Z and its unit kept on the line at 390: R137-9) */
   #scenelist input { width:4.4em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; } /* (no spinners over the value: R96-6) */
   #scenelist input::-webkit-inner-spin-button, #scenelist input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
   /* (the offsets wrap in a narrow panel, each letter with its field; the name keeps its ellipsis; a gap between models: R95-1, R96-1) */
@@ -1104,7 +1106,7 @@
         <dt>Click</dt><dd>Select a part (Ctrl+click adds)</dd>
         <dt>Double-click</dt><dd>Fit the part clicked</dd></dl></section>
       <section class="keys help-touch"><h3>Touch</h3><dl>
-        <dt>One finger</dt><dd>Orbit</dd>
+        <dt>One finger</dt><dd>Turn (orbit)</dd>
         <dt>Two fingers</dt><dd>Pinch to zoom, drag to pan</dd>
         <dt>Tap</dt><dd>Select a part</dd>
         <dt>Double-tap</dt><dd>Fit the part tapped</dd></dl></section>

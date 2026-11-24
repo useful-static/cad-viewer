@@ -1484,12 +1484,8 @@ function offerPicture(png, name, save) {
   save();
 }
 
-// The view rendered at twice its size (less where the GPU or memory cannot),
-// without the hover and selection highlights, Measure's results painted in:
-// -> { canvas, scale, cssW, cssH } or null when the GPU gave nothing back.
-// Save picture and a tour's pictures use it.
-// The picture's size: N x the view's CSS size, capped at 8192 px on the long
-// side and 16.7 Mpx -> { s, W, H, capped }
+// The view rendered at N× (capped 8192 px / 16.7 Mpx), no hover or selection tint, Measure painted
+// in: -> { canvas, scale, cssW, cssH } | null; pictureSize -> { s, W, H, capped }
 const PIC_LONG = 8192, PIC_AREA = 16.7e6, TILE = 2048;
 function pictureSize(n, cw, ch) {
   const s = Math.min(n, PIC_LONG / Math.max(cw, ch), Math.sqrt(PIC_AREA / (cw * ch)));
@@ -1646,7 +1642,7 @@ function paintFace(f) {
   const c = hexToRgb($('partcolour').value), old = app.faceOverrides.get(f);
   // (no Undo step for a face already that colour: R136-6)
   if (old && old.every((v, i) => Math.abs(v - c[i]) < 1e-6)) { tell('that face is that colour already', 2000); return; }
-  rememberColours('paint'); // (a wrong face undone by Ctrl+Z, not only by Reset all: R135-3)
+  rememberColours('Paint'); // (a wrong face undone by Ctrl+Z, not only by Reset all: R135-3)
   app.faceOverrides.set(f, c);
   updateButtons();
   recolour(`face painted`);
@@ -2297,11 +2293,8 @@ function endTour(restore = true) {
   announce('tour closed');
 }
 
-// The view as a tour step (the tour maker, js/tour-recorder.js): the camera
-// (exactly, or the selected parts framed from this side), the part colours,
-// what is hidden, explode, section, style, and Measure's notes as callouts.
-// Parts are named by namesFor: the fewest names that cover exactly them.
-// captureNote: what the last capture had to change, for the tour maker to say ('' none)
+// The view as a tour step (js/tour-recorder.js): camera, colours, hidden, explode, section, style,
+// notes; parts named by namesFor. captureNote: what the capture had to change ('' none)
 let captureNote = '';
 function captureStep({ camera = 'exact' } = {}) {
   captureNote = '';
@@ -2917,7 +2910,7 @@ function rememberVisibility(what = 'the last change') {
 }
 // (a part colour, a painted face and Reset in the same history: Reset all wiped every colour with no
 // way back, and Ctrl+Z after a colour undid an older Hide -- R135-3)
-function rememberColours(what = 'colours') {
+function rememberColours(what = 'Colours') { // (one form, capitalised, as Hide: R137-7)
   app.visUndo.push({ ov: new Map(ownOverrides()), fo: new Map(ownFaces()), what });
   if (app.visUndo.length > 100) app.visUndo.shift();
 }
@@ -2968,12 +2961,8 @@ function placeOpen(narrow) {
   if (narrow && lbl.parentElement !== panel) $('fhopen').after(lbl); // under File's Open heading
   else if (!narrow && lbl.parentElement === panel) menu.before(lbl);
   if (had && document.activeElement !== lbl) focusBeside(lbl);
-  // a model list goes where Open… goes, and in the narrow layout stands in
-  // the row before File while the row has room for it (refold folds it in
-  // after Open… where it has not): a short window (800 x 500) is narrow by
-  // its height alone, and folded the list away with the row half empty (UI
-  // organization review rank 5). Moved only when it must: a move takes the
-  // focus from it.
+  // a model list goes where Open… goes; narrow, in the row before File while it has room (moved only
+  // when it must: a move takes the focus)
   const ml = $('modellist');
   if (narrow) { if (ml.nextElementSibling !== menu) menu.before(ml); } else if (lbl.nextElementSibling !== ml) lbl.after(ml);
   // "File" at every width: it holds Copy view link too, which a menu named
@@ -3352,7 +3341,20 @@ function wireMenus() {
 // its height is published as --optbar-h, which lifts #hover above it and
 // insets Fit.
 
+// Undo pressable whenever it has something to take back -- Measure's too, as Ctrl+Z does (R137-6)
+function syncUndo() {
+  const m = app.measure;
+  $('undo').disabled = !app.visUndo.length && !(m?.on && (m.pending.length || m.results.length));
+}
 function syncOptbar() {
+  syncUndo();
+  // (Section and Explode open together: Explode's slider Section's width, which its row's buttons set
+  // -- at 390 they were 159 and 335 px, R136-3, R137-1)
+  const sp = $('secpos'), xp = $('xppos');
+  if (sp?.style && xp?.style) {
+    xp.style.flex = ''; xp.style.width = '';
+    if (!$('secopt').hidden && !$('xpopt').hidden && !$('optbar').hidden) { xp.style.flex = '0 0 auto'; xp.style.width = `${sp.getBoundingClientRect().width}px`; }
+  }
   const bar = $('optbar');
   const card = !$('empty').hidden || !$('progress').hidden;
   bar.hidden = card || ![...bar.children].some((o) => !o.hidden);
@@ -4093,7 +4095,7 @@ function updateButtons() {
   const has = !!app.header;
   $('isolate').disabled = $('hide').disabled = !app.selected.size;
   $('showall').disabled = !app.hidden.size;
-  $('undo').disabled = !app.visUndo.length;
+  syncUndo();
   $('fit').disabled = !has && !app.dxf;
   // (a button about to disable hands the focus on, as Hide's does)
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
@@ -4101,7 +4103,10 @@ function updateButtons() {
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
-  $('explode').disabled = !has || app.header.meshes.length < 2; // (one body: nothing to spread -- R136-2)
+  const oneBody = has && app.header.meshes.length < 2;
+  $('explode').disabled = !has || oneBody; // (one body: nothing to spread -- R136-2)
+  // (and the reason in its title: R137-5)
+  $('explode').title = oneBody ? 'Exploded view: this model is one part, so there is nothing to pull apart' : 'Exploded view: pull the parts apart; how far, and along what, show along the bottom of the view (X)';
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   $('section').disabled = !has && app.section.axis === 'off'; // (no model: nothing to cut, as Explode -- R20-3)
   for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
@@ -4227,7 +4232,7 @@ function setPartColour(hex) {
   // selected part and lost its own -- high R134-2)
   if (app.paintFaces) { tell(`paint colour set: ${tapWord()} a face to paint it`, 3000); return; }
   if (!app.selected.size) return;
-  rememberColours('colour');
+  rememberColours('Colour');
   const c = hexToRgb(hex);
   // (shown now, and -- in a tour -- kept as the visitor's own, which leaving the tour puts back)
   for (const id of app.selected) { app.overrides.set(id - 1, c); if (app.tour) app.tour.base.overrides.set(id - 1, c); }
@@ -4810,11 +4815,15 @@ function syncScene() {
   $('scene').hidden = !many;
   if (!many) return;
   const list = $('scenelist');
-  // rebuilt only when the models change (a typed offset keeps its focus)
-  const key = app.scene.map((m) => m.name).join('\n');
+  // (in the page's unit, not always mm: R137-3)
+  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm';
+  // rebuilt only when the models or the unit change (a typed offset keeps its focus)
+  const key = `${app.scene.map((m) => m.name).join('\n')}\n${uw}`;
   if (list.dataset.key === key) {
     app.scene.forEach((m, i) => list.querySelectorAll('li')[i]?.querySelectorAll('input').forEach((inp, k) => {
-      if (document.activeElement !== inp) inp.value = String(+m.offset[k].toFixed(3));
+      // (a typed value kept as typed while it says the same: 12.34567 came back 12.346 -- R137-8)
+      const v = m.offset[k] / f;
+      if (document.activeElement !== inp && Math.abs(Number(inp.value) - v) > 1e-9 * Math.max(1, Math.abs(v))) inp.value = String(+v.toFixed(4));
     }));
     return;
   }
@@ -4822,10 +4831,25 @@ function syncScene() {
   list.replaceChildren();
   app.scene.forEach((m, i) => {
     const li = document.createElement('li');
-    const nm = document.createElement('span');
-    nm.textContent = `${i + 1}. ${m.name}`;
-    nm.title = m.name;
+    const nm = document.createElement('span'), t = document.createElement('span');
+    t.textContent = `${i + 1}. ${m.name}`;
+    t.title = m.name;
+    nm.append(t);
     li.append(nm);
+    // (an added model taken out again: only File > Open, dropping the whole scene, did it -- R137-4)
+    if (i > 0) {
+      const x = document.createElement('button');
+      x.className = 'mini';
+      x.textContent = '×';
+      x.setAttribute('aria-label', `Remove ${m.name} from the scene`);
+      x.title = `Remove ${m.name} from the scene`;
+      x.onclick = async () => {
+        const now = sceneNow();
+        if (!now || !now[i]) return;
+        if (await showScene(now.filter((_, j) => j !== i), { newTree: true })) { tell(`${m.name} removed`, 3000); $('view').focus?.(); }
+      };
+      nm.append(x);
+    }
     if (i > 0) {
       const at = document.createElement('div');
       at.append('moved by ');
@@ -4833,17 +4857,17 @@ function syncScene() {
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.step = 'any';
-        inp.value = String(m.offset[k]);
-        inp.setAttribute('aria-label', `${m.name}: move along ${ax} (mm)`);
-        inp.title = `Move ${m.name} along ${ax}, in mm from where its file puts it`;
+        inp.value = String(+(m.offset[k] / f).toFixed(4));
+        inp.setAttribute('aria-label', `${m.name}: move along ${ax} (${uw})`);
+        inp.title = `Move ${m.name} along ${ax}, in ${uw} from where its file puts it`;
         inp.addEventListener('change', () => {
           const v = Number(inp.value);
           if (!Number.isFinite(v)) return;
-          moveModel(i, k, v);
+          moveModel(i, k, v * f);
         });
         // (the wheel over it: the page-wide rule, wireLooks -- R97-2)
         const u = document.createElement('span');
-        u.append(`${ax} `, inp, k === 2 ? ' mm' : '');
+        u.append(`${ax} `, inp, k === 2 ? ` ${uw}` : '');
         at.append(u);
         /* (u, above: a letter, its field and Z's "mm" never parted -- R96-1)  */
       });
@@ -4865,7 +4889,8 @@ async function moveModel(i, k, v) {
     // (a move that took the GPU from an Add still uploading shows the added model too, and ends the
     // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
     if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
-    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +o.toFixed(3)).join(', ')} mm`);
+    const f = geomMm() ? MM_PER[curUnit()] : 1;
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
@@ -5102,10 +5127,7 @@ function edgesOf(base) {
   // going without, said; one build a model, a running one awaited)
   const going = app.edgeJobs.get(base);
   if (going) return going.promise;
-  // (a build that failed for the model itself -- the worker's own refusal, no module worker -- is
-  // not tried again for it: every move started a worker that failed the same way and said so
-  // again; opening the file again tries. A failure of the moment -- no room for the copy, a worker
-  // that died, an allocation the worker could not make -- is tried again at the next ask, up to
+  // (a build failing for the model itself is not tried again; a failure of the moment is, up to
   // MOMENT_TRIES)
   if (info.failed) return Promise.resolve(info.value);
   // (a build before that was stopped or failed for the moment: this one says its own)
@@ -5135,11 +5157,7 @@ function edgesOf(base) {
     const position = base.position.slice(), index = base.index.slice();
     return [{ position, index, meshes: base.header.meshes, silhouetteCap: cap }, [position.buffer, index.buffer]];
   });
-  // (kept by its model, stopped when no model or scene shown holds it any longer -- stopEdgeJobs,
-  // stop(why): the reason said -- its worker and its copies of the arrays would otherwise run on;
-  // keyed on the job, so a stopped one never clears a newer one's)
-  // (a stop takes it out of the map at once: a build asked for again before the stopped one
-  // settles starts its own, not the stopped one's)
+  // (kept by its model, stopped -- stopEdgeJobs, out of the map at once -- when nothing shown holds it)
   const entry = { stop: (why) => { if (app.edgeJobs.get(base) === entry) app.edgeJobs.delete(base); job.stop(why); }, promise: null };
   entry.promise = job.promise.then((v) => {
     if (app.edgeJobs.get(base) === entry) app.edgeJobs.delete(base);
@@ -5342,11 +5360,7 @@ async function loadMeshFile(buf, name, seq, drop = []) {
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format.toUpperCase()} mesh`);
   await nextPaint();
   if (stale(seq)) return;
-  // (the companions together under the size a file may be: a zip's are unpacked here -- r54 Q8)
-  // (and only for a reader that reads them, js/formats.js takesCompanions: a zipped STL was refused
-  // for a bzip2 picture beside it -- r78 A2)
-  // (each read to what the ones before leave, js/companions.js, check-tour's reading too -- r79 A7,
-  // r80 A1; a zip's inflate stopped with the load -- r78 A6)
+  // (companions, for a reader that takes them, together under a file's size: r54 Q8, r78-r80)
   let extras;
   try { extras = await readCompanions(takesCompanions(formatOfName(`m.${format}`)?.label) ? drop : [], name, () => stale(seq), MAX_FILE_BYTES); } catch (e) {
     if (e instanceof StopRead) return;
@@ -5403,10 +5417,8 @@ function syncUnitParam() {
 }
 // which model a list's tour auto-played for: the URL it was opened from (else its data)
 const autoTourKey = () => app.sourceUrl || app.header;
-// An entry's tour, File > "Tour: X" and the one the entry plays itself, by one rule (r68 A2): it
-// first waits for the address's ?add=s, the shown model's re-read in another unit and the visitor's
-// own Add model… (a model joining ends a tour: r69 A3, r70 A1, r71), and starts only over the model
-// it was asked for, by its URL's key and its open, not while that model is on its way out.
+// An entry's tour, by one rule: it waits for the adds, a re-read and Add model…, then starts only over
+// the model asked for, by its URL's key and open (r68-r71)
 const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain, app.addLoad].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
 // The tour's file read, then every load it waits for ended, up to four rounds (r71 A2, Q4, A9)
 async function entryTourRead(url) {
@@ -5831,10 +5843,7 @@ function fillInfo2D(el) {
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
-    // (its texts too, as its row in the layer list counts them: a layer of notes read "0 lines";
-    // and, as the row does, what a frozen reference on it holds -- dxf.js layersOf: the row said 461,
-    // the selection "0 lines and shapes" -- r66 A1, Q2. Unlike the row, no viewport frame: the row
-    // counts a frame so its layer can be hidden; a frame is no line or shape of the drawing -- r67 A10)
+    // (its texts and a frozen reference's items too, as its row counts them; no viewport frame: r66, r67)
     const of = (it) => dxfLib.layersOf(it).includes(l);
     const np = d.paths.filter((p) => of(p) && dxfLib.isShape(p)).length, nt = d.texts.filter(of).length;
     row('selection', `layer ${l}: ${fmtInt(np)} ${np === 1 ? 'line or shape' : 'lines and shapes'}${nt ? `, ${fmtInt(nt)} ${nt === 1 ? 'text' : 'texts'}` : ''}`);
@@ -6520,7 +6529,7 @@ function buildTree() {
       }
     };
     cb.onchange = () => {
-      rememberVisibility(cb.checked ? 'show' : 'hide');
+      rememberVisibility(cb.checked ? 'Show' : 'Hide');
       for (const id of ids) (cb.checked ? app.hidden.delete(id) : app.hidden.add(id));
       syncTreeChecks();
       pushState();
@@ -6626,7 +6635,7 @@ function syncSheets() {
 function setSheets(show) {
   const ids = sheetIds();
   if (!ids.length) return;
-  rememberVisibility(show ? 'sheets shown' : 'sheets hidden');
+  rememberVisibility(show ? 'Show sheets' : 'Hide sheets');
   for (const id of ids) {
     if (show) app.hidden.delete(id);
     else app.hidden.add(id);
@@ -6756,11 +6765,8 @@ const modelSizeMm = () => {
   return b ? Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : Infinity;
 };
 const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, modelSizeMm());
-// (geometry not converted: in Auto's display unit where the header's unit is a display row, as a
-// converted model is -- in m, a 0.4 mm part read "0.000": r89 Q1 -- else in the header's unit as
-// written, r88 A8; modelSizeMm is then in the model's own units)
-// (the word by units.js unconvertedWord, the 2D view's one rule: a copy of it here read "size ()" for
-// a blank unit -- r92 A3)
+// (geometry not converted: Auto's unit where the header's is a display row, else the header's own;
+// the word by units.js unconvertedWord -- r88 A8, r89 Q1, r92 A3)
 const lenUnit = () => (geomMm() ? curUnit() : unconvertedWord(app.header.units, modelSizeMm()));
 // (and a noise floor at float32's resolution, a ten-millionth of how far the model reaches from the
 // origin -- its size, or its farthest corner: "-1e-9" read as an overhang -- r90 A5; at a billionth a
@@ -7024,7 +7030,7 @@ function fillInfo(el) {
   const ids = [...app.selected];
   const b = ids.length ? bboxOf(ids) : app.header.bbox;
   const dims = b ? [0, 1, 2].map((k) => lenNum(b.max[k] - b.min[k], 'size')).join(' × ') : '-';
-  let title = 'whole model';
+  let title = app.scene?.length > 1 ? 'whole scene' : 'whole model'; // (as the parts list names it: R137-11)
   // a tree row chosen on its own: its full name (the row truncates it)
   if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} bodies` : app.selName;
   else if (ids.length === 1) title = meshLabel(ids[0]);
@@ -8080,7 +8086,7 @@ function wireInput() {
       h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => { if (!app.dxf) edgesKey(); }, // (not a drawing's: it switched the 3D style unseen -- R136-8)
       m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
       p: () => { if (!$('savepic').disabled) savePicture(); },
-      x: () => { if (!$('explode').disabled && !$('explode').hidden) setExplode(!app.explode.on, true); } };
+      x: () => { if (!$('explode').disabled && !$('explode').hidden) setExplode(!app.explode.on, true); else if (app.header?.meshes.length === 1) tell('this model is one part: nothing to explode', 2500); } };
     let k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     // (a LETTER of another script only: punctuation on a Latin layout keeps
     // its own meaning; on Dvorak "." sits at KeyE and toggled the edges, r18)

@@ -1107,7 +1107,7 @@ export function createMeasure(deps) {
     if (kb && (b.disabled || b.hidden || !b.getClientRects().length)) (st.on || deps.view2d?.()?.measuring ? $('measoff') : offFocus()).focus(); // (a drawing's too: R45-4)
   };
   // (in a drawing, its results: R44-4)
-  $('measundo').onclick = handOn($('measundo'), () => { const v = deps.view2d?.(); if (v) { v.undoMeasure(); sync2D(v); } else undo(); });
+  $('measundo').onclick = handOn($('measundo'), () => { const v = deps.view2d?.(); if (v) { const w = v.undoMeasure(); sync2D(v); if (w) deps.tell(w, 2000); } else undo(); });
   // the note's text: Enter pins it, Esc drops the note (and stays in Measure)
   // (the field gone, the focus to the Note mode's button, not the header's first control: R120-3)
   const noteBack = () => { if ($('measnotetext').hidden) $('measmode')?.querySelector?.('[data-mode="note"]')?.focus?.(); };
