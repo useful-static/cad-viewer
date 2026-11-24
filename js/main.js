@@ -875,10 +875,8 @@ async function recoverRenderer(why) {
 // Edge width in CSS px, and how much wider the hovered body's edges are
 const EDGE_PX = 1.5;
 const EDGE_HOVER_PX = 1;
-// With a section on, a face seen from inside (a cut face) is drawn this share of the model's
-// radius nearer, along its view ray (renderer-webgl.js VS): enough to settle a cut face on the face
-// it rests on (r109 R1), a length that does not grow as the view zooms out (r110 E1), and under
-// the corpus's thin walls (0.34 mm on the rack, its rails 0.73 mm: r110's audit has the sweep)
+// With a section on, a cut face is drawn this share of the model's radius nearer along its ray
+// (renderer-webgl.js VS), under the corpus's thinnest walls (r109 R1, r110 E1 and its sweep)
 const CUT_PULL = 5e-4;
 // ... and at most this share of the cut body's own radius: a small part's lead drew its inside
 // (r111 G1; the round's audit has the lengths measured)
@@ -3729,10 +3727,8 @@ function openListed(url, refocus = false, keepMenu = false) {
   const pick = ++listPick;
   const c = chain || { id: pick, before: location.href, at: 0 };
   app.pickChain = c;
-  // (each entry the chain makes stamped with its depth in it, so a failure steps back as deep as the
-  // entry shown -- counted by events, a Back across an edit counted one more: r62 A1, Q1)
-  // (by what the address says, not its spelling: "lists/l.json" and "lists%2Fl.json" are one list --
-  // a pick of the model the address already names pushed an entry of the same address: r62)
+  // (each entry stamped with its depth, a failure stepping back as deep; compared by what the
+  // address says, not its spelling: r62 A1, Q1)
   const spelled = (h) => { const x = new URL(h); x.search = new URLSearchParams(x.search).toString(); return x.href; };
   if (spelled(u.href) !== spelled(location.href)) {
     c.at++;
@@ -4738,10 +4734,8 @@ function sceneFailed(merged, failed, cap) {
   Object.assign(merged.edgeInfo, { error: `${failed[0].name}: ${infos[0].error}${more}`, failed: infos.some((i) => i.failed), stopped: infos.every((i) => i.stopped) });
   // (the scene's edges still drawn when every model carries its own: only the facts are missing)
   merged.edgeInfo.value = merged.edges ? fileEdgesValue(merged, cap) : null;
-  // (the word kept for the scene unless every failure is a stop -- the next scene owns a stop --
-  // and told; worded by what is missing -- the edges are drawn when only the facts are. A move
-  // with a failure said before kept no word, and its ready line read "ready": r42 Q3. Told again
-  // after each move that leaves it -- the move the panel advises -- the same words not twice.)
+  // (the word kept unless every failure is a stop, worded by what is missing, told again after each
+  // move that leaves it, never twice the same: r42 Q3)
   if (app.baseMesh === merged && !merged.edgeInfo.stopped) sayNoFacts(`${merged.edgeInfo.value ? 'no volume' : 'no edges'} for this scene: ${merged.edgeInfo.error}`);
   return merged.edgeInfo.value;
 }
@@ -4807,7 +4801,7 @@ function syncScene() {
   if (!many) return;
   const list = $('scenelist');
   // (in the page's unit, not always mm: R137-3)
-  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm', dp = f >= 1000 ? 7 : 4; // (m to the µm: R138-10)
+  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm', dp = f >= 1000 ? 5 : 4; // (m to 0.01 mm, as much as the field shows: R138-10, R139-3)
   // rebuilt only when the models or the unit change (a typed offset keeps its focus)
   const key = `${app.scene.map((m) => m.name).join('\n')}\n${uw}`;
   if (list.dataset.key === key) {
@@ -4847,7 +4841,8 @@ function syncScene() {
         for (const c of linkAdds().carried) { u.searchParams.append('add', c.url); u.searchParams.append('addat', c.offset.map((o) => +o.toFixed(4)).join(',')); }
         history.replaceState(history.state, '', u);
         // (by keys, to the next ×, else the view: R138-7)
-        ((kb && document.querySelectorAll('#scenelist li button')[i - 1]) || $('view')).focus?.();
+        const nx = kb && document.querySelectorAll('#scenelist li button')[i - 1];
+        ((nx && nx.getClientRects?.().length) ? nx : $('view')).focus?.(); // (a shown one: the last gone, List holes took it -- R139-5)
       };
       nm.append(x);
     }
@@ -4891,7 +4886,7 @@ async function moveModel(i, k, v) {
     // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
     if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
     const f = geomMm() ? MM_PER[curUnit()] : 1;
-    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(f >= 1000 ? 7 : 4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(f >= 1000 ? 5 : 4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
@@ -6456,7 +6451,7 @@ function buildTree() {
     cb.setAttribute('aria-label', `Show ${label.textContent}`); // a screen reader names the part
     const cnt = document.createElement('span');
     cnt.className = 'cnt';
-    cnt.textContent = ids.length > 1 ? ids.length : '';
+    cnt.textContent = ids.length > 1 ? fmtInt(ids.length) : ''; // (as the panel's counts: "1790" beside "1,461" -- R139-6)
     // the checkbox sits in a <label>, which on touch fills the row height, so a
     // tap anywhere in that column toggles it (a label click toggles its box)
     const cbw = document.createElement('label');
@@ -6535,6 +6530,7 @@ function buildTree() {
       syncTreeChecks();
       pushState();
       viewChanged();
+      announce(`${fmtInt(ids.length)} ${cb.checked ? 'shown' : 'hidden'}`); // (as H says it: R139-7)
     };
     // (R58-1)
     const ctl = (e) => e.target.closest('.tw[role=button], .cbwrap');
@@ -6753,6 +6749,9 @@ function select(ids, additive, name = null) {
   pushState();
   syncTreeChecks();
   showInfo();
+  // (on touch the view's label names what was picked: a row picked after a tap left the tapped
+  // part's name up -- R139-2)
+  if (app.pointerType === 'touch' && lastLabel) hoverLabel(app.selected.size === 1 ? meshLabel([...app.selected][0]) : '', true);
 }
 
 // The display unit in force, and a length (model units) in it. The geometry
@@ -7048,7 +7047,8 @@ function fillInfo(el) {
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
     sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
     // (from a key, the focus to Measure from selection: R42-1)
-    sel.onclick = () => { const kb = document.activeElement === sel; select(sameParts(ids[0]), false); if (kb) ($('refset').disabled ? $('refclear') : $('refset')).focus(); }; // (off: the ×, R115-4)
+    // (the copies named, and only a key press moves the focus on: R139-8)
+    sel.onclick = (e) => { const kb = e.detail === 0; select(sameParts(ids[0]), false, meshLabel(ids[0]).replace(/ #\d+$/, '')); if (kb) ($('refset').disabled ? $('refclear') : $('refset')).focus(); }; // (off: the ×, R115-4)
     add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
@@ -7250,9 +7250,8 @@ function wireInput() {
   // canvas took no focus at all (a click on the view leaves the page focused)
   $('view').addEventListener('mousedown', (e) => {
     e.preventDefault();
-    // (not a tap's: its compatibility mousedown came after the tap had focused the note field, and
-    // typing then ran the view's keys -- R138-4)
-    if (e.sourceCapabilities?.firesTouchEvents || app.pointerType === 'touch') return;
+    // (not off the note field a tap just opened -- R138-4; any other focus goes: R139-1)
+    if (document.activeElement === $('measnotetext')) return;
     if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   });
   const stageXY = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };

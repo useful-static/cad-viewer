@@ -895,12 +895,10 @@
        is left of its line. */
     .opt-row { flex-wrap:wrap; }
     #secpos, #xppos { flex:1 1 110px; }
-    /* (Section's and Explode's bars alike: the off button, the slider and its readout on the first line,
-       the axes / modes and the rest under -- the sliders sat 210 px apart, readouts on opposite sides:
-       R138-2) */
-    #secopt .opt-row > .seg, #secsel, #secflip, #xpmode { order:1; }
-    #secoff, #xpoff { min-width:80px; }
   }
+  /* (Section's and Explode's bars alike: the off button, the slider and its readout first, in the
+     markup -- R138-2, R139-4 -- their off buttons one width: R139-9) */
+  #secoff, #xpoff { min-width:84px; }
   /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
      R115-2) */
   @media (max-width: 359px) { #secpos { flex-basis:72px; min-width:72px; } }
@@ -982,7 +980,7 @@
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
     <div class="menu-panel" id="showpanel" aria-label="Show">
-      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all, checkbox, Colour, Paint or Reset, or while measuring the last measurement (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
+      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last step: Hide, Isolate, Show all, a checkbox, Colour, Paint or Reset; while measuring, the last measurement (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
     </div></div>
 </div><div id="hdend"><button id="helpbtn" aria-expanded="false" aria-controls="helppop" aria-keyshortcuts="?" title="Controls, shortcuts and graphics (?)">?</button><button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button></div></header>
 <aside id="parts" aria-label="Parts">
@@ -1150,17 +1148,19 @@
   <div id="optbar" hidden>
     <div class="opt" id="secopt" hidden><div class="opt-row">
       <button id="secoff" aria-pressed="true" title="Turn the section off">Section <span aria-hidden="true">×</span></button>
-      <span class="seg" role="group" aria-label="Section plane axis"><button data-axis="x" aria-pressed="false" title="Cut across X">X</button><button data-axis="y" aria-pressed="false" title="Cut across Y">Y</button><button data-axis="z" aria-pressed="false" title="Cut across Z">Z</button></span>
+      <!-- (the slider and its readout before the axes in the markup, as on screen at every width: the
+           axes moved after them by CSS on a phone left Tab going down and back up -- R139-4) -->
       <input id="secpos" type="range" min="0" max="1000" value="500" disabled autocomplete="off" aria-label="Section plane position" aria-describedby="secval">
       <span id="secval" class="secval" role="button" tabindex="0" title="Type the cut position (click, or Enter)"></span>
+      <span class="seg" role="group" aria-label="Section plane axis"><button data-axis="x" aria-pressed="false" title="Cut across X">X</button><button data-axis="y" aria-pressed="false" title="Cut across Y">Y</button><button data-axis="z" aria-pressed="false" title="Cut across Z">Z</button></span>
       <button id="secsel" disabled aria-label="Cut through the selection" title="Put the cut through the middle of the selected parts"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v4M8 11v4M1 8h4M11 8h4" stroke="currentColor" stroke-width="1.3"/></svg></button>
       <button id="secflip" aria-pressed="false" disabled title="Cut away the other side">Flip</button>
     </div></div>
     <div class="opt" id="xpopt" hidden><div class="opt-row">
       <button id="xpoff" aria-pressed="true" title="Put the parts back together">Explode <span aria-hidden="true">×</span></button>
-      <span class="seg" id="xpmode" role="group" aria-label="Which way the parts move"><button data-mode="assembly" aria-pressed="false" title="Each subassembly away from the rest, then its parts within it">Assembly</button><button data-mode="x" aria-pressed="false" title="Along X only">X</button><button data-mode="y" aria-pressed="false" title="Along Y only">Y</button><button data-mode="z" aria-pressed="false" title="Along Z only">Z</button></span>
       <input id="xppos" type="range" min="0" max="100" value="40" autocomplete="off" aria-label="How far apart" aria-describedby="xpval">
       <span id="xpval" class="secval"></span>
+      <span class="seg" id="xpmode" role="group" aria-label="Which way the parts move"><button data-mode="assembly" aria-pressed="false" title="Each subassembly away from the rest, then its parts within it">Assembly</button><button data-mode="x" aria-pressed="false" title="Along X only">X</button><button data-mode="y" aria-pressed="false" title="Along Y only">Y</button><button data-mode="z" aria-pressed="false" title="Along Z only">Z</button></span>
     </div></div>
     <div class="opt" id="measopt" hidden><div class="opt-row">
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>
