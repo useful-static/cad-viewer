@@ -1289,11 +1289,8 @@ function applyView(v, link = false) {
     c.viewRadius = Math.min(app.sphere.radius, c.dist / fitDistance(1, c.fov, aspect));
   }
   if (v.style && styleById(v.style)) setStyle(v.style, false);
-  // a link leaves out "section off" and "nothing hidden": a whole link (one
-  // with a camera) means those where it names none, or a link pasted into a
-  // tab keeps that tab's cut and hidden parts
-  // (the Section button's axis -- last -- is only ever a real axis: set to "off" it turned the
-  // button into one that does nothing)
+  // a whole link (with a camera) naming no cut or hidden parts means none (the Section button's
+  // last axis stays a real one)
   if (v.section) Object.assign(app.section, { of: null, held: null }, v.section, v.section.axis !== 'off' ? { last: v.section.axis } : {});
   else if (v.cam) app.section.axis = 'off';
   if (v.hidden || v.cam) { app.hidden = new Set(bodies.hidden); syncTreeChecks(); }
@@ -1422,11 +1419,8 @@ async function exportMesh(fmt) {
 // A note given a frame to draw before work that freezes the view (100 ms at most: a hidden tab)
 const notePainted = () => new Promise((r) => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 100); });
 
-// Save picture (P): the view as a PNG at the picture options' size and
-// background (renderPicture: in tiles, capped at 8192 px and 16.7 Mpx),
-// hover left out, the selection unless the options include it, with
-// Measure's results and the hole table's markers drawn in.
-// print: the picture printed (File > Print) instead of saved
+// Save picture (P): a PNG at the options' size and background (in tiles, to 8192 px / 16.7 Mpx),
+// Measure's results and hole markers drawn in; print: printed instead of saved
 async function savePicture(print = false) {
   // a drawing: its canvas without the hover and selection; on a phone the same Share / Save as a
   // model's picture (UI design round 11 R11-5)
@@ -2555,6 +2549,10 @@ function setupEmbed() {
     new MutationObserver(place).observe(hint, { attributes: true, attributeFilter: ['hidden'] });
     addEventListener('resize', place);
   }
+  // (the frame losing the focus -- a click or tap on the host page -- gives the page its wheel and its
+  // drag back: a phone has no Esc, and a click outside kept the wheel caught -- R145-1, R145-3;
+  // &active=1 stays active)
+  if (embedParams.get('active') !== '1') addEventListener('blur', () => setEmbedActive(false));
   // (a drawing fits by its own view: drawnBox is the 3D model's, null in 2D -- round 10 R10-1)
   $('embedfit').onclick = () => (app.dxf ? $('fit').click() : fitTo(drawnBox(null)));
   if (embedParams.get('noopen') === '1') { $('embedopen').remove(); return; }
@@ -2578,6 +2576,9 @@ function setupEmbed() {
 function setEmbedActive(on) {
   if (!app.embed || app.embedActive === on) return;
   app.embedActive = on;
+  // (the frame takes the keyboard on its activating press: the 3D view's press takes no focus, so its
+  // Esc and keys went to the host page -- R145-1)
+  if (on) try { window.focus(); } catch { /* a frame that cannot be focused: the pointer still works */ }
   document.body.classList.toggle('active', on);
   $('embedhint').hidden = on;
   announce(on ? `${app.dxf ? 'the drawing now pans' : 'the model now turns'} and zooms with the pointer; Esc gives the page its wheel back` : 'the page scrolls again');
@@ -3925,7 +3926,9 @@ const listNote = (errors) => errors.map((e) => `model list ${e.url}: ${e.message
 // nothing the viewer does relies on Esc alone.
 
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
-const fsApi = () => !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+// (and allowed here: a frame without allowfullscreen showed the button, which did nothing -- R145-2)
+const fsApi = () => !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)
+  && (document.fullscreenEnabled ?? document.webkitFullscreenEnabled ?? true);
 
 function syncFullscreen() {
   const on = !!fsElement();
@@ -4891,10 +4894,8 @@ async function moveModel(i, k, v) {
 // a new run stops a going one (STOPPED); never retried on the page; always settles.
 const STOPPED = Symbol('stopped');
 
-// One run of a module worker (the facts' js/edges-worker.js, Clearance's js/clearance-worker.js):
-// make() builds the message and transfer list (in a try: the copies may not fit). Settles once:
-// { ok: data } | { error, transient? } (transient: tried again at the next ask, up to
-// MOMENT_TRIES) | { stopped: why } | { noWorker: why }.
+// One run of a module worker (edges, clearance); make() builds the message in a try. Settles once:
+// { ok } | { error, transient? (retried, MOMENT_TRIES) } | { stopped } | { noWorker }
 function workerJob(file, make) {
   let stopIt = () => {};
   const promise = new Promise((resolve) => {
@@ -5546,9 +5547,15 @@ async function loadDxf(buf, name, seq) {
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
 }
 
-// The 2D view on a sheet: -1 model space, else layout i (its paper space and
-// what its viewports show). The layers are the drawing's: which are off
-// carries over; a Measure in progress does not
+// the 2D view's name, the layers the shown sheet draws on as the panel counts them, on opening and
+// on a sheet's change (R144-5, R145-6) -> the layers' words
+function sheetLabel() {
+  const sh = app.dxf.shown || app.dxf.drawing, tl = layerTally(sh), nl = sh.layers.filter((l) => tl.get(l.name)).length;
+  const ln = `${nl} ${nl === 1 ? 'layer' : 'layers'}`;
+  $('view2d').setAttribute('aria-label', `${$('model').textContent}: ${ln}; arrows pan, plus and minus zoom`);
+  return ln;
+}
+// The 2D view on a sheet: -1 model space, else layout i; which layers are off carries over
 function setSheet(i) {
   const d = app.dxf.drawing;
   const L = i >= 0 ? d.layouts[i] : null;
@@ -5570,7 +5577,7 @@ function setSheet(i) {
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
-  if (old) { buildLayerList(); showInfo(); announce(L ? `${L.name}: paper space` : 'model space'); }
+  if (old) { buildLayerList(); showInfo(); sheetLabel(); announce(L ? `${L.name}: paper space` : 'model space'); }
   app.measure?.sync2D(app.dxf.view); // (R45-2)
 }
 
@@ -5658,9 +5665,7 @@ function show2D(drawing, name, url) {
   buildLayerList();
   $('model').textContent = name;
   document.title = `${name} — ${SHORT_TITLE}`;
-  // (the layers the shown sheet draws on, as the info panel counts them: 5 said against its 4 -- R144-5)
-  const sh = app.dxf.shown || drawing, tl = layerTally(sh), nl = sh.layers.filter((l) => tl.get(l.name)).length, ln = `${nl} ${nl === 1 ? 'layer' : 'layers'}`;
-  cv.setAttribute('aria-label', `${name}: ${ln}; arrows pan, plus and minus zoom`);
+  const ln = sheetLabel();
   $('sharelink').disabled = !url;
   // (and why not, as a 3D model from this device has a link: R144-6)
   $('sharelink').title = url ? 'Copy a link that opens this drawing' : 'Copy view link: this drawing was opened from this device, so no link can open it; put it on a web page to share it';
@@ -5668,7 +5673,7 @@ function show2D(drawing, name, url) {
   syncMenuButtons();
   showInfo();
   setStatus('ready', readyText());
-  announce(`${name} opened: a 2D drawing, ${ln}`);
+  announce(`${name} opened: ${ln}`); // (after "ready · 2D drawing", not "2D drawing" twice: R145-7)
 }
 
 // 2D Measure on or off: two clicks give a distance with ΔX and ΔY in the
@@ -6166,19 +6171,16 @@ async function loadUrl(url) {
         rd.cancel();
         throw new Error(oversizeText(name));
       }
-      // through setStatus, so a recovery that ends mid-fetch sees a load in
-      // progress (app.status 'loading') and does not paint "ready" over it
-      setStatus('loading', pct
-        // (in the page's one MB, mb: "fetching 546.4 MB", then refused as 521 MB of text -- r73 A6)
-        // (what has come rounded down: up, as a size past a limit is, it read "12.1 of 12.1 MB" still
-        // downloading -- r74 A10)
-        // (and the percent down: rounded, "100%" from 99.5 % on, still downloading -- r75 Q7)
-        ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${mb(total)} MB`
-        : `fetching ${mbSoFar(got)} MB`);
+      // through setStatus (a recovery mid-fetch sees a load); come and percent rounded down, KB under
+      // a megabyte (r73 A6, r74 A10, r75 Q7, R145-5)
+      const kb = (pct ? total : got) < 2 ** 20;
+      const soFar = kb ? `${Math.floor(got / 1024).toLocaleString('en')}` : mbSoFar(got), unit = kb ? 'KB' : 'MB';
+      const all = pct ? (kb ? sizeText(total) : `${mb(total)} MB`) : '';
+      setStatus('loading', pct ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${all}` : `fetching ${soFar} ${unit}`);
       const secs = (performance.now() - tf) / 1000;
       const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
       showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
-        pct ? `${mbSoFar(got)} of ${mb(total)} MB${rate}` : `${mbSoFar(got)} MB${rate}`);
+        pct ? `${soFar}${kb ? ' KB' : ''} of ${all}${rate}` : `${soFar} ${unit}${rate}`);
     }
     const all = new Uint8Array(got);
     let o = 0;
@@ -8471,10 +8473,7 @@ async function startFromAddress(early) {
       return openStart(r.tour.model); // (with the address's ?add=s: r58 A2)
     });
   }
-  // (not over an error: a list read above and failed left the page's error, which this wrote over --
-  // "reading the model list…" for good, the card with no error: r50 Q1. The page is still 'init'
-  // here otherwise, "starting GPU", and this is what moves it on -- unless the visitor's own file is
-  // opening, whose line it is.)
+  // (not over an error, nor the visitor's own file opening: this moves an 'init' page on -- r50 Q1)
   if (!src && !poster && app.status !== 'error' && untouched()) {
     setStatus('idle', lists.length && !place ? 'reading the model list…' : tourUrl ? 'reading the tour…' : idleText());
   }
