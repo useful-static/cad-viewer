@@ -819,6 +819,7 @@ export function createMeasure(deps) {
         st.results.splice(i, 1);
         if (!st.results.length) setList(false);
         syncRow(); deps.queueFrame();
+        deps.tell(`removed: ${r.main}`, 2000); // (said, as Undo and Clear all are: R138-8)
         // (by the count left, not the list -- a closed list is not refilled, and its removed row's
         // hidden x took the focus nowhere: the last one gone, Measure's toggle shown, R26-2, R27-1)
         if (kb) {

@@ -1039,10 +1039,8 @@ function viewChanged() {
   queueFrame();
 }
 
-// Where the camera goes to frame bbox seen with orientation q: -> { target, dist, bar }. `cover` px
-// at the bottom are covered (the options bar, a tour's card). pad >= 0 (a tour's step): fitted
-// exactly above them by fitWindow, pad px clear, top px covered at the top, in the given projection
-// (R82-4, R90-1, R91-1, R91-2); pad < 0 (Fit): fitBox, the target moved down half the bar.
+// The camera framing bbox seen with q -> { target, dist, bar }, above `cover` px; pad >= 0 (a tour
+// step) by fitWindow (R82-4, R90-1, R91-1, R91-2), pad < 0 (Fit) by fitBox.
 function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1, ortho = app.cam.ortho, top = 0) {
   const c = { ...app.cam, q, ortho };
   const box = $('stage');
@@ -3831,10 +3829,7 @@ function wireHistory() {
     listPick++;
     app.pickPending = 0; // (a pick downloading is no longer the step shown: its entries are not unwound)
     app.pickChain = null;
-    // (the page as first opened: its model with the address's ?add=s, as its start opened it -- Back
-    // reopened the model alone, and the entry's view went onto a partial scene: r59 A3, Q1)
-    // (and its entry the start's address again: a device file's rewrite had dropped its model and
-    // ?add=s from it, so the scene Back opened was one the address no longer named -- r62 Q4)
+    // (the page as first opened, its ?add=s too, under the start's address: r59 A3, Q1, r62 Q4)
     if (first) {
       // (the start's model and ?add=s, the entry's own ?unit= and view kept -- "this file is in" was
       // lost, and the start's #view= put back that never landed: r63 A2, Q5)
@@ -4732,10 +4727,8 @@ async function sceneEdges(merged, models) {
   return sceneFailed(merged, failed, cap);
 }
 
-// A scene whose facts are missing: its state from every model that failed (the first's alone gave
-// "move a model to try again" while a later one's failure was remembered, and left a later one's
-// first failure unsaid: r41 A2, Q1) -- remembered if any is (no try can then give the scene its
-// facts), stopped only if all were; its error the first's, its model named, the others counted
+// A scene whose facts are missing: its state from every failed model (remembered if any is, stopped
+// only if all were), its error the first's, the others counted (r41 A2, Q1)
 function sceneFailed(merged, failed, cap) {
   const infos = failed.map((m) => m.base.edgeInfo);
   // (the merge's failure named as itself, not counted as a model: r43 A6)
@@ -4774,10 +4767,8 @@ function sayNoFacts(text) {
   if (fresh) tell(text, 6000);
   rewriteReady(() => { app.noFacts = text; });
 }
-// A word of the ready text changed (`change`: the missing facts' word, the list's note), and a ready
-// line rewritten in place: the ready text before it replaced, the words other writers added after it
-// kept; nothing written unless the page is ready and its line starts with that ready text. The one
-// rule sayNoFacts, showBase and listsRead call (it was written out in each: r51 A8)
+// A ready-text word changed and the ready line rewritten in place, later writers' words kept, only
+// while ready; sayNoFacts', showBase's and listsRead's one rule (r51 A8)
 function rewriteReady(change) {
   const msg = app.statusMsg || '', before = readyText();
   change();
@@ -4816,14 +4807,14 @@ function syncScene() {
   if (!many) return;
   const list = $('scenelist');
   // (in the page's unit, not always mm: R137-3)
-  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm';
+  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm', dp = f >= 1000 ? 7 : 4; // (m to the µm: R138-10)
   // rebuilt only when the models or the unit change (a typed offset keeps its focus)
   const key = `${app.scene.map((m) => m.name).join('\n')}\n${uw}`;
   if (list.dataset.key === key) {
     app.scene.forEach((m, i) => list.querySelectorAll('li')[i]?.querySelectorAll('input').forEach((inp, k) => {
       // (a typed value kept as typed while it says the same: 12.34567 came back 12.346 -- R137-8)
       const v = m.offset[k] / f;
-      if (document.activeElement !== inp && Math.abs(Number(inp.value) - v) > 1e-9 * Math.max(1, Math.abs(v))) inp.value = String(+v.toFixed(4));
+      if (document.activeElement !== inp && Math.abs(Number(inp.value) - v) > 1e-9 * Math.max(1, Math.abs(v))) inp.value = String(+v.toFixed(dp));
     }));
     return;
   }
@@ -4846,7 +4837,17 @@ function syncScene() {
       x.onclick = async () => {
         const now = sceneNow();
         if (!now || !now[i]) return;
-        if (await showScene(now.filter((_, j) => j !== i), { newTree: true })) { tell(`${m.name} removed`, 3000); $('view').focus?.(); }
+        const k = app.measure?.results.length || 0, kb = x.matches(':focus-visible');
+        if (!(await showScene(now.filter((_, j) => j !== i), { newTree: true }))) return;
+        // (the results it clears said: R138-1; the address without its ?add=, so a reload does not bring
+        // it back: R138-6)
+        tell(`${m.name} removed${k ? `; ${k} measurement${k > 1 ? 's' : ''} cleared` : ''}`, 3000);
+        const u = new URL(location.href);
+        u.searchParams.delete('add'); u.searchParams.delete('addat');
+        for (const c of linkAdds().carried) { u.searchParams.append('add', c.url); u.searchParams.append('addat', c.offset.map((o) => +o.toFixed(4)).join(',')); }
+        history.replaceState(history.state, '', u);
+        // (by keys, to the next ×, else the view: R138-7)
+        ((kb && document.querySelectorAll('#scenelist li button')[i - 1]) || $('view')).focus?.();
       };
       nm.append(x);
     }
@@ -4857,7 +4858,7 @@ function syncScene() {
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.step = 'any';
-        inp.value = String(+(m.offset[k] / f).toFixed(4));
+        inp.value = String(+(m.offset[k] / f).toFixed(dp));
         inp.setAttribute('aria-label', `${m.name}: move along ${ax} (${uw})`);
         inp.title = `Move ${m.name} along ${ax}, in ${uw} from where its file puts it`;
         inp.addEventListener('change', () => {
@@ -4890,7 +4891,7 @@ async function moveModel(i, k, v) {
     // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
     if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
     const f = geomMm() ? MM_PER[curUnit()] : 1;
-    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(f >= 1000 ? 7 : 4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
@@ -7249,6 +7250,9 @@ function wireInput() {
   // canvas took no focus at all (a click on the view leaves the page focused)
   $('view').addEventListener('mousedown', (e) => {
     e.preventDefault();
+    // (not a tap's: its compatibility mousedown came after the tap had focused the note field, and
+    // typing then ran the view's keys -- R138-4)
+    if (e.sourceCapabilities?.firesTouchEvents || app.pointerType === 'touch') return;
     if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   });
   const stageXY = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -8562,10 +8566,8 @@ async function readLists(lists, openFirst) {
   // behind a poster View in 3D opened them: r58 A2)
   if (listsRead(r, openFirst())) await openStart(r.entries[0].url);
 }
-// What the model lists' answer says, and whether to open their first model: a list with nothing in
-// it to open is a failure apart from the load (failApart's one rule: its own put it on the card and
-// in a note at once, and kept a failed load's error where a tour's replaced it -- r49 A2); one that
-// failed beside lists that answered is told; the ready line carries it (app.listNote)
+// What the lists' answer says and whether to open their first model: nothing to open is a failure
+// apart (failApart, r49 A2); a failed one beside others told, on the ready line (app.listNote)
 function listsRead(r, openFirst) {
   const note = r.errors.length ? listNote(r.errors) : r.entries.length ? '' : 'the model list names no models';
   // (the answer is in: the read for a model it names is over, and its own failure is the page's --

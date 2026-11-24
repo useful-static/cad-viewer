@@ -576,8 +576,9 @@
   /* (the name cut with an ellipsis, not the row: the li clipped the Z field's focus ring -- R97-3) */
   #scenelist li > span { display:flex; align-items:center; gap:4px; }
   #scenelist li > span > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* (its × beside it: R137-4) */
-  @media (max-width:519px) { #scenelist input { width:3.6em; } } /* (Z and its unit kept on the line at 390: R137-9) */
-  #scenelist input { width:4.4em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; } /* (no spinners over the value: R96-6) */
+  /* (the mass field's look, not the browser's grey box: R138-5) */
+  #scenelist input { width:4.4em; font:inherit; font-size:11px; -moz-appearance:textfield; appearance:textfield; padding:1px 4px; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; } /* (no spinners over the value: R96-6) */
+  @media (max-width:519px) { #scenelist input { width:3.6em; } } /* (after the rule it narrows -- before it, it never applied: R137-9, R138-3) */
   #scenelist input::-webkit-inner-spin-button, #scenelist input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
   /* (the offsets wrap in a narrow panel, each letter with its field; the name keeps its ellipsis; a gap between models: R95-1, R96-1) */
   /* (a wrapped line hangs in as the panel's other values do, a few px under the one above: R97-6, R97-7) */
@@ -894,6 +895,11 @@
        is left of its line. */
     .opt-row { flex-wrap:wrap; }
     #secpos, #xppos { flex:1 1 110px; }
+    /* (Section's and Explode's bars alike: the off button, the slider and its readout on the first line,
+       the axes / modes and the rest under -- the sliders sat 210 px apart, readouts on opposite sides:
+       R138-2) */
+    #secopt .opt-row > .seg, #secsel, #secflip, #xpmode { order:1; }
+    #secoff, #xpoff { min-width:80px; }
   }
   /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
      R115-2) */
@@ -976,7 +982,7 @@
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
     <div class="menu-panel" id="showpanel" aria-label="Show">
-      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all, checkbox, colour, paint or Reset (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
+      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all, checkbox, Colour, Paint or Reset, or while measuring the last measurement (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
     </div></div>
 </div><div id="hdend"><button id="helpbtn" aria-expanded="false" aria-controls="helppop" aria-keyshortcuts="?" title="Controls, shortcuts and graphics (?)">?</button><button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button></div></header>
 <aside id="parts" aria-label="Parts">
