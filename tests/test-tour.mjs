@@ -823,7 +823,8 @@ test('tour.js: a step "style" not in STYLE_IDS ("hidden-line") is refused naming
   assert.equal(parseTour(tour2({ style: 'wire' })).steps[0].style, 'wire');
 });
 await test('tour-recorder.js: Save after one step calls api.save once with the untitled tour named after its model, "board.cadtour.json", and says so (r114 M3 tour-recorder-R26, R141-6; R142-5: its case kept, a title slugged)', async () => {
-  for (const [name, title, want] of [['LC-Board.cadmesh.gz', '', 'LC-Board.cadtour.json'], ['LC-Board.cadmesh.gz', 'My Tour', 'my-tour.cadtour.json']]) {
+  for (const [name, title, want] of [['LC-Board.cadmesh.gz', '', 'LC-Board.cadtour.json'], ['LC-Board.cadmesh.gz', 'My Tour', 'my-tour.cadtour.json'],
+    ['A.cadmesh.gz + B.stp', '', 'A+B.cadtour.json']]) { // (a scene as main.js saveBase names it: R143-4)
     const got = [];
     await withRecorder({ model: () => ({ key: 'k', name, unit: 'mm', url: 'b.cadmesh' }), validate: () => ({ steps: [{}] }), save: (text, n) => got.push(n) }, async ({ $ }) => {
       if (title) { $('tetitle').value = title; $('tetitle').fire('input'); }

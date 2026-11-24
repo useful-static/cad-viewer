@@ -1221,9 +1221,11 @@ function hoverLabel(text, asked = false) {
   $('hover').textContent = String(text ?? '').replace(/ #(\d)/g, ' #$1'); // (" #3" kept with its name: R39-7)
 }
 // the hover line emptied, a note's hold and the last label with it (a model or drawing left)
+let carriedNote = ''; // (a note about the load itself, kept through its clear: R143-1)
 function clearHover() {
-  noteHeldUntil = 0;
   lastLabel = '';
+  if (typeof carriedNote === 'string' && carriedNote && $('hover').textContent === carriedNote && performance.now() < noteHeldUntil) return;
+  noteHeldUntil = 0;
   $('hover').textContent = '';
 }
 
@@ -2085,10 +2087,7 @@ function setTourPlaying(on) {
   if (!on && t.i === t.tour.steps.length - 1) t.ended = true;
 }
 
-// A tour step's missing parts, told -- but not in the moment of the tour's start, which told every
-// part it lacks: whatever step is shown in that moment, the start's own or the one a picture, a
-// video or the maker's "Show this step" shows next (the flag spent by step 1 left those saying both
-// notes at once: r46 A4, r47 A7, r48 Q7, r49 A3, Q2)
+// A tour step's missing parts, told -- but not at the tour's start, which told them all (r46 A4 .. r49 Q2)
 function tellStepMissing(t) {
   if (app.tourMissing.length && !t.startedNow) tell(`not in this model: ${[...new Set(app.tourMissing)].join(', ')}`, 4000);
 }
@@ -2476,11 +2475,8 @@ async function tourPictures(tour) {
   return files.length;
 }
 
-// A tour as a video: played from the start (its holds and orbits, once
-// through, whatever its mode and loop), each frame drawn with Measure's
-// notes and the step's caption into a canvas that MediaRecorder records as
-// WebM, in this browser. The visitor's own input stops it where it is.
-// -> the video's size in bytes, or a reason it could not be made
+// A tour as a WebM video: played once from the start, notes and captions drawn in, recorded by
+// MediaRecorder; the visitor's input stops it. -> its size in bytes, or why it could not be made
 async function tourVideo(tour) {
   const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   const mime = window.MediaRecorder && types.find((t) => MediaRecorder.isTypeSupported(t));
@@ -4111,7 +4107,10 @@ function updateButtons() {
   const sd = $('savedrawing'), faceless = has && !app.baseMesh?.faces;
   sd.dataset.t ||= sd.title;
   sd.disabled = !has || faceless; // (and why, as Explode's: R142-11)
-  sd.title = faceless ? 'Save drawing: this .cadmesh was written without its faces, so it has no edges to draw; open the model it came from' : sd.dataset.t;
+  // (a mesh file is not "a .cadmesh": R143-2)
+  sd.title = !faceless ? sd.dataset.t : /\.cadmesh(\.gz)?$/i.test(app.sourceName || '')
+    ? 'Save drawing: this .cadmesh was written without its faces, so it has no edges to draw; open the model it came from'
+    : 'Save drawing: a mesh has no CAD faces to draw edges from; open the model as STEP, IGES or BREP';
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -4313,11 +4312,8 @@ function clearModel() {
   $('sheetsrow').hidden = true;
   $('view').setAttribute('aria-label', '3D view: no model open');
   if (app.measure) app.measure.reset(true); // (Measure too: a drawing has its own)
-  // the tools that belong to the model shown go with it -- the section's cut,
-  // Walk's viewpoint, Paint -- or a 2D drawing (or the next model) opens with
-  // them on and their controls hidden (Explode is reset where the new mesh
-  // lands; a view link sets the section again after this). Turntable and the
-  // Display looks are preferences and stay.
+  // the shown model's tools go with it (the cut, Walk, Paint; Explode where the next mesh lands);
+  // Turntable and the Display looks are preferences and stay
   app.section.axis = 'off';
   app.section.of = null; // (a tour step's box with it: r134 M2)
   explodeOffForModel();
@@ -4371,6 +4367,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
     if (stale(seq)) return false; // a superseded load paints nothing over the newer one
     setStatus('loading', `${what} ${name}`);
     showProgress(`Opening ${name}`, null, detail);
+    // (no Cancel through the upload: the page is frozen, and an Esc landed after the model opened -- R143-6)
+    if (what === 'uploading') $('pcancel').hidden = true;
     await nextPaint();
     return !stale(seq);
   };
@@ -4405,7 +4403,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   const decodeMs = performance.now() - t1;
   checkFits(app.renderer, mesh);
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
-  if (!(await phase('uploading', `uploading ${fmtInt(mesh.header.indexCount / 3)} triangles to the GPU`))) return;
+  if (!(await phase('uploading', `uploading ${fmtInt(mesh.header.indexCount / 3)} ${mesh.header.indexCount === 3 ? 'triangle' : 'triangles'} to the GPU`))) return;
   app.wanted = mesh;
   try {
     // Rejects on a GPU allocation/validation failure; the renderer then still
@@ -4495,6 +4493,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   showInfo();
   app.gpuLacks = null; // (this model is on the GPU: cannotHold's note of the one before goes)
   setStatus('ready', readyText()); // announced with the change into ready
+  // (named, as a drawing is: "ready" alone said nothing of what opened -- R143-5)
+  announce(`${name} opened: ${fmtInt(app.stats.meshes)} ${app.stats.meshes === 1 ? 'body' : 'bodies'}${readyText() === 'ready' ? '' : `, ${readyText().replace(/^ready · /, '')}`}`);
   applyListEntry(); // its step, page, author, license, style from the model list
   touchHintOnce();
   // the facts' closed flags go into the state texture too (the cut fill)
@@ -4518,11 +4518,8 @@ function keepEdges(base, v) {
   delete base.header.edgesFailed;
 }
 
-// A big CAD file on a phone (a touch-only device) is converted only once
-// asked (feature review item 21): it can take minutes and more memory than
-// the browser gives a tab, which then reloads the page with no word said.
-// Resolves true to convert, false when cancelled or superseded. A saved
-// conversion never asks (the cache is read before this).
+// A big CAD file on a touch-only device converted only once asked (minutes, and a tab out of memory
+// reloads unsaid). -> true to convert, false cancelled or superseded; a saved conversion never asks
 const BIG_PHONE_MB = 20;
 function askBigConversion(buf, name, seq) {
   const mbs = buf.byteLength / 2 ** 20; // (as the download's and conversion's cards: "26 MB" here, "24.5 MB" there -- R133-2)
@@ -4583,7 +4580,7 @@ async function addToScene(base, name, seq, unmeshed = 0) {
   const unitsClash = sceneUnitsRefusal(models);
   if (unitsClash) throw new Error(unitsClash);
   setStatus('loading', `adding ${name}`);
-  showProgress(`Adding ${name}`, null, `uploading ${fmtInt(base.header.indexCount / 3)} more triangles to the GPU`);
+  showProgress(`Adding ${name}`, null, `uploading ${fmtInt(base.header.indexCount / 3)} more ${base.header.indexCount === 3 ? 'triangle' : 'triangles'} to the GPU`);
   await nextPaint();
   if (stale(seq)) return;
   if (!(await showScene(models, { newTree: true }))) return;
@@ -4767,10 +4764,8 @@ function rewriteReady(change) {
   if (line !== msg) setStatus('ready', line);
 }
 
-// The one change of the shown model or scene (loadBuffer, showScene, clearModel): the edge builds
-// of every model not kept stopped (why: the reason said), the scene shown before ended -- its
-// sceneEdges still waiting on a build settles GONE -- then `next` shown. (Written out at three
-// places in two orders, each one line a mutant could drop unseen.)
+// The one change of the shown model or scene: other models' edge builds stopped (why said), the
+// scene before ended (its waiting sceneEdges settle GONE), then `next` shown
 const GONE = Symbol('gone');
 function showBase(next, keep, why) {
   stopEdgeJobs(new Set(keep), why);
@@ -5969,11 +5964,8 @@ function tessellate(buf, format, seq, name, threads) {
         frac = barMax;
         detail = `${run < tot ? `~${fmt(tot - run)} left (estimate)` : 'taking longer than expected'} · ${clock} so far`;
       } else if (conv) {
-        // Time left for the WHOLE conversion: the forecast for the steps to
-        // come, scaled by this device's speed (read off the first step), plus
-        // the current step's, which leans toward the step's own pace as it
-        // advances. When a step outlasts both, the card says so rather than
-        // count down to a number that is wrong.
+        // Time left for the whole conversion: the steps to come by this device's speed, plus the
+        // current step's own pace; a step outlasting both said, not counted down wrongly
         const factor = deviceFactor(fc, readSecs);
         const st = step;
         const inStep = (now - stepAt) / 1000;
@@ -6236,7 +6228,7 @@ function pickModelFile(files) {
   // (the others the viewer would open, not every file: "1 more" of a .pdf -- r81 A10)
   const rest = files.filter((x) => x !== f && !extras.includes(x) && formatOfName(x.name)).length;
   // (shown as well as said: only a screen reader heard it -- R142-1)
-  if (rest > 0) tell(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`, 6000);
+  if (rest > 0) tell((carriedNote = `opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`), 6000);
   return f;
 }
 
@@ -6268,7 +6260,7 @@ async function loadFile(file, extras = companionsOf.get(file) || []) {
   const seq = beginLoad();
   app.fetchMs = null;
   setStatus('loading', `reading ${file.name}`);
-  showProgress(`Opening ${file.name}`, null, `reading ${mb(file.size)} MB from disk`);
+  showProgress(`Opening ${file.name}`, null, `reading ${sizeText(file.size)} from disk`); // (KB under a MB: R143-9)
   announce(`loading ${file.name}`); // a new load is news even mid-load
   const buf = await file.arrayBuffer();
   if (stale(seq)) return;
@@ -7171,11 +7163,8 @@ function devicePx(e) {
   ];
 }
 
-// Resolves to the body id under (x, y), 0 for background, or null when no
-// answer is available (GPU lost): callers must not treat null as "nothing".
-// An answer computed against a model that has since been replaced is also null:
-// its id would index the new model's bodies.
-// A pick counts only while the view it was aimed at stands (app.viewGen).
+// -> the body id under (x, y), 0 for background, or null with no answer (GPU lost, the model since
+// replaced, the view it aimed at gone: app.viewGen) -- null is not "nothing"
 app.pickAt = async (x, y) => {
   const gen = app.viewGen;
   try {
@@ -7698,7 +7687,8 @@ function wireInput() {
     e.target.value = ''; // so choosing the same file again fires change
     if (files.length) openFile(pickModelFile(files));
   };
-  document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
+  // (named as its key names it: R143-8)
+  document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => { setView(b.dataset.view); tell(VIEW_NAMES[b.dataset.view], 1500, `${VIEW_NAMES[b.dataset.view]} view`); }; });
   $('fit').onclick = () => {
     if (app.dxf) { uncover(); return app.dxf.view.fit(); }
     fitParts([...app.selected]);

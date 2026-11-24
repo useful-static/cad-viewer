@@ -291,7 +291,8 @@ export function createTourRecorder(api) {
     let t;
     try { api.validate(text()); t = text(); } catch (e) { note(`not saved: ${e.message}`); return; }
     // (an untitled tour named after its model as other saves keep it, not "tour": R141-6, R142-5)
-    const base = (api.model()?.name || '').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, '-');
+    // (as main.js saveBase names a scene, "a+b": R143-4)
+    const base = (api.model()?.name || '').split(' + ').map((n) => n.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '')).filter(Boolean).join('+').replace(/[\\/:*?"<>|]+/g, '-');
     const slug = draft.title || !base ? tourSlug(draft.title) : base;
     api.save(`${t}\n`, `${slug}.cadtour.json`);
     note(api.modelUrl() ? `saved ${slug}.cadtour.json` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)`);

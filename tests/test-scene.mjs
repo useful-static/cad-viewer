@@ -1717,12 +1717,12 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     const read = [];
     let release = null;
     const held = new Promise((res) => { release = res; });
-    const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb',
+    const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb', 'sizeText',
       'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions', 'StopRead', 'companionsOverText',
       `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
-      app, 2 * 2 ** 30, isCompanion, () => {}, () => {}, () => false, (fn) => fn(), () => {}, () => {}, () => '0',
+      app, 2 * 2 ** 30, isCompanion, () => {}, () => {}, () => false, (fn) => fn(), () => {}, () => {}, () => '0', () => '1 KB',
       (seq) => seq !== app.loadSeq,
       // (the reader: what it is handed, after the awaits a real one makes)
       async (buf, name, seq, extras = []) => { await tick(); read.push([name, extras.map((x) => x.name)]); },
