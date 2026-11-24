@@ -901,7 +901,7 @@
   }
   /* (Section's and Explode's bars alike: the off button, the slider and its readout first, in the
      markup -- R138-2, R139-4 -- their off buttons one width: R139-9) */
-  #secoff, #xpoff { min-width:84px; }
+  #secoff, #xpoff { min-width:88px; } /* (over either's own width on touch too: 84 vs 85 px -- R141-12) */
   /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
      R115-2) */
   @media (max-width: 359px) { #secpos { flex-basis:72px; min-width:72px; } }
@@ -1168,7 +1168,7 @@
     <!-- (Walk shown while on, as Section, Explode and Measure are: 4 s after it began nothing did -- R140-2) -->
     <div class="opt" id="walkopt" hidden><div class="opt-row">
       <button id="walkoff" aria-pressed="true" title="Stop walking (Esc)">Walk <span aria-hidden="true">×</span></button>
-      <span class="secval" id="walknote">W A S D move, Q E down and up, drag to look</span>
+      <span class="secval" id="walknote">W A S D move, Q E down and up, drag to look (Shift: faster)</span>
     </div></div>
     <div class="opt" id="measopt" hidden><div class="opt-row">
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>

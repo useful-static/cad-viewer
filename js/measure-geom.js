@@ -131,11 +131,17 @@ export function circleOf(pts, angularDeflection) {
   // (not asked of a loop the stored positions cannot tell: rounded, its points move along it, and it
   // is counted untold below, not lost)
   const most = ((2 * Math.PI) / circleMinPoints(angularDeflection)) * 1.01;
-  for (let i = 0; i < m && !untoldAt(far, r); i++) {
+  // (and once round its centre: a sliver face's loop out along a short arc of a 108.7 mm circle and back
+  // wound 0 turns, every point on it, and Save drawing drew the whole circle round a 123 mm board -- R141-1)
+  let wind = 0;
+  for (let i = 0; i < m; i++) {
     const [x0, y0] = xy[i], [x1, y1] = xy[(i + 1) % m];
     const ax = x0 - cx, ay = y0 - cy, bx = x1 - cx, by = y1 - cy;
-    if (Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by)) > most) return null;
+    const t = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+    if (Math.abs(t) > most && !untoldAt(far, r)) return null;
+    wind += t;
   }
+  if (Math.abs(wind) < Math.PI) return null;
   const centre = [0, 1, 2].map((k) => c[k] + ux[k] * cx + uy[k] * cy);
   // (inside the test, but as stored it cannot be told from a shape that is not a circle: untold)
   return untoldAt(far, r) || dev > RADIUS_TOL * r ? { centre, normal: nz, radius: r, dev, untold: true } : { centre, normal: nz, radius: r, dev };

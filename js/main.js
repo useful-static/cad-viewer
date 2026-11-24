@@ -227,6 +227,8 @@ const IDLE_MSG = `open or drop ${opensShort()}`;
 // (MB of 2^20, as the limits and their words count: "546.4 MB" while loading, then refused as "521 MB
 // of text" -- r72 Q8; a tenth kept, for a progress line that moves)
 const mb = mbTenth; // (rounded up to a tenth, as the limits' words say a size: r73 Q4)
+// a saved file's size: KB under 1 MB ("0.0 MB" for 31 KB -- R141-4)
+const sizeText = (n) => (n < 2 ** 20 ? `${Math.max(1, Math.ceil(n / 1024)).toLocaleString('en')} KB` : `${mb(n)} MB`);
 // (and what has come of a download rounded down: rounded up, it read "12.1 of 12.1 MB" still downloading -- r74 A10)
 const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
 
@@ -247,11 +249,8 @@ function failApart(msg, own = false) {
 // an embed's poster up: its picture stands in for the model until View in 3D
 const posterUp = () => !!app.embed && !!$('poster') && !$('poster').hidden;
 
-// The GPU recovery's start: the page 'recovering' -- but a load under way keeps its state, its card
-// and its question, and the loss is told (written over it, a load's "convert it?" question was
-// hidden and the load hung: r49 Q1)
-// (an error up kept too, as failApart keeps it: a failed ?src's 404 went recovering, then idle, and
-// the card lost it -- r50 A3, Q4)
+// The GPU recovery's start: the page 'recovering', but a load under way or an error up keeps its
+// state, card and question, the loss told (r49 Q1, r50 A3, Q4)
 function recoveryStarts(why) {
   const text = `GPU context lost (${why}); recovering`;
   if (PROGRESS_STATES.has(app.status) || app.status === 'error') tell(text, 6000);
@@ -1419,9 +1418,11 @@ async function exportMesh(fmt) {
   const pl = sectionPlane(), sb = pl && drawnBox(ids);
   const cuts = !!pl && !!sb && [0, 1, 2].reduce((m, k) => m + Math.max(pl[k] * sb.min[k], pl[k] * sb.max[k]), 0) > pl[3] + 1e-9 * (1 + Math.abs(pl[3]));
   const viewOnly = [cuts ? 'uncut' : '', app.explode.on && app.explode.for === app.header && app.explode.t > 0 ? 'unexploded' : ''].filter(Boolean);
-  const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: the section and Explode change the view, not the file)` : '';
+  // (only what is on named: a section alone read "the section and Explode" -- R141-9)
+  const what = viewOnly.length === 2 ? 'the section and Explode change' : cuts ? 'the section changes' : 'Explode changes';
+  const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: ${what} the view, not the file)` : '';
   app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name, whole }; // (for tests)
-  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${(bytes.length / 1048576).toFixed(1)} MB${whole}`, whole ? 6000 : 3000);
+  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${bytes.length < 1048576 ? `${Math.max(1, Math.ceil(bytes.length / 1024))} KB` : `${(bytes.length / 1048576).toFixed(1)} MB`}${whole}`, whole ? 6000 : 3000);
 }
 
 // A note given a frame to draw before work that freezes the view (100 ms at most: a hidden tab)
@@ -2205,7 +2206,7 @@ function startTour(tour, url, only = null, at = 0) {
     updateButtons();
   }
   // Walk off while it plays; leaving puts it back
-  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
+  if (app.walk) walkMark(false);
   // nothing selected while it plays (a selection greys the rest); leaving puts it back
   if (app.selected.size) select([], false);
   app.hover = 0;
@@ -2272,7 +2273,7 @@ function endTour(restore = true) {
     if (base.holesFor && app.measure) showHoles(base.holesFor);
     // Walk as the visitor had it: back on, or off if they turned it on in the
     // tour (its eye was placed for a step, not for the view put back)
-    if (!!app.walk !== base.walk) { app.walk = base.walk; $('walk').setAttribute('aria-pressed', String(base.walk)); }
+    if (!!app.walk !== base.walk) walkMark(base.walk);
     updateButtons();
     viewChanged();
   }
@@ -2478,7 +2479,7 @@ async function tourPictures(tour) {
   }
   if (!files.length) return 0;
   const { zip } = await import('./export-mesh.js');
-  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${slugOf(tour.title)}-pictures.zip`);
+  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${slugOf(tour.title || saveBase(app.sourceName || ''))}-pictures.zip`); // (R141-6)
   return files.length;
 }
 
@@ -2529,7 +2530,7 @@ async function tourVideo(tour) {
   if (app.tour === t) endTour(); // (its own only, as tourPictures: r118 L2)
   const blob = new Blob(chunks, { type: 'video/webm' });
   if (!blob.size) return 'the recording came out empty';
-  downloadBlob(blob, `${slugOf(tour.title)}.webm`);
+  downloadBlob(blob, `${slugOf(tour.title || saveBase(app.sourceName || ''))}.webm`);
   return blob.size;
 }
 
@@ -2756,11 +2757,15 @@ function walkKey(k, shift) {
   viewChanged();
   return true;
 }
-function setWalk(on) {
+// Walk's flag, button and bar together, however it ends (a new model left the bar up: R141-2)
+function walkMark(on) {
   app.walk = on;
   $('walk').setAttribute('aria-pressed', String(on));
   const wo = $('walkopt');
   if (wo) { wo.hidden = !on; syncOptbar(); }
+}
+function setWalk(on) {
+  walkMark(on);
   let turned = false;
   if (on) {
     // stand where the eye is: a near orbit distance, so a look-around turns in place
@@ -2800,7 +2805,8 @@ function setWalk(on) {
     viewChanged();
   }
   const off = turned ? 'walk off: turned to the model' : 'walk off'; // (the cut said: R126-3)
-  tell(on ? 'Walk: W A S D move, Q E down and up, drag to look (Shift: faster)' : off, 3000, on ? 'walk on' : off);
+  // (the keys in Walk's bar alone, not a second time in the note: R141-8)
+  tell(on ? 'walk on' : off, 3000, on ? 'walk on: W A S D move, Q E down and up, drag to look, Shift faster' : off);
 }
 
 // one animation frame of the turntable; runs only while it is on
@@ -3526,11 +3532,8 @@ function listEntry(src) {
   return (url && (app.listEntries || []).find((x) => x.url === url)) || null;
 }
 
-// What the list says of the model on screen: its step, page, author,
-// license, labels, style; the info panel, File and the tree show them. Run
-// on a load and when a list arrives after its model opened.
-// Whether a view link's view is over the model shown, applied or still to come (r58 A3); keyed by
-// the model's URL, as the entry's other keys are (r59 A6, Q4).
+// What the list says of the model on screen (step, page, author, license, labels, style), for the
+// info panel, File and the tree; on a load and on a late list. A view link's view keyed by URL (r58 A3, r59 A6).
 const linkViewOver = () => (!!app.header && app.viewLinkedFor === autoTourKey()) || pendingViewIsFor();
 function applyListEntry() {
   const e = app.header ? listEntry(app.sourceUrl) : null;
@@ -4325,7 +4328,7 @@ function clearModel() {
   app.section.axis = 'off';
   app.section.of = null; // (a tour step's box with it: r134 M2)
   explodeOffForModel();
-  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
+  if (app.walk) walkMark(false);
   if (app.paintFaces) setPaint(false);
   app.hidden.clear();
   app.visUndo = [];
@@ -4447,7 +4450,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   // Add model the visitor's cut could not reach past the first model -- r134 M2)
   app.section.axis = 'off';
   app.section.of = null;
-  if (app.walk) { app.walk = false; $('walk').setAttribute('aria-pressed', 'false'); }
+  if (app.walk) walkMark(false);
   app.sourceName = name;
   // the URL it came from, for a view link (null: a local file, which a link cannot carry)
   app.sourceUrl = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
@@ -4797,7 +4800,8 @@ const pendingVolume = (info, inScene) => (info?.error
 const silhouetteCapHere = () => (coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP);
 
 // a move field as wide as a long value (metres' "0.00314" was cut to "0.0031" at 390: R140-3)
-const fitField = (inp) => { inp.style.width = inp.value.length > 6 ? `${inp.value.length + 2}ch` : ''; };
+// (one width, four decimals, the exact value in its title: a widened field sent Z to its own line -- R141-3)
+const fitField = (inp, exact, uw) => { inp.title = `${inp.title.split(' — ')[0]} — ${+exact.toPrecision(12)} ${uw}`; };
 // The info panel's models: each by name, the added ones with their offset
 function syncScene() {
   const many = !!app.scene && app.scene.length > 1 && !!app.header;
@@ -4805,7 +4809,7 @@ function syncScene() {
   if (!many) return;
   const list = $('scenelist');
   // (in the page's unit, not always mm: R137-3)
-  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm', dp = f >= 1000 ? 5 : 4; // (m to 0.01 mm, as much as the field shows: R138-10, R139-3)
+  const f = geomMm() ? MM_PER[curUnit()] : 1, uw = geomMm() ? curUnit() : 'mm', dp = 4; // (R138-10, R139-3, R141-3: the exact value in the title)
   // rebuilt only when the models or the unit change (a typed offset keeps its focus)
   const key = `${app.scene.map((m) => m.name).join('\n')}\n${uw}`;
   if (list.dataset.key === key) {
@@ -4813,7 +4817,7 @@ function syncScene() {
       // (a typed value kept as typed while it says the same: 12.34567 came back 12.346 -- R137-8)
       const v = m.offset[k] / f;
       if (document.activeElement !== inp && Math.abs(Number(inp.value) - v) > 1e-9 * Math.max(1, Math.abs(v))) inp.value = String(+v.toFixed(dp));
-      fitField(inp);
+      fitField(inp, v, uw);
     }));
     return;
   }
@@ -4859,10 +4863,9 @@ function syncScene() {
         inp.type = 'number';
         inp.step = 'any';
         inp.value = String(+(m.offset[k] / f).toFixed(dp));
-        fitField(inp);
-        inp.addEventListener('input', () => fitField(inp));
         inp.setAttribute('aria-label', `${m.name}: move along ${ax} (${uw})`);
         inp.title = `Move ${m.name} along ${ax}, in ${uw} from where its file puts it`;
+        fitField(inp, m.offset[k] / f, uw);
         inp.addEventListener('change', () => {
           const v = Number(inp.value);
           if (!Number.isFinite(v)) return;
@@ -4893,16 +4896,14 @@ async function moveModel(i, k, v) {
     // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
     if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
     const f = geomMm() ? MM_PER[curUnit()] : 1;
-    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toFixed(f >= 1000 ? 5 : 4)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toPrecision(12)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
 }
 
-// Clearance in js/clearance-worker.js, on copies of the model's arrays: two triangle trees over
-// millions of triangles held the tab for seconds (9.6 M triangles, 10.8 s). A run started while
-// one is going stops it (STOPPED). A run that failed in the worker run again on the page froze
-// the tab and, when it threw, left the readout at "checking …" for good. Always settles.
+// Clearance in js/clearance-worker.js on copies of the arrays (on the page it held the tab 10.8 s);
+// a new run stops a going one (STOPPED); never retried on the page; always settles.
 const STOPPED = Symbol('stopped');
 
 // One run of a module worker (the facts' js/edges-worker.js, Clearance's js/clearance-worker.js):
@@ -5865,12 +5866,8 @@ const crashText = (msg) => (/^(import failed|converter unavailable)/.test(msg ||
   : `the conversion stopped: the converter crashed or this device ran out of memory (${msg}). `
     + 'A smaller export, or a computer with more memory, may work');
 
-// On the multi-core converter where this device can take it
-// (js/converter-choice.js); if that fails, or leaves faces unmeshed, once more
-// on the single-threaded one, which needs less memory.
-// (a multi-core build that could not be loaded, remembered for the session:
-// a site that ships only the single-threaded one failed every file on it
-// first, review r23)
+// The multi-core converter where the device can take it (js/converter-choice.js), else, or on a
+// failure, the single-threaded one; a multi-core build that failed to load remembered (r23)
 let threadsUnavailable = false;
 async function convert(buf, format, seq, name) {
   if (!useThreads(browserEnv()) || threadsUnavailable) return tessellate(buf, format, seq, name, false);
@@ -7036,7 +7033,9 @@ function fillInfo(el) {
   const dims = b ? [0, 1, 2].map((k) => lenNum(b.max[k] - b.min[k], 'size')).join(' × ') : '-';
   let title = app.scene?.length > 1 ? 'whole scene' : 'whole model'; // (as the parts list names it: R137-11)
   // a tree row chosen on its own: its full name (the row truncates it)
-  if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} bodies` : app.selName;
+  // (a part's copies called so, as "all N" calls them: R141-11)
+  const copies = ids.length > 1 && sameParts(ids[0]).length === ids.length && sameParts(ids[0]).every((id) => ids.includes(id));
+  if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} ${copies ? 'copies' : 'bodies'}` : app.selName;
   else if (ids.length === 1) title = meshLabel(ids[0]);
   else if (ids.length > 1) title = `${ids.length} bodies`;
   const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
@@ -7106,10 +7105,8 @@ function fillInfo(el) {
     const u = lenUnit();
     const counts = [`${fmtInt(closed)} closed${capped ? ` (${fmtInt(capped)} capped)` : ''}`, sheets && `${fmtInt(sheets)} ${sheets === 1 ? 'sheet' : 'sheets'}`,
       open && `${fmtInt(open)} open`, empty && `${fmtInt(empty)} empty`].filter(Boolean).map((c) => c.replace(/ /g,' ')).join(' / '); // (each one piece, a break after " / ": R34-3, R35-5)
-    // (a body whose volume may not be its material's -- its shells touch or cross, or too large to
-    // check -- said, as what it is: each flag's count and words, js/edges.js flagsSaid, as stp2mesh)
-    // (in a unit not converted, in that unit, as the lengths are: r86 A4)
-    // (its number in the header's unit, so named: lenUnit may be Auto's mm for one in m -- r89 Q1)
+    // (a volume that may not be the material's said by its flags, edges.js flagsSaid; in the header's
+    // unit when not converted -- r86 A4, r89 Q1)
     const hu = geomMm() ? u : headerUnitWord(app.header.units);
     const volWords = geomMm() ? fmtVolume(vol, u) : fmtUnconverted(vol, hu, 3), areaWords = geomMm() ? fmtArea(area, u) : fmtUnconverted(area, hu, 2);
     // (none closed: no number, as mass -- R31-1)
@@ -7819,7 +7816,7 @@ function wireInput() {
   });
   const hintNow = () => (framed ? ''
     : !app.header && !app.dxf ? (app.embed ? 'There is no model to print.' : 'Open a model to print it.')
-      : app.embed ? `To print the ${app.dxf ? 'drawing' : 'model'}, press ${IS_MAC ? '⌘P' : 'Ctrl+P'}.` // (R119-4)
+      : app.embed ? `To print the ${app.dxf ? 'drawing' : 'model'}, ${coarseOnly() ? "use the browser's Print" : `press ${IS_MAC ? '⌘P' : 'Ctrl+P'}`}.` // (R119-4; no keys on a phone: R141-10)
         : `To print the ${app.dxf ? 'drawing' : 'model'}, use Print… in the File menu.`);
   addEventListener('beforeprint', () => { if (!$('printimg').getAttribute('src')) $('printname').textContent = hintNow(); });
   addEventListener('afterprint', () => {
@@ -7974,7 +7971,7 @@ function wireInput() {
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
-    tell(`saved ${saveBase(name)}.cadmesh, ${mb(bytes.byteLength ?? bytes.length)} MB`, 3000); // ("NaN MB" from an ArrayBuffer: R134-4) // (said, as Save picture and STL: R133-10)
+    tell(`saved ${saveBase(name)}.cadmesh, ${sizeText(bytes.byteLength ?? bytes.length)}`, 3000); // (R133-10, R134-4)
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);
@@ -8440,11 +8437,8 @@ async function startFromAddress(early) {
   // once it has answered: r57 Q5, r58 Q3)
   if (place && posterAsked(params) && untouched()) { listed = readLists(lists, () => false); src = null; }
   else if (place) {
-    // the model is on its way: its card says so, not "No model to show" for
-    // the list's round trip (seconds, on a slow link). No Cancel: the list is
-    // read whatever is pressed; a file the visitor opens meanwhile is theirs,
-    // and the list's model does not open over it (untouched). With the
-    // visitor's file already opening, its line and card are left to it.
+    // the model on its way said on its card for the list's round trip; a file the visitor opens
+    // meanwhile is theirs, the list's model not opened over it (untouched)
     const reading = untouched();
     if (reading) {
       setStatus('idle', 'reading the model list…');
@@ -8539,10 +8533,8 @@ async function startFromAddress(early) {
       await openStart(app.listEntries[0].url);
     }
     if (!poster) lackingNote(place, firstOpened ? app.listEntries[0].url : tourOwn ? r.tour.model : null);
-    // (the address's tour failing after the visitor left that address -- a list pick during its read:
-    // told, not written into the picked model's ready line. Which way it went was the order of two
-    // answers: the tour's 404 before the pick's model showed, told; after, the new model's line said
-    // "the tour not found" -- r66, the differential's residual since r60)
+    // (the address's tour failing after the visitor left that address: told, not written into the
+    // picked model's ready line -- r60, r66)
     if (r.error) {
       if (params.get('tour') && !new URLSearchParams(location.search).has('tour')) tell(`the tour ${r.error}`, 6000);
       else failApart(`the tour ${r.error}`, true);

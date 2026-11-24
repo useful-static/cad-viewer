@@ -1374,7 +1374,7 @@ await test('tourSlug: one rule for the recorder and the page\'s downloads (r76 A
   const fs = await import('node:fs');
   const main = fs.readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   assert.match(main, /const slugOf = tourSlug;/);
-  assert.match(fs.readFileSync(new URL('../js/tour-recorder.js', import.meta.url), 'utf8'), /tourSlug\(draft\.title\)/);
+  assert.match(fs.readFileSync(new URL('../js/tour-recorder.js', import.meta.url), 'utf8'), /tourSlug\(draft\.title \|\|/); // (untitled: its model's name -- R141-6)
 });
 await test('a ranged read that fails where a plain one opens the file is asked again plainly, not called a CORS failure (r73 Q2: a host sending its stored Content-Encoding)', async () => {
   // (the browser's ranged request asks for identity; such a host sends gzip anyway, and the fetch

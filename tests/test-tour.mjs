@@ -822,14 +822,14 @@ test('tour.js: a step "style" not in STYLE_IDS ("hidden-line") is refused naming
   assert.throws(() => parseTour(tour2({ style: 'hidden-line' })), /step 1 "style": must be one of shaded, edges, hidden, hiddengrey, wire, xray/);
   assert.equal(parseTour(tour2({ style: 'wire' })).steps[0].style, 'wire');
 });
-await test('tour-recorder.js: Save after one step calls api.save once with the tour as "tour.cadtour.json" and says so (r114 M3 tour-recorder-R26)', async () => {
+await test('tour-recorder.js: Save after one step calls api.save once with the untitled tour named after its model, "board.cadtour.json", and says so (r114 M3 tour-recorder-R26, R141-6)', async () => {
   const saved = [], notes = [];
   await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), save: (text, name) => saved.push([name, JSON.parse(text).steps.length]) }, async ({ $ }) => {
     $('teadd').onclick();
     $('tesave').onclick();
   });
-  assert.deepEqual(saved, [['tour.cadtour.json', 1]]);
-  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved tour.cadtour.json']);
+  assert.deepEqual(saved, [['board.cadtour.json', 1]]);
+  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json']);
 });
 await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved the video, 3.0 MB", Pictures resolving 4 "saved 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30)', async () => {
   for (const [bytes, pics, want] of [[3145728, 4, ['saved the video, 3.0 MB', 'saved 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {

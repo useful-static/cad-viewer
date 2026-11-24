@@ -36,6 +36,15 @@ test('a D -- a circle cut by a flat, its points all on the circle -- is no circl
   const n = circleMinPoints(0.5), ring = Array.from({ length: n }, (_, i) => [r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n), 0]);
   assert.ok(circleOf(ring, 0.5), 'the coarsest circle refused');
 });
+test('a loop out along a short arc and back, every point on one circle, winds 0 turns: no circle (R141-1)', () => {
+  // (a sliver face's loop on a 108.7 mm circle, as the RK3399 board's: its 217 mm circle in the drawing)
+  const r = 108.7, there = [], back = [];
+  // (0.01 mm wide, 0.5 rad long: taken before for a 108.7 mm circle)
+  for (let i = 0; i <= 40; i++) { const t = 1 + (0.5 * i) / 40; there.push([r * Math.cos(t), r * Math.sin(t), 0]); back.push([(r + 0.01) * Math.cos(t), (r + 0.01) * Math.sin(t), 0]); }
+  assert.equal(circleOf([...there, ...back.reverse().slice(1, -1)], 0.5), null, 'an out-and-back arc taken for a circle');
+  const n = 48, ring = Array.from({ length: n }, (_, i) => [r * Math.cos((2 * Math.PI * i) / n), r * Math.sin((2 * Math.PI * i) / n), 0]);
+  assert.ok(circleOf(ring, 0.5) && circleOf([...ring].reverse(), 0.5), 'a whole circle, either way round, refused');
+});
 test('a face of 140,000 loops: its outer loop found by a walk, not one argument a loop (r108 M4)', () => {
   const tris = [];
   for (let i = 0; i < 140000; i++) { const x = (i % 1000) * 2, y = Math.floor(i / 1000) * 2; tris.push([[x, y, 0], [x + 1, y, 0], [x, y + 1, 0]]); }

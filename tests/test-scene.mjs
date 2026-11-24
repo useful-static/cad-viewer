@@ -1478,7 +1478,7 @@ await test('Measure\'s copy: said when copied, and when the clipboard refuses or
 // a cell whose shown and heard are empty while it says something is the fault this table guards.
 const W = 'could not move B: x', N = 'no volume for this model: v', E = 'not loaded: z.step: no surfaces';
 const O = 'big.stl is over 2 GB, more than this viewer opens', G = 'GPU error: device lost', REC = 'recovered on webgl2';
-const GOING = 'exporting 1 body as STL…', SAVED = 'saved m.stl: 1 body, 0.0 MB';
+const GOING = 'exporting 1 body as STL…', SAVED = 'saved m.stl: 1 body, 1 KB'; // (KB under a megabyte: R141-4)
 const CH = 'recovered on webgl2, but it cannot hold this model: too big', LACK = 'recovered on webgl2, but it cannot hold this model: earlier';
 // (r48: three rows with nothing shown -- a first load, its failure, a recovery -- ran no cell of
 // Cancel's idle branch or the error card: r48 A3)
