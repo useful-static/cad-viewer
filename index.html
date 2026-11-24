@@ -400,6 +400,8 @@
     overflow:auto; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel);
     box-shadow:0 8px 24px rgba(0,0,0,.45); font-size:12px; color:var(--fg); }
   #touredit[hidden] { display:none; }
+  /* (the view's note ends before the maker's panel: R130-3; below 520 px it goes above the sheet) */
+  #stage:has(#touredit:not([hidden])) #hover { max-width:calc(100% - min(330px, 100% - 16px) - 36px); }
   /* (a maker too wide to sit beside the card ends above it while its draft plays, by the card's own
      height: it covered the card -- R68-1, R69-1, R69-2) */
   #stage.touring.tournarrow #touredit { max-height:calc(100% - 28px - var(--tourcard-h, 62px) - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
@@ -412,8 +414,9 @@
     #stage.touring #touredit > :not(.tehead, .terow:has(#teplay)) { display:none; }
     /* (its head and × kept in sight as the sheet scrolls: R129-7; the view's note above the sheet, and
        none under its head while a draft plays: R129-1) */
+    #touredit { scroll-padding-top:52px; } /* (a focused field scrolled out from under the sticky head: R130-1) */
     #touredit .tehead { position:sticky; top:-10px; z-index:1; background:var(--panel); margin:-10px -12px 4px; padding:10px 12px 0; }
-    #stage:has(#touredit:not([hidden])) #hover { bottom:calc(min(50%, 100% - 16px - var(--optbar-h, 0px)) + 16px + var(--optbar-h, 0px)); }
+    #stage:has(#touredit:not([hidden])) #hover { max-width:calc(100% - 96px); bottom:calc(min(50%, 100% - 16px - var(--optbar-h, 0px)) + 16px + var(--optbar-h, 0px)); }
     #stage.touring:has(#touredit:not([hidden])) #hover { visibility:hidden; }
   }
   #touredit .tehead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }

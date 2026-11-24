@@ -726,7 +726,7 @@ function setExplodeNow(on, focus) {
     viewChanged();
   }
   if (fitted) fitTo(drawnBox(null));
-  announce(on ? `exploded ${Math.round(x.t * 100)} %` : 'explode off');
+  if (!app.quietExplode) announce(on ? `exploded ${Math.round(x.t * 100)} %` : 'explode off');
   // (off: the focus goes to the button, or to the menu it is folded into)
   if (focus) (on ? $('xpoff') : toolFocus('explode')).focus();
 }
@@ -1763,12 +1763,8 @@ async function shareView() {
   app.lastViewLink = link;
   // (a link carries the first MAX_NOTES notes: said, not left for the visitor to find)
   const nNotes = app.measure ? app.measure.notes().length : 0;
-  // (copied only when the clipboard took it: a refusal, or a prompt the visitor cancelled, read
-  // "View link copied" -- r47 A5; with the box shown it says the link itself, and a note after it
-  // came once the box had closed -- what the box does not say is told: r48 Q11)
-  // (the added models opened from this device, which viewLink leaves out: said too -- a scene of a
-  // URL's case and a board added from the device copied a link to the case alone, "View link
-  // copied" told: r51 A6)
+  // ("copied" only when the clipboard took it, r47 A5; the box says what it holds, r48 Q11; models
+  // added from this device, which the link leaves out, said too: r51 A6)
   const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
     : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
   const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf);
@@ -2011,7 +2007,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   const x = app.explode;
   const ex0 = x.on && x.for === app.header ? x.t : 0;
   const ex1 = app.renderer ? explodeTo : 0;
-  if (ex1 > 0 && !x.on) { x.t = 0; setExplode(true); }
+  if (ex1 > 0 && !x.on) { x.t = 0; app.quietExplode = true; setExplode(true); app.quietExplode = false; } // (not "exploded 0 %" as it opens to 50: R130-4)
   const explodeAt = (e) => {
     if (!x.on || ex0 === ex1) return;
     x.t = ex0 + (ex1 - ex0) * e;
@@ -2132,6 +2128,9 @@ function showTourStep(i) {
   const n = t.tour.steps.length;
   t.i = Math.max(0, Math.min(n - 1, i));
   const s = t.tour.steps[t.i];
+  // (a step's "not in this model" ends with it: it stayed over the next -- R130-7)
+  const was = $('hover').textContent;
+  if (was.startsWith('not in this model')) tell(was, 1, '');
   $('tourtitle').textContent = stepTitle(t.tour, t.i);
   $('tourtitle').hidden = !$('tourtitle').textContent;
   const cb = $('tourbody'), had = document.activeElement === cb, ring = had && cb.matches(':focus-visible');
@@ -2154,7 +2153,7 @@ function showTourStep(i) {
   // there from the explode they are at now
   const x = app.explode;
   const ex1 = app.renderer ? s.explode ?? 0 : 0;
-  if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; setExplode(true); }
+  if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; app.quietExplode = true; setExplode(true); app.quietExplode = false; } // (R130-4)
   // the way the step explodes, as it was recorded (as a view link sets it)
   if (ex1 > 0 && x.on && s.explodeAlong && x.mode !== s.explodeAlong) setExplodeMode(s.explodeAlong);
   const exNow = x.t;
@@ -2195,13 +2194,15 @@ function startTour(tour, url, only = null, at = 0) {
   // before the first, not the first tour's step)
   const prev = app.tour;
   endTour(false);
-  // (an exploding tour's card above the Explode bar throughout: R44-3)
+  // (an exploding or cutting tour's card above the Explode and Section bars throughout: R44-3; the
+  // card jumped up to 97 px with a Section step's bar -- R130-2)
   let floor = 0;
-  if (tour.steps.some((s) => s.explode)) {
-    const x = $('xpopt'), o = $('optbar'), was = [x.hidden, o.hidden];
-    o.style.visibility = 'hidden'; o.hidden = false; x.hidden = false;
+  const bars = [...(tour.steps.some((s) => s.explode) ? ['xpopt'] : []), ...(tour.steps.some((s) => s.section && s.section.axis !== 'off') ? ['secopt'] : [])].map($);
+  if (bars.length) {
+    const o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
+    o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = false;
     floor = o.offsetHeight;
-    [x.hidden, o.hidden] = was; o.style.visibility = '';
+    o.hidden = was[0]; bars.forEach((b, i) => { b.hidden = was[i + 1]; }); o.style.visibility = '';
   }
   $('stage').style.setProperty('--tour-floor', `${floor}px`);
   const saved = prev ? prev.saved : currentView();
@@ -2295,6 +2296,8 @@ function endTour(restore = true) {
   // (a preview ended from its card, the maker still open: the focus back to Preview, not File or none
   // -- R120-2)
   if (wasPreview && app.recorder?.isOpen() && !$('touredit').contains(document.activeElement)) $('teplay').focus();
+  // (an embed has no File to take it: the focus fell to the page -- R130-6)
+  else if (app.embed && (document.activeElement === document.body || $('tourcard').contains(document.activeElement))) $('view').focus?.();
   announce('tour closed');
 }
 
@@ -3586,12 +3589,8 @@ function applyListEntry() {
     app.tourIdxFor = null; // (part names resolve by label too: tourParts)
     buildTree();
   }
-  // its hidden parts (a heatsink over the chips), once per model opened and
-  // not over a view link's view; ahead of its tour, which starts from them
-  // (keyed as the auto tour is, by the model's URL: a re-read in another unit is not a new open,
-  // and laid the list's hide over the visitor's own hide / show)
-  // (held back by a link's view, it is decided for this open all the same, as the tour's key is: a
-  // re-read in another unit then laid it over the link's view -- r59 Q4)
+  // its hidden parts (a heatsink), once per open by the model's URL, as the auto tour; not over a
+  // view link's view, but decided for this open all the same (r59 Q4); ahead of its tour
   if (app.header && e && e.hide && app.listHideFor !== autoTourKey()) {
     app.listHideFor = autoTourKey();
     const ids = linkViewOver() ? [] : tourParts(e.hide).ids;
@@ -3801,12 +3800,8 @@ function wireHistory() {
     // alone -- it opens again with them: r59 A3)
     const first = !!(history.state && history.state.cadvFirst);
     const whole = !first || !params.getAll('add').length || (app.scene || []).length > 1;
-    // (the model shown OR OPENING: Back while a pick still downloads goes to the entry's model -- the
-    // pick then showed under the earlier entry's address: r60 Q1)
-    // (onto the model still shown while a pick downloads -- or an entry naming none, the visitor's own
-    // file shown: the pick cancelled, as Cancel does, and what is shown kept -- it was downloaded
-    // again, its state reset: r61 Q6; the pick went on and showed under an address naming no
-    // model: r63 Q4)
+    // (the model shown OR opening, r60 Q1; Back onto the one still shown while a pick downloads, or
+    // an entry naming none, cancels the pick and keeps what is shown: r61 Q6, r63 Q4)
     const cancelPick = () => {
       listPick++;
       app.pickPending = 0;
@@ -5579,7 +5574,7 @@ function setSheet(i) {
     // (a touch has no hover, so the layer a tap selects is named in the view, as a tapped part is:
     // UI design round 11 R11-4)
     // (a press on blank paper with nothing selected says nothing; a layer let go, 3D's words -- R129-3)
-    onSelect: (layer) => { const had = app.dxf.selSaid; app.dxf.selSaid = layer || ''; syncLayerRows(); showInfo(); if (layer || had) announce(layer ? `layer ${layer} selected` : 'selection cleared'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500); },
+    onSelect: (layer) => { const had = app.dxf.selSaid; app.dxf.selSaid = layer || ''; syncLayerRows(); showInfo(); if (layer || had) announce(layer ? `layer ${layer} selected` : 'selection cleared'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500, ''); }, // (shown, said once: R130-5)
     onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
     onMeasure: (r) => { tell(r.text, 4000); app.measure?.sync2D(app.dxf?.view); },
     onPending: () => app.measure?.sync2D(app.dxf?.view),
