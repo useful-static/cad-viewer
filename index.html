@@ -296,7 +296,9 @@
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
-  .opt-row { display:flex; gap:6px; align-items:center; padding:5px 10px; overflow-x:auto; scrollbar-width:thin;
+  /* (wraps at every width: at 150 % zoom the cut's Flip lay past the edge behind a thin scrollbar --
+     R132-5; it wrapped on a phone only, r18) */
+  .opt-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:5px 10px; overflow-x:auto; scrollbar-width:thin;
     scroll-padding-inline-end:40px; }
   .opt-row > * { flex:none; }
   .opt.more-right::after { content:''; position:absolute; top:0; right:0; bottom:var(--sbh, 0px); width:40px;
@@ -641,6 +643,19 @@
   #view2d { outline:none; }
   :is(#view, #view2d, #info, #holesrows tr):focus-visible { outline:2px solid var(--ring); outline-offset:-2px; } /* (the held panel, a scroll box: the app's ring, R48-2; a hole row, R120-4) */
   :is(#stage[data-bg="paper"] #view, body.mode2d #view2d):focus-visible { outline-color:#b35a00; }
+  /* Windows high contrast (forced colours): a toggle that is on, the selected part's row and the
+     view's focus in the system's own pair, which the page's colours were forced out of -- a pressed
+     icon #ffd9b0 on white, 1.33:1 (high R132-1); on and off alike (R132-2); no selected row (R132-4);
+     the view's ring the canvas's own colour, so a frame of Highlight over Canvas is drawn over the
+     view instead (R132-3) */
+  @media (forced-colors: active) {
+    button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; border-color:Highlight; color:HighlightText; }
+    #tree .row.sel { forced-color-adjust:none; background:Highlight; }
+    #tree .row.sel, #tree .row.sel :not(input) { color:HighlightText; }
+    :is(#view, #view2d):focus-visible { outline:none; }
+    #stage:has(> :is(#view, #view2d):focus-visible)::after { content:''; position:absolute; inset:0; z-index:5; pointer-events:none;
+      border:3px solid Highlight; outline:2px solid Canvas; outline-offset:-5px; }
+  }
   /* Cards over the 3D view: the empty state (no model yet; also what a drag
      over the view shows), and load progress. Centred, never wider than the view. */
   #stage .card { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%);

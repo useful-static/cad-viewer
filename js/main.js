@@ -1360,7 +1360,7 @@ function applyView(v, link = false) {
   }
   if (bodies.changed) {
     // (only what the link held: "its parts are not selected" from a link that selected none -- R131-4)
-    const lost = [v.selNames?.length ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : v.selected?.length ? 'its parts are not selected' : '',
+    const lost = [v.selNames?.length ? `${bodies.selected.length} of ${v.selNames.length} selected ${v.selNames.length === 1 ? 'part' : 'parts'} found by name` : v.selected?.length ? 'its parts are not selected' : '',
       v.hidden?.length ? 'hidden parts not applied' : ''].filter(Boolean);
     const note = `this model has changed since the link was made${lost.length ? `: ${lost.join(', ')}` : ''}`;
     tell(note, 6000);
@@ -1767,19 +1767,20 @@ async function shareView() {
   // added from this device, which the link leaves out, said too: r51 A6)
   const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
     : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && ((app.overrides?.size || 0) + (app.faceOverrides?.size || 0) > 0));
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && (app.overrides?.size || 0) > 0, !app.dxf && (app.faceOverrides?.size || 0) > 0);
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
 // ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
 // '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
-function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false) {
+function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false, painted = false) {
   const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
     nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : '',
     !nMeas ? '' : is2d ? `it leaves out the ${meas}` : `it carries notes, not the ${meas} (copy them from the results list)`,
-    coloured ? 'it leaves out the part colours (they stay in this browser)' : ''].filter(Boolean); // (R131-2)
+    coloured ? 'it leaves out the part colours (they stay in this browser)' : '', // (R131-2)
+    painted ? 'it leaves out the painted faces (they last while this model is open)' : ''].filter(Boolean); // (R132-6)
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
@@ -1946,13 +1947,8 @@ function applyStepState(s) {
   viewChanged();
 }
 
-// A step's "from": "outside": the camera where the part is least hidden by
-// the rest of the model (js/tour-sight.js): from the side of the model it
-// lies on, 30° up, when that is clear; higher, from another side, or from
-// underneath (a part on a board's bottom face) when it is not. The model's
-// up axis stays up on screen. Worked out once per step (ids: the step's
-// parts, whose own bodies never hide them; with none, a box frame, the
-// bodies inside the box).
+// A step's "from": "outside": the camera where its parts are least hidden (js/tour-sight.js), the
+// model's up kept up; once per step (ids: its parts; with none, the bodies inside a box frame).
 const sightOf = new WeakMap();
 function outsideQuat(box, ids = null, step = null) {
   const up = orientUp(app.cam.orient);
@@ -4239,7 +4235,8 @@ function resetPartColour() {
   // colours and dimming kept; clearing the shown map dropped the step's emphasis mid-tour)
   if (app.tour) applyStepState(app.tour.tour.steps[app.tour.i]);
   updateButtons();
-  if (n) recolour(`${n} part colour${n > 1 ? 's' : ''} reset`);
+  // (shown too: a link's "leaves out the part colours" stayed over it -- R132-11)
+  if (n) { const w = `${n} part colour${n > 1 ? 's' : ''} reset`; recolour(w); tell(w, 2500, ''); }
 }
 
 // What the picker shows: the first selected body's colour as drawn
@@ -4669,11 +4666,8 @@ async function showScene(models, { newTree = false } = {}) {
   return true;
 }
 
-// A scene's edges and facts: each model without today's built on its own, unmoved, one after
-// another (and kept on it: a move or the next Add model then builds nothing), and the scene's
-// merged from the models' (js/scene.js sceneEdgesFacts). (The whole scene built on its moved
-// float32 copy and split back gave a model moved 100,000 mm a volume 1 % low, and rebuilt every
-// model already current.) A model whose build fails or is stopped leaves the scene without.
+// A scene's edges and facts: each model built on its own, unmoved, and kept; the scene's merged
+// from them (js/scene.js sceneEdgesFacts); a model whose build fails leaves the scene without.
 async function sceneEdges(merged, models) {
   const stale = staleModels(models);
   const cap = silhouetteCapHere();
