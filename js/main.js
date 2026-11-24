@@ -739,9 +739,12 @@ function syncExplodeRow() {
   $('xpopt').hidden = !x.on;
   $('explode').setAttribute('aria-pressed', String(x.on));
   $('explode').hidden = !app.renderer;
-  $('explode').disabled = !app.header;
+  $('explode').disabled = !app.header || app.header.meshes.length < 2;
   for (const b of $('xpmode').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === x.mode));
-  $('xpmode').querySelector('[data-mode="assembly"]').textContent = x.flat ? 'Radial (flat file)' : 'Assembly';
+  const asm = $('xpmode').querySelector('[data-mode="assembly"]');
+  asm.textContent = x.flat ? 'Radial (flat file)' : 'Assembly';
+  // (its tooltip with its label: a flat file has no subassemblies -- R136-10)
+  asm.title = x.flat ? 'Each part straight out from the middle: this file has no subassemblies' : 'Each subassembly away from the rest, then its parts within it';
   $('xppos').value = String(Math.round(x.t * 100));
   $('xpval').textContent = `${Math.round(x.t * 100)} %`;
   $('xppos').setAttribute('aria-valuetext', `${Math.round(x.t * 100)} %`);
@@ -1218,11 +1221,8 @@ function flashHover(text, ms = 1500) {
   clearTimeout(viewNameTimer);
   viewNameTimer = setTimeout(() => { noteHeldUntil = 0; if (hov.textContent === text) hov.textContent = lastLabel; }, ms);
 }
-// the hover line's label (a part's name, a layer, a snap), unless a note holds it -- kept for the
-// note's end; `asked`: a tap that asks for the name, shown through a hold (it was swallowed under
-// the touch hint that says "tap names a part": r47 Q5)
-// (a tap on the background asks for nothing: it no longer erases a held note -- r48 A8; a tap
-// while the touch hint shows has followed it: the hint counted as seen -- r48 Q9)
+// the hover line's label unless a note holds it (kept for the note's end); `asked`: a tap asking for
+// the name, shown through a hold (r47 Q5, r48 A8, Q9)
 function hoverLabel(text, asked = false) {
   lastLabel = text;
   if (asked && text && $('hover').textContent === TOUCH_HINT) setPref('cadv.touchHint', '1');
@@ -1643,8 +1643,11 @@ function setPaint(on) {
   updateButtons();
 }
 function paintFace(f) {
-  rememberColours(); // (a wrong face undone by Ctrl+Z, not only by Reset all: R135-3)
-  app.faceOverrides.set(f, hexToRgb($('partcolour').value));
+  const c = hexToRgb($('partcolour').value), old = app.faceOverrides.get(f);
+  // (no Undo step for a face already that colour: R136-6)
+  if (old && old.every((v, i) => Math.abs(v - c[i]) < 1e-6)) { tell('that face is that colour already', 2000); return; }
+  rememberColours('paint'); // (a wrong face undone by Ctrl+Z, not only by Reset all: R135-3)
+  app.faceOverrides.set(f, c);
   updateButtons();
   recolour(`face painted`);
   if (app.selected.size) tell('face painted: it shows once deselected', 3000, ''); // (R134-5)
@@ -1761,13 +1764,13 @@ async function shareView() {
   // added from this device, which the link leaves out, said too: r51 A6)
   const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
     : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && (app.overrides?.size || 0) > 0, !app.dxf && (app.faceOverrides?.size || 0) > 0);
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && (app.overrides?.size || 0) > 0, !app.dxf && (app.faceOverrides?.size || 0) > 0, !app.dxf && !!app.ref && app.section.axis !== 'off');
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
 // ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
 // '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
-function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false, painted = false) {
+function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false, painted = false, refd = false) {
   const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
@@ -1776,7 +1779,9 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
     // (R131-2, R132-6; both in one clause, not two "it leaves out" in a 3 s note: R133-9)
     coloured && painted ? 'it leaves out the part colours and painted faces'
       : coloured ? 'it leaves out the part colours (they stay in this browser)'
-        : painted ? 'it leaves out the painted faces (they last while this model is open)' : ''].filter(Boolean);
+        : painted ? 'it leaves out the painted faces (they last while this model is open)' : '',
+    // (the cut's number read from the selection's corner opened from the model's, unsaid: R136-1)
+    refd ? "its cut's position reads from the whole model's corner, not the selection's" : ''].filter(Boolean);
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
@@ -1892,12 +1897,8 @@ function stepPose(s, proj) {
 // The grey a step's dim: "grey" draws the parts it is not about in
 const TOUR_GREY = [0.62, 0.64, 0.67];
 
-// A step's emphasis: its part colours, the rest dimmed
-// (ghost: hidden and drawn faintly; grey; hide), show / hide / isolate, style,
-// section and callouts. Each step is applied to the state the visitor had
-// before the tour, never stacked on the step before, so stepping back is
-// exact. The colours are the tour's only: they are never saved as the
-// visitor's part colours. Explode is moved by the flight (flyTo).
+// A step's emphasis (colours, the rest dimmed, visibility, style, section, callouts), applied to the
+// visitor's own pre-tour state, never stacked; its colours never saved; Explode moved by flyTo.
 function applyStepState(s) {
   const base = app.tour.base;
   const n = app.header.meshes.length;
@@ -2906,14 +2907,18 @@ function stateHeight(n) {
 // the hidden set first, and Undo (Ctrl/Cmd+Z) steps back through them. A new
 // model starts a new history.
 app.visUndo = [];
-function rememberVisibility() {
-  app.visUndo.push(new Set(app.hidden));
+// (each step named, so Undo says what it took back: "undone: everything shown" after a Hide read as
+// the opposite step -- R136-5)
+function rememberVisibility(what = 'the last change') {
+  const s = new Set(app.hidden);
+  s.what = what;
+  app.visUndo.push(s);
   if (app.visUndo.length > 100) app.visUndo.shift();
 }
 // (a part colour, a painted face and Reset in the same history: Reset all wiped every colour with no
 // way back, and Ctrl+Z after a colour undid an older Hide -- R135-3)
-function rememberColours() {
-  app.visUndo.push({ ov: new Map(ownOverrides()), fo: new Map(ownFaces()) });
+function rememberColours(what = 'colours') {
+  app.visUndo.push({ ov: new Map(ownOverrides()), fo: new Map(ownFaces()), what });
   if (app.visUndo.length > 100) app.visUndo.shift();
 }
 function undoVisibility() {
@@ -2926,8 +2931,8 @@ function undoVisibility() {
     saveOverrides();
     if (app.tour) applyStepState(app.tour.tour.steps[app.tour.i]);
     updateButtons();
-    recolour('undone: colours');
-    tell('undone: colours', 2500, '');
+    recolour(`undone: ${e.what}`);
+    tell(`undone: ${e.what}`, 2500, '');
     return;
   }
   app.hidden = e;
@@ -2935,7 +2940,7 @@ function undoVisibility() {
   pushState();
   showInfo();
   viewChanged();
-  announce(`undone: ${app.hidden.size ? `${app.hidden.size} hidden` : 'everything shown'}`);
+  tell(`undone: ${e.what} (${app.hidden.size ? `${app.hidden.size} hidden` : 'everything shown'})`, 2500);
 }
 
 // ---------- toolbar menus ----------
@@ -4096,7 +4101,7 @@ function updateButtons() {
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
-  $('explode').disabled = !has;
+  $('explode').disabled = !has || app.header.meshes.length < 2; // (one body: nothing to spread -- R136-2)
   $('explode').setAttribute('aria-pressed', String(app.explode.on));
   $('section').disabled = !has && app.section.axis === 'off'; // (no model: nothing to cut, as Explode -- R20-3)
   for (const b of $('exportmesh').querySelectorAll('button')) b.disabled = !has;
@@ -4222,7 +4227,7 @@ function setPartColour(hex) {
   // selected part and lost its own -- high R134-2)
   if (app.paintFaces) { tell(`paint colour set: ${tapWord()} a face to paint it`, 3000); return; }
   if (!app.selected.size) return;
-  rememberColours();
+  rememberColours('colour');
   const c = hexToRgb(hex);
   // (shown now, and -- in a tour -- kept as the visitor's own, which leaving the tour puts back)
   for (const id of app.selected) { app.overrides.set(id - 1, c); if (app.tour) app.tour.base.overrides.set(id - 1, c); }
@@ -4238,7 +4243,7 @@ function setPartColour(hex) {
 function resetPartColour() {
   let n = 0, nf = 0;
   const own = ownOverrides(), faces = ownFaces();
-  if (app.selected.size ? [...app.selected].some((id) => own.has(id - 1)) : own.size || faces.size) rememberColours();
+  if (app.selected.size ? [...app.selected].some((id) => own.has(id - 1)) : own.size || faces.size) rememberColours(app.selected.size ? 'Reset' : 'Reset all');
   if (app.selected.size) {
     for (const id of app.selected) { if (own.delete(id - 1)) n++; if (!app.tour) app.overrides.delete(id - 1); }
   } else {
@@ -5403,10 +5408,7 @@ const autoTourKey = () => app.sourceUrl || app.header;
 // own Add model… (a model joining ends a tour: r69 A3, r70 A1, r71), and starts only over the model
 // it was asked for, by its URL's key and its open, not while that model is on its way out.
 const entryTourWait = () => { const w = [app.addsPending && app.addsChain, rereading() && app.rereadChain, app.addLoad].filter(Boolean); return w.length ? Promise.all(w.map((p) => Promise.resolve(p).catch(() => {}))) : null; };
-// The tour's file read, and then every load it waits for ended -- one begun during the read too, a few
-// rounds, each a load's end: the menu's and the entry's own by one helper (the entry's waited once,
-// before the read: r71 A2, Q4). Four rounds, not until none: a visitor adding model after model would
-// hold the tour for good; past them it starts, and the next model joining ends it as any join does (A9)
+// The tour's file read, then every load it waits for ended, up to four rounds (r71 A2, Q4, A9)
 async function entryTourRead(url) {
   const [r] = await Promise.all([readTour(url), entryTourWait()]);
   await entryTourSettled();
@@ -6234,11 +6236,8 @@ function droppedFile(e) {
 // load takes (loadFile) whatever else is picked or loaded meanwhile
 const companionsOf = new WeakMap();
 function pickModelFile(files) {
-  // (the model by the zip's one choice, js/formats.js zipModel: a format the viewer opens -- the first
-  // file not a companion took a notes .pdf over the board.step beside it, and refused it: r80 A3;
-  // with none, the first not a companion, which is refused in its own words)
-  // (then a zip, which zipModel passes over inside a zip and a drop opens: [notes.pdf, board.zip]
-  // opened the .pdf -- r81 A3)
+  // (the model by formats.js zipModel: a format it opens, then a zip, else the first non-companion,
+  // refused in its own words -- r80 A3, r81 A3)
   const chosen = zipModel(files.map((x) => x.name)).model;
   const f = files.find((x) => x.name === chosen) || files.find((x) => formatOfName(x.name)) || files.find((x) => !isCompanion(x.name)) || files[0];
   const extras = files.filter((x) => x !== f && isCompanion(x.name));
@@ -6260,11 +6259,8 @@ function refusedForSize(f) {
 // (the words once, for a file refused and a download cut at the size: r51 A9, Q8)
 const oversizeText = (name) => `${name} is ${OVERSIZE_WORDS}`; // (the list check's words too: js/cadmesh.js, r72 A8)
 
-// A file from the device (Open…, a drop). One too big is refused before
-// anything starts: in loadFile the refusal came after the running load was
-// cancelled, so it also killed a conversion in progress (review r21)
-// (on an embed's poster -- a drop -- the file is the visitor's ask, as View in 3D is: the poster
-// goes, not left over the model drawn under it, and View in 3D then opening ?src= over it: r52 Q6)
+// A file from the device (Open…, a drop): one too big refused before anything starts (r21); on an
+// embed's poster it is the visitor's ask, and the poster goes (r52 Q6)
 function openFile(f) {
   if (refusedForSize(f)) return;
   // (and the address's tour is over: View in 3D, which plays it, will not run -- r55 A3, Q2)
@@ -6524,7 +6520,7 @@ function buildTree() {
       }
     };
     cb.onchange = () => {
-      rememberVisibility();
+      rememberVisibility(cb.checked ? 'show' : 'hide');
       for (const id of ids) (cb.checked ? app.hidden.delete(id) : app.hidden.add(id));
       syncTreeChecks();
       pushState();
@@ -6630,7 +6626,7 @@ function syncSheets() {
 function setSheets(show) {
   const ids = sheetIds();
   if (!ids.length) return;
-  rememberVisibility();
+  rememberVisibility(show ? 'sheets shown' : 'sheets hidden');
   for (const id of ids) {
     if (show) app.hidden.delete(id);
     else app.hidden.add(id);
@@ -7742,7 +7738,8 @@ function wireInput() {
   // (in a folded menu, the menu's own rule hands the focus on: r19)
   $('undo').onclick = () => {
     const kb = document.activeElement === $('undo') && !$('undo').closest('.menu.folded');
-    undoVisibility();
+    // (as Ctrl+Z, whose key its tooltip names: R136-7)
+    if (app.measure?.on && (app.measure.pending.length || app.measure.results.length)) app.measure.undo(); else undoVisibility();
     setTimeout(() => { if (kb && $('undo').disabled) (app.dxf ? $('view2d') : $('view')).focus({ preventScroll: true }); }, 0);
   };
   $('isolate').onclick = () => {
@@ -7750,7 +7747,7 @@ function wireInput() {
     const next = new Set(app.header.meshes.map((_, i) => i + 1).filter((id) => !app.selected.has(id)));
     // (no Undo step for an Isolate that changes nothing: R135-6)
     if (next.size === app.hidden.size && [...next].every((id) => app.hidden.has(id))) { tell('only the selection is shown already', 2500); return; }
-    rememberVisibility();
+    rememberVisibility('Isolate');
     app.hidden = next;
     syncTreeChecks();
     pushState();
@@ -7760,7 +7757,7 @@ function wireInput() {
   };
   $('hide').onclick = () => {
     if (!app.selected.size) return;
-    rememberVisibility();
+    rememberVisibility('Hide');
     const n = app.selected.size;
     for (const id of app.selected) app.hidden.add(id);
     app.selected.clear();
@@ -7871,7 +7868,7 @@ function wireInput() {
   for (const b of $('exportmesh').querySelectorAll('button')) b.onclick = () => { closeMenus(); exportMesh(b.dataset.fmt); };
   $('showall').onclick = () => {
     if (!app.hidden.size) return;
-    rememberVisibility();
+    rememberVisibility('Show all');
     app.hidden.clear();
     syncTreeChecks();
     pushState();
@@ -7984,7 +7981,8 @@ function wireInput() {
       const field = (t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type))
         || t0.tagName === 'TEXTAREA' || t0.isContentEditable;
       // (while measuring with something to take back, Measure's own Undo: R135-7)
-      if (!field && app.measure?.on && (app.measure.pending.length || app.measure.results.length)) { e.preventDefault(); app.measure.undo(); } else if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
+      // (a drawing's measuring too: R136-8)
+      if (!field && app.dxf?.view?.measuring) { e.preventDefault(); $('measundo').click(); } else if (!field && app.measure?.on && (app.measure.pending.length || app.measure.results.length)) { e.preventDefault(); app.measure.undo(); } else if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -8079,7 +8077,7 @@ function wireInput() {
         : app.dxf.view.selected ? app.dxf.view.select(null) : app.embed && app.embedActive ? (setEmbedActive(false), true) : false)) : app.measure.escape()
         || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false)
         || (app.selected.size ? (select([], false), announce('selection cleared'), true) : select([], false))), // (said: R127-6)
-      h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => edgesKey(),
+      h: () => $('hide').click(), i: () => $('isolate').click(), a: () => $('showall').click(), e: () => { if (!app.dxf) edgesKey(); }, // (not a drawing's: it switched the 3D style unseen -- R136-8)
       m: () => { if (app.dxf) toggle2DMeasure(); else if (!$('measure').disabled) app.measure.setOn(!app.measure.on, true); },
       p: () => { if (!$('savepic').disabled) savePicture(); },
       x: () => { if (!$('explode').disabled && !$('explode').hidden) setExplode(!app.explode.on, true); } };

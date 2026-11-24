@@ -139,6 +139,7 @@
   /* (one row tall meanwhile, as it will be: unfolded it stood 72-104 px, and the page jumped 64 px up
      at boot -- R135-1, R135-8) */
   html:not(.booted) #tb { flex-wrap:nowrap; overflow:hidden; }
+  @media (min-width:768px) { html:not(.booted) #tb { height:40px; } } /* (as booted: 46 → 40 px, a 6 px jump -- R136-4) */
   html:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
@@ -314,7 +315,7 @@
   .seg button:first-child { border-radius:4px 0 0 4px; margin-left:0; }
   .seg button:last-child { border-radius:0 4px 4px 0; }
   .seg button[aria-pressed=true] { position:relative; } /* its orange border over the neighbours' */
-  #secpos { width:clamp(110px, 32vw, 360px); touch-action:none; } /* (a short touch drag moves it, not the page: R116-4) */
+  #secpos, #xppos { width:clamp(110px, 32vw, 360px); touch-action:none; } /* (a short touch drag moves it, not the page: R116-4; the two stacked sliders one width: R136-3) */
   #secval { min-width:13ch; /* ("Z = -298.5 mm" kept from stepping ⌖ and Flip when the reference changes: R114-4) */ cursor:text; text-decoration:underline dotted; text-underline-offset:3px; }
   #secin { width:9ch; font:inherit; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   #secval:has(#secin) { text-decoration:none; } /* (no readout underline under the typed digits: R123-6) */
@@ -890,7 +891,7 @@
        the edge while the slider moved (review r18). The slider takes what
        is left of its line. */
     .opt-row { flex-wrap:wrap; }
-    #secpos { flex:1 1 110px; }
+    #secpos, #xppos { flex:1 1 110px; }
   }
   /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
      R115-2) */
@@ -1078,12 +1079,12 @@
       <!-- a 2D drawing's own controls, in place of the 3D groups (UI design round 8 R8-2) -->
       <!-- (each line by the device, as the 3D groups are: round 9 R9-2) -->
       <section class="help-2d"><h3>Drawing</h3><dl>
-        <dt class="help-mouse">Drag</dt><dd class="help-mouse">Pan</dd>
+        <dt class="help-mouse">Drag (any button)</dt><dd class="help-mouse">Pan</dd>
         <dt class="help-mouse">Wheel</dt><dd class="help-mouse">Zoom toward the pointer</dd>
         <dt class="help-mouse">Double-click</dt><dd class="help-mouse">Fit the drawing</dd>
         <dt class="help-mouse">Click a line</dt><dd class="help-mouse">Select its layer</dd>
         <dt class="help-touch">One finger</dt><dd class="help-touch">Pan</dd>
-        <dt class="help-touch">Two fingers</dt><dd class="help-touch">Pinch to zoom</dd>
+        <dt class="help-touch">Two fingers</dt><dd class="help-touch">Pinch to zoom, and pan</dd>
         <dt class="help-touch">Double-tap</dt><dd class="help-touch">Fit the drawing</dd>
         <dt class="help-touch">Tap a line</dt><dd class="help-touch">Select its layer</dd>
         <dt>Measure</dt><dd>Two points; they snap to line ends, middles and circle centres</dd></dl></section>
@@ -1097,8 +1098,8 @@
         <dt><kbd>Esc</kbd></dt><dd>Drop a half-taken measurement, then stop measuring</dd>
         <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
       <section class="keys help-mouse"><h3>Mouse</h3><dl>
-        <dt>Drag</dt><dd>Orbit</dd>
-        <dt>Right-drag, Shift+drag</dt><dd>Pan</dd>
+        <dt>Drag</dt><dd>Turn (orbit)</dd>
+        <dt>Right-drag, middle-drag, Shift+drag</dt><dd>Pan</dd>
         <dt>Wheel</dt><dd>Zoom toward the pointer</dd>
         <dt>Click</dt><dd>Select a part (Ctrl+click adds)</dd>
         <dt>Double-click</dt><dd>Fit the part clicked</dd></dl></section>
