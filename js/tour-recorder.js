@@ -355,7 +355,7 @@ export function createTourRecorder(api) {
     const f = el.file.files[0];
     el.file.value = '';
     if (!f) return;
-    try { load(api.validate(await f.text())); note(`${f.name}: ${draft.steps.length} steps`); } catch (e) { note(`${f.name}: ${e.message}`); }
+    try { load(api.validate(await f.text())); note(`${f.name}: ${draft.steps.length} ${draft.steps.length === 1 ? 'step' : 'steps'}`); /* (R146-4) */ } catch (e) { note(`${f.name}: ${e.message}`); }
   };
 
   // at: the step a tour being watched is on, selected (its card and the list agree: R74-4)

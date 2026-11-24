@@ -896,11 +896,8 @@ function styleFrame(s, scale, light = false) {
     cullFaces: !!s.paper };
 }
 
-// pic (a picture's tile, renderPicture): { W, H, x0, y0, tw, th, scale } --
-// the whole picture's size in px, this tile's place in it, and px per CSS
-// px. The projection is the whole picture's, cropped to the tile, so every
-// screen-space value (edge width, the 6 px cull) is in picture px and
-// nothing jumps at a seam.
+// pic (a picture's tile): { W, H, x0, y0, tw, th, scale }, the whole picture's projection cropped to
+// the tile, so nothing jumps at a seam
 function frameState(pic = null) {
   const c = app.cam;
   const r = app.renderer;
@@ -1528,11 +1525,8 @@ app.pic = { scale: 2, bg: 'view', sel: false };
   if (p && typeof p.sel === 'boolean') app.pic.sel = p.sel;
 }
 
-// The view at app.pic.scale x its CSS size, in tiles of at most 2048 px (the
-// picture's projection cropped), each copied out in the same task. No hover;
-// the selection only if app.pic.sel. Transparent: each tile on black and on
-// white, alpha = 1 - (white - black). -> { canvas, scale, cssW, cssH, tiles,
-// capped } or null.
+// The view at app.pic.scale x its size, in tiles of up to 2048 px; transparent by a black and a white
+// render (alpha = 1 - (white - black)). -> { canvas, scale, cssW, cssH, tiles, capped } or null
 async function renderPicture(opts = app.pic) {
   const r = app.renderer, box = $('stage');
   const cw = Math.max(1, box.clientWidth), ch = Math.max(1, box.clientHeight);
@@ -2244,13 +2238,15 @@ function endTour(restore = true) {
   const wasPreview = app.tour === app.previewing;
   app.tour = null;
   app.tourGhost = false;
+  // (a step's "not in this model" ends with the tour too: it stayed after "tour closed" -- R146-6)
+  if ($('hover').textContent.startsWith('not in this model')) tell($('hover').textContent, 1, '');
   $('tourcard').hidden = true;
   $('stage').classList.remove('touring');
   if (restore && saved && app.header) {
     app.overrides = base.overrides;
     if (base.faceOverrides) app.faceOverrides = base.faceOverrides;
     recolour();
-    restoreExplode(base.explode);
+    quietly(() => restoreExplode(base.explode)); // (the tour's own explode undone unsaid: R146-5)
     applyView(saved); // camera, style, section, hidden and selected parts, notes
     if (app.measure) app.measure.putBack(base.measured);
     if (base.measureOn && app.measure && !app.measure.on) app.measure.setOn(true);
@@ -4437,10 +4433,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   app.sphere = sphereOf(mesh.header.bbox);
   app.sphereBase = app.sphere; // (Explode grows app.sphere from it)
   explodeOffForModel(); // a new model opens together
-  // nor with the last one's cut or Walk viewpoint (a view link sets the
-  // section again below; updateButtons syncs the section's controls)
-  // (and the cut's box the scene's: a tour ended unrestored here left a step's 'first', so after
-  // Add model the visitor's cut could not reach past the first model -- r134 M2)
+  // nor with the last one's cut or Walk viewpoint, and the cut's box the scene's (r134 M2)
   app.section.axis = 'off';
   app.section.of = null;
   if (app.walk) walkMark(false);
@@ -5223,10 +5216,8 @@ async function unpackGz(buf, name, seq) {
   return stale(seq) ? null : out;
 }
 
-// extras: the companions picked, dropped or zipped with the file (an OBJ's .mtl, a .gltf's .bin),
-// carried with it down to its reader -- in a global, a refused pick, an Add model… over the size or a
-// superseded zip wrote over them while the load ran, the .obj then read without its .mtl or with
-// another zip's (r52 A1, Q2)
+// extras: the file's companions (an OBJ's .mtl, a .gltf's .bin) carried down to its reader, not in a
+// global another pick wrote over (r52 A1, Q2)
 async function loadAny(buf, name, seq, extras = []) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
@@ -5535,10 +5526,8 @@ async function loadDxf(buf, name, seq) {
   showProgress(`Opening ${name}`, null, `reading ${sizeText(buf.byteLength)} of ${format}`);
   await nextPaint();
   if (stale(seq)) return;
-  // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
-  // bytes: parseDXF reads a binary one from them, an ASCII one in the drawing's own code page.
-  // Off the page's thread (readInWorker), else here.
-  // (one that draws nothing refused by readDrawing itself, in either: r87 A2)
+  // a DWG read into a DXF's group codes, a DXF as its bytes, off the page's thread where it can be
+  // (one that draws nothing refused by readDrawing: r87 A2)
   const got = await readInWorker({ kind: '2d', buf, format, name }, name);
   if (stale(seq)) return;
   await twoD();
@@ -6174,7 +6163,9 @@ async function loadUrl(url) {
       // through setStatus (a recovery mid-fetch sees a load); come and percent rounded down, KB under
       // a megabyte (r73 A6, r74 A10, r75 Q7, R145-5)
       const kb = (pct ? total : got) < 2 ** 20;
-      const soFar = kb ? `${Math.floor(got / 1024).toLocaleString('en')}` : mbSoFar(got), unit = kb ? 'KB' : 'MB';
+      // (all of it come reads as its total, rounded up as that is: "0 KB of 1 KB" for 375 bytes -- R146-3)
+      const allIn = pct && got >= total;
+      const soFar = kb ? (allIn ? `${Math.max(1, Math.ceil(got / 1024))}` : `${Math.floor(got / 1024).toLocaleString('en')}`) : allIn ? mb(got) : mbSoFar(got), unit = kb ? 'KB' : 'MB';
       const all = pct ? (kb ? sizeText(total) : `${mb(total)} MB`) : '';
       setStatus('loading', pct ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${all}` : `fetching ${soFar} ${unit}`);
       const secs = (performance.now() - tf) / 1000;
@@ -6745,10 +6736,8 @@ const curUnit = () => displayUnit(app.unitChoice, app.header?.sourceUnits, model
 // (geometry not converted: Auto's unit where the header's is a display row, else the header's own;
 // the word by units.js unconvertedWord -- r88 A8, r89 Q1, r92 A3)
 const lenUnit = () => (geomMm() ? curUnit() : unconvertedWord(app.header.units, modelSizeMm()));
-// (and a noise floor at float32's resolution, a ten-millionth of how far the model reaches from the
-// origin -- its size, or its farthest corner: "-1e-9" read as an overhang -- r90 A5; at a billionth a
-// face-to-face gap of a 10 ft model read "-0.000000762939" -- r91 Q5; converted too, a model 1 km
-// out read "-0.1" -- r92 A4)
+// (and a noise floor at float32's resolution, a ten-millionth of the model's reach from the origin,
+// converted too -- r90 A5, r91 Q5, r92 A4)
 const LEN_NOISE = 1e-7;
 const lenNoise = () => {
   const b = app.header && app.header.bbox;
@@ -7224,6 +7213,9 @@ function wireInput() {
   // canvas took no focus at all (a click on the view leaves the page focused)
   $('view').addEventListener('mousedown', (e) => {
     e.preventDefault();
+    // (an embed's press takes the keyboard into the frame, the first or any: an &active=1 frame
+    // never took it, its keys going to whatever had the focus -- R146-1)
+    if (app.embed) try { window.focus(); } catch { /* not focusable: the pointer still works */ }
     // (not off the note field a tap just opened -- R138-4; any other focus goes: R139-1)
     if (document.activeElement === $('measnotetext')) return;
     if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
@@ -7240,11 +7232,8 @@ function wireInput() {
   const startPinch = () => {
     pinch = touches.size >= 2 ? { ids: [...touches.keys()].slice(0, 2) } : null;
   };
-  // A lifted finger leaves the pinch on pointerup itself, and again (a no-op)
-  // on lostpointercapture / pointercancel, so the release never depends on
-  // capture events alone. A pinch finger lifting with two others still down
-  // (a third was resting): the remaining two pinch on, from their current
-  // positions.
+  // A lifted finger leaves the pinch on pointerup (and, a no-op, on capture loss); with two others
+  // still down, those two pinch on from where they are
   const releaseTouch = (id) => {
     if (touches.delete(id) && pinch && pinch.ids.includes(id)) startPinch();
   };
@@ -7810,6 +7799,18 @@ function wireInput() {
   };
   $('tourprev').onclick = stepBy(-1, $('tourprev'), $('tournext'));
   $('tournext').onclick = stepBy(1, $('tournext'), $('tourprev'));
+  // a sideways swipe on the card steps, as a phone's cards do (only its buttons did: R146-7)
+  {
+    let sw = null;
+    $('tourcard').addEventListener('pointerdown', (e) => { sw = e.pointerType === 'touch' ? [e.clientX, e.clientY] : null; });
+    $('tourcard').addEventListener('pointerup', (e) => {
+      if (!sw || !app.tour) return;
+      const dx = e.clientX - sw[0], dy = e.clientY - sw[1];
+      sw = null;
+      const to = app.tour.i + (dx < 0 ? 1 : -1);
+      if (Math.abs(dx) > 50 && Math.abs(dy) < Math.abs(dx) / 2 && to >= 0 && to < app.tour.tour.steps.length) showTourStep(to);
+    });
+  }
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
   // a press in a caption that scrolls takes the focus there, so the keys scroll it (R72-3)
@@ -8330,10 +8331,8 @@ async function addressTourEnds(r, ownFailed) {
 function tourReadyNote() {
   tell(`the tour is ready: open its 3D model${somethingShown() || app.embed ? '' : ` (${IDLE_MSG})`}`, 6000);
 }
-// Whether the address's tour plays over the model now shown: a tour made for its own model not over a
-// file the visitor opened instead (its cameras and parts are its model's -- r52 A2, Q1); one with no
-// model of its own over whatever is shown. The one rule for the start-up and View in 3D (they
-// disagreed: r55 Q3).
+// Whether the address's tour plays over the model shown: its own model's only, a modelless one over
+// any (r52 A2, Q1, r55 Q3)
 const tourPlaysHere = (tour) => !(tour.model && !untouched());
 // The address's tour is over, played or not: the next model a list opens plays its own (the flag
 // stayed set after a file dropped on the poster, or opened during View in 3D's wait, and no list
