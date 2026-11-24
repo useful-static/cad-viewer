@@ -201,12 +201,8 @@ function tellReady(words, ms = 6000) {
 const PROGRESS_STATES = new Set(['loading', 'tessellating']);
 
 function setStatus(s, msg) {
-  // Screen readers hear an EVENT through the polite live region: a state
-  // change into ready / idle / error / recovering / init, and a new error
-  // after an error (the shown model dropped after a failed load; "GPU lost
-  // repeatedly; reload"). #status itself is rewritten on every progress tick.
-  // (#status is not drawn -- the footer that held it is hidden: words a writer adds to the ready
-  // line while ready reach the user as a note -- tellReady, sayNoFacts -- r44 Q1)
+  // The live region hears an EVENT: a change into ready / idle / error / recovering / init, or a
+  // new error; #status (not drawn) is rewritten every tick; ready-line words go as notes (r44 Q1)
   const text = msg || s;
   if (!PROGRESS_STATES.has(s) && (s !== app.status || (s === 'error' && text !== app.statusMsg))) announce(text);
   // (an error while a model or drawing stays is shown in the view: the error card shows it only
@@ -696,6 +692,8 @@ function setExplodeModeNow(mode) {
   viewChanged();
 }
 
+// Explode set by a tour's step or a link's view, not by the visitor: unsaid (R130-4, R131-5, R131-7)
+const quietly = (fn) => { app.quietExplode = true; try { return fn(); } finally { app.quietExplode = false; } };
 function setExplode(on, focus = false) {
   if (on === app.explode.on) return;
   return keepingCut(() => setExplodeNow(on, focus));
@@ -1318,12 +1316,12 @@ function applyView(v, link = false) {
   const landExplode = () => {
     if (v.explode && app.renderer) {
       app.explode.t = v.explode.t;
-      setExplode(true);
+      quietly(() => setExplode(true));
       if (app.explode.on && app.explode.mode !== v.explode.mode) setExplodeMode(v.explode.mode);
       // (the sphere grown by the link's amount, which neither call above does when on in that mode: r111 H2-M2)
       syncExplodeSphere();
       syncExplodeRow();
-    } else if (v.cam && app.explode.on) setExplode(false);
+    } else if (v.cam && app.explode.on) quietly(() => setExplode(false));
   };
   viewLanding = !!v.section;
   try {
@@ -1361,8 +1359,10 @@ function applyView(v, link = false) {
     tell(`linked: ${name}`, 4000, `the link points at ${name}`);
   }
   if (bodies.changed) {
-    const note = `this model has changed since the link was made: ${v.selNames?.length
-      ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : 'its parts are not selected'}${v.hidden?.length ? ', hidden parts not applied' : ''}`;
+    // (only what the link held: "its parts are not selected" from a link that selected none -- R131-4)
+    const lost = [v.selNames?.length ? `${bodies.selected.length} of ${v.selNames.length} selected parts found by name` : v.selected?.length ? 'its parts are not selected' : '',
+      v.hidden?.length ? 'hidden parts not applied' : ''].filter(Boolean);
+    const note = `this model has changed since the link was made${lost.length ? `: ${lost.join(', ')}` : ''}`;
     tell(note, 6000);
   }
 }
@@ -1767,18 +1767,19 @@ async function shareView() {
   // added from this device, which the link leaves out, said too: r51 A6)
   const nMeas = app.dxf ? app.dxf.view.results?.length || 0 // (a drawing's too: R25-6)
     : app.measure ? app.measure.results.filter((r) => r.mode !== 'note').length : 0; // (R24-7)
-  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf);
+  const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && ((app.overrides?.size || 0) + (app.faceOverrides?.size || 0) > 0));
   if (said) tell(said, copied ? 3000 : 4000);
 }
 // What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
 // ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
 // '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
-function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false) {
+function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false) {
   const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
     nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : '',
-    !nMeas ? '' : is2d ? `it leaves out the ${meas}` : `it carries notes, not the ${meas} (copy them from the results list)`].filter(Boolean);
+    !nMeas ? '' : is2d ? `it leaves out the ${meas}` : `it carries notes, not the ${meas} (copy them from the results list)`,
+    coloured ? 'it leaves out the part colours (they stay in this browser)' : ''].filter(Boolean); // (R131-2)
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
@@ -2007,7 +2008,7 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   const x = app.explode;
   const ex0 = x.on && x.for === app.header ? x.t : 0;
   const ex1 = app.renderer ? explodeTo : 0;
-  if (ex1 > 0 && !x.on) { x.t = 0; app.quietExplode = true; setExplode(true); app.quietExplode = false; } // (not "exploded 0 %" as it opens to 50: R130-4)
+  if (ex1 > 0 && !x.on) { x.t = 0; quietly(() => setExplode(true)); }
   const explodeAt = (e) => {
     if (!x.on || ex0 === ex1) return;
     x.t = ex0 + (ex1 - ex0) * e;
@@ -2028,14 +2029,14 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   };
   const frame = (now) => {
     if (app.lastInput !== input0) { // the visitor took the camera: a playing tour pauses
-      app.tourRaf = 0; app.tourFlying = false; explodeAt(1); if (ex1 === 0 && x.on) setExplode(false); settle();
+      app.tourRaf = 0; app.tourFlying = false; explodeAt(1); if (ex1 === 0 && x.on) quietly(() => setExplode(false)); settle();
       setTourPlaying(false);
       return;
     }
     const t = ms ? Math.min(1, (now - t0) / ms) : 1;
     const e = (EASE[ease] || EASE.inOut)(t);
     explodeAt(e);
-    if (t >= 1 && ex1 === 0 && x.on) setExplode(false);
+    if (t >= 1 && ex1 === 0 && x.on) quietly(() => setExplode(false));
     if (!to) { // no camera of its own: the explode alone
       viewChanged();
       if (t < 1) app.tourRaf = requestAnimationFrame(frame); else { app.tourRaf = 0; app.tourFlying = false; if (done) done(); }
@@ -2153,7 +2154,7 @@ function showTourStep(i) {
   // there from the explode they are at now
   const x = app.explode;
   const ex1 = app.renderer ? s.explode ?? 0 : 0;
-  if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; app.quietExplode = true; setExplode(true); app.quietExplode = false; } // (R130-4)
+  if (ex1 > 0 && !(x.on && x.for === app.header)) { x.t = 0; quietly(() => setExplode(true)); }
   // the way the step explodes, as it was recorded (as a view link sets it)
   if (ex1 > 0 && x.on && s.explodeAlong && x.mode !== s.explodeAlong) setExplodeMode(s.explodeAlong);
   const exNow = x.t;
@@ -2196,12 +2197,14 @@ function startTour(tour, url, only = null, at = 0) {
   endTour(false);
   // (an exploding or cutting tour's card above the Explode and Section bars throughout: R44-3; the
   // card jumped up to 97 px with a Section step's bar -- R130-2)
+  // (each step's own bars, the tallest kept: one Section and one Explode step lifted it by both -- R131-1)
   let floor = 0;
-  const bars = [...(tour.steps.some((s) => s.explode) ? ['xpopt'] : []), ...(tour.steps.some((s) => s.section && s.section.axis !== 'off') ? ['secopt'] : [])].map($);
-  if (bars.length) {
-    const o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
+  const sets = new Set(tour.steps.map((s) => [s.explode ? 'xpopt' : '', s.section && s.section.axis !== 'off' ? 'secopt' : ''].filter(Boolean).join(' ')));
+  for (const set of sets) {
+    if (!set) continue;
+    const bars = set.split(' ').map($), o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
     o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = false;
-    floor = o.offsetHeight;
+    floor = Math.max(floor, o.offsetHeight);
     o.hidden = was[0]; bars.forEach((b, i) => { b.hidden = was[i + 1]; }); o.style.visibility = '';
   }
   $('stage').style.setProperty('--tour-floor', `${floor}px`);
@@ -3156,11 +3159,8 @@ function focusBeside(el) {
   (after.find(live) || before.reverse().find(live))?.focus();
 }
 
-// The one net under all of them (review r19 L8): a focused control that disables itself or is
-// hidden drops the focus to the page; this watches for it anywhere and gives the focus to the
-// nearest usable toolbar control -- not after a pointer press, where the user put it. The control
-// watched is the one that HAS the focus, never one remembered (a Hide clicked long before took the
-// focus at the next key: review r20). In the parts panel the focus stays in the panel (r20).
+// The one net (r19 L8, r20): the focused control disabled or hidden gives the focus to the nearest
+// usable toolbar control (in the parts panel, to the panel), never after a pointer press.
 function focusInPanel(f, wasInTree) {
   // (the info block's Details fold is not a place to land: it is rebuilt
   // with the values on every selection)

@@ -970,11 +970,11 @@
     <div id="infovals"></div>
     <!-- mass: the selection's closed bodies times a material's density; the
          select lives outside #infovals, so a refresh never closes it -->
-    <div id="infomass" hidden><b>mass if</b> <select id="material" autocomplete="off" aria-label="Material the mass is worked out for" title="The material the selected parts are made of: their mass is their volume times its density">
+    <div id="infomass" hidden><b>mass if</b> <select id="material" autocomplete="off" aria-label="Material the mass is worked out for" title="The material the selected parts are made of: their mass is their volume times its density (remembered in this browser)">
         <option value="1.24">PLA (1.24 g/cm³)</option><option value="1.04">ABS (1.04)</option><option value="1.27">PETG (1.27)</option>
         <option value="2.70">aluminium (2.70)</option><option value="7.85">steel (7.85)</option><option value="8.5">brass (8.5)</option><option value="1.85">FR-4 (1.85)</option>
         <option value="custom">other…</option>
-      </select><span id="densitybox" hidden> <input id="density" type="number" inputmode="decimal" min="0.01" max="25" step="0.01" autocomplete="off" aria-label="Density, in grams per cubic centimetre" title="The material's density in g/cm³ (water is 1)"> g/cm³</span> <span id="massval"></span></div>
+      </select><span id="densitybox" hidden> <input id="density" type="number" inputmode="decimal" min="0.01" max="25" step="0.01" autocomplete="off" aria-label="Density, in grams per cubic centimetre" title="The material's density in g/cm³ (water is 1; remembered in this browser)"> g/cm³</span> <span id="massval"></span></div>
     <div id="holes" hidden><div class="holeshead"><b id="holestitle">Holes</b>
       <button id="holescsv" class="mini" title="Copy the table as CSV">Copy</button>
       <button id="holesclose" class="mini" aria-label="Close the hole table" title="Close the hole table">×</button></div>
@@ -1001,7 +1001,7 @@
   <label id="sheetsrow" hidden title="Show or hide every flat sheet of the model at once: on a board its pads, silkscreen and labels (Undo steps back)"><input type="checkbox" id="sheets" checked autocomplete="off"> flat sheets (pads, labels) <span id="sheetscount"></span></label>
   <div id="colours"><label for="palette">Colours</label>
     <select id="palette" autocomplete="off" title="Colour scheme: the file's own colours, or one colour per part name, per assembly, per body, or one colour for all (remembered in this browser)"></select>
-    <span class="group"><input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; kept while this model is open)">
+    <span class="group"><input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; remembered in this browser, not carried by a view link)">
     <button id="paintbtn" aria-pressed="false" disabled title="Paint faces: while on, a click paints the face under it in the swatch's colour (Reset all, with nothing selected, clears them)">Paint</button>
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></span></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
