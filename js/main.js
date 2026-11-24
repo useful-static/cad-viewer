@@ -1233,6 +1233,8 @@ function clearHover() {
 // a note is showing ("☰ for parts" only where the ☰ is: R6-2)
 let TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
 function touchHintOnce() {
+  // (after the load's own note, not instead of it: R144-3)
+  if (carriedNote && $('hover').textContent === carriedNote && performance.now() < noteHeldUntil) { setTimeout(touchHintOnce, noteHeldUntil - performance.now() + 50); return; }
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
@@ -1312,11 +1314,8 @@ function applyView(v, link = false) {
     if (v.section) landExplode(); else keepingCut(landExplode);
   } finally { viewLanding = false; }
   select(bodies.selected, false);
-  // A view made on another shape (a desktop link opened on a phone): its
-  // selected parts framed afresh from the same side, with room around them,
-  // or with nothing selected, as far out as keeps all the link showed in
-  // view (its camera alone cut the part off at the edge of a narrow screen:
-  // UI organization review, features rank 1)
+  // A view made on another shape (a desktop link on a phone): its selection, else all it showed,
+  // framed afresh from the same side (its camera alone cut the part off on a narrow screen)
   const a1 = stageAspectNow();
   if (v.cam && v.aspect > 0 && Math.abs(a1 / v.aspect - 1) > 0.05) {
     const c = app.cam;
@@ -4373,7 +4372,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
     return !stale(seq);
   };
   const t0 = performance.now();
-  if (isGzip(buf) && !(await phase('unpacking', `unpacking ${mb(buf.byteLength)} MB`))) return;
+  if (isGzip(buf) && !(await phase('unpacking', `unpacking ${sizeText(buf.byteLength)}`))) return; // (KB under a MB, as every size on the card: R144-4)
   // (stopped once the load is, as unpackGz's: Cancel waited for the whole of a .cadmesh.gz -- r78 A6)
   let raw;
   try { raw = await inflateCadmesh(buf, () => stale(seq)); } catch (e) {
@@ -4382,7 +4381,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   }
   if (stale(seq)) return;
   const inflateMs = performance.now() - t0;
-  if (!(await phase('reading', `reading ${mb(raw.byteLength)} MB of geometry`))) return;
+  if (!(await phase('reading', `reading ${sizeText(raw.byteLength)} of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
   // a file with no surfaces (a STEP or IGES of curves or points only) is
@@ -5013,10 +5012,7 @@ function forgetClearance() {
 // The clearance line of a run's result, in the unit shown now: by the run, and again when the unit
 // picker changes (it kept "1.00 mm" beside Measure's "0.039 in" of the same distance -- r92 A2)
 function sayClearance(lc) {
-  // a part, and the model it is in (a board's parts are often just "SOLID"; by scene.js
-  // modelOfBody, runClearance's rule too -- r92, r94 A5), named as the tree, the
-  // hover and the info panel name it -- meshLabel, "owner › body" by the list's labels (the raw
-  // body name read "mesh 2" for the tree's "PRT0001 › mesh 2" -- r93 A2)
+  // a part and its model (scene.js modelOfBody), named as the tree names it, meshLabel (r92 .. r94 A5)
   const ranges = modelRanges(app.scene);
   const nm = (id) => `${meshLabel(id) || `body ${id}`} (${modelOfBody(ranges, id) + 1})`; // (unnamed: the tree's "body N")
   const text = lc.distance === 0
@@ -5213,7 +5209,7 @@ async function refreshCacheBar() {
 // a newer load took over meanwhile.
 async function unpackGz(buf, name, seq) {
   setStatus('loading', `unpacking ${name}`);
-  showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
+  showProgress(`Opening ${name}`, null, `unpacking ${sizeText(buf.byteLength)}`);
   await nextPaint();
   if (stale(seq)) return null;
   // (the thread given turns as it unpacks, and the unpack stopped once the load is: a Cancel or a new
@@ -5347,7 +5343,7 @@ async function loadMeshFile(buf, name, seq, drop = []) {
   const format = meshFormatOf(name, buf);
   if (!format) throw new Error(`${name} is not a file this viewer opens: ${OPENS}`);
   setStatus('loading', `reading ${name}`);
-  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format.toUpperCase()} mesh`);
+  showProgress(`Opening ${name}`, null, `reading ${sizeText(buf.byteLength)} of ${format.toUpperCase()} mesh`);
   await nextPaint();
   if (stale(seq)) return;
   // (companions, for a reader that takes them, together under a file's size: r54 Q8, r78-r80)
@@ -5499,7 +5495,7 @@ async function loadZip(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `unpacking ${name}`);
-  showProgress(`Opening ${name}`, null, `unpacking ${mb(buf.byteLength)} MB`);
+  showProgress(`Opening ${name}`, null, `unpacking ${sizeText(buf.byteLength)}`);
   await nextPaint();
   if (stale(seq)) return;
   const { unzip } = await meshReaders();
@@ -5535,7 +5531,7 @@ async function loadDxf(buf, name, seq) {
   setStatus('loading', `reading ${name}`);
   // a DWG by its tag, a DXF by its start, else by its name: formats.js drawingReaderOf (r70, r80, r108)
   const format = drawingReaderOf(name, new Uint8Array(buf, 0, Math.min(SNIFF_BYTES, buf.byteLength)))?.label || 'DXF';
-  showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format}`);
+  showProgress(`Opening ${name}`, null, `reading ${sizeText(buf.byteLength)} of ${format}`);
   await nextPaint();
   if (stale(seq)) return;
   // a DWG (js/dwg.js) is read into the group-code pairs a DXF holds; a DXF is passed as its
@@ -5662,13 +5658,17 @@ function show2D(drawing, name, url) {
   buildLayerList();
   $('model').textContent = name;
   document.title = `${name} — ${SHORT_TITLE}`;
-  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} ${drawing.layers.length === 1 ? 'layer' : 'layers'}; arrows pan, plus and minus zoom`);
+  // (the layers the shown sheet draws on, as the info panel counts them: 5 said against its 4 -- R144-5)
+  const sh = app.dxf.shown || drawing, tl = layerTally(sh), nl = sh.layers.filter((l) => tl.get(l.name)).length, ln = `${nl} ${nl === 1 ? 'layer' : 'layers'}`;
+  cv.setAttribute('aria-label', `${name}: ${ln}; arrows pan, plus and minus zoom`);
   $('sharelink').disabled = !url;
+  // (and why not, as a 3D model from this device has a link: R144-6)
+  $('sharelink').title = url ? 'Copy a link that opens this drawing' : 'Copy view link: this drawing was opened from this device, so no link can open it; put it on a web page to share it';
   // (Save picture, Print and the picture options: updateButtons above sets them from app.dxf)
   syncMenuButtons();
   showInfo();
   setStatus('ready', readyText());
-  announce(`${name} opened: a 2D drawing, ${drawing.layers.length} ${drawing.layers.length === 1 ? 'layer' : 'layers'}`);
+  announce(`${name} opened: a 2D drawing, ${ln}`);
 }
 
 // 2D Measure on or off: two clicks give a distance with ΔX and ΔY in the
@@ -5705,11 +5705,12 @@ function leave2D() {
 }
 
 // a sheet's items per layer, each under every layer it answers to -- its own and a frozen
-// reference's it is drawn under (r65 A3); an outline is its polyline's
+// reference's it is drawn under (r65 A3); by the info panel's one rule, dxf.js isShape (a viewport's
+// frame was counted in the row, not the panel: 3 against "2 lines and shapes" -- R144-1)
 function layerTally(d) {
   const count = new Map();
   const tally = (it) => { for (const n of dxfLib.layersOf(it)) count.set(n, (count.get(n) || 0) + 1); };
-  for (const p of d.paths) if (!p.outline) tally(p);
+  for (const p of d.paths) if (dxfLib.isShape(p)) tally(p);
   for (const t of d.texts) tally(t);
   return count;
 }
@@ -5926,7 +5927,7 @@ function tessellate(buf, format, seq, name, threads) {
     const w = new Worker(new URL('./step-worker.js', import.meta.url));
     const t0 = performance.now();
     const bytes = buf.byteLength; // read now: posting buf to the worker detaches it (length 0)
-    const size = mb(bytes);
+    const size = sizeText(bytes); // (R144-4)
     let stage = 'starting the converter';
     if (!stale(seq)) announce('converting'); // its ticks are progress, not news
     // The forecast from the file's contents (js/import-progress.js), until the
@@ -5992,7 +5993,7 @@ function tessellate(buf, format, seq, name, threads) {
       setStatus('tessellating', conv
         ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
-      showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
+      showProgress(`Converting ${name} (${size})`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
       // (the detail line only grows while it converts: Cancel moved 9 px as it rewrapped -- R133-4)
       const pd = globalThis.document?.getElementById('pdetail'); // ("?.": test-scene runs this with no page)
       if (pd) { pd.style.minHeight = ''; detailH = Math.max(detailH, pd.offsetHeight); pd.style.minHeight = `max(${detailH}px, 2.8em)`; } // (two lines from the first tick: R134-7)
@@ -6041,10 +6042,8 @@ function tessellate(buf, format, seq, name, threads) {
     };
     w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
     show();
-    // the multi-core try is sent a copy, so the bytes are still here for the
-    // single-threaded one if it fails -- a copy that does not fit is a failure of this try, the
-    // worker and its progress timer ended (unguarded, the one-thread retry succeeded and the leaked
-    // timer set the page back to "tessellating" every second: r49 A1)
+    // the multi-core try is sent a copy (the bytes kept for a one-thread retry); a copy that does not
+    // fit fails this try, its worker and timer ended (r49 A1)
     try { w.postMessage({ buffer: buf, format, threads }, threads ? [] : [buf]); } catch (e) { done(reject, new Error(`no room for the file's copy: ${e?.message || e}`)); }
   });
 }
@@ -6120,11 +6119,8 @@ async function loadUrl(url) {
   // (an early download is not this load's to abort: its body is let go, which ends it)
   if (stale(seq)) { res.body?.cancel().catch(() => {}); return; }
   if (!res.ok) {
-    // the whole URL tried, not only the file's name: a site owner whose
-    // ?src= went wrong could not see where it pointed (feature review
-    // 2026-10-29). A relative ?src= is a URL of this page, so it resolves
-    // against the page, as every link does; a list's files resolve against
-    // the list. Given a list, the error says so.
+    // the whole URL tried, not only the name (a relative ?src= against the page, a list's files
+    // against the list, which the error then names)
     const tried = res.url || new URL(url, location.href).href;
     // (one test of "relative", js/model-list.js isRelative: a //host address is not -- r53 A7; one the
     // list names was read from the list, and came here absolute)

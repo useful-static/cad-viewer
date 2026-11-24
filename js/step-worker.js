@@ -46,8 +46,9 @@ onmessage = async (ev) => {
       mainScriptUrlOrBlob: `${VENDOR}occt-import-js.js`,
       onProgress: (phase, fraction) => postMessage({ type: 'occt', phase, fraction }),
     }).catch((e) => { throw /fetch|network|load|404/i.test(String(e && e.message ? e.message : e)) ? unavailable() : e; });
-    // (MiB to the tenth up, as the card's own size -- formats.js mbTenth: 0.0 against 0.1, 24.5 against 25.7 -- R142-4)
-    post(`converting ${format.toUpperCase()} (${(Math.ceil((buffer.byteLength / 2 ** 20) * 10) / 10).toFixed(1)} MB)`, true);
+    // (as the card's own size, main.js sizeText: KB under a MiB, else MiB to the tenth up -- R142-4, R144-4)
+    const n = buffer.byteLength;
+    post(`converting ${format.toUpperCase()} (${n < 2 ** 20 ? `${Math.max(1, Math.ceil(n / 1024)).toLocaleString('en')} KB` : `${(Math.ceil((n / 2 ** 20) * 10) / 10).toFixed(1)} MB`})`, true);
     const t0 = performance.now();
     const tess = params || fmt.DEFAULT_TESSELLATION;
     const result = occt.ReadFile(format, new Uint8Array(buffer), tess);

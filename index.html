@@ -238,8 +238,9 @@
   .menu.folded.open > .menu-panel { display:flex; flex-wrap:wrap; gap:6px; position:fixed; z-index:10;
     width:max-content; max-width:calc(100vw - 16px); padding:8px; background:var(--panel);
     border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45); }
-  .menu.folded .presets { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; flex-basis:100%; }
-  .presets button { min-width:max-content; } /* (its name and key whole: "Front 1" 2 px over at 320 px -- R143-7) */
+  /* (each column at least its button's content: a button's own min-width did not widen a 1fr column,
+     "Front 1" 2 px over at 320 x 256 -- R143-7, R144-2) */
+  .menu.folded .presets { display:grid; grid-template-columns:repeat(4, minmax(max-content, 1fr)); gap:6px; flex-basis:100%; }
   /* a folded View is a compact panel: it grew to 932 px at 1280, its preset
      buttons 224 px each, over the top of the model (UI organization review
      rank 10) */

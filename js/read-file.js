@@ -43,6 +43,10 @@ export function readDrawing({ buf, format, name = 'the drawing' }) {
     case 'DXF': drawing = parseDXF(buf); break;
     default: throw new Error(`no 2D reader for ${format}`);
   }
-  if (drawsNothing(drawing)) throw new Error(`${name} has nothing to draw`);
+  if (drawsNothing(drawing)) {
+    // (what it holds that the viewer does not draw, as the info panel's "not drawn" row says it: R144-8)
+    const nd = Object.entries(drawing.notDrawn || {}).filter(([, n]) => n > 0);
+    throw new Error(nd.length ? `${name} has nothing the viewer draws: it holds ${nd.map(([k, n]) => `${n} ${k}`).join(', ')}, which are not drawn` : `${name} has nothing to draw`);
+  }
   return drawing;
 }
