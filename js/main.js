@@ -1153,7 +1153,7 @@ for (const v of VIEW_ROWS) {
     const k = document.createElement('kbd');
     k.textContent = v.key;
     b.append(k);
-  }
+  } else b.title = `${v.name} view (9 from the opposite view)`; // (no key of its own: R140-6)
   document.querySelector('.presets').append(b);
   // and its key in the ? box, before "the opposite view"
   if (v.key) {
@@ -2610,6 +2610,8 @@ function setStyle(id, remember) {
   $('style').value = id;
   syncStyleBg();
   queueFrame();
+  // (Hidden grey draws the selection's hidden edges only: R140-1)
+  if (remember && id === 'hiddengrey' && !app.selected.size) tell('Hidden grey: select a part to see its hidden edges', 3500);
 }
 
 // the paper styles' overlay palette (#hover, notices): dark on a light chip
@@ -2666,14 +2668,16 @@ function wireLooks() {
     press();
     syncStyleBg();
     queueFrame();
+    announce(app.lightBg ? 'light background' : 'dark background'); // (each toggle said, as Level is: R140-7)
   };
   $('ghost').onclick = () => {
     app.ghostHidden = !app.ghostHidden;
     setPref('cadv.ghost', app.ghostHidden ? '1' : '0');
     press();
     queueFrame();
+    announce(app.ghostHidden ? 'hidden parts shown as ghosts' : 'hidden parts not drawn');
   };
-  $('turntable').onclick = () => { app.turntable = !app.turntable && !reducedMotion(); press(); turn(); };
+  $('turntable').onclick = () => { app.turntable = !app.turntable && !reducedMotion(); press(); turn(); announce(app.turntable ? 'turntable on' : 'turntable off'); };
   // any input is the visitor taking the view: the turntable waits -- but not a press on a tour's
   // card, whose Pause it paused and whose click then played again (R79-1)
   for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
@@ -2755,6 +2759,8 @@ function walkKey(k, shift) {
 function setWalk(on) {
   app.walk = on;
   $('walk').setAttribute('aria-pressed', String(on));
+  const wo = $('walkopt');
+  if (wo) { wo.hidden = !on; syncOptbar(); }
   let turned = false;
   if (on) {
     // stand where the eye is: a near orbit distance, so a look-around turns in place
@@ -3348,8 +3354,11 @@ function syncOptbar() {
   // -- at 390 they were 159 and 335 px, R136-3, R137-1)
   const sp = $('secpos'), xp = $('xppos');
   if (sp?.style && xp?.style) {
-    xp.style.flex = ''; xp.style.width = '';
-    if (!$('secopt').hidden && !$('xpopt').hidden && !$('optbar').hidden) { xp.style.flex = '0 0 auto'; xp.style.width = `${sp.getBoundingClientRect().width}px`; }
+    xp.style.flex = ''; xp.style.width = ''; $('xpval').style.minWidth = '';
+    if (!$('secopt').hidden && !$('xpopt').hidden && !$('optbar').hidden) {
+      xp.style.flex = '0 0 auto'; xp.style.width = `${sp.getBoundingClientRect().width}px`;
+      $('xpval').style.minWidth = `${$('secval').getBoundingClientRect().width}px`; // (the groups after them aligned too: R140-8)
+    }
   }
   const bar = $('optbar');
   const card = !$('empty').hidden || !$('progress').hidden;
@@ -3358,7 +3367,8 @@ function syncOptbar() {
   for (const o of bar.children) optFade(o);
   // A bar that came or grew over a view still as Fit left it fits again above it; one that goes or
   // shrinks leaves the view; nor under a measurement (R133-6)
-  const measuring = app.measure?.on && app.measure.results?.length;
+  // (nor while walking: a fit ends Walk)
+  const measuring = (app.measure?.on && app.measure.results?.length) || app.walk;
   if (!card && !measuring && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
 }
 
@@ -3564,11 +3574,7 @@ function applyListEntry() {
     };
     tl.append(b);
   }
-  // a listed model with a tour plays it as soon as the list names it: once
-  // per model opened, never over a view link's view or ?tour='s own tour
-  // (the visitor's ✕ ends it for this model)
-  // (keyed by the model's URL, not its data: a re-read in another unit is the same model opened,
-  // and replayed the tour the visitor had closed; a new open of it resets the key: loadUrl)
+  // a listed model's tour plays once per open (keyed by its URL), never over a link's view or ?tour=
   if (app.header && app.autoTourFor !== autoTourKey()) {
     if (linkViewOver() || app.urlTourPending) app.autoTourFor = autoTourKey();
     else if (e && e.tours && e.tours.length && !app.tour) {
@@ -4740,10 +4746,8 @@ function sceneFailed(merged, failed, cap) {
   return merged.edgeInfo.value;
 }
 
-// A model's or a scene's edges in hand, as edgesOf resolves to them: its silhouettes under the
-// device's cap (a scene's were capped by the merge: then none over), its facts only when built by
-// today's rule (an older file's or kept conversion's volume was the signed sum, unflagged). (Built
-// at two places, a model's and a scene's, that a field added to one would miss: r40 A5.)
+// A model's or scene's edges in hand (edgesOf): silhouettes under the device's cap, facts only by
+// today's rule; one builder for both (r40 A5)
 function fileEdgesValue(base, cap) {
   const over = !!base.silhouettes && overSilhouetteCap(base.silhouettes.length / 2, cap);
   return { edges: base.edges, silhouettes: over ? null : base.silhouettes,
@@ -4752,10 +4756,8 @@ function fileEdgesValue(base, cap) {
     facts: factsCurrent(base.header) ? base.header.facts : null, source: 'file', ms: 0 };
 }
 
-// The status line's word that the shown model or scene has no facts (app.noFacts): kept in every
-// ready line (readyText, r40 Q8) until the shown model or scene changes -- showBase, its one owner,
-// takes it back (r44 A5, Q4). sayNoFacts: kept whatever the line says now (r42 Q3), told at once
-// when new (r46 A1), and written into the line only when it is the ready line (r43 A2).
+// app.noFacts, the "no facts" word, in every ready line until the model changes (showBase owns it);
+// sayNoFacts tells it once when new and writes it only into the ready line (r40-r46)
 function sayNoFacts(text) {
   const fresh = app.noFacts !== text; // (with a word said before, if any)
   if (fresh) tell(text, 6000);
@@ -4794,6 +4796,8 @@ const pendingVolume = (info, inScene) => (info?.error
 // the device's silhouette cap: a coarse-pointer device's smaller one, else edges.js's
 const silhouetteCapHere = () => (coarseOnly() ? COARSE_SILHOUETTE_CAP : SILHOUETTE_CAP);
 
+// a move field as wide as a long value (metres' "0.00314" was cut to "0.0031" at 390: R140-3)
+const fitField = (inp) => { inp.style.width = inp.value.length > 6 ? `${inp.value.length + 2}ch` : ''; };
 // The info panel's models: each by name, the added ones with their offset
 function syncScene() {
   const many = !!app.scene && app.scene.length > 1 && !!app.header;
@@ -4809,6 +4813,7 @@ function syncScene() {
       // (a typed value kept as typed while it says the same: 12.34567 came back 12.346 -- R137-8)
       const v = m.offset[k] / f;
       if (document.activeElement !== inp && Math.abs(Number(inp.value) - v) > 1e-9 * Math.max(1, Math.abs(v))) inp.value = String(+v.toFixed(dp));
+      fitField(inp);
     }));
     return;
   }
@@ -4854,6 +4859,8 @@ function syncScene() {
         inp.type = 'number';
         inp.step = 'any';
         inp.value = String(+(m.offset[k] / f).toFixed(dp));
+        fitField(inp);
+        inp.addEventListener('input', () => fitField(inp));
         inp.setAttribute('aria-label', `${m.name}: move along ${ax} (${uw})`);
         inp.title = `Move ${m.name} along ${ax}, in ${uw} from where its file puts it`;
         inp.addEventListener('change', () => {
@@ -5820,11 +5827,8 @@ function fillInfo2D(el) {
   // (the layers the list shows, of the sheet shown: "layers 2" over one row -- R129-2)
   const tl = layerTally(d);
   row('layers', `${fmtInt(d.layers.filter((l) => tl.get(l.name)).length)}`);
-  // (a wide polyline's outline is its polyline's, a viewport's frame is not the drawing's: neither
-  // a shape -- the layer list still counts a frame, so its layer can be hidden)
-  // (what the drawing draws as it opens; what a layer off or frozen holds said apart -- a frozen
-  // reference's line counted as drawn: r65 A3)
-  // (dxf.js openCounts, dwg-check's count too: r67 A5)
+  // (no outline or viewport frame a shape; what layers off or frozen hold said apart: dxf.js
+  // openCounts -- r65 A3, r67 A5)
   const oc = dxfLib.openCounts(d, full.layers);
   row('contents', `${fmtInt(oc.shapes)} ${oc.shapes === 1 ? 'line or shape' : 'lines and shapes'}, ${fmtInt(oc.texts)} ${oc.texts === 1 ? 'text' : 'texts'}${oc.hidden ? ` (and ${fmtInt(oc.hidden)} on layers off or frozen)` : ''}`);
   // what the drawing holds that is not drawn here, by kind (it was left out without a word)
@@ -6751,7 +6755,7 @@ function select(ids, additive, name = null) {
   showInfo();
   // (on touch the view's label names what was picked: a row picked after a tap left the tapped
   // part's name up -- R139-2)
-  if (app.pointerType === 'touch' && lastLabel) hoverLabel(app.selected.size === 1 ? meshLabel([...app.selected][0]) : '', true);
+  if (app.pointerType === 'touch' && lastLabel) hoverLabel(app.selected.size === 1 ? meshLabel([...app.selected][0]) : app.selName || '', true); // ("all 4": its name, R140-9)
 }
 
 // The display unit in force, and a length (model units) in it. The geometry
@@ -7609,11 +7613,8 @@ function wireInput() {
     // on ☰ and its controls were past File and View: review r19)
     if (open && e.detail === 0) partsStop()?.focus();
   };
-  // (focus back to ☰ if it was in the panel: left in the hidden panel it fell
-  // to the page, and the next Tab went to the full-screen button: r21)
-  // Closed on the click, not the press: closed at the press the scrim stopped
-  // catching the touch at once, and the tap's click went through to what lay
-  // under it (Cancel, discarding a conversion; full screen: review r22)
+  // (focus back to ☰ if it was in the panel, r21; closed on the click, not the press, so the tap goes
+  // to nothing under it: r22)
   $('scrim').addEventListener('pointerdown', (e) => e.preventDefault());
   $('scrim').addEventListener('click', (e) => { e.preventDefault(); setPanel(false, true); });
   // the Open… label is the file picker's only visible control: make it
@@ -7673,6 +7674,7 @@ function wireInput() {
   $('clearbtn').onclick = () => runClearance();
   $('paintbtn').onclick = () => setPaint(!app.paintFaces);
   $('walk').onclick = () => setWalk(!app.walk);
+  $('walkoff').onclick = () => { setWalk(false); $('view').focus?.(); };
   // the installed app opened with a file (manifest.webmanifest file_handlers)
   if ('launchQueue' in window) {
     window.launchQueue.setConsumer(async (p) => {

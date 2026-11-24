@@ -243,6 +243,9 @@
      buttons 224 px each, over the top of the model (UI organization review
      rank 10) */
   #viewmenu.folded.open > .menu-panel { max-width:min(420px, calc(100vw - 16px)); }
+  /* (in a folded View the Display toggles start their own row under a heading, as File's groups do:
+     they ran on after Style, wrapping at a different item at each width -- R140-5) */
+  #viewmenu.folded #displaypanel::before { content:"Display"; flex-basis:100%; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
   /* one column that scrolls down where main.js caps its height (a short
      window): wrapping made a second column, File's Save as heading the
      other column from its SAVE (844 x 390) */
@@ -315,7 +318,7 @@
   .seg button:first-child { border-radius:4px 0 0 4px; margin-left:0; }
   .seg button:last-child { border-radius:0 4px 4px 0; }
   .seg button[aria-pressed=true] { position:relative; } /* its orange border over the neighbours' */
-  #secpos, #xppos { width:clamp(110px, 32vw, 360px); touch-action:none; } /* (a short touch drag moves it, not the page: R116-4; the two stacked sliders one width: R136-3) */
+  #secpos, #xppos { flex:1 1 110px; max-width:clamp(110px, 32vw, 360px); min-width:110px; touch-action:none; } /* (grows from 110 px: a wrapping row breaks before it shrinks, and Flip fell to its own line at 1024 touch -- R140-4) */ /* (a short touch drag moves it, not the page: R116-4; the two stacked sliders one width: R136-3) */
   #secval { min-width:13ch; /* ("Z = -298.5 mm" kept from stepping ⌖ and Flip when the reference changes: R114-4) */ cursor:text; text-decoration:underline dotted; text-underline-offset:3px; }
   #secin { width:9ch; font:inherit; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:1px 4px; }
   #secval:has(#secin) { text-decoration:none; } /* (no readout underline under the typed digits: R123-6) */
@@ -1161,6 +1164,11 @@
       <input id="xppos" type="range" min="0" max="100" value="40" autocomplete="off" aria-label="How far apart" aria-describedby="xpval">
       <span id="xpval" class="secval"></span>
       <span class="seg" id="xpmode" role="group" aria-label="Which way the parts move"><button data-mode="assembly" aria-pressed="false" title="Each subassembly away from the rest, then its parts within it">Assembly</button><button data-mode="x" aria-pressed="false" title="Along X only">X</button><button data-mode="y" aria-pressed="false" title="Along Y only">Y</button><button data-mode="z" aria-pressed="false" title="Along Z only">Z</button></span>
+    </div></div>
+    <!-- (Walk shown while on, as Section, Explode and Measure are: 4 s after it began nothing did -- R140-2) -->
+    <div class="opt" id="walkopt" hidden><div class="opt-row">
+      <button id="walkoff" aria-pressed="true" title="Stop walking (Esc)">Walk <span aria-hidden="true">×</span></button>
+      <span class="secval" id="walknote">W A S D move, Q E down and up, drag to look</span>
     </div></div>
     <div class="opt" id="measopt" hidden><div class="opt-row">
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>
