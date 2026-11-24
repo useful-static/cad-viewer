@@ -558,10 +558,8 @@ function gpuSync() {
 const edgeData = new WeakMap();
 
 // ---------- Explode (plan feature 8) ----------
-// Each body's direction, summed down the assembly tree, so subassemblies part
-// first; a flat tree starts along the view's up axis. X / Y / Z keep one axis.
-// The farthest body travels one diagonal at 100 %. Directions: bodyTable slots
-// 0..2 (aXd on a WebGL1 with no vertex textures); the fraction: `explode`.
+// Each body's direction summed down the tree (subassemblies part first); the farthest travels one
+// diagonal at 100 %. Directions in bodyTable slots 0..2 (aXd on WebGL1), the fraction `explode`.
 app.explode = { on: false, t: 0.4, mode: null, dirs: null, len: 0, flat: false, for: null };
 const cen = (b) => [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
 
@@ -943,11 +941,8 @@ function frameState(pic = null) {
     // the height (a body's projected radius is radius * focalPx / w)
     focalPx: proj[5] * h / 2,
     hoverId: app.hover || 0,
-    // the GPU holds a model the UI does not show (a superseded load mid-hand-
-    // back): its ids do not match the state texture, so draw background only.
-    // A colour copy of the shown model (a recolour still uploading: ~8 s for
-    // the rack on WebGPU over SwiftShader) is the same geometry and ids, so
-    // its old colours keep drawing meanwhile.
+    // the GPU holding a model the UI does not show: background only (a colour copy of the shown
+    // model, a recolour still uploading, keeps drawing)
     drawModel: sameModel(r.drawn, app.mesh),
     // Explode: the fraction of each body's direction (the body table) it moves
     explode: app.explode.on && app.explode.for === app.header ? app.explode.t : 0,
@@ -1372,10 +1367,8 @@ function pictureName(source) {
   const two = (n) => String(n).padStart(2, '0');
   return `${saveBase(source)}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
 }
-// Whether body mi (0-based) of a mesh is closed: the facts' flag, and not closed while the facts are
-// not known (the edges worker still working, or failed) -- what the view draws then (no cut face).
-// The one answer for the view's cut fill, Measure's cut-face point and clearance's containment (the
-// three answered three ways while the facts were absent)
+// Whether body mi of a mesh is closed (the facts' flag; not while they are unknown): the one answer
+// for the cut fill, Measure's cut-face point and clearance's containment
 function closedOf(mesh, mi) {
   const c = mesh?.edgeInfo?.value?.facts?.closed;
   return c ? !!c[mi] : false;
@@ -1422,7 +1415,7 @@ async function exportMesh(fmt) {
   const what = viewOnly.length === 2 ? 'the section and Explode change' : cuts ? 'the section changes' : 'Explode changes';
   const whole = viewOnly.length ? ` (${viewOnly.join(', ')}: ${what} the view, not the file)` : '';
   app.lastExport = { fmt, bytes: bytes.length, bodies: ids.length, name, whole }; // (for tests)
-  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${bytes.length < 1048576 ? `${Math.max(1, Math.ceil(bytes.length / 1024))} KB` : `${(bytes.length / 1048576).toFixed(1)} MB`}${whole}`, whole ? 6000 : 3000);
+  tellReady(`saved ${name}: ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'}, ${bytes.length < 1048576 ? `${Math.max(1, Math.ceil(bytes.length / 1024))} KB` : `${(Math.ceil(bytes.length / 104857.6) / 10).toFixed(1)} MB`}${whole}` /* (up, as every save's: R142-8) */, whole ? 6000 : 3000);
 }
 
 // A note given a frame to draw before work that freezes the view (100 ms at most: a hidden tab)
@@ -2479,7 +2472,7 @@ async function tourPictures(tour) {
   }
   if (!files.length) return 0;
   const { zip } = await import('./export-mesh.js');
-  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${slugOf(tour.title || saveBase(app.sourceName || ''))}-pictures.zip`); // (R141-6)
+  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${tour.title ? slugOf(tour.title) : saveBase(app.sourceName)}-pictures.zip`); // (the model's name as other saves keep it: R141-6, R142-5)
   return files.length;
 }
 
@@ -2530,7 +2523,7 @@ async function tourVideo(tour) {
   if (app.tour === t) endTour(); // (its own only, as tourPictures: r118 L2)
   const blob = new Blob(chunks, { type: 'video/webm' });
   if (!blob.size) return 'the recording came out empty';
-  downloadBlob(blob, `${slugOf(tour.title || saveBase(app.sourceName || ''))}.webm`);
+  downloadBlob(blob, `${tour.title ? slugOf(tour.title) : saveBase(app.sourceName)}.webm`);
   return blob.size;
 }
 
@@ -3156,11 +3149,8 @@ function focusBeside(el) {
   // resizes ended there: review r22)
   const ps = el === $('panelbtn') && !narrowLayout() && partsStop();
   if (ps) { ps.focus(); return; }
-  // inside a folded menu's closed panel (Open… in the narrow File): its
-  // menu's button, not the next button along (View, skipping File: r20).
-  // A menu in a menu goes out to the first button shown: a view preset in a
-  // View folded around its Views menu, whose button is not shown there, to
-  // View's (the focus went on along the row to Show: r23)
+  // inside a folded menu's closed panel: its menu's button, or the first one shown of a menu in a
+  // menu (r20, r23)
   for (let m = el.closest('.menu-panel')?.closest('.menu'); m; m = m.parentElement.closest('.menu')) {
     const mb = m.querySelector(':scope > .menu-btn');
     if (live(mb)) { mb.focus(); return; }
@@ -3445,7 +3435,7 @@ function showModelName() {
   nm.textContent = label;
   const st = document.createElement('span');
   st.className = 'mstats';
-  st.textContent = ` · ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'body' : 'bodies'} · ${fmtInt(s.triangles)} triangles`;
+  st.textContent = ` · ${fmtInt(s.meshes)} ${s.meshes === 1 ? 'body' : 'bodies'} · ${fmtInt(s.triangles)} ${s.triangles === 1 ? 'triangle' : 'triangles'}`; // (R142-9)
   $('model').replaceChildren(nm, st);
   $('model').title = entry ? `${$('model').textContent} (${app.sourceName})` : $('model').textContent; // the narrow footer truncates it
   document.title = `${label} — ${SHORT_TITLE}`;
@@ -3564,10 +3554,7 @@ function applyListEntry() {
     b.title = `Play the tour “${t.name}” of this model`;
     b.onclick = async () => {
       closeMenus();
-      // (the model the tour is for, by its open, as the entry's own tour checks it: picked away
-      // during the read, the tour played over the next model, and its failure went into that
-      // model's ready line -- told only then, as the address's tour's is: r67 A1. After the
-      // ?add=s, and the entry's own tour stepping aside for the visitor's: r68 A2)
+      // (only over the model it is for, after the ?add=s, a visitor's tour first -- r67 A1, r68 A2)
       const key = autoTourKey(), open = app.openCount;
       app.tourPicked = open;
       const r = await entryTourRead(t.url);
@@ -4097,7 +4084,10 @@ function updateButtons() {
   $('showall').disabled = !app.hidden.size;
   syncUndo();
   $('fit').disabled = !has && !app.dxf;
-  // (a button about to disable hands the focus on, as Hide's does)
+  // (no model: the views, Ortho, Z up, Walk and Turntable greyed as Fit is -- they acted and said
+  // "walk on" over the empty page: R142-2)
+  if (!has && app.walk) walkMark(false);
+  for (const b of [$('proj'), $('up'), $('walk'), $('turntable'), $('presetmenu')?.querySelector('.menu-btn'), ...document.querySelectorAll('#viewpanel .presets button')]) if (b) b.disabled = !has;
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has && !app.dxf;
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
@@ -4118,7 +4108,10 @@ function updateButtons() {
   $('picmore').disabled = !has || !!app.dxf;
   if ($('picmore').disabled) setPicOpts(false);
   // (the drawing needs the b-rep faces: a .cadmesh written before they were kept has none)
-  $('savedrawing').disabled = !has || !(app.baseMesh && app.baseMesh.faces);
+  const sd = $('savedrawing'), faceless = has && !app.baseMesh?.faces;
+  sd.dataset.t ||= sd.title;
+  sd.disabled = !has || faceless; // (and why, as Explode's: R142-11)
+  sd.title = faceless ? 'Save drawing: this .cadmesh was written without its faces, so it has no edges to draw; open the model it came from' : sd.dataset.t;
   $('proj').setAttribute('aria-pressed', String(!!app.cam.ortho));
   $('up').setAttribute('aria-pressed', String(app.cam.orient.startsWith('+z')));
   syncMenuButtons();
@@ -4712,10 +4705,8 @@ async function sceneEdges(merged, models) {
     // on -- stopping at it left a later model without its edges, and the scene without any)
     if (!v?.facts) failed.push(m);
   }
-  // (merged again only when a model's were built here: mergeModels merged them already; a merge
-  // that fails -- it allocates the scene's arrays again -- is the scene's failure, said, not a
-  // rejection nobody handles that left the panel at "computing…": r41 Q3)
-  // (mergeModels' own merge failing is the same failure: js/scene.js keeps its error on the scene)
+  // (merged again only when a model's were built here; a failed merge, here or in mergeModels, is
+  // the scene's failure, said -- r41 Q3)
   let mergeError = merged.mergeError || null;
   if (stale.length) {
     try {
@@ -4864,7 +4855,7 @@ function syncScene() {
         inp.step = 'any';
         inp.value = String(+(m.offset[k] / f).toFixed(dp));
         inp.setAttribute('aria-label', `${m.name}: move along ${ax} (${uw})`);
-        inp.title = `Move ${m.name} along ${ax}, in ${uw} from where its file puts it`;
+        inp.title = `Move ${m.name} along ${ax}, in ${uw === 'in' ? 'inches' : uw}, from where its file puts it`; // ("in in": R142-6)
         fitField(inp, m.offset[k] / f, uw);
         inp.addEventListener('change', () => {
           const v = Number(inp.value);
@@ -4896,7 +4887,7 @@ async function moveModel(i, k, v) {
     // add's "adding X": the add returned superseded and left it, with its progress card -- r118 L1)
     if (app.status === 'loading' && (app.statusMsg || '').startsWith('adding ') && !app.sceneAsked) setStatus('ready', readyText());
     const f = geomMm() ? MM_PER[curUnit()] : 1;
-    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toPrecision(12)).join(', ')} ${geomMm() ? curUnit() : 'mm'}`);
+    announce(`${models[i].name} moved to ${models[i].offset.map((o) => +(o / f).toPrecision(6)).join(', ') /* (no unit change's tail digits: R142-7) */} ${geomMm() ? curUnit() : 'mm'}`);
   } catch (e) {
     tellReady(`could not move ${models[i].name}: ${e.message || e}`);
   }
@@ -5409,11 +5400,7 @@ function syncUnitParam() {
   const u = new URL(location.href);
   const want = readUnit() !== 'mm' && app.sourceUrl ? readUnit() : null;
   if ((u.searchParams.get('unit') || null) === want) return;
-  // (a ?unit= is the named model's, by addressUnit's rule: the address names the model shown when it
-  // names none -- the list's first, a tour's own --, or a reload read it in mm and dropped the unit:
-  // r62 Q2)
-  // (and a #view= the address had, naming no model, was a device file's: not this model's -- named
-  // now, it became the model's own view: r63)
+  // (a ?unit= and a #view= are the named model's: the address names the model shown -- r62 Q2, r63)
   if (want && !modelUrlIn(u.searchParams)) { setModelParam(u, app.sourceUrl); u.hash = ''; }
   if (want) u.searchParams.set('unit', want); else u.searchParams.delete('unit');
   history.replaceState(history.state, '', u);
@@ -5545,10 +5532,8 @@ async function loadZip(buf, name, seq) {
 }
 
 // ---------- 2D DXF (plan feature 23; js/dxf.js, js/dxf-view.js) ----------
-// A DXF opens in 2D mode: the 3D model goes, the drawing is drawn on its own
-// canvas (#view2d) on paper, the parts list lists its layers (a checkbox
-// shows or hides one, a click on its name selects it, as a click on one of
-// its lines does), and the 3D-only controls step aside (body.mode2d).
+// A DXF opens in 2D: drawn on its own canvas (#view2d), its layers in the parts list, the 3D-only
+// controls stepping aside (body.mode2d).
 async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
@@ -5682,13 +5667,13 @@ function show2D(drawing, name, url) {
   buildLayerList();
   $('model').textContent = name;
   document.title = `${name} — ${SHORT_TITLE}`;
-  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} layers; arrows pan, plus and minus zoom`);
+  cv.setAttribute('aria-label', `2D drawing ${name}: ${drawing.layers.length} ${drawing.layers.length === 1 ? 'layer' : 'layers'}; arrows pan, plus and minus zoom`);
   $('sharelink').disabled = !url;
   // (Save picture, Print and the picture options: updateButtons above sets them from app.dxf)
   syncMenuButtons();
   showInfo();
   setStatus('ready', readyText());
-  announce(`${name} opened: a 2D drawing, ${drawing.layers.length} layers`);
+  announce(`${name} opened: a 2D drawing, ${drawing.layers.length} ${drawing.layers.length === 1 ? 'layer' : 'layers'}`);
 }
 
 // 2D Measure on or off: two clicks give a distance with ΔX and ΔY in the
@@ -6060,7 +6045,7 @@ function tessellate(buf, format, seq, name, threads) {
         show();
       }
       else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads, phases: phaseSecs(performance.now()) });
-      else done(reject, new Error(crashText(m.message)));
+      else done(reject, new Error(crashText(m.message).replace('could not read this file', `could not read ${name}`))); // (named: R142-3)
     };
     w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
     show();
@@ -6250,7 +6235,8 @@ function pickModelFile(files) {
   companionsOf.set(f, extras);
   // (the others the viewer would open, not every file: "1 more" of a .pdf -- r81 A10)
   const rest = files.filter((x) => x !== f && !extras.includes(x) && formatOfName(x.name)).length;
-  if (rest > 0) announce(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`);
+  // (shown as well as said: only a screen reader heard it -- R142-1)
+  if (rest > 0) tell(`opening ${f.name}; the viewer opens one model at a time (${rest} more not opened)`, 6000);
   return f;
 }
 
@@ -8001,6 +7987,8 @@ function wireInput() {
     if (e.key === 'Escape' && closeMenus(true)) { e.preventDefault(); return; }
     // ...and the ? box, giving the focus back to ? when it was in the box
     if (e.key === 'Escape' && helpOpen()) { e.preventDefault(); setHelp(false, $('helppop').contains(document.activeElement)); return; }
+    // ...and a load's Cancel while its card offers it, as Esc closes the rest (R142-14)
+    if (e.key === 'Escape' && !$('progress').hidden && $('pcancel').offsetParent && !$('pcancel').disabled) { e.preventDefault(); $('pcancel').click(); return; }
     const typed = (t.tagName === 'INPUT' && !NOT_TYPED.includes(t.type))
       || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
     // ...but Esc in the slide-out's field (an empty Filter parts: a filled one

@@ -911,8 +911,8 @@ export function computeNormals(positions, indices) {
 
 // A conversion's result as the model both converters encode (the page's js/step-worker.js and
 // stp2mesh.mjs): the meshes, the unit the file declared, the angular deflection it was meshed at
-export function conversionModel(result, { sourceUnits = null, angularDeflection } = {}) {
-  const model = occtResultToModel(result);
+export function conversionModel(result, { sourceUnits = null, angularDeflection, bytes } = {}) {
+  const model = occtResultToModel(result, MM, bytes);
   model.sourceUnits = sourceUnits;
   model.angularDeflection = angularDeflection;
   return model;
@@ -927,14 +927,16 @@ export const modelFactsOf = (header) => Object.fromEntries(MODEL_FACTS.filter((k
 // occt-import-js ReadStepFile/ReadFile result -> model for encodeCadmesh.
 // Per-face b-rep colours become per-vertex colours (OCCT meshes each face
 // with its own vertices, so a face's triangles own their vertex range).
-export function occtResultToModel(result, units = MM) {
+export function occtResultToModel(result, units = MM, bytes = Infinity) {
   // (said for IGES and BREP too, naming no library, with what to try: r21)
   if (!result || !result.success) {
     // (OpenCascade reports running out of memory while reading the same way,
-    // so that is named too: a re-export alone would fail again, r23)
-    throw new Error('import failed: the converter could not read this file. It may be damaged or cut short, '
-      + 'not the format its name says, or too big for this device\'s memory; re-export it from the CAD program, '
-      + 'try another of its formats, or open it on a computer with more memory');
+    // so that is named too: a re-export alone would fail again, r23 -- but not of a file of a few
+    // MB, which no device runs out on: a 0-byte file was "too big for this device's memory", R142-3)
+    const big = !(bytes < 8 * 2 ** 20);
+    throw new Error(`import failed: the converter could not read this file. It may be ${bytes === 0 ? 'empty, ' : ''}damaged or cut short`
+      + `${big ? ', ' : ', or '}not the format its name says${big ? ', or too big for this device\'s memory' : ''}; re-export it from the CAD program`
+      + `${big ? ', try another of its formats, or open it on a computer with more memory' : ' or try another of its formats'}`);
   }
   const meshes = result.meshes.map((m) => {
     const positions = Float32Array.from(m.attributes.position.array);

@@ -290,8 +290,9 @@ export function createTourRecorder(api) {
     if (!sameModel('saved')) return;
     let t;
     try { api.validate(text()); t = text(); } catch (e) { note(`not saved: ${e.message}`); return; }
-    // (an untitled tour named after its model, not "tour": R141-6)
-    const slug = tourSlug(draft.title || (api.model()?.name || '').replace(/\.[^.]*(\.gz)?$/i, ''));
+    // (an untitled tour named after its model as other saves keep it, not "tour": R141-6, R142-5)
+    const base = (api.model()?.name || '').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, '-');
+    const slug = draft.title || !base ? tourSlug(draft.title) : base;
     api.save(`${t}\n`, `${slug}.cadtour.json`);
     note(api.modelUrl() ? `saved ${slug}.cadtour.json` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)`);
   };

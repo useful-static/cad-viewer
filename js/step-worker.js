@@ -46,13 +46,14 @@ onmessage = async (ev) => {
       mainScriptUrlOrBlob: `${VENDOR}occt-import-js.js`,
       onProgress: (phase, fraction) => postMessage({ type: 'occt', phase, fraction }),
     }).catch((e) => { throw /fetch|network|load|404/i.test(String(e && e.message ? e.message : e)) ? unavailable() : e; });
-    post(`converting ${format.toUpperCase()} (${(buffer.byteLength / 1e6).toFixed(1)} MB)`, true);
+    // (MiB to the tenth up, as the card's own size -- formats.js mbTenth: 0.0 against 0.1, 24.5 against 25.7 -- R142-4)
+    post(`converting ${format.toUpperCase()} (${(Math.ceil((buffer.byteLength / 2 ** 20) * 10) / 10).toFixed(1)} MB)`, true);
     const t0 = performance.now();
     const tess = params || fmt.DEFAULT_TESSELLATION;
     const result = occt.ReadFile(format, new Uint8Array(buffer), tess);
     const t1 = performance.now();
     post('packing mesh');
-    const model = fmt.conversionModel(result, { sourceUnits: declared, angularDeflection: tess.angularDeflection });
+    const model = fmt.conversionModel(result, { sourceUnits: declared, angularDeflection: tess.angularDeflection, bytes: buffer.byteLength });
     // (kept without edges and facts when their build throws: the page's edges worker builds them and
     // says why there are none -- js/cadmesh.js KEEP_WITHOUT_EDGES)
     const out = fmt.encodeCadmesh(model, { onEdgesError: fmt.KEEP_WITHOUT_EDGES });
