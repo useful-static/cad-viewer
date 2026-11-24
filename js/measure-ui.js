@@ -8,11 +8,8 @@
 // escape() first.
 
 import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometry, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
-// A hole row's diameter as the table, its summary and the picked row's words write it -- with its
-// countersink, one text (the summary grouped a countersunk Ø3 with plain ones, and the announcement
-// left the countersink out: r68 A8, Q11). r: { d, head } (or a group's); fmt: the number's writer.
-// (what is measured: the wider rim's Ø, a countersink's or a chamfer's alike -- "countersunk" named
-// a 0.3 deburr one: r69 A4)
+// A hole row's Ø with its wider rim's, one text for the table, summary and words (r68 A8, r69 A4).
+// r: { d, head }; fmt: the number's writer.
 export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at its rim)` : ''}`;
 // The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
 // (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5), and
@@ -864,11 +861,15 @@ export function createMeasure(deps) {
       plain ? 6000 : 3000, say ? `measure on${row ? ', or Enter on a hole row for a point' : ''}` : ''); // (R65-1)
   }
 
+  // (said, and the gone result's note ended with it: silent, it read "24.37 mm" for 4 s -- R135-7)
   function undo() {
-    if (st.pending.length) st.pending.pop();
-    else st.results.pop();
+    if (st.pending.length) { st.pending.pop(); deps.tell('point dropped', 2000); } else {
+      const r = st.results.pop();
+      if (r) deps.tell(`removed: ${r.main}`, 2000);
+    }
     syncRow();
     deps.queueFrame();
+    return true;
   }
 
   // Esc: the results list, a half-made measurement, then Measure itself
@@ -950,10 +951,8 @@ export function createMeasure(deps) {
       sized.push([h, sid]);
     }
     const meanOf = (s) => sums[s] / counts[s];
-    // (a size's printed Ø: what most of its holes print, its mean's on a tie -- a mean just under a
-    // rounding half-step put V2C's Ø3.25 ×2, whose rows print 3.3, on Ø3.20's line at 1 decimal: r139 L3)
-    // (on a tie, the value no smaller size took, else its mean's: V2C's Ø3.25 pair prints 3.3 and 3.2,
-    // a tie its mean broke to 3.2, onto Ø3.20's line -- r140 L1)
+    // (a size's printed Ø: what most of its holes print; on a tie the value no smaller size took,
+    // else its mean's -- r139 L3, r140 L1)
     const votes = [];
     for (const [h, s] of sized) { const p = deps.num(h.diameter); (votes[s] ||= new Map()).set(p, (votes[s].get(p) || 0) + 1); }
     const label = [], taken = new Set();
@@ -1000,11 +999,8 @@ export function createMeasure(deps) {
       // (holes along different axes -- a top face's and a side wall's -- spread in all three: the
       // first hole's two cross axes left the third out, r124 L4)
       const mixed = g.axes && g.axes.size > 1;
-      // (and along their axis where they lie apart on it: two side dimples a part apart spanned
-      // "0.00 mm × 0.00 mm" -- R29-2)
-      // (each axis named, as the table's head and a picked row are, the unit once, an axis they do
-      // not spread along left out: "0.00 mm × 11.87 mm × 0.00 mm" named none, and broke
-      // between a number and its unit -- R30-1)
+      // (along their axis too where they lie apart on it, each axis named, the unit once, an axis
+      // with no spread left out: R29-2, R30-1)
       const spread = [0, 1, 2].filter((j) => (mixed || j !== k || deps.num(g.hi[j] - g.lo[j]) !== deps.num(0)) && deps.num(g.hi[j] - g.lo[j]) !== deps.num(0))
         .map((j) => `${'XYZ'[j]} ${deps.num(g.hi[j] - g.lo[j])}`).join(', ');
       const li = document.createElement('li');

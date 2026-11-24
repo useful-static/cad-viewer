@@ -484,12 +484,8 @@ function graphicsNote() {
 
 // ---------- GPU model sync ----------
 //
-// app.wanted is the ONE model the GPU should hold. Only gpuSync() uploads, one
-// at a time in call order, and it uploads app.wanted as it stands when it runs.
-// A superseded load therefore never uploads, and nothing ever has to be
-// "restored" (the restore re-uploads raced newer loads in every arrangement
-// review rounds 2-3 tried). Each pick reports the mesh it drew, and pickAt
-// rejects answers about any mesh but app.mesh.
+// app.wanted is the ONE model the GPU should hold; only gpuSync() uploads it, one at a time, so a
+// superseded load never uploads; pickAt takes answers about app.mesh only.
 let gpuChain = Promise.resolve();
 const rendererWaiters = [];
 
@@ -1241,12 +1237,8 @@ function clearHover() {
   $('hover').textContent = '';
 }
 
-// The first model this browser shows on a touch-only screen: the gestures,
-// where they can be seen. Their help sits in the parts panel, which a phone
-// keeps closed, so a first visitor saw none of it (feature review
-// 2026-10-29). Once per browser; a note already showing (a view link's) wins.
-// ("☰ for parts" only where the ☰ is shown: a touch tablet's wide layout has the list beside the
-// view -- UI design round 6 R6-2)
+// The first model this browser shows on a touch-only screen: the gestures, once per browser, unless
+// a note is showing ("☰ for parts" only where the ☰ is: R6-2)
 let TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
 function touchHintOnce() {
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
@@ -1651,6 +1643,7 @@ function setPaint(on) {
   updateButtons();
 }
 function paintFace(f) {
+  rememberColours(); // (a wrong face undone by Ctrl+Z, not only by Reset all: R135-3)
   app.faceOverrides.set(f, hexToRgb($('partcolour').value));
   updateButtons();
   recolour(`face painted`);
@@ -2917,9 +2910,27 @@ function rememberVisibility() {
   app.visUndo.push(new Set(app.hidden));
   if (app.visUndo.length > 100) app.visUndo.shift();
 }
+// (a part colour, a painted face and Reset in the same history: Reset all wiped every colour with no
+// way back, and Ctrl+Z after a colour undid an older Hide -- R135-3)
+function rememberColours() {
+  app.visUndo.push({ ov: new Map(ownOverrides()), fo: new Map(ownFaces()) });
+  if (app.visUndo.length > 100) app.visUndo.shift();
+}
 function undoVisibility() {
   if (!app.visUndo.length || !app.header) return;
-  app.hidden = app.visUndo.pop();
+  const e = app.visUndo.pop();
+  if (!(e instanceof Set)) {
+    const ov = ownOverrides(), fo = ownFaces();
+    ov.clear(); for (const [k, c] of e.ov) ov.set(k, c);
+    fo.clear(); for (const [k, c] of e.fo) fo.set(k, c);
+    saveOverrides();
+    if (app.tour) applyStepState(app.tour.tour.steps[app.tour.i]);
+    updateButtons();
+    recolour('undone: colours');
+    tell('undone: colours', 2500, '');
+    return;
+  }
+  app.hidden = e;
   syncTreeChecks();
   pushState();
   showInfo();
@@ -4211,6 +4222,7 @@ function setPartColour(hex) {
   // selected part and lost its own -- high R134-2)
   if (app.paintFaces) { tell(`paint colour set: ${tapWord()} a face to paint it`, 3000); return; }
   if (!app.selected.size) return;
+  rememberColours();
   const c = hexToRgb(hex);
   // (shown now, and -- in a tour -- kept as the visitor's own, which leaving the tour puts back)
   for (const id of app.selected) { app.overrides.set(id - 1, c); if (app.tour) app.tour.base.overrides.set(id - 1, c); }
@@ -4226,6 +4238,7 @@ function setPartColour(hex) {
 function resetPartColour() {
   let n = 0, nf = 0;
   const own = ownOverrides(), faces = ownFaces();
+  if (app.selected.size ? [...app.selected].some((id) => own.has(id - 1)) : own.size || faces.size) rememberColours();
   if (app.selected.size) {
     for (const id of app.selected) { if (own.delete(id - 1)) n++; if (!app.tour) app.overrides.delete(id - 1); }
   } else {
@@ -4531,11 +4544,8 @@ function askBigConversion(buf, name, seq) {
 }
 
 // ---------- more than one model (feature review item 18; js/scene.js) ----------
-// app.scene: [{ base (the model as decoded), name, url, offset [x,y,z] mm }],
-// the first the model opened, the rest added (File > Add model…, ?add=).
-// With more than one, app.baseMesh is their merge: one top-level tree node
-// per model, ids running on, so every body tool works across them. Moving an
-// added model merges again (its ids stay the same).
+// app.scene: [{ base, name, url, offset }], the first opened, the rest added; with more than one,
+// app.baseMesh is their merge (a tree node each, ids running on), merged again on a move.
 
 // Start a load whose model joins the scene instead of replacing it
 // (offset: where the address's ?addat= puts it -- the add's own, ended with it: kept on the app, an
@@ -4641,6 +4651,8 @@ async function showScene(models, { newTree = false } = {}) {
   if (app.measure) app.measure.reset(); // its points were on bodies that may have moved
   app.sourceName = models.map((m) => m.name).join(' + ');
   if (newTree) {
+    // (said: hidden parts came back and Undo emptied unsaid -- R135-4)
+    if (app.hidden.size && app.scene?.length > 1) tell('the scene starts afresh: every part shown, Undo cleared', 4000);
     app.selected.clear();
     app.hidden.clear();
     app.visUndo = [];
@@ -5367,11 +5379,8 @@ async function meshFromSource(src, unit, seq) {
   }
 }
 
-// The unit a unit-less mesh was read in is part of WHICH model is shown: the address carries it
-// (?unit=, beside ?src), so a reload and a view link open the file at that size -- a link's
-// camera, taken in inches, sat 25.4 times off a model opened in mm
-// (kept on the scene's first model: a scene drops meshSource -- no re-read there -- and the address,
-// a view link and the tour maker still name the first model at its size)
+// A unit-less mesh's read unit is part of which model is shown: the address carries it (?unit=), so
+// a reload and a link open it at that size; kept on a scene's first model
 const readUnit = () => (app.scene && app.scene[0] && app.scene[0].unit) || 'mm';
 function syncUnitParam() {
   const u = new URL(location.href);
@@ -6686,11 +6695,8 @@ function drawnBox(ids) {
   return min[0] === Infinity ? null : { min, max };
 }
 
-// The section's range: the model's box, or while exploded the drawn one (so
-// the cut reaches every moved body), kept until the explode changes
-// -- or, for a cut a tour's step put there (app.section.of 'first'), the box of the scene's first
-// model, the one the tour was made on: Add model made the scene's box larger and a step's "t 0.5"
-// cut the V2C at z 5.095, not where it was recorded, z 7.395 (r127 M1; the first is never moved)
+// The section's range: the model's box, the drawn one while exploded, or for a tour step's cut the
+// scene's first model's, the tour's own (r127 M1)
 let secBoxKey = null, secBox = null;
 function sectionBox() {
   const x = app.explode;
@@ -7741,22 +7747,28 @@ function wireInput() {
   };
   $('isolate').onclick = () => {
     if (!app.selected.size) return;
+    const next = new Set(app.header.meshes.map((_, i) => i + 1).filter((id) => !app.selected.has(id)));
+    // (no Undo step for an Isolate that changes nothing: R135-6)
+    if (next.size === app.hidden.size && [...next].every((id) => app.hidden.has(id))) { tell('only the selection is shown already', 2500); return; }
     rememberVisibility();
-    app.hidden = new Set(app.header.meshes.map((_, i) => i + 1).filter((id) => !app.selected.has(id)));
+    app.hidden = next;
     syncTreeChecks();
     pushState();
     viewChanged();
+    announce(`isolated: ${app.selected.size} shown`); // (said, as its Undo is: R135-5)
     if (!noSurface([...app.selected], 'nothing to show')) uncover(); // (blank, unsaid: R33-2)
   };
   $('hide').onclick = () => {
     if (!app.selected.size) return;
     rememberVisibility();
+    const n = app.selected.size;
     for (const id of app.selected) app.hidden.add(id);
     app.selected.clear();
     syncTreeChecks();
     pushState();
     showInfo();
     viewChanged();
+    announce(`${n} hidden`);
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
@@ -7864,6 +7876,7 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
+    announce('everything shown');
   };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; app.section.held = null; updateButtons(); viewChanged(); };
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
@@ -7970,7 +7983,8 @@ function wireInput() {
       const t0 = e.target;
       const field = (t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type))
         || t0.tagName === 'TEXTAREA' || t0.isContentEditable;
-      if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
+      // (while measuring with something to take back, Measure's own Undo: R135-7)
+      if (!field && app.measure?.on && (app.measure.pending.length || app.measure.results.length)) { e.preventDefault(); app.measure.undo(); } else if (!field && app.visUndo.length) { e.preventDefault(); undoVisibility(); }
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -8524,11 +8538,7 @@ async function startFromAddress(early) {
       if (params.get('tour') && !new URLSearchParams(location.search).has('tour')) tell(`the tour ${r.error}`, 6000);
       else failApart(`the tour ${r.error}`, true);
     }
-    // (behind an embed's poster: View in 3D plays it, over the model it opens -- nothing said, and
-    // not started here too, which a press before the tour was read did: r50 Q3, r54 Q2. Else the
-    // one ending, View in 3D's too: addressTourEnds -- played by tourPlaysHere while the address's,
-    // told when there is nothing to play over unless its own model failed: r48 A1, A2; r49 Q5;
-    // r50 A5; r51 Q4; r55 Q3; r57 A1, Q1)
+    // (behind a poster View in 3D plays it; else addressTourEnds, the one ending: r48-r57)
     if (!poster) addressTourEnds(r.error ? null : r, tourOwn && app.status === 'error');
     // (read: the line no longer says it is being read -- r51, the start-up table)
     if (app.status === 'idle' && app.statusMsg === 'reading the tour…') setStatus('idle', idleText());

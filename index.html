@@ -135,7 +135,10 @@
   /* until main.js has something of its own to show (html.started) the viewer says it is coming, and
      until it has run (html.booted) the toolbar waits unseen: on a slow link its menus lay flat in
      two rows of presses that did nothing for 8 s (high R133-1; the embed's alone said it) */
-  html:not(.booted) :is(#tb > :not(.title), #hdend, #parts > *) { visibility:hidden; } /* (the name kept: R134-9) */
+  html:not(.booted) :is(#tb > :not(.title), #hdend, #parts > *, #embedbar, #embedhint) { visibility:hidden; } /* (the name kept: R134-9; an embed's Fit and Open too: R135-2) */
+  /* (one row tall meanwhile, as it will be: unfolded it stood 72-104 px, and the page jumped 64 px up
+     at boot -- R135-1, R135-8) */
+  html:not(.booted) #tb { flex-wrap:nowrap; overflow:hidden; }
   html:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
@@ -970,7 +973,7 @@
   <span class="sep"></span>
   <div class="menu" id="showmenu"><button class="menu-btn" aria-expanded="false" aria-controls="showpanel" title="Isolate, hide and show parts">Show</button>
     <div class="menu-panel" id="showpanel" aria-label="Show">
-      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all or checkbox (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
+      <button id="isolate" title="Show only the selected parts (I)" aria-keyshortcuts="I" disabled>Isolate</button><button id="hide" title="Hide the selected parts (H)" aria-keyshortcuts="H" disabled>Hide</button><button id="showall" title="Show every hidden part (A)" aria-keyshortcuts="A" disabled>Show all</button><button id="undo" title="Undo the last Hide, Isolate, Show all, checkbox, colour, paint or Reset (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>Undo</button>
     </div></div>
 </div><div id="hdend"><button id="helpbtn" aria-expanded="false" aria-controls="helppop" aria-keyshortcuts="?" title="Controls, shortcuts and graphics (?)">?</button><button id="fullscreen" aria-pressed="false" aria-label="Full screen" title="Full screen" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-on" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><path class="fs-off" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/></svg></button></div></header>
 <aside id="parts" aria-label="Parts">
