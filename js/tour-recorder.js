@@ -282,7 +282,8 @@ export function createTourRecorder(api) {
     try { tour = api.validate(text()); } catch (e) { note(`not ready: ${e.message}`); return; }
     api.preview(tour, from, play);
   }
-  el.sGo.onclick = () => preview(Math.max(0, draft.sel), false);
+  // (a phone's maker folds as the step plays: the focus to Preview, not the page -- R129-6)
+  el.sGo.onclick = () => { preview(Math.max(0, draft.sel), false); if (!el.sGo.offsetParent) el.play.focus?.(); };
   el.play.onclick = () => preview(0, true);
 
   el.save.onclick = () => {

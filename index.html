@@ -410,6 +410,11 @@
     #touredit { top:auto; bottom:calc(8px + var(--optbar-h, 0px)); max-height:min(50%, calc(100% - 16px - var(--optbar-h, 0px))); }
     #stage.touring #touredit, #stage.touring.tournarrow #touredit { top:8px; bottom:auto; max-height:none; }
     #stage.touring #touredit > :not(.tehead, .terow:has(#teplay)) { display:none; }
+    /* (its head and × kept in sight as the sheet scrolls: R129-7; the view's note above the sheet, and
+       none under its head while a draft plays: R129-1) */
+    #touredit .tehead { position:sticky; top:-10px; z-index:1; background:var(--panel); margin:-10px -12px 4px; padding:10px 12px 0; }
+    #stage:has(#touredit:not([hidden])) #hover { bottom:calc(min(50%, 100% - 16px - var(--optbar-h, 0px)) + 16px + var(--optbar-h, 0px)); }
+    #stage.touring:has(#touredit:not([hidden])) #hover { visibility:hidden; }
   }
   #touredit .tehead { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
   #touredit .tehead b { font-size:14px; }

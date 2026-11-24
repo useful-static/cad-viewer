@@ -180,12 +180,9 @@ function sayNow(text) {
   requestAnimationFrame(() => { if (seq === saySeq) el.textContent = text; });
 }
 
-// A note for the user: shown where the view's short notes go (the hover line, for ms) and read
-// out (`said`, if it says it otherwise). The one way a note reaches anyone: a note only shown --
-// "export failed", "the picture could not be copied" -- was never heard, and the status line is not
-// drawn (r45 A1, Q1). flashHover is called only from here.
-// (text empty: read out only -- Measure off; said null: shown only, the words said beside it by the
-// caller in its own words -- a tour step's)
+// A note for the user, shown on the hover line for ms and read out (`said`, if it differs): the one
+// way a note reaches anyone (r45 A1); flashHover only from here. Empty text: read only; said null
+// or '': shown only.
 function tell(text, ms = 1500, said = text) {
   if (text) flashHover(text, ms);
   if (said) announce(said);
@@ -3295,13 +3292,8 @@ function wireMenus() {
     const btn = m.querySelector('.menu-btn');
     // detail 0 = a keyboard press (Enter / Space): focus moves into the panel
     btn.onclick = (e) => setMenu(m, !m.classList.contains('open'), e.detail === 0);
-    // an action (Open… included) closes its menu; a toggle (Ortho, Z up)
-    // leaves it open to show its new state
-    // A keyboard pick (Enter / Space: a click with no pointer, detail 0) made
-    // inside the panel gives the focus to the menu's button: closing the panel
-    // dropped it to the page, with no focus shown (review r18). Whether the
-    // focus was in the menu is read before the item acts: Hide disables
-    // itself, and the browser then moves the focus off it to the page.
+    // an action closes its menu, a toggle leaves it open; a keyboard pick gives the focus to the
+    // menu's button, read before the item acts (Hide disables itself) -- review r18
     const panel = m.querySelector('.menu-panel');
     let focusIn = false;
     panel.addEventListener('click', () => { focusIn = m.contains(document.activeElement); }, true);
@@ -5586,7 +5578,8 @@ function setSheet(i) {
   app.dxf.view = dxfViewLib.createDxfView($('view2d'), shown, {
     // (a touch has no hover, so the layer a tap selects is named in the view, as a tapped part is:
     // UI design round 11 R11-4)
-    onSelect: (layer) => { syncLayerRows(); showInfo(); announce(layer ? `layer ${layer} selected` : 'nothing selected'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500); },
+    // (a press on blank paper with nothing selected says nothing; a layer let go, 3D's words -- R129-3)
+    onSelect: (layer) => { const had = app.dxf.selSaid; app.dxf.selSaid = layer || ''; syncLayerRows(); showInfo(); if (layer || had) announce(layer ? `layer ${layer} selected` : 'selection cleared'); if (layer && app.pointerType === 'touch') tell(`layer ${layer}`, 2500); },
     onHover: (what, snap) => hoverLabel(!what ? '' : snap ? what : `layer ${what}`),
     onMeasure: (r) => { tell(r.text, 4000); app.measure?.sync2D(app.dxf?.view); },
     onPending: () => app.measure?.sync2D(app.dxf?.view),
@@ -5707,7 +5700,7 @@ function toggle2DMeasure() {
   if (kb && !on) toolFocus('measure').focus();
   // (a drawing's results go with Measure: said, as nothing else did -- R23-3)
   const off = n ? `measure off: ${n} ${n === 1 ? 'result' : 'results'} cleared` : 'measure off';
-  tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres)` : off, 3000, on ? 'measure on' : off);
+  tell(on ? `Measure: ${tapWord()} two points (they snap to line ends, middles and circle centres${tapWord() === 'click' ? '; Esc to stop' : ''})` : off, 3000, on ? 'measure on' : off); // (as 3D's: R129-5)
 }
 
 // out of 2D mode (a 3D model opened, or a new DXF replacing this one)
@@ -5726,6 +5719,16 @@ function leave2D() {
   refold();
 }
 
+// a sheet's items per layer, each under every layer it answers to -- its own and a frozen
+// reference's it is drawn under (r65 A3); an outline is its polyline's
+function layerTally(d) {
+  const count = new Map();
+  const tally = (it) => { for (const n of dxfLib.layersOf(it)) count.set(n, (count.get(n) || 0) + 1); };
+  for (const p of d.paths) if (!p.outline) tally(p);
+  for (const t of d.texts) tally(t);
+  return count;
+}
+
 // the parts list as the drawing's layers: colour, name, line count, a box
 function buildLayerList() {
   app.releaseInfo?.(); // (a list built afresh: the old panel's height is not this one's)
@@ -5735,12 +5738,7 @@ function buildLayerList() {
   $('treefilter').hidden = true;
   // (the sheet shown: a layout lists the layers it draws)
   const d = app.dxf.shown || app.dxf.drawing;
-  const count = new Map();
-  // (an item under each layer it answers to -- its own and a frozen reference's it is drawn under:
-  // a frozen layer holding only a reference had no row, and what it holds could not be shown -- r65 A3)
-  const tally = (it) => { for (const n of dxfLib.layersOf(it)) count.set(n, (count.get(n) || 0) + 1); };
-  for (const p of d.paths) if (!p.outline) tally(p); // (an outline is its polyline's)
-  for (const t of d.texts) tally(t);
+  const count = layerTally(d);
   for (const l of d.layers) {
     if (!count.get(l.name)) continue; // an empty layer: nothing to show or hide
     const li = document.createElement('li');
@@ -5753,7 +5751,11 @@ function buildLayerList() {
     cb.type = 'checkbox';
     cb.checked = app.dxf.view.layerOn(l.name);
     cb.setAttribute('aria-label', `Show layer ${l.name}`);
-    cb.onchange = () => app.dxf.view.setLayerOn(l.name, cb.checked);
+    cb.onchange = () => {
+      app.dxf.view.setLayerOn(l.name, cb.checked);
+      // (a layer hidden is let go, as a hidden part is: it stayed tinted and named -- R129-9)
+      if (!cb.checked && app.dxf.view.selected === l.name) app.dxf.view.select(null);
+    };
     cb.tabIndex = -1; // (Space on the row shows / hides: one tab stop, as the parts list)
     wrap.append(cb);
     const lab = document.createElement('span');
@@ -5818,7 +5820,9 @@ function fillInfo2D(el) {
     row(...dxfViewLib.sizeRow(e, d.units));
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
-  row('layers', `${fmtInt(d.layers.length)}`);
+  // (the layers the list shows, of the sheet shown: "layers 2" over one row -- R129-2)
+  const tl = layerTally(d);
+  row('layers', `${fmtInt(d.layers.filter((l) => tl.get(l.name)).length)}`);
   // (a wide polyline's outline is its polyline's, a viewport's frame is not the drawing's: neither
   // a shape -- the layer list still counts a frame, so its layer can be hidden)
   // (what the drawing draws as it opens; what a layer off or frozen holds said apart -- a frozen
@@ -5834,7 +5838,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? '; the "Model" menu lists the layouts' : ''})`); // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
+    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? `; ${$('fhsheet').hidden ? 'the' : 'File >'} "Model" menu lists the layouts` : ''})`); // (folded into File on a phone: R129-8) // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
@@ -7265,13 +7269,8 @@ function wireInput() {
   // a finger covers what it aims at: on a touch screen, a held finger aims
   // this far above itself
   const AIM_LIFT = 48;
-  // One gesture at a time: only the pointer that started it moves, ends or
-  // clicks it. A second MOUSE/PEN pointer is ignored instead of hijacking the
-  // first. A second FINGER turns a one-finger orbit into a pinch (zoom) +
-  // two-finger pan; the orbit it interrupts is dropped (no click). A finger
-  // left alone after a pinch does nothing until it is lifted (it has no
-  // drag), so lifting one finger does not jerk the view into an orbit. Fingers
-  // never take over a mouse or pen drag.
+  // One gesture at a time, the starting pointer's: a second mouse / pen is ignored; a second finger
+  // makes a pinch + pan (the orbit dropped), and the finger left after it does nothing till lifted.
   let drag = null;
   const touches = new Map(); // pointerId -> [clientX, clientY], fingers on the stage
   let pinch = null; // { ids: [a, b] } while two fingers are down
@@ -8076,7 +8075,7 @@ function wireInput() {
     // a press: the panel, Measure's list, point, Measure, Paint, Walk, Explode, Section, selection
     const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
-    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), true)) || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
+    const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), tell('point dropped', 2000), true)) /* (as 3D: R129-4) */ || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
         // (then a selected layer, then an active embed lets the page have the wheel back, as in 3D: round 10 R10-2)
         : app.dxf.view.selected ? app.dxf.view.select(null) : app.embed && app.embedActive ? (setEmbedActive(false), true) : false)) : app.measure.escape()
         || escTool() || (app.embed && app.embedActive && !app.selected.size ? (setEmbedActive(false), true) : false)
