@@ -132,9 +132,11 @@
   html.dark #embedhint { background:rgba(15,23,42,.88); }
   html.dark .pbar { background:#273449; }
   html.dark #stage:not([data-bg="paper"]) .mlabel { background:rgba(15,23,42,.92); } /* (the slate frame's, as the hover note: R125-7) */
-  /* an embed, until main.js has something of its own to show: the viewer
-     says it is coming (main.js adds html.started) */
-  html.embed:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
+  /* until main.js has something of its own to show (html.started) the viewer says it is coming, and
+     until it has run (html.booted) the toolbar waits unseen: on a slow link its menus lay flat in
+     two rows of presses that did nothing for 8 s (high R133-1; the embed's alone said it) */
+  html:not(.booted) :is(#tb, #hdend, #parts > *) { visibility:hidden; }
+  html:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
   /* hidden means hidden: an element's own display rule beat the attribute, and a hidden control stayed
@@ -652,6 +654,9 @@
     button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; border-color:Highlight; color:HighlightText; }
     #tree .row.sel { forced-color-adjust:none; background:Highlight; }
     #tree .row.sel, #tree .row.sel :not(input) { color:HighlightText; }
+    /* (their rings the system's too: the page's orange stayed, 2.3:1 on white, 1:1 on the row -- R133-7) */
+    button[aria-pressed=true]:focus-visible:not(#_) { outline-color:CanvasText; } /* (:not(#_): over the ring rule's id) */
+    #tree .row.sel :focus-visible:not(#_) { outline-color:HighlightText; }
     :is(#view, #view2d):focus-visible { outline:none; }
     #stage:has(> :is(#view, #view2d):focus-visible)::after { content:''; position:absolute; inset:0; z-index:5; pointer-events:none;
       border:3px solid Highlight; outline:2px solid Canvas; outline-offset:-5px; }

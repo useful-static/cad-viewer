@@ -214,7 +214,7 @@ function setStatus(s, msg) {
   $('status').textContent = msg || s;
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
-  if (!PROGRESS_STATES.has(s)) $('progress').hidden = true;
+  if (!PROGRESS_STATES.has(s)) { $('progress').hidden = true; const pd = $('pdetail'); if (pd?.style) pd.style.minHeight = ''; }
   // (a card, a model or an error is now the view's to show: index.html's
   // "Loading the 3D viewer…" goes)
   // ("?.": tests/test-scene.mjs runs this function's own code with no page)
@@ -1779,8 +1779,10 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
     hasUrl && nLocal ? `it leaves out the ${nLocal === 1 ? 'added model' : `${nLocal} added models`} opened from this device` : '',
     nNotes > MAX_NOTES ? `it carries the first ${MAX_NOTES} of its ${nNotes} notes (a link is short)` : '',
     !nMeas ? '' : is2d ? `it leaves out the ${meas}` : `it carries notes, not the ${meas} (copy them from the results list)`,
-    coloured ? 'it leaves out the part colours (they stay in this browser)' : '', // (R131-2)
-    painted ? 'it leaves out the painted faces (they last while this model is open)' : ''].filter(Boolean); // (R132-6)
+    // (R131-2, R132-6; both in one clause, not two "it leaves out" in a 3 s note: R133-9)
+    coloured && painted ? 'it leaves out the part colours and painted faces'
+      : coloured ? 'it leaves out the part colours (they stay in this browser)'
+        : painted ? 'it leaves out the painted faces (they last while this model is open)' : ''].filter(Boolean);
   if (copied) return `View link copied${clauses.length ? `: ${clauses.join('; ')}` : ''}`;
   return clauses.length ? `The view link: ${clauses.join('; ')}` : '';
 }
@@ -3343,7 +3345,10 @@ function syncOptbar() {
   // the bar. A tight fit put a model's near corner under a bar that appeared
   // later (Measure turned on), where no click can reach it. A bar that goes
   // or shrinks covers nothing: the view stays (closing a tool must not move it).
-  if (!card && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
+  // (not under a measurement: its first result wrapped the row at 150 % zoom, the model re-fitted
+  // under the points -- R133-6)
+  const measuring = app.measure?.on && app.measure.results?.length;
+  if (!card && !measuring && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
 }
 
 // the camera is where the last Fit put it (nothing has moved it since)
@@ -3561,11 +3566,7 @@ function applyListEntry() {
       // and a list model with an ?add= never played its tour -- r59, the sweep's I15)
       const key = autoTourKey();
       const t = e.tours[0];
-      // (after the address's ?add=s, as the link's view waits for them: a model joining ends the tour
-      // over the scene -- showScene --, and the entry's tour started, then was ended at once by the
-      // ?add= it was opened with: r60, the differential against the real page)
-      // (and still this open's: an older open's wait, ending once Back had opened the model again,
-      // started its tour over the new open, under its ?add= -- r62)
+      // (after the address's ?add=s, which end a tour as they join, and still this open's: r60, r62)
       const open = app.openCount;
       // (and held back, when it would start, by a link's view landed meanwhile -- a #view= edited in
       // during the ?add=s landed, then the tour took the camera: r61 Q2)
@@ -4221,12 +4222,12 @@ function setPartColour(hex) {
 // Reset: the selected parts' picked colours, or with nothing selected every
 // picked colour of this model; the parts take the scheme's colours again
 function resetPartColour() {
-  let n = 0;
+  let n = 0, nf = 0;
   const own = ownOverrides(), faces = ownFaces();
   if (app.selected.size) {
     for (const id of app.selected) { if (own.delete(id - 1)) n++; if (!app.tour) app.overrides.delete(id - 1); }
   } else {
-    n = own.size + faces.size;
+    n = own.size; nf = faces.size;
     own.clear();
     faces.clear(); // and the painted faces
   }
@@ -4236,7 +4237,9 @@ function resetPartColour() {
   if (app.tour) applyStepState(app.tour.tour.steps[app.tour.i]);
   updateButtons();
   // (shown too: a link's "leaves out the part colours" stayed over it -- R132-11)
-  if (n) { const w = `${n} part colour${n > 1 ? 's' : ''} reset`; recolour(w); tell(w, 2500, ''); }
+  // (a painted face named as one, as Copy view link names them: "1 part colour reset" -- R133-8)
+  const w = [n ? `${n} part colour${n > 1 ? 's' : ''}` : '', nf ? `${nf} painted face${nf > 1 ? 's' : ''}` : ''].filter(Boolean).join(' and ');
+  if (w) { recolour(`${w} reset`); tell(`${w} reset`, 2500, ''); }
 }
 
 // What the picker shows: the first selected body's colour as drawn
@@ -4339,12 +4342,8 @@ function checkFits(r, mesh) {
   }
 }
 
-// stepBuf: the tessellated buffer when this load came from a STEP import (what
-// Save .cadmesh writes), null for a .cadmesh load.
-// conversion (a conversion only): { unmeshedFaces, threads } -- the faces the
-// converter returned without triangles, named in the info panel and read out
-// with the ready line, and whether it ran on the multi-core converter.
-// (reading: a unit-less mesh's { unit, unitless }, set on the scene as it is made -- r117 M3)
+// stepBuf: a STEP import's tessellated buffer (Save .cadmesh's), null for a .cadmesh; conversion:
+// { unmeshedFaces, threads }; reading: a unit-less mesh's { unit, unitless } (r117 M3)
 async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, reading = null) {
   const unmeshedFaces = conversion?.unmeshedFaces || 0;
   // Each step names itself (the loading card) and lets that paint first:
@@ -4508,17 +4507,17 @@ function keepEdges(base, v) {
 // conversion never asks (the cache is read before this).
 const BIG_PHONE_MB = 20;
 function askBigConversion(buf, name, seq) {
-  const mbs = buf.byteLength / 1e6;
+  const mbs = buf.byteLength / 2 ** 20; // (as the download's and conversion's cards: "26 MB" here, "24.5 MB" there -- R133-2)
   // (app.bigAsk: { mb } makes any device ask past that size: tests/ui-checks.py)
   if (app.bigAsk ? mbs < app.bigAsk.mb : !coarseOnly() || mbs < BIG_PHONE_MB) return Promise.resolve(true);
   // the reference machine's time from the size alone, rounded up
   const secs = forecastTotal(forecast({ bytes: buf.byteLength }));
   const mins = Math.max(1, Math.ceil(secs / 60));
-  setStatus('loading', `${name} is ${mbs.toFixed(0)} MB: convert it?`);
-  showProgress(`Convert ${name}?`, 0, `${mbs.toFixed(0)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
+  setStatus('loading', `${name} is ${mb(buf.byteLength)} MB: convert it?`);
+  showProgress(`Convert ${name}?`, 0, `${mb(buf.byteLength)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
     app.embed ? '' : 'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.'); // (an embed has no File menu: R125-6)
   $('pgo').hidden = false;
-  announce(`${name} is ${mbs.toFixed(0)} MB: Convert anyway, or Cancel`);
+  announce(`${name} is ${mb(buf.byteLength)} MB: Convert anyway, or Cancel`);
   $('pgo').focus();
   return new Promise((resolve) => {
     const finish = (v) => { clearInterval(t); $('pgo').hidden = true; $('pgo').onclick = null; resolve(v); };
@@ -5079,11 +5078,8 @@ function edgesOf(base) {
   // (the edges now, drawn now -- the draw came only once the facts' build ended; the facts built
   // below, and the build's edges drawn in their place when it ends: syncEdges keys on the arrays)
   if (base.edges && !info.value) { info.value = fileEdgesValue(base, cap); if (app.baseMesh === base) refreshEdges(); }
-  // (built by the worker on copies: the model's own buffers stay with the page and the GPU upload;
-  // with no module worker there are none -- not built on the page, where a big model's would hold
-  // the tab -- and the volume, the cut fill and Clearance's part-inside test go without, said)
-  // (one build a model: a build already going for it is awaited, not stopped and begun again --
-  // every move restarted a stale model's from nothing)
+  // (built by the worker on copies; with no module worker none, the volume, cut fill and inside test
+  // going without, said; one build a model, a running one awaited)
   const going = app.edgeJobs.get(base);
   if (going) return going.promise;
   // (a build that failed for the model itself -- the worker's own refusal, no module worker -- is
@@ -5210,11 +5206,8 @@ async function loadAny(buf, name, seq, extras = []) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
-  // A name that says no format this viewer opens (a URL with no extension; x.gz with nothing
-  // inside its name, r20) is opened by what its bytes are (js/formats.js sniffFormat), gzipped
-  // ones unpacked first (r19), and named for it. The name changes only for what it turned out
-  // to be: an unknown x.gz is refused as "x.gz", not "x" (r21); it is unpacked once, whatever
-  // it is (a .cadmesh opens raw, anything else is refused below in plain words)
+  // A name that says no format is opened by its bytes (sniffFormat), gzip unpacked once first, and
+  // renamed only for what it turned out to be (r19-r21)
   if (!formatOfName(name)) {
     let body = buf;
     if (isGzip(buf) && !(body = await unpackGz(buf, name, seq))) return;
@@ -5590,11 +5583,8 @@ function forgetAddressModel() {
   history.replaceState(history.state, '', u);
   app.entrySearch = u.search; // (the entry shown, rewritten: wireHistory -- r60 A1)
 }
-// What an address loses when another model replaces the one it names -- a list pick's or a device
-// file's: the model, its unit, the address's ?add=s and their places, its tour, and its view (each
-// of those was the replaced model's). One rule for both: a pick dropped add / addat / tour / step, a
-// dropped file only the model and the unit, and the view stayed to read as the device file's
-// (r59 A4, r60 A2, and the sweep's I6 under the harness's address writes).
+// What an address loses when another model (a pick or a device file) replaces the one it names:
+// its model, unit, ?add=s and places, tour and view, by one rule for both (r59 A4, r60 A2, I6).
 const ADDRESS_MODEL_PARAMS = [...MODEL_PARAMS, 'unit', 'add', 'addat', 'tour', 'step'];
 function dropAddressModel(u) {
   for (const k of ADDRESS_MODEL_PARAMS) u.searchParams.delete(k);
@@ -5965,6 +5955,7 @@ function tessellate(buf, format, seq, name, threads) {
       return out;
     };
     const STEPS = ['reading the file', 'building the parts', 'meshing', 'writing the result'];
+    let detailH = 0;
     const show = () => {
       if (stale(seq)) return;
       const now = performance.now();
@@ -5989,7 +5980,8 @@ function tessellate(buf, format, seq, name, threads) {
         const quiet = (now - conv.moved) / 1000;
         // once a step has said "longer than expected" it keeps saying so: a 1%
         // twitch after a long stall would otherwise bring back a short pace
-        const left = overStep === st ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
+        // (and through the steps after: it switched back to a fresh estimate at each -- R133-4)
+        const left = overStep >= 0 && st >= overStep ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
         if (typeof left !== 'number') overStep = st;
         // the bar: the forecast's share of the conversion done, never moving back
         const total = forecastTotal(fc) * factor;
@@ -6001,13 +5993,16 @@ function tessellate(buf, format, seq, name, threads) {
         const leftText = typeof left !== 'number' ? (early ? '' : 'taking longer than expected')
           : left < 1 ? 'almost done' : `~${fmt(left)} left (estimate)`;
         almost = leftText === 'almost done';
-        const pct = (st === 1 || st === 2) && f < 1 && !almost ? ` · ${Math.round(f * 100)}%` : '';
-        detail = `step ${Math.min(st + 1, 3)} of 3: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
+        const pct = (st === 1 || st === 2) && f > 0 && f < 1 && !almost ? ` · ${Math.round(f * 100)}%` : ''; // (no "meshing · 0%" under a bar at 58 %: R133-11)
+        detail = `step ${st + 1} of ${STEPS.length}: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
+        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction > 0 && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
+      // (the detail line only grows while it converts: Cancel moved 9 px as it rewrapped -- R133-4)
+      const pd = globalThis.document?.getElementById('pdetail'); // ("?.": test-scene runs this with no page)
+      if (pd) { pd.style.minHeight = ''; detailH = Math.max(detailH, pd.offsetHeight); pd.style.minHeight = `${detailH}px`; }
     };
     const tick = setInterval(show, 1000);
     let settled = false;
@@ -7658,10 +7653,16 @@ function wireInput() {
   stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('drop'); });
   $('emptyopen').onclick = () => $('open').click();
   // File > Add model…: the picked file joins the scene
-  $('addmodelbtn').onclick = () => { closeMenus(); $('addmodel').click(); };
+  $('addmodelbtn').onclick = () => {
+    closeMenus();
+    if (PROGRESS_STATES.has(app.status)) { tell('wait for the model that is loading, then Add model…', 4000); return; }
+    $('addmodel').click();
+  };
   $('addmodel').addEventListener('change', () => {
     const files = [...$('addmodel').files];
     $('addmodel').value = '';
+    // (not while a model loads, by the button or a pick: it silently ended the download -- R133-5)
+    if (PROGRESS_STATES.has(app.status)) { tell('wait for the model that is loading, then Add model…', 4000); return; }
     addPicked(files);
   });
   $('clearbtn').onclick = () => runClearance();
@@ -7958,6 +7959,7 @@ function wireInput() {
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
+    tell(`saved ${saveBase(name)}.cadmesh, ${mb(bytes.length)} MB`, 3000); // (said, as Save picture and STL: R133-10)
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);
@@ -8414,11 +8416,8 @@ async function startFromAddress(early) {
   let listed = null;
   let src = params.get('src');
   const place = modelNameIn(params);
-  // (behind a poster the list is read beside it, not before it: the poster goes up at once and View
-  // in 3D opens the name once the list has answered -- the "reading the model list" card showed for
-  // up to 20 s for a model nobody had asked to open: r57 Q5)
-  // (src none: View in 3D opens the place's entry once the list has answered -- a relative ?src= the
-  // list names stayed the raw string and opened from the page's address, a 404: r58 Q3)
+  // (behind a poster the list is read beside it, and View in 3D opens the name or the place's entry
+  // once it has answered: r57 Q5, r58 Q3)
   if (place && posterAsked(params) && untouched()) { listed = readLists(lists, () => false); src = null; }
   else if (place) {
     // the model is on its way: its card says so, not "No model to show" for
@@ -8670,5 +8669,6 @@ async function selftest() {
 guard(main()).then(() => { if (params.get('selftest')) return selftest(); });
 // (the module's last statement: every one above it ran -- js/boot-check.js's sign the page started;
 // window.__cadv, set early, missed a throw in any later top-level statement: r74 Q7)
+document.documentElement.classList.add('booted'); // (the toolbar shown once it works: R133-1)
 window.__cadvStarted = true;
 document.getElementById('bootslow')?.remove(); // (index.html's no-script card: r76 Q4)
