@@ -1654,6 +1654,7 @@ function paintFace(f) {
   app.faceOverrides.set(f, hexToRgb($('partcolour').value));
   updateButtons();
   recolour(`face painted`);
+  if (app.selected.size) tell('face painted: it shows once deselected', 3000, ''); // (R134-5)
 }
 
 // File > Print (feature review item 24): the picture Save picture makes, alone
@@ -3341,12 +3342,8 @@ function syncOptbar() {
   bar.hidden = card || ![...bar.children].some((o) => !o.hidden);
   $('stage').style.setProperty('--optbar-h', `${optbarHeight()}px`);
   for (const o of bar.children) optFade(o);
-  // The bar came or grew over a view still as Fit left it: fit again, above
-  // the bar. A tight fit put a model's near corner under a bar that appeared
-  // later (Measure turned on), where no click can reach it. A bar that goes
-  // or shrinks covers nothing: the view stays (closing a tool must not move it).
-  // (not under a measurement: its first result wrapped the row at 150 % zoom, the model re-fitted
-  // under the points -- R133-6)
+  // A bar that came or grew over a view still as Fit left it fits again above it; one that goes or
+  // shrinks leaves the view; nor under a measurement (R133-6)
   const measuring = app.measure?.on && app.measure.results?.length;
   if (!card && !measuring && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
 }
@@ -4133,7 +4130,7 @@ function updateButtons() {
   const all = !sel.length;
   $('partreset').disabled = all ? !ownOverrides().size && !ownFaces().size : !sel.some((id) => ownOverrides().has(id - 1));
   $('partreset').textContent = all ? 'Reset all' : 'Reset';
-  $('partreset').title = all ? 'Give every recoloured part its scheme colour again'
+  $('partreset').title = all ? 'Give every recoloured part its scheme colour again, and clear the painted faces' // (R134-8)
     : 'Give the selected parts their scheme colour again';
 }
 
@@ -4210,13 +4207,18 @@ function recolour(announcement) {
 // The colour of the selected parts: pick one (every selected body takes it),
 // or reset them to the scheme's colours. Kept for this model while it is open.
 function setPartColour(hex) {
+  // (with Paint on the swatch is the paint's colour, not the selection's: choosing it recoloured the
+  // selected part and lost its own -- high R134-2)
+  if (app.paintFaces) { tell(`paint colour set: ${tapWord()} a face to paint it`, 3000); return; }
   if (!app.selected.size) return;
   const c = hexToRgb(hex);
   // (shown now, and -- in a tour -- kept as the visitor's own, which leaving the tour puts back)
   for (const id of app.selected) { app.overrides.set(id - 1, c); if (app.tour) app.tour.base.overrides.set(id - 1, c); }
   saveOverrides();
   updateButtons();
-  recolour(`${app.selected.size} part${app.selected.size > 1 ? 's' : ''} recoloured`);
+  const w = `${app.selected.size} part${app.selected.size > 1 ? 's' : ''} recoloured`;
+  recolour(w);
+  tell(`${w}: it shows once deselected`, 3000, ''); // (under the selection's tint it did not show: R134-5)
 }
 
 // Reset: the selected parts' picked colours, or with nothing selected every
@@ -4513,6 +4515,7 @@ function askBigConversion(buf, name, seq) {
   // the reference machine's time from the size alone, rounded up
   const secs = forecastTotal(forecast({ bytes: buf.byteLength }));
   const mins = Math.max(1, Math.ceil(secs / 60));
+  if (panelOpen()) setPanel(false); // (the question under a phone's open drawer, its button covered: R134-3)
   setStatus('loading', `${name} is ${mb(buf.byteLength)} MB: convert it?`);
   showProgress(`Convert ${name}?`, 0, `${mb(buf.byteLength)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
     app.embed ? '' : 'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.'); // (an embed has no File menu: R125-6)
@@ -5523,11 +5526,7 @@ async function loadDxf(buf, name, seq) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
   setStatus('loading', `reading ${name}`);
-  // a DWG by its bytes (its tag, js/formats.js DWG_TAG: an unread version is refused by name by the reader), a DXF
-  // by its start whatever its name (r108 D6: its first SNIFF_BYTES, the six of the DWG tag not enough to see one),
-  // else by its name
-  // (its name by the formats table, the one rule: an extension added to the DWG row was read as a DXF -- r70 A5)
-  // (by js/formats.js drawingReaderOf, the list check's rule too: r80 A4)
+  // a DWG by its tag, a DXF by its start, else by its name: formats.js drawingReaderOf (r70, r80, r108)
   const format = drawingReaderOf(name, new Uint8Array(buf, 0, Math.min(SNIFF_BYTES, buf.byteLength)))?.label || 'DXF';
   showProgress(`Opening ${name}`, null, `reading ${mb(buf.byteLength)} MB of ${format}`);
   await nextPaint();
@@ -5993,16 +5992,16 @@ function tessellate(buf, format, seq, name, threads) {
         const leftText = typeof left !== 'number' ? (early ? '' : 'taking longer than expected')
           : left < 1 ? 'almost done' : `~${fmt(left)} left (estimate)`;
         almost = leftText === 'almost done';
-        const pct = (st === 1 || st === 2) && f > 0 && f < 1 && !almost ? ` · ${Math.round(f * 100)}%` : ''; // (no "meshing · 0%" under a bar at 58 %: R133-11)
+        const pct = (st === 1 || st === 2) && Math.round(f * 100) >= 1 && f < 1 && !almost ? ` · ${Math.round(f * 100)}%` : ''; // (no "· 0%" under a bar at 58 %: R133-11, R134-6)
         detail = `step ${st + 1} of ${STEPS.length}: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && conv.fraction > 0 && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
+        ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size} MB)`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
       // (the detail line only grows while it converts: Cancel moved 9 px as it rewrapped -- R133-4)
       const pd = globalThis.document?.getElementById('pdetail'); // ("?.": test-scene runs this with no page)
-      if (pd) { pd.style.minHeight = ''; detailH = Math.max(detailH, pd.offsetHeight); pd.style.minHeight = `${detailH}px`; }
+      if (pd) { pd.style.minHeight = ''; detailH = Math.max(detailH, pd.offsetHeight); pd.style.minHeight = `max(${detailH}px, 2.8em)`; } // (two lines from the first tick: R134-7)
     };
     const tick = setInterval(show, 1000);
     let settled = false;
@@ -6842,13 +6841,8 @@ function showInfo() {
   $('info').hidden = !el.childElementCount;
 }
 
-// "measured from": the whole model's corner, or the parts chosen with
-// Measure from selection; its buttons are never rebuilt (the focus stays)
-// mass: the selection's closed bodies times the material's density (mm³ /
-// 1000 = cm³); with nothing selected it says why it waits (a whole model is
-// rarely one material)
-// The density in g/cm³: the material picked, or the one typed after
-// "other…"; null while the typed one is not a usable number
+// "measured from": the model's corner or Measure from selection's parts (its buttons never rebuilt);
+// mass: the selection's closed bodies × density (g/cm³: the material's, or a typed one, else null)
 function density() {
   if ($('material').value !== 'custom') return Number($('material').value);
   const d = Number($('density').value);
@@ -7959,7 +7953,7 @@ function wireInput() {
       return;
     }
     downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
-    tell(`saved ${saveBase(name)}.cadmesh, ${mb(bytes.length)} MB`, 3000); // (said, as Save picture and STL: R133-10)
+    tell(`saved ${saveBase(name)}.cadmesh, ${mb(bytes.byteLength ?? bytes.length)} MB`, 3000); // ("NaN MB" from an ArrayBuffer: R134-4) // (said, as Save picture and STL: R133-10)
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);
@@ -8173,6 +8167,9 @@ async function main() {
     }
   }
   wireInput();
+  // (the toolbar shown once it is wired: set at the module's end it flashed unfolded and dead for a
+  // second while main() waited for the GPU -- R133-1, high R134-1)
+  document.documentElement.classList.add('booted');
   keepFocus();
   queueFrame();
   refreshCacheBar();
@@ -8666,9 +8663,9 @@ async function selftest() {
   }
 }
 
-guard(main()).then(() => { if (params.get('selftest')) return selftest(); });
+// (main() failing before it wired the toolbar still shows it: never hidden for good)
+guard(main()).finally(() => document.documentElement.classList.add('booted')).then(() => { if (params.get('selftest')) return selftest(); });
 // (the module's last statement: every one above it ran -- js/boot-check.js's sign the page started;
 // window.__cadv, set early, missed a throw in any later top-level statement: r74 Q7)
-document.documentElement.classList.add('booted'); // (the toolbar shown once it works: R133-1)
 window.__cadvStarted = true;
 document.getElementById('bootslow')?.remove(); // (index.html's no-script card: r76 Q4)

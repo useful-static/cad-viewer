@@ -135,7 +135,7 @@
   /* until main.js has something of its own to show (html.started) the viewer says it is coming, and
      until it has run (html.booted) the toolbar waits unseen: on a slow link its menus lay flat in
      two rows of presses that did nothing for 8 s (high R133-1; the embed's alone said it) */
-  html:not(.booted) :is(#tb, #hdend, #parts > *) { visibility:hidden; }
+  html:not(.booted) :is(#tb > :not(.title), #hdend, #parts > *) { visibility:hidden; } /* (the name kept: R134-9) */
   html:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
   * { box-sizing: border-box; }
@@ -651,7 +651,7 @@
      the view's ring the canvas's own colour, so a frame of Highlight over Canvas is drawn over the
      view instead (R132-3) */
   @media (forced-colors: active) {
-    button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; border-color:Highlight; color:HighlightText; }
+    button[aria-pressed=true]:not(#_) { forced-color-adjust:none; background:Highlight; border-color:Highlight; color:HighlightText; } /* (over Paint's own border too: R134-11) */
     #tree .row.sel { forced-color-adjust:none; background:Highlight; }
     #tree .row.sel, #tree .row.sel :not(input) { color:HighlightText; }
     /* (their rings the system's too: the page's orange stayed, 2.3:1 on white, 1:1 on the row -- R133-7) */
