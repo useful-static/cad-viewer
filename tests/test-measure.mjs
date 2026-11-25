@@ -549,6 +549,37 @@ test(`the BVH (bodies over ${BVH_MIN} triangles) answers as the scan does`, () =
   assert.ok(hits > 50, `only ${hits} rays hit: the arm would not test much`);
   assert.equal(agree, 300, `${agree}/300 agree (${hits} hit)`);
 });
+test('a body\'s tree and geometry built in steps (R153-2): warm stops at its deadline and goes on; a ray meanwhile, and after, answers as the whole-built tree does; the geometry equals bodyGeometry\'s', async () => {
+  const { stepUntil } = await import('../js/raycast.js');
+  const { bodyGeometrySteps } = await import('../js/measure-geom.js');
+  const m = model([{ name: 'big', faces: washer(1.6, 4, 1.6, 3000) }]);
+  const whole = makeCaster(m), stepped = makeCaster(m);
+  let calls = 0;
+  while (!stepped.warm(0, 0)) calls++; // (a deadline long past: one step a call)
+  assert.ok(calls >= 2, `built in ${calls + 1} calls: it never stopped`);
+  // a second model, its tree half built: its rays take every triangle meanwhile
+  const half = makeCaster(m);
+  assert.equal(half.warm(0, 0), false);
+  assert.equal(half.built(), 0);
+  let seed = 11, same = 0, hits = 0;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let i = 0; i < 200; i++) {
+    const o = [rnd() * 12 - 6, rnd() * 12 - 6, 10], d = [rnd() * 0.4 - 0.2, rnd() * 0.4 - 0.2, -1];
+    const a = whole.cast([0], o, d), b = stepped.cast([0], o, d), c = half.cast([0], o, d);
+    if (a) hits++;
+    if (JSON.stringify(a) === JSON.stringify(b) && (a ? c && Math.abs(c.t - a.t) < 1e-9 : !c)) same++;
+  }
+  assert.equal(half.built(), 0, 'no tree built whole under a ray while its steps were under way');
+  assert.ok(hits > 50, `only ${hits} rays hit`);
+  assert.equal(same, 200, `${same}/200 agree`);
+  // geometry: stopped at every step, the same as built at once
+  const steps = bodyGeometrySteps(m, 0);
+  let r, n = 0;
+  while (!(r = stepUntil(steps, 0)).done) n++;
+  assert.ok(n >= 3, `${n} stops`);
+  const g = bodyGeometry(m, 0);
+  assert.deepEqual([r.value.corners, r.value.edges, r.value.circles.map((c) => [c.centre, c.radius])], [g.corners, g.edges, g.circles.map((c) => [c.centre, c.radius])]);
+});
 
 // createMeasure at the viewer's opening camera (the r108 M1 arm's): bodies, the hidden set; the page's
 // elements stubs, made elements recorded, what is told recorded. -> { meas, $, toScreen, made, told }

@@ -7,7 +7,7 @@
 // dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
 // escape() first.
 
-import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometry, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
+import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometrySteps, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
 // A hole row's Ø with its wider rim's, one text for the table, summary and words (r68 A8, r69 A4).
 // r: { d, head }; fmt: the number's writer.
 export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at its rim)` : ''}`;
@@ -61,7 +61,7 @@ export function snapOrder(list, dir) {
   const near = (q) => q.p[0] * dir[0] + q.p[1] * dir[1] + q.p[2] * dir[2];
   return list.sort((a, b) => a.run - b.run || near(b) - near(a) || a.dd - b.dd);
 }
-import { edgeNearness, faceOfTri, makeCaster, seesInside } from './raycast.js';
+import { edgeNearness, faceOfTri, makeCaster, seesInside, stepUntil } from './raycast.js';
 import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
@@ -103,7 +103,7 @@ export function createMeasure(deps) {
     navigator.clipboard.writeText(text).then(() => deps.tell(done), fail);
   };
   const st = {
-    on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), caster: null, model: null,
+    on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), geomJobs: new Map(), caster: null, model: null,
     listOpen: false, holes: null, prepared: new Set(), preparing: new Set(),
   };
   const layer = $('measvg');
@@ -113,14 +113,19 @@ export function createMeasure(deps) {
   // ---- the model's caches ----
   function model() {
     const m = scene.mesh;
-    if (m !== st.model) { st.model = m; st.geom = new Map(); st.caster = m ? makeCaster(m) : null; st.prepared = new Set(); }
+    if (m !== st.model) { st.model = m; st.geom = new Map(); st.geomJobs = new Map(); st.caster = m ? makeCaster(m) : null; st.prepared = new Set(); }
     return m;
   }
-  // a body's geometry, built at most `budget` ms per call across bodies
+  // a body's geometry, built in steps until `deadline` and taken up again at the next call (one body
+  // built whole held the first aim 0.5 s: R153-2) -> the geometry, or null while it is not done
   function geomOf(mi, deadline) {
     if (st.geom.has(mi)) return st.geom.get(mi);
     if (performance.now() > deadline) return null;
-    const g = bodyGeometry(st.model, mi);
+    if (!st.geomJobs.has(mi)) st.geomJobs.set(mi, bodyGeometrySteps(st.model, mi));
+    const r = stepUntil(st.geomJobs.get(mi), deadline);
+    if (!r.done) return null;
+    st.geomJobs.delete(mi);
+    const g = r.value;
     // the b-rep edges' lengths and midpoints, once
     // (each body's own angle, g.a: a scene of added models has no one header value -- r126 L1)
     g.mids = g.edges.map((e, i) => { const a = arcOf(e, g.a > 0 ? g.a : 0.5); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
@@ -496,6 +501,11 @@ export function createMeasure(deps) {
     if (!st.on || st.mode === 'face') { if (st.snap) { st.snap = null; deps.queueFrame(); } return; }
     st.snap = x === null ? null : snapAt(x, y);
     deps.queueFrame();
+    // (the parts here still being read in steps: tried again at the same point, so a corner or an edge
+    // shows once ready without a move -- R153-2)
+    st.hoverAt = [x, y];
+    clearTimeout(st.hoverRetry);
+    if (st.snap?.pending) st.hoverRetry = setTimeout(() => { if (st.on && st.hoverAt[0] === x && st.hoverAt[1] === y) hover(x, y); }, 50);
   }
 
   // ---- dragging a placed end dot ----
@@ -863,7 +873,8 @@ export function createMeasure(deps) {
       // otherwise building them, 0.9 s on the board -- R152-7)
       while (mi < m.header.meshes.length && performance.now() < end) {
         if (m.header.meshes[mi].idxCount / 3 > HUGE_BODY) { mi++; continue; }
-        st.caster.warm(mi);
+        // (each in steps, taken up at the next slice: one body built whole was a 0.5 s task -- R153-2)
+        if (!st.caster.warm(mi, end)) break;
         if (m.faces && !geomOf(mi, end)) break;
         mi++;
       }
@@ -911,6 +922,7 @@ export function createMeasure(deps) {
     st.loupe = null;
     st.model = null;
     st.geom = new Map();
+    st.geomJobs = new Map();
     setList(false);
     showHoles(null);
     syncRow();

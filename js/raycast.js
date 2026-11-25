@@ -4,6 +4,8 @@
 
 export const BVH_MIN = 10_000;
 const LEAF = 8;
+// the most triangles a ray tests one by one while that body's tree is still being built (R153-2)
+const BRUTE_MAX = 200_000;
 
 // Möller-Trumbore, both faces: t along o + t d of triangle t, or Infinity
 function hitTri(P, I, t, o, d) {
@@ -83,12 +85,22 @@ function hitBox(lo, hi, o, inv, tmax) {
 }
 
 function buildBvh(P, I, t0, nt) {
+  const steps = bvhSteps(P, I, t0, nt);
+  let r;
+  while (!(r = steps.next()).done);
+  return r.value;
+}
+// The same tree, in steps of about STEP_WORK triangles' work, so a caller with a time budget can
+// stop between them (a body's tree built whole held the page at Measure's first aim: R153-2)
+const STEP_WORK = 20000;
+export function* bvhSteps(P, I, t0, nt) {
   const tris = new Uint32Array(nt);
   const cen = new Float32Array(nt * 3);
   for (let i = 0; i < nt; i++) {
     const t = t0 + i;
     tris[i] = t;
     for (let k = 0; k < 3; k++) cen[3 * i + k] = (P[I[3 * t] * 3 + k] + P[I[3 * t + 1] * 3 + k] + P[I[3 * t + 2] * 3 + k]) / 3;
+    if (!((i + 1) % STEP_WORK)) yield;
   }
   const order = new Uint32Array(nt);
   for (let i = 0; i < nt; i++) order[i] = i;
@@ -122,32 +134,51 @@ function buildBvh(P, I, t0, nt) {
   };
   // (a leaf's box from its triangles, a parent's the union of its children's, the split axis the
   // centroids' widest: every node's box read every triangle under it -- R151-1)
-  const build = (s, e) => {
+  // depth first, left before right, by a stack of tasks: [s, e, parent, side] makes a node, [-1, idx]
+  // closes one (its box from its children's) -- the recursion's node order, with a place to stop
+  const tasks = [[0, nt, -1, 0]];
+  let work = 0;
+  while (tasks.length) {
+    const tk = tasks.pop();
+    if (tk[0] < 0) {
+      const n = nodes[tk[1]], a = nodes[n.l], b = nodes[n.r];
+      n.lo = [0, 1, 2].map((k) => Math.min(a.lo[k], b.lo[k]));
+      n.hi = [0, 1, 2].map((k) => Math.max(a.hi[k], b.hi[k]));
+      continue;
+    }
+    const [s, e, parent, side] = tk;
     const n = { lo: null, hi: null, s, e, l: -1, r: -1 };
     const idx = nodes.length;
     nodes.push(n);
-    if (e - s <= LEAF) { [n.lo, n.hi] = box(s, e); return idx; }
-    const cl = [Infinity, Infinity, Infinity], ch = [-Infinity, -Infinity, -Infinity];
-    for (let i = s; i < e; i++) for (let k = 0; k < 3; k++) { const v = cen[3 * order[i] + k]; if (v < cl[k]) cl[k] = v; if (v > ch[k]) ch[k] = v; }
-    const ax = ch[1] - cl[1] > ch[0] - cl[0] ? (ch[2] - cl[2] > ch[1] - cl[1] ? 2 : 1) : (ch[2] - cl[2] > ch[0] - cl[0] ? 2 : 0);
-    const mid = (s + e) >> 1;
-    select(s, e, mid, ax);
-    n.l = build(s, mid);
-    n.r = build(mid, e);
-    const a = nodes[n.l], b = nodes[n.r];
-    n.lo = [0, 1, 2].map((k) => Math.min(a.lo[k], b.lo[k]));
-    n.hi = [0, 1, 2].map((k) => Math.max(a.hi[k], b.hi[k]));
-    return idx;
-  };
-  build(0, nt);
+    if (parent >= 0) { if (side) nodes[parent].r = idx; else nodes[parent].l = idx; }
+    work += e - s;
+    if (e - s <= LEAF) { [n.lo, n.hi] = box(s, e); } else {
+      const cl = [Infinity, Infinity, Infinity], ch = [-Infinity, -Infinity, -Infinity];
+      for (let i = s; i < e; i++) for (let k = 0; k < 3; k++) { const v = cen[3 * order[i] + k]; if (v < cl[k]) cl[k] = v; if (v > ch[k]) ch[k] = v; }
+      const ax = ch[1] - cl[1] > ch[0] - cl[0] ? (ch[2] - cl[2] > ch[1] - cl[1] ? 2 : 1) : (ch[2] - cl[2] > ch[0] - cl[0] ? 2 : 0);
+      const mid = (s + e) >> 1;
+      select(s, e, mid, ax);
+      tasks.push([-1, idx], [mid, e, idx, 1], [s, mid, idx, 0]);
+    }
+    if (work >= STEP_WORK) { work = 0; yield; }
+  }
   return { nodes, tris: Uint32Array.from(order, (i) => tris[i]) };
+}
+
+// Runs a step generator until it ends or the clock passes `deadline` -> { done, value }
+export function stepUntil(steps, deadline) {
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return { done: true, value: r.value };
+    if (performance.now() > deadline) return { done: false };
+  }
 }
 
 // One caster per model: caches each big body's BVH.
 // model: { position, index, header: { meshes } }
 export function makeCaster(model) {
   const P = model.position, I = model.index, meshes = model.header.meshes;
-  const bvh = new Map();
+  const bvh = new Map(), jobs = new Map();
   // nearest hit on body mi (mesh index) along o + t d, t in (0, tmax): { t, tri } | null
   function body(mi, o, d, tmax = Infinity, skip = null) {
     const m = meshes[mi];
@@ -161,10 +192,12 @@ export function makeCaster(model) {
       if (skip && skip([o[0] + h * d[0], o[1] + h * d[1], o[2] + h * d[2]])) return;
       best = h; bt = t;
     };
-    if (nt < BVH_MIN) {
+    // (a tree still being built in steps: this ray tests every triangle, a few ms, rather than finish
+    // the tree now and hold the page -- up to BRUTE_MAX; past it, built here as before)
+    if (nt < BVH_MIN || (!bvh.has(mi) && jobs.has(mi) && nt <= BRUTE_MAX)) {
       for (let t = t0; t < t0 + nt; t++) test(t);
     } else {
-      if (!bvh.has(mi)) bvh.set(mi, buildBvh(P, I, t0, nt));
+      if (!bvh.has(mi)) { jobs.delete(mi); bvh.set(mi, buildBvh(P, I, t0, nt)); }
       const { nodes, tris } = bvh.get(mi);
       const inv = d.map((v) => (v !== 0 ? 1 / v : 1e30));
       const stack = [0];
@@ -186,8 +219,18 @@ export function makeCaster(model) {
     }
     return best;
   }
-  // warm(mi): body mi's tree built ahead of its first ray (Measure's idle slices: R150-4)
-  const warm = (mi) => { const m = meshes[mi]; if (m.idxCount / 3 >= BVH_MIN && !bvh.has(mi)) bvh.set(mi, buildBvh(P, I, m.idxStart / 3, m.idxCount / 3)); };
+  // warm(mi, deadline): body mi's tree built ahead of its first ray (Measure's idle slices: R150-4),
+  // in steps until the deadline (R153-2) -> whether it is built
+  const warm = (mi, deadline = Infinity) => {
+    const m = meshes[mi];
+    if (m.idxCount / 3 < BVH_MIN || bvh.has(mi)) return true;
+    if (!jobs.has(mi)) jobs.set(mi, bvhSteps(P, I, m.idxStart / 3, m.idxCount / 3));
+    const r = stepUntil(jobs.get(mi), deadline);
+    if (!r.done) return false;
+    jobs.delete(mi);
+    bvh.set(mi, r.value);
+    return true;
+  };
   return { cast, body, warm, built: () => bvh.size };
 }
 

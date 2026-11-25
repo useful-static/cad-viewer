@@ -38,16 +38,8 @@ const storedFloor = (far) => 4 * storedUlp(far);
 // (the real step, the power of two a float32 of that size moves by: 2^-23 x far overstated it up to
 // twice, and 32 m out the RK3399 lost 14 rims as untold that are stored as finely as at 20 m: r67 Q1)
 const storedUlp = (far) => (far > 0 ? 2 ** (Math.floor(Math.log2(far)) - 23) : 0);
-// A loop the stored positions cannot tell: a stored coordinate's rounding, half a unit in its last
-// place, more than this many times the radius test. Such a loop is "untold": no circle, and
-// counted, so the hole table says what it cannot tell. The line is where the circle test's own
-// floor begins: past it a loop is tested to the stored step, not to 1% of its radius, and a loop
-// up to that step off a circle passes -- so a rim is told only while the step is within the test.
-// (It was 1.5, measured on the eight boards 20 m out, every rim that read there reading right; 300
-// m to 1 km out the RK3399 then gained loops 1.69% and 2.10% off a circle as holes, Ø3.69 to Ø6.21:
-// r69 Q1. The price, measured in r66: 20 m out 38 of the RK3328's 49 rows untold, and said.) A
-// per-loop line, by how far each loop is off, is no fix: the rounding of one placement decides it,
-// and inside one power of two the table differs (the position test's second rule).
+// A loop the stored positions cannot tell: a stored coordinate's rounding more than this many times
+// the radius test. Such a loop is "untold": no circle, and counted (r66, r69 Q1).
 const TELL_SHARE = 0.5;
 export const untoldAt = (far, r) => storedUlp(far) / 2 > TELL_SHARE * RADIUS_TOL * r;
 // (the rounding past which a rim is untold, as a share of its radius: the hole table's words say
@@ -180,14 +172,7 @@ function planeOf(P, I, t0, nt) {
     }
   }
   // (a tolerance the files meet: FLAT_SHARE of the face's size, at least a micrometre, and no finer
-  // than the positions are stored -- float32 rounds a coordinate to its step, storedUlp. At 1e-6 a flat
-  // tilted face 1 m out read "not flat", and a board's bottom whose 4 vertices of 1,873 sit 0.3 um
-  // off lost its 38 holes' depths)
-  // (3e-5, measured: the faces holding a circle that read not flat, over the eight boards and the
-  // three largest private models, are either off by 1-2e-5 of their size -- an 802 mm plate face 8.87
-  // um, whose 18 through-holes read as one-rim at the origin and as through 20 m out, the floor
-  // there looser -- or curved, 5e-5 and up; none between. At 1e-5 that plate's placement decided:
-  // r67 Q2)
+  // than the positions are stored, storedUlp; 3e-5 measured between flat and curved faces -- r67 Q2)
   if (hi - lo > Math.max(FLAT_SHARE * ext, PLANE_FLOOR_MM, storedFloor(far))) return null;
   return { normal: n, d: dot(n, p0) };
 }
@@ -243,6 +228,15 @@ function faceLoops(I, t0, nt, span = 2 ** 26) {
 // model: { position, index, faces (Uint32Array pairs | null), header }.
 // Without a faces section a body is one face with no circles.
 export function bodyGeometry(model, meshIndex) {
+  const steps = bodyGeometrySteps(model, meshIndex);
+  let r;
+  while (!(r = steps.next()).done);
+  return r.value;
+}
+// The same, in steps: it yields between faces and along its walks, so a caller with a time budget
+// (Measure's hover and warm-up) can stop and go on later -- one body built whole held the page
+// 0.5 s at the first aim (R153-2)
+export function* bodyGeometrySteps(model, meshIndex) {
   const P = model.position, I = model.index, h = model.header;
   const m = h.meshes[meshIndex];
   // a face's outside is its vertex normals' (facingNormals), the one rule: a decoded model always
@@ -314,6 +308,7 @@ export function bodyGeometry(model, meshIndex) {
         nodeNb[kb].add(ka);
       }
     });
+    yield;
   }
   // corners: welded points where other than two boundary segments meet
   const corners = [];
@@ -342,10 +337,12 @@ export function bodyGeometry(model, meshIndex) {
     edgeClosed.push(cur === start);
   };
   for (let k = 0; k < nodeP.length; k++) {
+    if (!(k & 4095)) yield;
     if (!isCorner(k)) continue;
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   for (let k = 0; k < nodeP.length; k++) {
+    if (!(k & 4095)) yield;
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; a: the angular
@@ -648,22 +645,11 @@ function holeWall(geom, a, faceN) {
   return null;
 }
 
-// The holes of a body: circles on its planar faces that bound an inner loop
-// (a face's loops other than its outer one), merged where the two rims of one
-// through-hole meet the top and bottom faces (same axis, same radius), and those of other radii where
-// the wall between joins them (holeWall: countersunk, chamfered, filleted).
-// -> [{ centre, normal, diameter, depth, rims, head? }] sorted by diameter, then position, with
-// .untold / .untoldAt: how many rims it cannot tell and their centres, .unpaired / .unpairedAt the
-// through-holes left out as their other rim is one of them (head: a countersunk or chamfered hole's
-// wider rim's Ø).
-// A row's centre and normal are a rim's: the wider one's, past the radius test, else the one met
-// first in the body's face order
-// The hole table's order, in place: by Ø, then position, each by rank -- a value within tol of the one
-// before it shares its rank (Ø 1e-4 of it, position 1e-6 of the spread), so fit noise and units do not
-// renumber holes (r121 M2, r122 M1)
-// (a chain, bounded: within tol of the one before and within 4 tol of its rank's first -- 16 sizes
-// stepping 0.0002 from Ø3.000 were one rank, chained: r123 L3. A value that is no number -- no
-// holesOf row has one -- ranks last, each its own: a NaN made the sort's order its input's, r123 L2)
+// The holes of a body: circles on its planar faces that bound an inner loop, the two rims of one
+// through-hole merged, and rims of other radii joined by their wall (holeWall).
+// -> [{ centre, normal, diameter, depth, rims, head? }] with .untold / .untoldAt, .unpaired / .unpairedAt
+// The hole table's order, in place: by Ø, then position, each by rank within a tolerance, chained and
+// bounded, a NaN last (r121 M2, r122 M1, r123 L2, L3)
 const ranks = (v, tol) => {
   const r = [];
   const key = (i) => (Number.isFinite(v[i]) ? v[i] : Infinity);
@@ -701,15 +687,9 @@ export function holesOf(geom) {
   // two flanges, 1.6 thick and 10 apart, read as one hole 10 deep
   // (a rim's face's outward normal: its plane's, which looks as its vertex normals do)
   const faceN = (c) => (geom.faces[c.face] && geom.faces[c.face].plane ? geom.faces[c.face].plane.normal : c.normal);
-  // The candidates, by key: the radius, in steps of the radius test (and the steps either side),
-  // and the axis line's point nearest the origin, in cells (and the cells round it) -- the same for
-  // every rim on one line wherever along it, whatever its direction. (Every rim against every other
-  // was 8.8 s of a 6,400-hole plate's 14.4 s; keyed on a rounded direction, a 30-degree bore 600
-  // long drifted past the cells searched.) Each key's rims are sorted along their axis, and a rim
-  // walks behind its face from where it stands, nearest first, stopping at the first that pairs:
-  // 4,000 rims on one shared axis were each tried against all
-  // (measured from the rims' own centre, the cell sized to how far they reach from it: from the
-  // world origin, 5 m out a small bore's two rims fell 2 cells apart by their normals' noise)
+  // The candidates, by key: the radius in steps of its test and the axis line's nearest point in
+  // cells (each with its neighbours), measured from the rims' own centre; each key's rims sorted along
+  // their axis, a rim walking behind its face to the first that pairs
   const rStep = Math.log(1 + RADIUS_TOL);
   const o = [0, 1, 2].map((k) => (rims.length ? rims.reduce((s2, c) => s2 + c.centre[k], 0) / rims.length : 0));
   const reach = rims.reduce((m2, c) => Math.max(m2, len(sub(c.centre, o))), 0);
@@ -796,18 +776,9 @@ export function holesOf(geom) {
     out.push({ centre: r.centre, normal: r.normal, diameter: 2 * r.radius, depth: best >= 0 ? bestAlong : 0, rims: best >= 0 ? 2 : 1 });
     if (best < 0) single.push([i, out.length - 1]);
   }
-  // The rims left single, each read by its wall as the body's faces join it (holeWall):
-  //   - a wall out to a rim on a face looking the other way: a through-hole whose rims differ --
-  //     countersunk, chamfered at either end or both -- one row: the bore's diameter, through, its
-  //     depth, and the wider rim's diameter as `head` when wider than the bore (it was two one-rim
-  //     rows: round 23 Q5, carried open; r67);
-  //   - a wall out to such a face with no rim on it told, the face holding rims it cannot tell: a
-  //     through-hole whose other rim cannot be told so far out -- untold too, not a blind hole
-  //     (1 km out, a countersunk hole's narrow rim untold left its head a "blind" row: r68);
-  //   - a wall that stops inside, from a rim wider than its bore: a countersunk blind hole, its
-  //     bore's diameter (its bore was in no row: r68).
-  // Each is the rim's own few faces, so a body of many is a walk per rim, not a search among all
-  // that share its axis (r68 Q3: 16,000 such rims, 20 s).
+  // The rims left single, each read by its wall (holeWall): out to a rim facing the other way, one
+  // through row with its head (r67); out to such a face with no rim told, untold (r68); stopping
+  // inside from a wider rim, a countersunk blind hole (r68). A walk per rim (r68 Q3).
   const singleOf = new Map(single.map(([i, row]) => [i, row]));
   const rimAt = new Map(); // a single rim's every node -> the rim
   for (const [i] of single) for (const k of rims[i].nodes || []) rimAt.set(k, i);
