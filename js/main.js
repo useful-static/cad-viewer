@@ -4035,6 +4035,7 @@ function updateButtons() {
   for (const b of [$('proj'), $('up'), $('walk'), $('turntable'), $('presetmenu')?.querySelector('.menu-btn'), ...document.querySelectorAll('#viewpanel .presets button')]) if (b) b.disabled = !has;
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has && !app.dxf;
+  if (!app.dxf) { const mb = $('measure'); mb.dataset.t ||= mb.title; mb.title = has && !app.baseMesh?.faces ? 'Measure: points snap to the surface, this file having no CAD faces (M)' : mb.dataset.t; } // (R153-1)
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
@@ -5370,9 +5371,7 @@ function setMeshUnit(u) {
   if (app.addsPending && app.addsChain) {
     return app.addsChain.then(() => (app.meshSource ? setMeshUnit(u) : tell(`not read in ${unitName(u)}: models were added beside it`)));
   }
-  // (nor over another model opening -- a list pick, a dropped file: the re-read is a load, and it
-  // ended that one, the visitor's pick lost and its entry taken back under the unit just written --
-  // r64 A4. A re-read of this one under way is replaced, as a second choice means.)
+  // (nor over another model opening, whose load the re-read would end -- r64 A4)
   if (PROGRESS_STATES.has(app.status) && !rereading()) {
     syncMeshUnitRow();
     tell(`not read in ${unitName(u)}: another model is opening`);
