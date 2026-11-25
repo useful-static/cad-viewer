@@ -749,7 +749,12 @@
   .group { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; } /* wraps as one */
   /* one focus ring for every control (the browser's white ring was on most,
      the accent on a few) */
-  :is(button, select, input, textarea, summary, label.btn, a.btn, #tree .label, [role=button], #tourbody):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
+  :is(button, select, input, textarea, summary, label.btn, a.btn, a.helplink, #tree .label, [role=button], #tourbody):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
+  /* (the help links in the accent, whole, a 40 px target on touch -- not the browser's blue: R152-5, R152-6, R152-10) */
+  a.helplink { color:var(--acc-text); white-space:nowrap; }
+  body.embed #helppop .noembed { display:none !important; }
+  #helppop .helpmore { margin:10px 0 0; }
+  @media (any-pointer: coarse) { a.helplink { display:inline-flex; align-items:center; min-height:40px; } }
   /* (wraps rather than cut the scheme's name: "File colou" in a phone's drawer) */
   #colours { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
   /* (its least its longest value's width: R53-1) */
@@ -1137,8 +1142,8 @@
         <dt>Two fingers</dt><dd>Pinch to zoom, drag to pan</dd>
         <dt>Tap</dt><dd>Select a part</dd>
         <dt>Double-tap</dt><dd>Fit the part tapped</dd>
-        <dt>Measure</dt><dd>Tap points; hold to aim with the magnifier, lift to place</dd>
-        <dt>☰</dt><dd>The parts list</dd><!-- (a phone's box named no tool: R151-5) -->
+        <dt class="noembed">Measure</dt><dd class="noembed">Tap points; hold to aim with the magnifier, lift to place</dd>
+        <dt class="noembed">☰</dt><dd class="noembed">The parts list</dd><!-- (a phone's box named no tool: R151-5; not an embed's, which has neither: R152-4) -->
         <dt>Swipe a tour's card</dt><dd>Next / previous step</dd></dl></section><!-- (named where a phone reads it: R147-12) -->
       <section class="keys"><h3>Views</h3><dl id="viewkeys"><!-- each view's key: main.js, from js/orient.js VIEWS -->
         <dt id="viewkey9"><kbd>9</kbd></dt><dd>The opposite view</dd>
@@ -1171,9 +1176,10 @@
         <dt><kbd>Esc</kbd></dt><dd>Leave the tour</dd></dl></section>
       <section class="keys"><h3>Anywhere</h3><dl>
         <dt><kbd>Esc</kbd></dt><dd>One step back per press: Measure, Paint, Walk, Explode, the section, then the selection</dd>
-        <dt><kbd>?</kbd></dt><dd>This box</dd>
-        <dt>More</dt><dd><a href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></dd></dl></section><!-- (the help reached from the viewer: R151-4) -->
+        <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
     </div>
+    <!-- (the help reached from the viewer, R151-4; outside the keys, which touch hides -- R152-3) -->
+    <p class="helpmore"><a class="helplink" href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p>
   </div>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's
@@ -1220,7 +1226,7 @@
     <p class="drop-hint">Drop <span id="dropwhat">a model file</span> here,&nbsp;or</p><!-- ("or" never alone on a line: R122-3) -->
     <p class="drop-now">Drop to open</p>
     <button id="emptyopen" class="primary">Choose a file…</button>
-    <p class="note">Your file is opened on this device and never uploaded. <a href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p>
+    <p class="note">Your file is opened on this device and never uploaded.<br><a class="helplink" href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p><!-- (its own line, whole: R152-6) -->
     <p id="emptyerr" class="err" hidden></p>
   </div>
   <!-- the model list as pictures (an entry's "image"), from File > Browse models -->

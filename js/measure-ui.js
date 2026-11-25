@@ -208,8 +208,7 @@ export function createMeasure(deps) {
     st.preparing.add(i);
     deps.tell('preparing snapping on this part…', 8000, 'preparing snapping');
     setTimeout(() => {
-      if (st.model === scene.mesh) { st.caster?.warm?.(i); if (scene.mesh.faces) geomOf(i, Infinity); st.prepared.add(i); }
-      st.preparing.delete(i);
+      if (st.model === scene.mesh) { st.caster?.warm?.(i); if (scene.mesh.faces) geomOf(i, Infinity); st.prepared.add(i); }      st.preparing.delete(i);
       deps.tell('snapping ready', 1500, '');
       deps.queueFrame();
     }, 80);
@@ -295,7 +294,9 @@ export function createMeasure(deps) {
     const edgePts = [];
     const pray = v.rayAt(x, y); // (the pointer's ray: an edge's point under it)
     let pending = false;
-    for (const mi of near) {
+    // (a file of triangles only, no CAD faces: the surface alone, as its note says -- corners and edges
+    // of its tessellation were offered, and building them froze the rack 2.6 s: R152-1, R152-2)
+    for (const mi of st.model.faces ? near : []) {
       const g = geomOf(mi, deadline);
       if (!g) { pending = true; continue; }
       const consider = (p, kind, info) => {
@@ -858,12 +859,12 @@ export function createMeasure(deps) {
     const slice = () => {
       if (!st.on || st.model !== m) return;
       const end = performance.now() + 8;
-      // (a body over 20k triangles left to its first ray: each is built whole, and the rack's froze
-      // the page 2.3 s on Measure's press -- R151-1)
+      // (a huge body left to prepare(), said first: R151-1; those under it warmed too, the first aim
+      // otherwise building them, 0.9 s on the board -- R152-7)
       while (mi < m.header.meshes.length && performance.now() < end) {
-        if (m.header.meshes[mi].idxCount / 3 > 20000) { mi++; continue; }
+        if (m.header.meshes[mi].idxCount / 3 > HUGE_BODY) { mi++; continue; }
         st.caster.warm(mi);
-        if (!geomOf(mi, end)) break;
+        if (m.faces && !geomOf(mi, end)) break;
         mi++;
       }
       if (mi < m.header.meshes.length) setTimeout(slice, 0);

@@ -3437,9 +3437,8 @@ function orientFor(src) {
   return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
 }
 
-// Where a list's note for a part goes: the top of that part, at the middle of its box, along
-// the view's up; null for a name the model does not have. The part is named as a list's "hide"
-// and a tour's callouts name one (js/tour.js resolveParts: a label, any case, a path, "#<id>")
+// Where a list's note for a part goes (its top, along the view's up), the part named as tour.js
+// resolveParts names one; null for a name the model lacks
 function notePoint(part) {
   if (!part || !app.header) return null;
   return topOf(tourParts([part]).ids);
@@ -6801,9 +6800,7 @@ function syncRefRow() {
   if (app.holesFor && app.measure) showHoles(app.holesFor);
 }
 
-// List holes' state and an open "parts shown" table, after a selection or a visibility change:
-// holes need b-rep faces (said in its tooltip, R25-5), and with nothing selected some part shown
-// (R25-4); a table of the parts shown follows what is shown, and closes with none (R25-3)
+// List holes' state and an open "parts shown" table after a selection or visibility change (R25-3..5)
 const shownIds = () => app.header.meshes.map((_, i) => i + 1).filter((id) => !app.hidden.has(id));
 function syncHoles() {
   if (!app.header) return;
