@@ -834,10 +834,7 @@ async function recoverRenderer(why) {
     queueFrame();
     gpuSync().then(() => {
       queueFrame();
-      // only a renderer that survives its re-upload AND some seconds of
-      // drawing counts as a clean recovery and resets the attempt count: a
-      // device lost on every draw (a watchdog reset on a huge model) would
-      // otherwise reset it each cycle and recover forever
+      // only a re-upload that then draws some seconds resets the count (else a loss on every draw recovers forever)
       setTimeout(() => { if (app.renderer === r && !isDead(r)) recoveries = 0; }, RECOVERY_QUIET_MS);
       recovered();
     }, (e) => {
@@ -1723,9 +1720,7 @@ async function shareView() {
   const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && (app.overrides?.size || 0) > 0, !app.dxf && (app.faceOverrides?.size || 0) > 0, !app.dxf && !!app.ref && app.section.axis !== 'off');
   if (said) tell(said, copied ? 3000 : 4000);
 }
-// What Copy view link tells: copied, and what the link does not carry -- its clauses a list, joined
-// ("View link copied:  (with the first 20…": r49 A6, Q6); with the box shown, only those clauses;
-// '' when there is nothing to tell (a function, its text tested as said: r50 Q6)
+// What Copy view link tells: copied, and what the link does not carry (r49 A6, Q6; r50 Q6)
 function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false, painted = false, refd = false) {
   const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
   const clauses = [hasUrl ? '' : 'it holds the view, not the file (opened from this device)',
@@ -1800,6 +1795,33 @@ async function readTour(url) {
     return { error: await fetchFailedText(abs, 'the tour', e, 'could not be read') };
   }
   try { return { tour: parseTour(text, from) }; } catch (e) { return { error: `could not be read: ${e.message}` }; }
+}
+
+// (each step's own bars, the tallest kept: R131-1; measured again on a new shape: R154-3)
+function tourFloor(tour) {
+  let floor = 0;
+  const sets = new Set(tour.steps.map((s) => [s.explode ? 'xpopt' : '', s.section && s.section.axis !== 'off' ? 'secopt' : ''].filter(Boolean).join(' ')));
+  for (const set of sets) {
+    if (!set) continue;
+    const bars = set.split(' ').map($), o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
+    o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = false;
+    floor = Math.max(floor, o.offsetHeight);
+    o.hidden = was[0]; bars.forEach((b, i) => { b.hidden = was[i + 1]; }); o.style.visibility = '';
+  }
+  $('stage').style.setProperty('--tour-floor', `${floor}px`);
+}
+// the camera still where the tour's step left it (landed, untouched; q and -q one turn: R94-1)
+function atStepPose() {
+  const c = app.cam, t = app.tour, L = t && !app.tourFlying && t.landed;
+  if (!L) return false;
+  const tol = L.dist * 1e-6, q = camQ(c);
+  return Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol)
+    && Math.abs(L.q.reduce((s, v, k) => s + v * q[k], 0)) >= 1 - 1e-9;
+}
+// that step framed again, at once, for the projection or the view's shape now (R92-3; R154-3)
+function restep() {
+  const c = app.cam, t = app.tour, to = stepPose(t.tour.steps[t.i], !!c.ortho);
+  if (to) { c.target = to.pose.target.slice(); c.dist = to.pose.dist; c.q = to.pose.q.slice(); t.landed = to.pose; } // (q: an Iso step's turn is the new shape's)
 }
 
 // The camera a step asks for -> { pose: { target, dist, q }, ortho } or null
@@ -2136,19 +2158,8 @@ function startTour(tour, url, only = null, at = 0) {
   // before the first, not the first tour's step)
   const prev = app.tour;
   endTour(false);
-  // (an exploding or cutting tour's card above the Explode and Section bars throughout: R44-3; the
-  // card jumped up to 97 px with a Section step's bar -- R130-2)
-  // (each step's own bars, the tallest kept: one Section and one Explode step lifted it by both -- R131-1)
-  let floor = 0;
-  const sets = new Set(tour.steps.map((s) => [s.explode ? 'xpopt' : '', s.section && s.section.axis !== 'off' ? 'secopt' : ''].filter(Boolean).join(' ')));
-  for (const set of sets) {
-    if (!set) continue;
-    const bars = set.split(' ').map($), o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
-    o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = false;
-    floor = Math.max(floor, o.offsetHeight);
-    o.hidden = was[0]; bars.forEach((b, i) => { b.hidden = was[i + 1]; }); o.style.visibility = '';
-  }
-  $('stage').style.setProperty('--tour-floor', `${floor}px`);
+  // (the card above the tour's Explode and Section bars throughout: R44-3, R130-2)
+  tourFloor(tour);
   const saved = prev ? prev.saved : currentView();
   // what the visitor had: each step is applied to it, and leaving puts it back
   // (styleChoice: the visitor's own, not a step's; leaving puts it back)
@@ -3651,9 +3662,8 @@ let listPick = 0;
 // refocus: a keyboard pick made inside the narrow layout's File menu gives
 // the focus to File's button as the menu closes (it fell to the page)
 function openListed(url, refocus = false, keepMenu = false) {
-  // (the steps a pick makes are a chain, taken back to the address before its first if it fails;
-  // a pick made while another still downloads continues that chain -- its "before" was the other's
-  // entry, and a failure landed there, the address naming a model not shown: r62 A2)
+  // (a pick's steps a chain, undone to the address before its first on failure; a pick during another's
+  // download continues that chain: r62 A2)
   const chain = app.pickPending && app.pickChain ? app.pickChain : null;
   const u = new URL(location.href);
   // (the pick's address names its model alone, with the lists: r59 A4, Q1; dropAddressModel)
@@ -4035,7 +4045,7 @@ function updateButtons() {
   for (const b of [$('proj'), $('up'), $('walk'), $('turntable'), $('presetmenu')?.querySelector('.menu-btn'), ...document.querySelectorAll('#viewpanel .presets button')]) if (b) b.disabled = !has;
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has && !app.dxf;
-  if (!app.dxf) { const mb = $('measure'); mb.dataset.t ||= mb.title; mb.title = has && !app.baseMesh?.faces ? 'Measure: points snap to the surface, this file having no CAD faces (M)' : mb.dataset.t; } // (R153-1)
+  if (!app.dxf) { const mb = $('measure'); mb.dataset.t ||= mb.title; mb.title = has && !app.baseMesh?.faces ? 'Measure distances and angles: this file has no CAD faces, so points snap to the surface (M)' : mb.dataset.t; } // (R153-1, R154-6)
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
@@ -5363,9 +5373,7 @@ const rereading = () => PROGRESS_STATES.has(app.status) && app.rereadSeq === app
 // the units row's "file is in": the same bytes read again in that unit
 function setMeshUnit(u) {
   const src = app.meshSource;
-  // (against the unit it is in -- or, a re-read of it under way, the unit that is being read: a
-  // choice back to mm during the inches re-read compared with mm, the unit it was still in, and was
-  // nothing; the model ended in inches, the visitor's last choice mm -- r66 A2, Q1)
+  // (against the unit it is in, or the one a re-read under way is reading: r66 A2, Q1)
   if (!src || u === (rereading() ? app.rereadUnit : src.unit) || !MM_PER[u]) return Promise.resolve();
   // (after the address's ?add=s; a scene has no unit to choose, which is said -- r63 A3, r65 Q9)
   if (app.addsPending && app.addsChain) {
@@ -5632,9 +5640,7 @@ function leave2D() {
   refold();
 }
 
-// a sheet's items per layer, each under every layer it answers to -- its own and a frozen
-// reference's it is drawn under (r65 A3); by the info panel's one rule, dxf.js isShape (a viewport's
-// frame was counted in the row, not the panel: 3 against "2 lines and shapes" -- R144-1)
+// a sheet's items per layer, under each layer it answers to (r65 A3), by dxf.js isShape (R144-1)
 function layerTally(d) {
   const count = new Map();
   const tally = (it) => { for (const n of dxfLib.layersOf(it)) count.set(n, (count.get(n) || 0) + 1); };
@@ -7248,10 +7254,7 @@ function wireInput() {
   stage.addEventListener('pointercancel', endPointer);
   stage.addEventListener('lostpointercapture', endPointer);
 
-  // Hover: at most one pick per 60 ms AND one in flight at a time (a WebGPU
-  // pick slower than 60 ms would otherwise pile up in the renderer's queue
-  // ahead of a click), and always a trailing pick at the last position, so
-  // stopping on the background clears the highlight.
+  // Hover: one pick per 60 ms and one in flight, plus a trailing pick at the last position.
   let hoverT = 0;
   let hoverTimer = null;
   let hoverXY = null;
@@ -7474,6 +7477,15 @@ function wireInput() {
   app.stageAspect = stage.clientWidth / Math.max(1, stage.clientHeight);
   new ResizeObserver(() => {
     const a = stage.clientWidth / Math.max(1, stage.clientHeight);
+    // a tour's step, untouched, framed again for the new shape (it stayed framed for the old: R154-3)
+    if (a > 0 && a !== app.stageAspect && app.tour) tourFloor(app.tour.tour);
+    if (a > 0 && a !== app.stageAspect && atStepPose()) {
+      app.stageAspect = a;
+      restep();
+      viewChanged();
+      queueFrame();
+      return;
+    }
     // a phone turned between portrait and landscape while the view is still
     // the one the model opened at: the Iso that suits the new shape
     // (js/orient.js isoView), framed afresh
@@ -7631,15 +7643,11 @@ function wireInput() {
   $('proj').onclick = () => {
     // (a walk's eye is a few mm from the model: Ortho there ends Walk and fits -- R122-1)
     if (app.walk) { app.cam.ortho = !app.cam.ortho; fitTo(drawnBox(null)); updateButtons(); viewChanged(); return; }
-    const c = app.cam, t = app.tour, L = t && !app.tourFlying && t.landed;
     // (on a step's own fitted view, untouched -- held or paused, not turned: the step fitted again in
     // the new projection -- R92-3, R93-1, R93-2)
-    const tol = L ? L.dist * 1e-6 : 0, q = camQ(c);
-    const still = L && Math.abs(c.dist - L.dist) <= tol && c.target.every((v, k) => Math.abs(v - L.target[k]) <= tol)
-      && Math.abs(L.q.reduce((s, v, k) => s + v * q[k], 0)) >= 1 - 1e-9; // (q and -q one turn: R94-1)
-    c.ortho = !c.ortho;
-    const to = still && stepPose(t.tour.steps[t.i], c.ortho);
-    if (to) { c.target = to.pose.target.slice(); c.dist = to.pose.dist; t.landed = to.pose; }
+    const still = atStepPose();
+    app.cam.ortho = !app.cam.ortho;
+    if (still) restep();
     updateButtons(); viewChanged();
   };
   // Z up: the file's +z up and -y toward the viewer, or back to its own frame
@@ -8098,19 +8106,19 @@ function wireInput() {
 // The controls and shortcuts, and the renderer with why a faster one was skipped, in a box from ?
 // (the button or the key; Esc or a press elsewhere closes it, the focus back to ?).
 const helpOpen = () => !$('helppop').hidden;
+// under ?, its right edge with ?'s, but inside the window: a phone's box
+// is nearly the window's width, and aligned to ? it ran off the left
+function placeHelp() {
+  const pop = $('helppop'), r = $('helpbtn').getBoundingClientRect();
+  pop.style.top = `${Math.round(r.bottom) + 4}px`;
+  pop.hidden = false;
+  pop.style.right = `${Math.max(8, Math.min(Math.round(innerWidth - r.right), innerWidth - 8 - pop.offsetWidth))}px`;
+}
 function setHelp(open, focus = false) {
   const pop = $('helppop'), btn = $('helpbtn');
   if (open === helpOpen()) return;
   const inside = pop.contains(document.activeElement);
-  if (open) {
-    closeMenus();
-    const r = btn.getBoundingClientRect();
-    pop.style.top = `${Math.round(r.bottom) + 4}px`;
-    pop.hidden = false;
-    // under ?, its right edge with ?'s, but inside the window: a phone's box
-    // is nearly the window's width, and aligned to ? it ran off the left
-    pop.style.right = `${Math.max(8, Math.min(Math.round(innerWidth - r.right), innerWidth - 8 - pop.offsetWidth))}px`;
-  }
+  if (open) { closeMenus(); placeHelp(); }
   pop.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
   if (open && focus) pop.focus();
@@ -8122,7 +8130,12 @@ function wireHelp() {
   addEventListener('pointerdown', (e) => {
     if (helpOpen() && !e.target.closest('#helppop, #helpbtn')) setHelp(false);
   }, true);
-  addEventListener('resize', () => setHelp(false));
+  // (a phone turned keeps the box, placed again under ?; closed only if ? left the window: R154-5)
+  addEventListener('resize', () => {
+    if (!helpOpen()) return;
+    const r = $('helpbtn').getBoundingClientRect();
+    if (r.width && r.left >= 0 && r.right <= innerWidth) placeHelp(); else setHelp(false);
+  });
 }
 
 // ---------- boot ----------

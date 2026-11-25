@@ -154,7 +154,7 @@
   body.nogpu { grid-template-columns:minmax(0, 1fr); } /* (no panel: the card centred over the whole width, R22-4) */
   body.nogpu :is(header, #stage) { grid-column:1 / -1; }
   body.nogpu #tb > .title { display:inline !important; } /* (the page's name in an otherwise empty header, R22-10) */
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; overscroll-behavior-x:none; } /* (a sideways swipe on a panel was the browser's Back: R154-1) */
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
   /* header = the non-scrolling frame (background, border, the narrow layout's
      fade overlay); #tb = the row of controls inside it (wraps on desktop,
@@ -337,6 +337,7 @@
   /* (its right padding less its own gutter, so its content ends with the rows below: R51-2) */
   #info { padding:8px max(0px, calc(10px - var(--infosb, 0px))) 8px 10px;border-bottom:1px solid var(--line); font-size:12px; overflow-wrap:anywhere; flex-shrink:0; scrollbar-width:thin; overflow-anchor:none;
     overflow-y:auto; scrollbar-gutter:stable; } /* (one width held or not: a scrollbar coming and going re-wrapped its lines, a click landing a row off -- R50-1) */
+  #info, #tree { touch-action:pan-y; } /* (a sideways swipe on them was Back in a landscape drawer: R154-1) */
   /* (overflow-anchor: no scroll anchor in the panel's changing rows -- partly in view in a phone's
      drawer, they moved the drawer a row on a tap, the next tap taking another: round 33) */
   #info:empty, #tree:empty { display:none; } /* no renderer / no model: no blank box or double rule */
@@ -408,7 +409,7 @@
     background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px;
     max-height:min(50%, calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); display:flex; flex-direction:column; }
   #tourcard > * { flex:none; }
-  #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; } /* (a long caption scrolls, title and buttons kept: R70-2) */
+  #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; touch-action:pan-y; overscroll-behavior:contain; } /* (sideways is the card's swipe: R154-2) */ /* (a long caption scrolls, title and buttons kept: R70-2) */
   /* (at most half the view at any size, the model kept in sight -- R71-3, R80-2, R81-3; and below an
      embed's Fit and Open: R71-4, R81-1) */
   #stage:has(#embedbar:not([hidden])) #tourcard { max-height:min(50%, calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); }
@@ -808,7 +809,8 @@
     #galleryclose { min-width:40px; } /* (R20-9) */
     #pictoast button { min-height:40px; } /* (R20-10) */
     #tree .row { min-height:34px; }
-    #tree input { width:20px; height:20px; }
+    #tree input, #sheetsrow input { width:20px; height:20px; }
+    #sheetsrow { min-height:40px; box-sizing:border-box; } /* (R154-4) */
     /* the checkbox's label wrapper fills the row height: a tap anywhere in
        that column toggles visibility (a label click toggles its checkbox) */
     #tree .cbwrap { align-self:stretch; display:flex; align-items:center; padding:0 4px; }
