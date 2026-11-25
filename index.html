@@ -362,9 +362,12 @@
   #info a { color:var(--acc-text); }
   /* the models' gallery and the poster: cards over the view */
   #stage #gallery { width:min(760px, calc(100% - 24px)); text-align:left; }
-  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  /* (held at the card's top while the pictures scroll: × scrolled away with them, a phone's only
+     way to close -- R147-2) */
+  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; position:sticky; top:-20px; z-index:1;
+    margin:-20px -22px 0; padding:20px 22px 8px; background:var(--panel); }
   #gallery .galhead h2 { margin:0; }
-  #gallerygrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  #gallerygrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(136px, 1fr)); gap:10px; } /* (two a row at 390 with a scrollbar too: R147-9) */
   #gallerygrid button { display:flex; flex-direction:column; gap:6px; padding:6px; text-align:center; }
   #gallerygrid button[aria-current="true"] { border-color:var(--acc); }
   #gallerygrid img { width:100%; aspect-ratio:4 / 3; object-fit:contain; background:#1b1f25; border-radius:4px; }
@@ -1129,7 +1132,8 @@
         <dt>One finger</dt><dd>Turn (orbit)</dd>
         <dt>Two fingers</dt><dd>Pinch to zoom, drag to pan</dd>
         <dt>Tap</dt><dd>Select a part</dd>
-        <dt>Double-tap</dt><dd>Fit the part tapped</dd></dl></section>
+        <dt>Double-tap</dt><dd>Fit the part tapped</dd>
+        <dt>Swipe a tour's card</dt><dd>Next / previous step</dd></dl></section><!-- (named where a phone reads it: R147-12) -->
       <section class="keys"><h3>Views</h3><dl id="viewkeys"><!-- each view's key: main.js, from js/orient.js VIEWS -->
         <dt id="viewkey9"><kbd>9</kbd></dt><dd>The opposite view</dd>
         <dt><kbd>5</kbd></dt><dd>Ortho on / off</dd>
@@ -1155,7 +1159,7 @@
         <dt><kbd>→</kbd> <kbd>←</kbd></dt><dd>Open / close</dd></dl></section>
       <!-- (a tour's keys, which only its buttons' titles named -- R146-8) -->
       <section class="keys"><h3>Tour</h3><dl>
-        <dt><kbd>→</kbd> <kbd>←</kbd></dt><dd>Next / previous step (<kbd>PageDown</kbd> <kbd>PageUp</kbd> too)</dd>
+        <dt><kbd>→</kbd> <kbd>←</kbd></dt><dd>Next / previous step, as <span class="nobr"><kbd>PageDown</kbd> <kbd>PageUp</kbd></span></dd><!-- (no lone "(" at a line's end: R147-11) -->
         <dt><kbd>Space</kbd></dt><dd>Play / pause</dd>
         <dt><kbd>Esc</kbd></dt><dd>Leave the tour</dd></dl></section>
       <section class="keys"><h3>Anywhere</h3><dl>

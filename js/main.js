@@ -952,11 +952,7 @@ function frameState(pic = null) {
   };
 }
 
-// The model's X, Y and Z (the file's own axes) in a corner of the view,
-// turned as the camera is: each axis drawn from the middle toward where it
-// points on screen, the ones pointing away from the viewer dimmer and drawn
-// first, so which way is which reads at a glance after any orbit (feature
-// review item 16)
+// The model's X, Y and Z in a corner, turned as the camera is, those pointing away dimmer and under
 const TRIAD = [['X', [1, 0, 0], '#ff5c5c'], ['Y', [0, 1, 0], '#5fd35f'], ['Z', [0, 0, 1], '#5f9dff']];
 function drawTriad() {
   const svg = $('triad');
@@ -1019,10 +1015,8 @@ function sectionPlane() {
   return [n[0], n[1], n[2], s.flip ? -pos : pos];
 }
 
-// Anything that changes WHAT is under a given pixel -- the camera, the section
-// plane, visibility -- moves app.viewGen, so a pick still in flight from before
-// is dropped instead of being applied to whatever is there now. (Hover and
-// selection highlights do not: they change colour, not what a pixel hits.)
+// What changes what a pixel hits (camera, cut, visibility) moves app.viewGen; a pick in flight from
+// before is dropped
 function viewChanged() {
   app.viewGen++;
   queueFrame();
@@ -1384,10 +1378,7 @@ async function exportMesh(fmt) {
   if (!ids.length) { tell(NOTHING_TO_EXPORT); return; }
   const names = ids.map((id) => meshLabel(id));
   const base = saveBase(app.sourceName);
-  // (its progress and its end through tellReady, the one guard of the ready line: told always,
-  // written only while ready -- its own two setStatus('ready') turned a load, its "convert it?"
-  // question or a GPU recovery to 'ready' under it: r47 A1, Q2; told, as a ready-to-ready line is
-  // not heard: r46 A6)
+  // (its progress and end through tellReady, the ready line's one guard -- r46 A6, r47 A1, Q2)
   tellReady(`exporting ${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} as ${fmt.toUpperCase()}…`, 4000);
   await new Promise((r) => setTimeout(r, 0)); // the note paints first
   let bytes;
@@ -1640,10 +1631,8 @@ async function printPng(png) {
   if (!app.noPrintDialog) window.print();
 }
 
-// Save drawing (SVG): the selected parts (else every one shown) at 1:1 in mm,
-// straight along the preset view nearest the camera's (Top, Front, …): their
-// b-rep edges, holes as true circles (js/drawing-svg.js). Every edge of the
-// parts is drawn, hidden ones too: a board alone gives its outline and holes.
+// Save drawing (SVG): the selection (else all shown) 1:1 in mm along the nearest preset view, every
+// b-rep edge, holes as circles (js/drawing-svg.js)
 function saveDrawing() {
   if (!app.header || !app.baseMesh?.faces) return;
   // (the visitor's own parts during a tour, as an export writes them: r72 A4)
@@ -1682,6 +1671,8 @@ function setModelParam(u, url) {
   if (i >= 0 && list[i].id) u.searchParams.set('model', list[i].id);
   else if (i >= 0) u.searchParams.set('index', String(i + 1));
   else if (url) u.searchParams.set('src', url);
+  // (the query as typed, not "models%2F…": searchParams escapes / and : that a query may hold -- R147-5)
+  u.search = u.search.replace(/%2F/gi, '/').replace(/%3A/gi, ':');
 }
 // ...and back, from an address's query: the URL of the model it names, by this page's lists
 // (js/model-list.js modelUrlFrom, the rule js/early.js reads the address by too)
@@ -1772,10 +1763,7 @@ const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offse
 const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' › ');
 
 function tourParts(names) {
-  // (a name with its owner, as a label reads, matched whole first: its last piece alone, "bolt #2",
-  // named every bracket's -- R37-1)
-  // (and one that names no such owner, or more levels than a label, by its last two pieces, else
-  // missing: its last piece alone isolated every bracket's bolt #2 unsaid -- R38-1)
+  // (a name with its owner matched whole, else by its last two pieces, never its last alone -- R37-1, R38-1)
   if (app.tourIdxFor !== app.header) {
     const idx = partIndex(app.header, app.partLabels, firstModelBodies());
     // (the file's names first; then the list's, numbered: "COMPOUND #2" named nothing -- R36-5)
@@ -2513,10 +2501,8 @@ async function tourVideo(tour) {
 }
 
 // ---------- ?embed=1 ----------
-// The model alone in another site's page, with Fit, full screen and "Open in
-// cad.place ↗". Until a click or tap it takes nothing from the page (the wheel
-// and a drag scroll it); Esc gives the wheel back. &active=1: active from the
-// start. &noopen=1: no "Open in cad.place ↗".
+// The model alone in another site's page; inactive until a click or tap, Esc or leaving the frame
+// gives the page back. &active=1: always active; &noopen=1: no "Open in cad.place ↗".
 const embedParams = new URLSearchParams(location.search);
 app.embed = embedParams.get('embed') === '1';
 app.embedActive = !app.embed || embedParams.get('active') === '1';
@@ -2571,6 +2557,7 @@ function setupEmbed() {
 }
 function setEmbedActive(on) {
   if (!app.embed || app.embedActive === on) return;
+  if (!on && embedParams.get('active') === '1') return; // (&active=1 stays active, Esc too: R147-10)
   app.embedActive = on;
   // (the frame takes the keyboard on its activating press: the 3D view's press takes no focus, so its
   // Esc and keys went to the host page -- R145-1)
@@ -3060,11 +3047,8 @@ function refold(keep = focusNow()) {
     }
     $(id).classList.add('folded');
   }
-  // the last step: a row that still does not fit (a 320 px phone with touch
-  // targets: 348 px) takes Measure into View's panel, as its first item (M
-  // still reaches it)
-  // (never in 2D: View is hidden there, so Measure went with it -- a phone's drawing had no
-  // Measure at all: UI design round 7 R7-1)
+  // the last step: a row that still does not fit takes Measure into View's panel, first (never in 2D,
+  // where View is hidden: R7-1)
   if (!document.body.classList.contains('mode2d') && !toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
   // a folded View holds the presets as its panel's grid, and Display's items,
   // not menus in a menu
@@ -3916,10 +3900,7 @@ function wireModelList() {
 const listNote = (errors) => errors.map((e) => `model list ${e.url}: ${e.message}`).join('; ');
 
 // ---------- full screen ----------
-// The whole page, toolbar and parts panel included. The standard API, or
-// WebKit's prefixed one (iPadOS before 16.4); the button is hidden where
-// there is neither (iPhone). The browser takes Esc to leave full screen, so
-// nothing the viewer does relies on Esc alone.
+// The whole page; the standard API or WebKit's, the button hidden where neither works
 
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
 // (and allowed here: a frame without allowfullscreen showed the button, which did nothing -- R145-2)
@@ -4383,10 +4364,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   if (!(await phase('reading', `reading ${sizeText(raw.byteLength)} of geometry`))) return;
   const t1 = performance.now();
   const base = decodeCadmesh(raw);
-  // a file with no surfaces (a STEP or IGES of curves or points only) is
-  // refused in plain words, the model on screen kept: it opened "ready" with
-  // 0 bodies, an empty tree and a blank view (review r22)
-  // (faces the converter could not mesh are not "no faces": r23; the words js/cadmesh.js noSurfaces)
+  // a file of curves or points only refused in plain words, the model shown kept (r22, r23; cadmesh.js noSurfaces)
   const none = noSurfaces(base.header.indexCount, name, conversion && conversion.unmeshedFaces);
   if (none) throw new Error(none);
   // File > Add model… (or ?add=): merged into the scene beside the shown model
@@ -5908,10 +5886,7 @@ function readInWorker(msg, name) {
       if (!ready) { app.lastReadVia = 'page'; done(resolve, null); return; }
       done(reject, new Error(`${name} could not be read: the reader stopped (${e.message || 'it ran out of memory'})`));
     };
-    // (the copy posted to the reader may not fit: said, and the worker, its timer and the load's
-    // cancel let go -- it rejected with the engine's words, the worker left running 60 s: r48 A4.
-    // A launch of its own, beside workerJob, as a reader that dies before it is ready hands the
-    // file to the page)
+    // (a copy that does not fit: said, the worker, timer and cancel let go -- r48 A4)
     try { w.postMessage(msg); } catch (e) { done(reject, new Error(`${name} could not be read: no room for its copy (${e?.message || e})`)); }
   });
 }
@@ -6985,7 +6960,7 @@ function fillInfo(el) {
       const items = [];
       for (const k of e.links) {
         if (items.length) items.push(' · ');
-        items.push(outLink(k.url, `${k.name} ↗`), ` (${new URL(k.url).host})`);
+        items.push(outLink(k.url, `${k.name} ↗`), ` (${new URL(k.url).host})`); // (the arrow kept with its name: R147-13)
       }
       add('see', ...items);
     }
@@ -7845,7 +7820,23 @@ function wireInput() {
   };
   $('gallerybtn').onclick = () => openGallery();
   $('galleryclose').onclick = () => closeGallery();
-  $('gallery').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); } });
+  // (the arrows by card -- a row by the grid's columns -- Home / End to the ends, and Tab kept in the
+  // open gallery: it answered only Tab, which left it for the page under it -- R147-4)
+  $('gallery').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeGallery(); return; }
+    const cards = [...$('gallerygrid').children], at = cards.indexOf(document.activeElement);
+    const all = [$('galleryclose'), ...cards];
+    if (e.key === 'Tab') {
+      const i = all.indexOf(document.activeElement), to = e.shiftKey ? (i <= 0 ? all.length - 1 : i - 1) : (i + 1) % all.length;
+      e.preventDefault(); all[to]?.focus(); return;
+    }
+    if (at < 0) return;
+    const cols = getComputedStyle($('gallerygrid')).gridTemplateColumns.split(' ').length;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, ArrowDown: at + cols, ArrowUp: at - cols, Home: 0, End: cards.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    cards[Math.max(0, Math.min(cards.length - 1, to))].focus();
+  });
   // Export as STL / 3MF / GLB: one button each (a drop-down among buttons,
   // which needed its own keyboard rules: UI organization review rank 7)
   for (const b of $('exportmesh').querySelectorAll('button')) b.onclick = () => { closeMenus(); exportMesh(b.dataset.fmt); };
@@ -8307,7 +8298,8 @@ async function viewIn3D(src) {
 // opens there (`opened`, or null); one rule for the start-up and View in 3D (r57 A7, r58 A5, Q8)
 function lackingNote(place, opened) {
   if (!place || !opened || modelUrlIn(params) || !app.listEntries?.length) return;
-  tell(`the model list has no model ${place}${opened === app.listEntries[0].url ? ': its first opens' : ''}`, 6000);
+  // (kept through the load's clear, as the dropped-files note is: gone at ready, never seen -- R147-7)
+  tell((carriedNote = `the model list has no model ${place}${opened === app.listEntries[0].url ? ': its first opens' : ''}`), 8000);
 }
 // The address's tour, once read and its model loaded: played (tourPlaysHere) while still the address's,
 // else said ready; the start-up's and View in 3D's ending (r57 A1, Q1, r72 A1, r73 A8)

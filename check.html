@@ -60,7 +60,9 @@
   textarea { resize:none; white-space:pre; overflow-x:auto; min-width:0; max-width:100%; } /* (it grows with its lists, one URL a line: R100-10, R100-11) */
   td.mark { text-align:center; } /* (R100-15) */
   /* (names whole beside the URL column, from where that column still has room: R100-4, R101-1) */
-  @media (min-width: 761px) { td.model { white-space:nowrap; } }
+  /* (whole up to a third of the page, a longer one wrapping: kept whole, one took 929 px and the page
+     scrolled sideways -- R147-3) */
+  @media (min-width: 761px) { td.model { min-width:min(max-content, 33vw); overflow-wrap:anywhere; } }
   /* (a model's later checks under its first, no rule between, at every width: R100-3, R101-4) */
   #results tr:has(+ tr.more) td { border-bottom:0; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
