@@ -232,9 +232,7 @@ const sizeText = (n) => (n < 2 ** 20 ? `${Math.max(1, Math.ceil(n / 1024)).toLoc
 // (and what has come of a download rounded down: rounded up, it read "12.1 of 12.1 MB" still downloading -- r74 A10)
 const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
 
-// Whether a model or a 2D drawing is shown: the one test, for the empty card, Cancel, a failure
-// apart from the load, the GPU recovery's end and an error shown in the view (three of them
-// asked app.mesh alone, and a drawing read as nothing shown: r47 A2, Q3)
+// Whether a model or a 2D drawing is shown: the one test (r47 A2, Q3)
 function somethingShown() { return !!(app.mesh || app.dxf); }
 
 // A failure not the running or shown load's own: told while something is shown or a load runs,
@@ -1343,7 +1341,7 @@ const saveBase = (name) => (name || 'model').split(' + ').map((n) => n.replace(/
 function pictureName(source) {
   const d = new Date();
   const two = (n) => String(n).padStart(2, '0');
-  return `${saveBase(source)}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}.png`;
+  return `${saveBase(source)}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}.png`; // (to the second: two in a minute took the browser's "(1)" -- R156-10)
 }
 // Whether body mi of a mesh is closed (the facts' flag; not while they are unknown): the one answer
 // for the cut fill, Measure's cut-face point and clearance's containment
@@ -1565,7 +1563,7 @@ async function renderPicture(opts = app.pic) {
   }
   // Measure's chips: the light palette on a light picture (paper, white,
   // transparent: a page it lands on is most often light)
-  app.measure.paint(ctx, s, !!currentStyle().paper || opts.bg !== 'view');
+  app.measure.paint(ctx, s, !!currentStyle().paper || !!app.lightBg || opts.bg !== 'view'); // (Light background too: R156-1)
   return { canvas: out, scale: s, cssW: cw, cssH: ch, tiles, capped };
 }
 
@@ -1582,10 +1580,7 @@ app.select = (ids) => select(ids, false); // (for tests: a selection as a click 
 // while this model is open; Reset with nothing selected clears it too)
 app.faceOverrides = new Map();
 function setPaint(on) {
-  // (one click mode at a time; Paint picks the faces where they are, so not
-  // while exploded)
-  // (not while a tour plays: no step holds face colours, and they are set aside meanwhile -- refused
-  // first, before it turns Measure or the step's Explode off for nothing)
+  // (one click mode at a time; not while exploded, nor while a tour plays -- refused first)
   if (on && app.tour) { tell('Paint is off while a tour plays: a tour step holds no face colours', 3000); on = false; }
   if (on && app.measure && app.measure.on) app.measure.setOn(false);
   if (on && app.explode.on) setExplode(false);
@@ -1626,7 +1621,9 @@ function saveDrawing() {
   if (!app.header || !app.baseMesh?.faces) return;
   // (the visitor's own parts during a tour, as an export writes them: r72 A4)
   const hidden = ownHidden();
-  const ids = app.selected.size ? [...app.selected] : app.header.meshes.map((_, i) => i + 1).filter((id) => !hidden.has(id));
+  // (a selected part hidden is not drawn, as the view and the exports leave it out: R156-6)
+  const sel = [...app.selected].filter((id) => !hidden.has(id));
+  const ids = sel.length ? sel : app.header.meshes.map((_, i) => i + 1).filter((id) => !hidden.has(id));
   if (!ids.length) { tell('nothing shown to draw'); return; }
   // (a drawing at 1:1 in mm: a model in another unit refused in words -- r84 A5)
   const notMm = notMmWords(app.header, 'a drawing is');
@@ -1640,7 +1637,7 @@ function saveDrawing() {
   const base = saveBase(app.sourceName);
   const label = $('model').querySelector('.mname')?.textContent || base;
   const d = drawingSVG(parts, right, up, {
-    title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${app.selected.size ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
+    title: `${label}: ${VIEW_NAMES[preset]} view, 1:1, mm${sel.length ? ` (${fmtInt(ids.length)} selected ${ids.length === 1 ? 'part' : 'parts'})` : ''}` });
   const name = `${base}-${VIEW_NAMES[preset].toLowerCase()}.svg`;
   downloadBlob(new Blob([d.svg], { type: 'image/svg+xml' }), name);
   app.lastDrawing = { name, preset, width: d.width, height: d.height, lines: d.lines, circles: d.circles, svg: d.svg }; // (for tests)
@@ -1691,9 +1688,7 @@ function viewLink() {
   return u.toString();
 }
 
-// The added models a view link carries (those opened from a URL, a model from a URL first) and how
-// many it leaves out (those opened from this device): one answer for viewLink and for what Copy
-// view link says of it (each kept its own copy of the test: r52 A5)
+// The added models a view link carries (from a URL) and how many it leaves out: one answer (r52 A5)
 function linkAdds() {
   const added = app.sourceUrl && app.scene ? app.scene.slice(1) : [];
   return { carried: added.filter((m) => m.url), left: added.filter((m) => !m.url).length };
@@ -2411,7 +2406,7 @@ function makerTour(tour, at = 0) {
   app.inMaker = false;
   return (app.previewing = app.tour);
 }
-async function tourPictures(tour) {
+async function tourPictures(tour, base = null) {
   if (!makerTour(tour)) return 0;
   setTourPlaying(false);
   app.tour.cut = true;
@@ -2443,13 +2438,13 @@ async function tourPictures(tour) {
   }
   if (!files.length) return 0;
   const { zip } = await import('./export-mesh.js');
-  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${tour.title ? slugOf(tour.title) : saveBase(app.sourceName)}-pictures.zip`); // (the model's name as other saves keep it: R141-6, R142-5)
+  downloadBlob(new Blob([await zip(files)], { type: 'application/zip' }), `${base ?? (tour.title ? slugOf(tour.title) : saveBase(app.sourceName))}-pictures.zip`); // (the maker's one name for its files: R156-9)
   return files.length;
 }
 
 // A tour as a WebM video: played once from the start, notes and captions drawn in, recorded by
 // MediaRecorder; the visitor's input stops it. -> its size in bytes, or why it could not be made
-async function tourVideo(tour) {
+async function tourVideo(tour, base = null) {
   const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   const mime = window.MediaRecorder && types.find((t) => MediaRecorder.isTypeSupported(t));
   if (!mime || !HTMLCanvasElement.prototype.captureStream) return 'this browser cannot record video';
@@ -2471,12 +2466,13 @@ async function tourVideo(tour) {
     r.render(frameState());
     ctx.drawImage(r.canvas, 0, 0, out.width, out.height);
     const scale = out.width / Math.max(1, box.clientWidth);
-    app.measure.paint(ctx, scale, !!currentStyle().paper);
+    app.measure.paint(ctx, scale, !!currentStyle().paper || !!app.lightBg);
     const s = app.tour === t ? t.tour.steps[t.i] : null;
     if (s) paintCaption(ctx, out.width, out.height, scale, stepTitle(t.tour, t.i), s.text);
     raf = requestAnimationFrame(draw);
   };
   rec.start(250);
+  const t0 = performance.now();
   draw();
   showTourStep(0);
   setTourPlaying(true);
@@ -2487,11 +2483,17 @@ async function tourVideo(tour) {
   while (app.tour === t && t.playing && performance.now() < limit) await new Promise((ok) => setTimeout(ok, 100));
   cancelAnimationFrame(raf);
   rec.stop();
+  const ms = performance.now() - t0;
   await stopped;
   if (app.tour === t) endTour(); // (its own only, as tourPictures: r118 L2)
-  const blob = new Blob(chunks, { type: 'video/webm' });
+  let blob = new Blob(chunks, { type: 'video/webm' });
   if (!blob.size) return 'the recording came out empty';
-  downloadBlob(blob, `${tour.title ? slugOf(tour.title) : saveBase(app.sourceName)}.webm`);
+  // (its length written in, so a player shows it and can scrub: R156-5)
+  try {
+    const { withDuration } = await import('./webm-duration.js'), n = 1 << 16;
+    blob = new Blob([withDuration(new Uint8Array(await blob.slice(0, n).arrayBuffer()), ms), blob.slice(n)], { type: 'video/webm' });
+  } catch { /* the recording as it came */ }
+  downloadBlob(blob, `${base ?? (tour.title ? slugOf(tour.title) : saveBase(app.sourceName))}.webm`);
   return blob.size;
 }
 
@@ -3193,10 +3195,7 @@ function keepFocus() {
   // still in the page)
   document.addEventListener('focusout', (e) => {
     const t = e.target;
-    // (also forgotten when a pointer press just came: iOS runs a tap's blur
-    // and click in one task, and with Reduce Motion the slide-out hid in it,
-    // so the filter stayed remembered and a later rotation reopened the
-    // slide-out around it: review r23)
+    // (also forgotten after a pointer press: iOS runs a tap's blur and click in one task -- review r23)
     if (!e.relatedTarget) setTimeout(() => { if (t === last && document.activeElement !== t && (usable(t) || performance.now() - pointerAt < 600)) last = null; });
   });
   document.addEventListener('pointerdown', () => { pointerAt = performance.now(); }, true);
@@ -3438,7 +3437,7 @@ function orientFor(src) {
   let url = null;
   try { url = src ? new URL(src, location.href).href : null; } catch { /* no URL */ }
   const e = listEntry(src);
-  return (e && e.orient) || (url && app.urlOrient) || app.userOrient;
+  return (e && e.orient) || (url && app.urlOrient) || app.fileOrient || app.userOrient;
 }
 
 // Where a list's note for a part goes (its top, along the view's up), the part named as tour.js
@@ -3808,9 +3807,7 @@ function wireHistory() {
     if (!PROGRESS_STATES.has(app.status)) landPendingView();
   });
 }
-// The view a link's address waits with: its fragment's view for the model the address names, or
-// none (a fragment naming no view clears what waited). One setter for the start, Back and an edit
-// (popstate cleared it on no view, hashchange kept the old one: r60 A4).
+// The view a link's address waits with, or none: one setter for the start, Back and an edit (r60 A4)
 function setPendingView(search, hash) {
   const view = linkViewOf(hash);
   app.pendingView = view ? { search, view } : null;
@@ -4418,6 +4415,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   app.partLabels = listEntry(app.sourceUrl)?.labels || null;
   buildTree();
   syncSheets(); // the flat-sheets row, for this model
+  app.fileOrient = app.pendingOrient?.seq === seq ? app.pendingOrient.orient : null;
   app.cam.orient = orientFor(app.sourceUrl);
   setView('iso');
   app.loadQ = app.cam.q; // the view it opened at (fillModelList)
@@ -5167,9 +5165,7 @@ async function loadAny(buf, name, seq, extras = []) {
     name = openedName(name, new Uint8Array(body, 0, Math.min(SNIFF_BYTES, body.byteLength))); // (js/formats.js, check-tour's too: r79 A5)
     buf = body;
   }
-  // every format by the one table (js/formats.js): a mesh (STL, OBJ, PLY, OFF, 3MF, glTF / GLB;
-  // gzipped too) is read into a .cadmesh (js/mesh-formats.js); a DXF or DWG opens in 2D; a zip
-  // for the model in it; a STEP / IGES / BREP is converted; a .cadmesh opens
+  // every format by the one table (js/formats.js)
   const fmt = formatOfName(name);
   if (fmt && fmt.kind === '2d' && app.adding && app.adding.seq === seq) {
     // a drawing has no place in a 3D scene: refused, not opened over it (the scene went)
@@ -5287,6 +5283,9 @@ async function loadMeshFile(buf, name, seq, drop = []) {
   // (a mesh added to a scene is read in the first model's unit: the scene's size)
   const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   const adding = app.adding && app.adding.seq === seq;
+  // (a file that says it is Z up, a 3MF or an STL we wrote, opens Z up: R156-2)
+  const head = new TextDecoder().decode(new Uint8Array(buf.buffer ?? buf, buf.byteOffset ?? 0, Math.min(17, buf.byteLength)));
+  if (!adding) app.pendingOrient = { seq, orient: format === '3mf' || (format === 'stl' && head === 'cad.place export:') ? Z_UP_ORIENT : null };
   return meshFromSource({ buf, name, format, extras }, adding ? readUnit() : addressUnit(url), seq);
 }
 
@@ -5384,6 +5383,7 @@ function setMeshUnit(u) {
     app.rereadSeq = seq;
     app.rereadUnit = u;
     if (url) app.urlOfLoad = { seq, url };
+    app.pendingOrient = { seq, orient: app.fileOrient }; // (its Z up kept: R156-2)
     setStatus('loading', `reading ${src.name} in ${unitName(u)}`);
     // (the same bodies, at another size: the visitor's hidden parts stay hidden)
     const hidden = new Set(app.hidden);
@@ -5393,9 +5393,7 @@ function setMeshUnit(u) {
       if (hidden.size) { app.hidden = hidden; syncTreeChecks(); pushState(); updateButtons(); viewChanged(); }
       announce(`${src.name} read in ${unitName(u)}`);
     }).finally(() => {
-      // (a re-read that ended without landing -- Cancel, a newer load, a failure -- and none other
-      // under way: the select says the reading again; it kept the choice, inches, the model in mm and
-      // every size 25.4x off what the row said -- r67 Q3)
+      // (a re-read that never landed: the select says the reading again -- r67 Q3)
       if (!rereading()) syncMeshUnitRow();
     });
   });
@@ -6637,9 +6635,7 @@ function select(ids, additive, name = null) {
   if (app.pointerType === 'touch' && lastLabel) hoverLabel(app.selected.size === 1 ? meshLabel([...app.selected][0]) : app.selName || '', true); // ("all 4": its name, R140-9)
 }
 
-// The display unit in force, and a length (model units) in it. The geometry
-// is in mm (OpenCascade converts on import); a file whose header names
-// another unit is shown in that unit, unconverted.
+// The display unit in force, and a length (model units) in it.
 // ('mm': a mesh file's .cadmesh saved before the mesh readers wrote MM)
 const geomMm = () => geomIsMm(app.header);
 // (the model's largest extent, in mm, for Auto's choice: units.js autoUnit)
@@ -7009,10 +7005,7 @@ function fillInfo(el) {
 
 const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
 
-// What the volume counts, in words (Details, under the volume): "the 305
-// closed bodies; 1,082 are flat sheets (pads, labels) and 4 are open surface
-// models", with "(12 of them closed by the converter's caps)" when some are
-// all of no area: said, seen (R34-2)
+// What the volume counts, in words (Details, under the volume; R34-2)
 function noSurface(ids, then) {
   const area = app.baseMesh?.edgeInfo?.value?.facts?.area;
   if (!area || !ids.length || ids.some((id) => area[id - 1] > 0)) return false;
@@ -7495,10 +7488,7 @@ function wireInput() {
     queueFrame();
   }).observe(stage);
   window.addEventListener('resize', queueFrame); // devicePixelRatio changes (browser zoom) keep the CSS size
-  // ☰ from the keyboard (Enter / Space, detail 0) moves the focus into the
-  // slide-out, to the parts list: left on ☰, the list was 7 Tabs away on a
-  // 390 px window and 11 on 844 x 390, past the whole toolbar (review r18).
-  // Esc there gives it back to ☰.
+  // ☰ from the keyboard moves the focus into the slide-out's parts list; Esc gives it back (review r18)
   $('panelbtn').onclick = (e) => {
     const open = !panelOpen();
     setPanel(open);
@@ -7932,8 +7922,10 @@ function wireInput() {
       tellReady(`could not save ${name}: ${e.message || e}`);
       return;
     }
-    downloadBlob(new Blob([bytes]), `${saveBase(name)}.cadmesh`);
-    tell(`saved ${saveBase(name)}.cadmesh, ${sizeText(bytes.byteLength ?? bytes.length)}`, 3000); // (R133-10, R134-4)
+    // (.gz on gzipped bytes, as the lists serve them: R156-13)
+    const file = `${saveBase(name)}.cadmesh${isGzip(bytes) ? '.gz' : ''}`;
+    downloadBlob(new Blob([bytes]), file);
+    tell(`saved ${file}, ${sizeText(bytes.byteLength ?? bytes.length)}`, 3000); // (R133-10, R134-4)
   };
   $('cacheclear').onclick = async () => {
     const err = await cacheClear().then(() => null, (e) => e);

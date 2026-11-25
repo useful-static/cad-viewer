@@ -777,6 +777,27 @@ const withRecorder = async (api, f) => {
     if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document;
   }
 };
+await test('webm-duration.js: a recording\'s Info without a Duration gets one (ms at a 1 ms TimecodeScale), its size grown, the Cluster after it intact; one with a Duration is set in place; a non-WebM is left alone (R156-5)', async () => {
+  const { withDuration } = await import('../js/webm-duration.js');
+  const ebml = [0x1a, 0x45, 0xdf, 0xa3, 0x84, 0x42, 0x86, 0x81, 0x01];
+  const seg = [0x18, 0x53, 0x80, 0x67, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+  const scale = [0x2a, 0xd7, 0xb1, 0x83, 0x0f, 0x42, 0x40];
+  const cluster = [0x1f, 0x43, 0xb6, 0x75, 0x81, 0x00];
+  const file = new Uint8Array([...ebml, ...seg, 0x15, 0x49, 0xa9, 0x66, 0x80 | scale.length, ...scale, ...cluster]);
+  const out = withDuration(file, 12345.5);
+  assert.equal(out.length, file.length + 11);
+  const info = ebml.length + seg.length;
+  assert.equal(out[info + 4], 0x80 | (scale.length + 11), 'the Info\'s size grown by the Duration');
+  const d = info + 5 + scale.length;
+  assert.deepEqual([...out.subarray(d, d + 3)], [0x44, 0x89, 0x88]);
+  assert.equal(new DataView(out.buffer, out.byteOffset).getFloat64(d + 3), 12345.5);
+  assert.deepEqual([...out.subarray(d + 11)], cluster, 'the Cluster after it');
+  const again = withDuration(out, 2000);
+  assert.equal(again.length, out.length, 'set in place');
+  assert.equal(new DataView(again.buffer, again.byteOffset).getFloat64(d + 3), 2000);
+  const other = new Uint8Array([1, 2, 3, 4]);
+  assert.equal(withDuration(other, 10), other);
+});
 await test('tour-recorder.js: a step deleted by its × is offered back: "step 2 deleted" with an Undo that puts it back in its place (R155-2)', async () => {
   let n = 0;
   await withRecorder({ capture: () => ({ view: ['iso', 'top', 'front'][n++] }) }, async ({ rec, $, list }) => {
@@ -859,8 +880,8 @@ await test('tour-recorder.js: Save after one step calls api.save once with the u
   assert.deepEqual(saved, [['board.cadtour.json', 1]]);
   assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json']);
 });
-await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved the video, 3.0 MB", Pictures resolving 4 "saved 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30)', async () => {
-  for (const [bytes, pics, want] of [[3145728, 4, ['saved the video, 3.0 MB', 'saved 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {
+await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved board.webm, 3.0 MB", Pictures resolving 4 "saved board-pictures.zip, 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30; the file named: R156-8)', async () => {
+  for (const [bytes, pics, want] of [[3145728, 4, ['saved board.webm, 3.0 MB', 'saved board-pictures.zip, 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {
     const notes = [];
     await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), video: async () => bytes, pictures: async () => pics }, async ({ $ }) => {
       $('teadd').onclick();

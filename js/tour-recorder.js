@@ -92,8 +92,9 @@ export function createTourRecorder(api) {
     }
     if (t) api.announce(t);
   };
-  // (a note said once, cleared by the next press that says nothing: it stayed through them -- R155-10)
-  el.panel.addEventListener('click', (e) => { if (!el.note.contains(e.target)) note(''); }, true);
+  // (a note said once, cleared by the next press that says nothing: it stayed through them -- R155-10;
+  // a deletion's Undo kept until the next note, a press elsewhere dropped it -- R156-4)
+  el.panel.addEventListener('click', (e) => { if (!undo && !el.note.contains(e.target)) note(''); }, true);
 
   // The model the draft's steps were made on: a tour plays over one model, so with another
   // open, its steps are not added to, shown or saved (saved, they named the other model)
@@ -307,6 +308,13 @@ export function createTourRecorder(api) {
   el.sGo.onclick = () => { preview(Math.max(0, draft.sel), false); if (!el.sGo.offsetParent) el.play.focus?.(); };
   el.play.onclick = () => preview(0, true);
 
+  // the files' one name: the tour's title, else its own model's (the first: R155-5), for the tour, its
+  // pictures and its video alike (R156-9)
+  const fileBase = () => {
+    const first = (api.model()?.name || '').split(' + ')[0];
+    const base = (first || '').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, '-');
+    return draft.title || !base ? tourSlug(draft.title) : base;
+  };
   el.save.onclick = () => {
     if (!sameModel('saved')) return;
     let t;
@@ -314,8 +322,7 @@ export function createTourRecorder(api) {
     // (an untitled tour named after its model as other saves keep it, not "tour": R141-6, R142-5)
     // (after its own model only, the one it plays on; an added model is said to be left out -- R155-5)
     const [first, ...added] = (api.model()?.name || '').split(' + ');
-    const base = (first || '').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, '-');
-    const slug = draft.title || !base ? tourSlug(draft.title) : base;
+    const slug = fileBase();
     api.save(`${t}\n`, `${slug}.cadtour.json`);
     const also = added.length ? `; it plays on ${first} alone, without ${added.length === 1 ? 'the added model' : `the ${added.length} added models`}` : '';
     note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
@@ -331,9 +338,10 @@ export function createTourRecorder(api) {
     renderList();
     note(kind === 'video' ? `recording the tour: it plays once through (a drag${typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse) and (not (any-pointer: fine))').matches ? '' : ' or a key'} stops it)…` /* (no keys on a touch-only device) */ : 'taking a picture of each step…');
     try {
-      const r = kind === 'video' ? await api.video(tour) : await api.pictures(tour);
-      // (KB under a megabyte, one picture singular: R89-1, R89-2)
-      if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved the video, ${r < 1048576 ? `${Math.max(1, Math.round(r / 1024))} KB` : `${(r / 1048576).toFixed(1)} MB`}` : `saved ${r} picture${r === 1 ? '' : 's'}`);
+      const base = fileBase();
+      const r = kind === 'video' ? await api.video(tour, base) : await api.pictures(tour, base);
+      // (KB under a megabyte, one picture singular: R89-1, R89-2; the file named, as every save: R156-8)
+      if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved ${base}.webm, ${r < 1048576 ? `${Math.max(1, Math.round(r / 1024))} KB` : `${(r / 1048576).toFixed(1)} MB`}` : `saved ${base}-pictures.zip, ${r} picture${r === 1 ? '' : 's'}`);
       else note(`no ${kind === 'video' ? 'video' : 'pictures'}: ${typeof r === 'string' ? r : 'nothing came back from the GPU'}`);
     } finally {
       busy = false;
@@ -400,9 +408,11 @@ export function createTourRecorder(api) {
   el.panel.addEventListener('keydown', (e) => {
     // (Ctrl/⌘+Z in the maker, outside a text field: its own deletion back, not a part's colour -- R155-2)
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea')) {
+      // (nothing of the maker's to undo: the key goes on to the view's Undo -- R156-4)
+      if (!undo) return;
       e.preventDefault();
       e.stopPropagation();
-      if (undo) undo(); else note('nothing in the maker to undo');
+      undo();
       return;
     }
     if (e.key !== 'Escape' || e.defaultPrevented) return;

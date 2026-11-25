@@ -578,7 +578,9 @@ await test('Save drawing during a tour draws the visitor\'s own parts, not the s
   assert.deepEqual(drawn(touring), [1, 2, 3], 'must fire: [3], the step\'s subject alone');
   // must accept: no tour, what is shown; a selection, as it is
   assert.deepEqual(drawn({ header, selected: new Set(), hidden: new Set([2]), tour: null }), [1, 3, 4]);
-  assert.deepEqual(drawn({ header, selected: new Set([2]), hidden: new Set([2]), tour: null }), [2]);
+  // (a selected part that is hidden is not drawn, as the view and the exports leave it out: R156-6)
+  assert.deepEqual(drawn({ header, selected: new Set([2, 3]), hidden: new Set([2]), tour: null }), [3]);
+  assert.deepEqual(drawn({ header, selected: new Set([2]), hidden: new Set([2]), tour: null }), [1, 3, 4]);
 });
 await test('a 2D file is a DWG by its bytes or by the formats table\'s DWG row, whatever extensions the row holds (main.js loadDxf, as written: r70 A5)', async () => {
   // (since r80 A4 loadDxf asks js/formats.js drawingReaderOf, its format by the table's row -- an

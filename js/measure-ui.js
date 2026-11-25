@@ -736,7 +736,7 @@ export function createMeasure(deps) {
       const at = st.holes.list.map((h) => P(h.centre));
       // (the picked ring last and as on screen, 9 px with a 3 px line: R26-5)
       const ring = (q, picked) => {
-        ctx.strokeStyle = picked ? INK.dark.line : HOLE;
+        ctx.strokeStyle = picked ? (light ? INK.light.line : INK.dark.line) : light ? '#0b6e99' : HOLE; // (the screen's on a light ground: R156-1)
         ctx.lineWidth = (picked ? 3 : 2) * s;
         ctx.beginPath(); ctx.arc(q[0], q[1], (picked ? 9 : 6) * s, 0, 2 * Math.PI); ctx.stroke();
       };
