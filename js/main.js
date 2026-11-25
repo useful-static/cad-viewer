@@ -1214,14 +1214,14 @@ function clearHover() {
 
 // The first model this browser shows on a touch-only screen: the gestures, once per browser, unless
 // a note is showing ("☰ for parts" only where the ☰ is: R6-2)
-let TOUCH_HINT = 'one finger turns · two pinch and pan · tap names a part · ☰ for parts';
+let TOUCH_HINT = 'one finger turns · two pinch and pan · tap selects a part · ☰ for parts'; // (as the ? box: R151-14)
 function touchHintOnce() {
   // (after the load's own note, not instead of it: R144-3)
   if (carriedNote && $('hover').textContent === carriedNote && performance.now() < noteHeldUntil) { setTimeout(touchHintOnce, noteHeldUntil - performance.now() + 50); return; }
   if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
-  TOUCH_HINT = `one finger turns · two pinch and pan · tap names a part${$('panelbtn').getClientRects().length ? ' · ☰ for parts' : ''}`;
+  TOUCH_HINT = `one finger turns · two pinch and pan · tap selects a part${$('panelbtn').getClientRects().length ? ' · ☰ for parts' : ''}`;
   tell(TOUCH_HINT, 6000);
   // (counted as seen only if it held its time: a 6 s note right after the load replaced it, and it
   // was recorded as shown and never came back -- r47 Q7)
@@ -2270,9 +2270,7 @@ function captureStep({ camera = 'exact' } = {}) {
   } else {
     s.view = { cam: { target: rc.target, dist: rc.dist, q, ortho: !!c.ortho } };
   }
-  // with a tour shown (the maker's Show or Preview), the view is the step as played: what its dim
-  // did (every other part grey, or hidden) is the dim field's, which the editor keeps, not a
-  // colour or a hide of the step's -- recording it named every other part #9ea3ab, or hid them
+  // with a tour shown, the step's dim is the dim field's, not recorded as colours or hides
   const dim = app.tour && app.tour.dimmed;
   const overrides = new Map(app.overrides);
   let hiddenNow = app.hidden;
@@ -3007,9 +3005,7 @@ function refold(keep = focusNow()) {
       continue;
     }
     if (id === 'sheet') {
-      // a drawing's sheet select, last: into File's panel, first there (2D has no View or Show to
-      // fold, and a 320 px phone's row ran past the edge with it: UI design round 8 R8-1)
-      // (under a "Sheet" heading: in File, a bare "Model ▾" read as a model picker -- round 9 R9-6)
+      // a drawing's sheet select, last, into File's panel under a "Sheet" heading (R8-1, R9-6)
       if (!$('sheet').hidden) { $('fhsheet').hidden = false; $('fhsheet').after($('sheet')); }
       continue;
     }
@@ -3435,10 +3431,7 @@ function fillModelList(entries) {
   }
 }
 
-// The orientation a model opens in (js/orient.js): its list entry's, else
-// the page's ?orient= for a model opened from a URL, else the one chosen
-// here (the Z up toggle; the file's own frame at first). A file opened from
-// the device has no URL, so the page's ?orient= is not for it.
+// The orientation a model opens in: its list entry's, else ?orient= for a URL's model, else Z up's
 function orientFor(src) {
   let url = null;
   try { url = src ? new URL(src, location.href).href : null; } catch { /* no URL */ }
@@ -3822,9 +3815,7 @@ function setPendingView(search, hash) {
   const view = linkViewOf(hash);
   app.pendingView = view ? { search, view } : null;
 }
-// The waiting view lands, if it is for the scene shown and the address's ?add=s are in: at the
-// model's load, at the ?add=s' end, on an edit with nothing loading, and when the visitor's own Add
-// model… joins (it never landed there, and was left waiting: r60 A3). One rule, viewIsFor's.
+// The waiting view lands when it is for the scene shown and its ?add=s are in (viewIsFor; r60 A3)
 function landPendingView() {
   if (app.header && !app.addsPending && pendingViewIsFor()) {
     applyLinkView(app.pendingView.view);
@@ -5040,10 +5031,7 @@ addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { c
   app.releaseInfo = () => { release(); unspace(); keyAt = -1e9; }; // (a new list forgets the last key: R19-3)
 }
 
-// The edge list and body facts of a loaded model: from the file when it
-// carries them, else built by a worker from copies of its arrays. Resolves
-// to base.edgeInfo.value ({ edges, silhouettes, silhouetteNormals,
-// silhouettesOmitted, facts, source, ms }), or null when the build failed.
+// A model's edges and body facts, the file's or a worker's build -> base.edgeInfo.value, or null
 function edgesOf(base) {
   const info = base.edgeInfo;
   const cap = silhouetteCapHere();
@@ -5932,7 +5920,7 @@ function tessellate(buf, format, seq, name, threads) {
         detail = `step ${st + 1} of ${STEPS.length}: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
+        ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` · ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
       showProgress(`Converting ${name} (${size})`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
       // (the detail line only grows while it converts: Cancel moved 9 px as it rewrapped -- R133-4)
@@ -6163,9 +6151,7 @@ function pickModelFile(files) {
   return f;
 }
 
-// A file over the size, refused before anything starts -- for Open…, a drop and Add model… alike
-// (Add model… called loadFile, whose own check came after beginLoad: an over-size file added
-// cancelled a running conversion, and over a model made the page's error -- r50 A1). Says whether.
+// A file over the size refused before anything starts, for Open…, a drop and Add model… alike (r50 A1)
 function refusedForSize(f) {
   if (f.size <= MAX_FILE_BYTES) return false;
   failApart(oversizeText(f.name));
@@ -6471,6 +6457,8 @@ function buildTree() {
 // ancestors (expanded) and, under a matching row, all of its descendants.
 function filterTree(q) {
   q = q.trim().toLowerCase();
+  // (the matches from their first: after a pick the list stayed scrolled to its end, #94-#108 of 108 -- R151-3)
+  if (globalThis.document && $('tree')) $('tree').scrollTop = 0;
   const walk = (li, force) => {
     const lab = li.querySelector(':scope > .row > .label');
     const hit = force || !q || lab.textContent.toLowerCase().includes(q);
@@ -7718,15 +7706,19 @@ function wireInput() {
   // promise, so the gesture still holds when the render finishes)
   $('piccopy').hidden = typeof ClipboardItem !== 'function' || !navigator.clipboard?.write;
   $('piccopy').onclick = () => copyPicture();
-  // Ctrl/Cmd+P is File > Print, P by place on other layouts; one print at a time, by key or button, its
-  // note shown before the picture is drawn; a print's picture then dropped for the hint; framed, the key,
-  // its naming and the print are the host page's (R116-1, R117-1..7, R118-1..5)
+  // Ctrl/Cmd+P is File > Print, one at a time; framed, the key and the print are the host page's
+  // (R116-1, R117-1..7, R118-1..5)
   const framed = FRAMED;
   $('printbtn').title = keyTitle($('printbtn').title);
   if (framed) {
     for (const k of document.querySelectorAll('#helppop kbd')) if (/^(Ctrl|⌘)\+P$/.test(k.textContent)) { k.parentElement.nextElementSibling?.remove(); k.parentElement.remove(); }
     $('printbtn').removeAttribute('aria-keyshortcuts');
-  } else if (IS_MAC) $('printbtn').setAttribute('aria-keyshortcuts', 'Meta+P Control+P');
+  } else if (IS_MAC) {
+    $('printbtn').setAttribute('aria-keyshortcuts', 'Meta+P Control+P');
+    // (the ? box in a Mac's keys: it kept "Ctrl+click" and Ctrl+A / Z / P -- R151-6)
+    for (const k of document.querySelectorAll('#helppop kbd')) k.textContent = k.textContent.replace(/^Ctrl\+/, '⌘');
+    for (const d of document.querySelectorAll('#helppop dd')) if (d.textContent.includes('Ctrl+click')) d.textContent = d.textContent.replace('Ctrl+click', '⌘-click');
+  }
   let printing = false;
   const startPrint = () => {
     if (printing || $('printbtn').disabled) return;
@@ -7865,9 +7857,12 @@ function wireInput() {
     e.preventDefault();
     let d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
     if (!d) return;
-    if (Math.sign(d) !== Math.sign(secWheel) || e.timeStamp - secWheelAt > 300) secWheel = 0;
+    const gap = e.timeStamp - secWheelAt;
+    if (Math.sign(d) !== Math.sign(secWheel) || gap > 300) secWheel = 0;
     secWheelAt = e.timeStamp;
-    if (Math.abs(d) >= 50) d = Math.sign(d) * 100;
+    // (a whole notch only for a line / page event or one that comes apart: a trackpad flick's ten 60 px
+    // events stepped ten times -- R151-11)
+    if (Math.abs(d) >= 50 && (e.deltaMode || gap > 60)) d = Math.sign(d) * 100;
     secWheel += d;
     while (Math.abs(secWheel) >= 100) { secStep(secWheel < 0 ? 1 : -1, e.shiftKey); secWheel -= Math.sign(secWheel) * 100; }
   }, { passive: false });
@@ -7974,8 +7969,11 @@ function wireInput() {
     // Ctrl/⌘+A outside a field: every body shown selected, not the page's text (R150-1)
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === 'a' || (nonLatinLetter(e.key) && e.code === 'KeyA'))) {
       const t0 = e.target;
-      if ((t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type)) || t0.tagName === 'TEXTAREA' || t0.isContentEditable || !app.header || app.dxf) return;
+      if ((t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type)) || t0.tagName === 'TEXTAREA' || t0.isContentEditable) return;
       e.preventDefault();
+      // (never the page's text -- a drawing's and the empty page's turned blue, R151-2 -- and nothing
+      // behind the ? box, a menu or the gallery: R151-7)
+      if (!app.header || app.dxf || helpOpen() || document.querySelector('.menu-btn[aria-expanded="true"]') || !$('gallery').hidden) return;
       const ids = [];
       for (let id = 1; id <= app.header.meshes.length; id++) if (!app.hidden.has(id)) ids.push(id);
       select(ids, false);

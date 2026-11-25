@@ -955,7 +955,7 @@
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
       <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, at its own origin (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
-      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, style, section, hidden and selected parts">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
+      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, projection, style, section, explode, hidden and selected parts, notes">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <!-- Save: every file the viewer writes, under one verb -->
       <span class="mhead" aria-hidden="true">Save</span>
       <span class="split"><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at the size and background chosen in the picture options (▾), without the hover highlight, with Measure's results drawn in (P)">Save picture</button><button id="picmore" class="mini" autocomplete="off" disabled aria-expanded="false" aria-controls="picopts" aria-label="Picture options" title="Picture options: size, background, selection">▾</button></span>
@@ -1056,7 +1056,7 @@
     <span class="group"><input id="partcolour" type="color" disabled autocomplete="off" aria-label="Colour of the selected parts" title="Colour of the selected parts (select a part first; remembered in this browser, not carried by a view link)">
     <button id="paintbtn" aria-pressed="false" disabled title="Paint faces: while on, a click paints the face under it in the swatch's colour (Reset all, with nothing selected, clears them)">Paint</button>
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></span></div>
-  <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" hidden>
+  <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" spellcheck="false" hidden><!-- (no red line under "C0402": R151-9) -->
   <p id="treenone" role="status" hidden></p>
   <ul id="tree"></ul>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
@@ -1123,7 +1123,8 @@
         <dt><kbd>M</kbd></dt><dd>Measure</dd>
         <dt><kbd>P</kbd></dt><dd>Save a picture</dd>
         <dt><kbd>Ctrl+P</kbd></dt><dd>Print</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Drop a half-taken measurement, then stop measuring</dd>
+        <dt><kbd>Ctrl+Z</kbd></dt><dd>Undo the last measurement</dd><!-- (R151-8) -->
+        <dt><kbd>Esc</kbd></dt><dd>Drop a half-taken measurement, then stop measuring, then let go of the selected layer</dd>
         <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
       <section class="keys help-mouse"><h3>Mouse</h3><dl>
         <dt>Drag</dt><dd>Turn (orbit)</dd>
@@ -1136,6 +1137,8 @@
         <dt>Two fingers</dt><dd>Pinch to zoom, drag to pan</dd>
         <dt>Tap</dt><dd>Select a part</dd>
         <dt>Double-tap</dt><dd>Fit the part tapped</dd>
+        <dt>Measure</dt><dd>Tap points; hold to aim with the magnifier, lift to place</dd>
+        <dt>☰</dt><dd>The parts list</dd><!-- (a phone's box named no tool: R151-5) -->
         <dt>Swipe a tour's card</dt><dd>Next / previous step</dd></dl></section><!-- (named where a phone reads it: R147-12) -->
       <section class="keys"><h3>Views</h3><dl id="viewkeys"><!-- each view's key: main.js, from js/orient.js VIEWS -->
         <dt id="viewkey9"><kbd>9</kbd></dt><dd>The opposite view</dd>
@@ -1154,6 +1157,7 @@
         <dt><kbd>I</kbd></dt><dd>Isolate the selection</dd>
         <dt><kbd>H</kbd></dt><dd>Hide the selection</dd>
         <dt><kbd>A</kbd></dt><dd>Show all</dd>
+        <dt><kbd>Ctrl+A</kbd></dt><dd>Select every part shown</dd><!-- (R151-6) -->
         <dt><kbd>Ctrl+Z</kbd></dt><dd>Undo</dd></dl></section>
       <section class="keys"><h3>Parts list</h3><dl>
         <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move (<span class="nobr"><kbd>Home</kbd> <kbd>End</kbd>:</span> first, last)</dd>
@@ -1167,7 +1171,8 @@
         <dt><kbd>Esc</kbd></dt><dd>Leave the tour</dd></dl></section>
       <section class="keys"><h3>Anywhere</h3><dl>
         <dt><kbd>Esc</kbd></dt><dd>One step back per press: Measure, Paint, Walk, Explode, the section, then the selection</dd>
-        <dt><kbd>?</kbd></dt><dd>This box</dd></dl></section>
+        <dt><kbd>?</kbd></dt><dd>This box</dd>
+        <dt>More</dt><dd><a href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></dd></dl></section><!-- (the help reached from the viewer: R151-4) -->
     </div>
   </div>
   <!-- The options bar: the controls of the tools that are on, one row each
@@ -1199,7 +1204,7 @@
       <button id="measoff" aria-pressed="true" title="Stop measuring (Esc)">Measure <span aria-hidden="true">×</span></button>
       <span class="seg" id="measmode" role="group" aria-label="What to measure"><button data-mode="distance" aria-pressed="true" title="The distance between two points, and its X, Y and Z parts">Distance</button><button data-mode="angle" aria-pressed="false" title="The angle at the middle of three points">Angle</button><button data-mode="face" aria-pressed="false" title="The gap between two faces, the first one flat">Face</button><button data-mode="note" aria-pressed="false" title="A note pinned to a point of the model: a view link carries it">Note</button></span>
       <span id="measnote" class="secval"></span>
-      <input id="measnotetext" type="text" hidden autocomplete="off" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
+      <input id="measnotetext" type="text" hidden autocomplete="off" spellcheck="false" placeholder="Note text, then Enter" aria-label="The note's text (Enter pins it, Esc drops it)">
       <button id="measundo" disabled aria-label="Undo the last point or result" title="Undo the last point or result"><svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M5.5 3L2 6.5 5.5 10M2.5 6.5h7a4 4 0 0 1 0 8H7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="measclear" disabled title="Remove every result">Clear all</button>
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
@@ -1215,7 +1220,7 @@
     <p class="drop-hint">Drop <span id="dropwhat">a model file</span> here,&nbsp;or</p><!-- ("or" never alone on a line: R122-3) -->
     <p class="drop-now">Drop to open</p>
     <button id="emptyopen" class="primary">Choose a file…</button>
-    <p class="note">Your file is opened on this device and never uploaded.</p>
+    <p class="note">Your file is opened on this device and never uploaded. <a href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p>
     <p id="emptyerr" class="err" hidden></p>
   </div>
   <!-- the model list as pictures (an entry's "image"), from File > Browse models -->

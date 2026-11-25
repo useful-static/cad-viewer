@@ -67,6 +67,7 @@ import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
 
 const SVG = 'http://www.w3.org/2000/svg';
+const HUGE_BODY = 200000; // triangles: a body this big readied for snapping only after it is said (R151-1)
 // every kind of point Measure snaps to, its mark and its name (a 'cut' point -- on a section's cut
 // face -- had neither: its label read "undefined undefined")
 export const SNAP_KINDS = ['vertex', 'mid', 'centre', 'edge', 'surface', 'cut'];
@@ -103,7 +104,7 @@ export function createMeasure(deps) {
   };
   const st = {
     on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), caster: null, model: null,
-    listOpen: false, holes: null,
+    listOpen: false, holes: null, prepared: new Set(), preparing: new Set(),
   };
   const layer = $('measvg');
   const labels = $('measlabels');
@@ -112,7 +113,7 @@ export function createMeasure(deps) {
   // ---- the model's caches ----
   function model() {
     const m = scene.mesh;
-    if (m !== st.model) { st.model = m; st.geom = new Map(); st.caster = m ? makeCaster(m) : null; }
+    if (m !== st.model) { st.model = m; st.geom = new Map(); st.caster = m ? makeCaster(m) : null; st.prepared = new Set(); }
     return m;
   }
   // a body's geometry, built at most `budget` ms per call across bodies
@@ -194,9 +195,24 @@ export function createMeasure(deps) {
         if (!s) { behind = true; break; }
         x0 = Math.min(x0, s[0]); y0 = Math.min(y0, s[1]); x1 = Math.max(x1, s[0]); y1 = Math.max(y1, s[1]);
       }
-      if (behind || (x >= x0 - r && x <= x1 + r && y >= y0 - r && y <= y1 + r)) out.push(i);
+      if (!(behind || (x >= x0 - r && x <= x1 + r && y >= y0 - r && y <= y1 + r))) continue;
+      if (ms[i].idxCount / 3 > HUGE_BODY && !st.prepared.has(i)) { prepare(i); continue; }
+      out.push(i);
     }
     return out;
+  }
+  // A huge body (the rack's frame, 846k triangles) readied for snapping only after that is said: it
+  // froze the page 2.3 s on the first aim, unsaid (R151-1)
+  function prepare(i) {
+    if (st.preparing.has(i)) return;
+    st.preparing.add(i);
+    deps.tell('preparing snapping on this part…', 8000, 'preparing snapping');
+    setTimeout(() => {
+      if (st.model === scene.mesh) { st.caster?.warm?.(i); if (scene.mesh.faces) geomOf(i, Infinity); st.prepared.add(i); }
+      st.preparing.delete(i);
+      deps.tell('snapping ready', 1500, '');
+      deps.queueFrame();
+    }, 80);
   }
 
   // the cut side of a section is not there to hit: a hit point past the plane, as the view cuts
@@ -307,18 +323,15 @@ export function createMeasure(deps) {
           const sx = a[0] + ab[0] * t, sy = a[1] + ab[1] * t;
           const dd = Math.hypot(sx - x, sy - y);
           if (dd > r) continue;
-          // the point of the edge nearest the pointer's ray: the screen parameter is no measure
-          // along it in perspective, and a straight b-rep edge is one segment however long -- a
-          // 100 mm board edge snapped 3.6 to 7.1 mm from the point under the cursor (r108 M1)
+          // the edge's point nearest the pointer's ray, not by the screen parameter (r108 M1)
           const p = nearestOnRay(line[i - 1], line[i], pray, t);
           if (skip && skip(p)) continue; // (an edge the section cut away, as consider's: r126 M1)
           edgePts.push({ p, kind: 'edge', mesh: mi, info: { length: g.mids[e].len, diameter: null }, dd });
         }
       }
     }
-    // nearest on screen, within a pixel the one nearer the eye (a through-hole's front rim), by runs
-    // (r122 L2); a corner, midpoint or centre before an edge point, the nearest visible of each:
-    // the 24 nearest tried, then more while the snap's 40 ms last (hidden pins: r134 M3)
+    // nearest on screen (within a pixel, nearer the eye), a point before an edge, the 24 nearest
+    // tried then more within 40 ms (r122 L2, r134 M3)
     const nearest = (list) => snapOrder(list, v.dir);
     const vis = (c) => visible(v, c.p, bodiesNear(v, ...v.toScreen(c.p), 0), skip);
     for (const list of [nearest(pts), nearest(edgePts)]) {
@@ -344,9 +357,7 @@ export function createMeasure(deps) {
     const pl = deps.sectionPlane();
     if (!pl) return null;
     if (deps.closed && !deps.closed(hit.mesh)) return null; // (an open sheet: no cut face drawn)
-    // (its outside: a surface, not the cut -- by the vertex normals interpolated at the hit, the
-    // view's own per-fragment test (js/raycast.js seesInside); the winding, turned by the body's
-    // signed volume, was a second rule, and the centroid's normal a third near an outline)
+    // (its outside a surface, not the cut, by the view's own test, raycast.js seesInside)
     const den = dot(pl, ray.d);
     if (Math.abs(den) < 1e-12) return null;
     const tp = (pl[3] - dot(pl, ray.o)) / den;
@@ -847,7 +858,14 @@ export function createMeasure(deps) {
     const slice = () => {
       if (!st.on || st.model !== m) return;
       const end = performance.now() + 8;
-      while (mi < m.header.meshes.length && performance.now() < end) { st.caster.warm(mi); if (!geomOf(mi, end)) break; mi++; }
+      // (a body over 20k triangles left to its first ray: each is built whole, and the rack's froze
+      // the page 2.3 s on Measure's press -- R151-1)
+      while (mi < m.header.meshes.length && performance.now() < end) {
+        if (m.header.meshes[mi].idxCount / 3 > 20000) { mi++; continue; }
+        st.caster.warm(mi);
+        if (!geomOf(mi, end)) break;
+        mi++;
+      }
       if (mi < m.header.meshes.length) setTimeout(slice, 0);
     };
     setTimeout(slice, 0);
