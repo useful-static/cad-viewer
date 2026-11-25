@@ -1,39 +1,8 @@
-// The edge list and the body facts, from a decoded model's global arrays, in
-// one pass per body. Pure, no DOM: run by the converter (js/cadmesh.js, so a
-// new .cadmesh carries them) and by a worker for a .cadmesh without today's
-// (an older one, or one whose build failed when it was read -- the failure is
-// written in its header, and one that is a size limit under today's rule is
-// not built again: js/cadmesh.js writtenSizeLimit). Its closed
-// test (shellsOf) is also the mesh readers': js/mesh-formats.js weld calls
-// shellTurns, here, to turn a shell wound the wrong way, and Clearance asks
-// bodyShells for a part's shells (js/clearance.js).
-//
-// OpenCascade meshes every b-rep face with its own vertices and never splits
-// a face at its seam, so within a body:
-//   - an edge (by vertex INDEX) used by one triangle is a face boundary. Each
-//     boundary between two faces appears twice, once per face, with
-//     different indices; the copies are joined by welding the positions on
-//     their exact bits (-0 made +0) and the one of the lower-numbered
-//     triangle is kept, i.e. of the lower-numbered face, so the edge takes
-//     that face's vertex colour whatever the weld does.
-//   - an edge used by two triangles is inside a face. It is a silhouette
-//     candidate when its two triangles' normals differ (by more than 1e-4 in
-//     any component): inside a flat face, or between two coplanar triangles
-//     of a curved one, the normals are equal and the edge can never be on an
-//     outline. The second normal is flipped when both triangles traverse the
-//     edge the same way, so an inconsistently wound mesh is not all outline.
-//
-// Body facts: area, and the material's volume (materialVolume: by the nesting of
-// the body's shells, float64), with net and unchecked where it may be off. Closed
-// comes from the header's kind (the converter takes it from the b-rep); only a
-// body without kind falls back to the mesh: welded edges, a triangle whose
-// welded corners collapse skipped (one of three distinct corners on a line
-// counts: it closes a T-junction), open where an edge is used once (shellsOf).
-//
-// Returns { edges: Uint32Array (a, b) pairs, silhouettes: Uint32Array pairs |
-// null, silhouetteNormals: Int16Array (nx ny nz 0) x 2 per candidate | null,
-// silhouettesOmitted: count left out over the cap (0), facts: an array per
-// body of each fact of BODY_FACTS (below) }.
+// The edge list and the body facts, from a decoded model's arrays, one pass per body; pure, run by
+// the converter and by a worker (design: git history of this header). An edge used by one triangle
+// is a face boundary (copies welded on exact bits, the lower triangle's kept); one used by two whose
+// normals differ is a silhouette candidate. Facts: area, volume (by shell nesting), closed (the
+// header's kind, else the mesh: shellsOf).
 
 import { nesting } from './solid.js';
 import { itemsIn } from './box-tree.js';
@@ -324,17 +293,11 @@ const kindClosed = (kind) => kind === 'closed' || kind === 'capped';
 // cones of 4,000 slivers apex to apex; every bundled and private model takes under 1 % of it.)
 export const OVERLAP_BUDGET = 4_000_000;
 
-// A closed body's volume as its material is taken -- each region inside a shell and outside the
-// shells it holds (never below 0) counted when its winding is above 0, the winding of the region round it plus
-// the shell's sign, each shell's sign taken against its outer shell's (the weld's rule: an outer
-// shell wound in is turned; a body wound inside out has its volume) -- from the nesting of its
-// shells. So a cavity is taken out once and a part embedded in another counted once (the signed
-// sum counted an embedded part twice). The nesting is exact where no two shells' surfaces meet
-// (each then lies wholly inside or wholly outside the other); where two shells' surfaces touch or
-// cross (their nearest distance 0, js/tri-distance.js -- not their boxes alone: a pin in the notch
-// of an L-shaped cavity read as overlapping), a shell is branched (two parts face to face), or a
-// part lies in two outer shells, the volume is the same count and `net` says it may not be the
-// material's; past OVERLAP_BUDGET `unchecked` says the test was not finished.
+// A closed body's material volume from the nesting of its shells: each region counted when its
+// winding (the region round it plus the shell's sign) is above 0, so a cavity is taken out once and
+// an embedded part counted once. Where shells touch or cross (nearest distance 0), branch, or a part
+// lies in two outer shells, `net` says it may not be the material's; past OVERLAP_BUDGET,
+// `unchecked`.
 // -> { volume, net, unchecked }
 function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, closed, V, budget = OVERLAP_BUDGET) {
   const ns = shellOpen.length;

@@ -4026,7 +4026,7 @@ function updateButtons() {
   for (const b of [$('proj'), $('up'), $('walk'), $('turntable'), $('presetmenu')?.querySelector('.menu-btn'), ...document.querySelectorAll('#viewpanel .presets button')]) if (b) b.disabled = !has;
   if (!has && app.measure && app.measure.on) app.measure.setOn(false);
   $('measure').disabled = !has && !app.dxf;
-  if (!app.dxf) { const mb = $('measure'); mb.dataset.t ||= mb.title; mb.title = has && !app.baseMesh?.faces ? 'Measure distances and angles: this file has no CAD faces, so points snap to the surface (M)' : mb.dataset.t; } // (R153-1, R154-6)
+  if (!app.dxf) { const mb = $('measure'); mb.dataset.t ||= mb.title; mb.title = has && !app.baseMesh?.faces ? 'Measure distances and angles, or pin a note: this file has no CAD faces, so points snap to the surface (M)' : mb.dataset.t; } // (R153-1, R154-6)
   // Explode: on every renderer (the directions as a table texture or an attribute); off with no model
   if (!has && app.explode.on) { app.explode.on = false; syncExplodeSphere(); $('xpopt').hidden = true; }
   $('explode').hidden = !app.renderer;
@@ -5481,7 +5481,7 @@ function setSheet(i) {
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
-  if (old) { buildLayerList(); showInfo(); sheetLabel(); announce(L ? `${L.name}: paper space` : 'model space'); }
+  if (old) { buildLayerList(); showInfo(); sheetLabel(); announce(L ? `${L.name}: a layout` : 'the drawing'); } // (in the visitor's words: R159-5)
   app.measure?.sync2D(app.dxf.view); // (R45-2)
 }
 
@@ -5702,7 +5702,7 @@ function fillInfo2D(el) {
   const d = app.dxf.shown || app.dxf.drawing, full = app.dxf.drawing;
   const row = (k, v) => { const p = document.createElement('div'); const b = document.createElement('b'); b.textContent = k; p.append(b, ` ${v}`); el.append(p); };
   row('file', `${app.dxf.name} · 2D drawing`);
-  if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (paper space, and model space through its viewports)`);
+  if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (a layout: its sheet, and the drawing seen through its windows)`);
   const e = d.extents;
   if (e) {
     // in Auto's unit for the drawing's, by its size, as 2D Measure and the 3D panel: by the one rule
@@ -5726,7 +5726,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('paper space', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'entity' : 'entities'} not shown here (model space is drawn${dxfLib.sheetsOf(full).length ? `; ${$('fhsheet').hidden ? 'the' : 'File >'} "Model" menu lists the layouts` : ''})`); // (folded into File on a phone: R129-8) // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
+    row('layouts', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'line or shape' : 'lines and shapes'} on the layouts, not shown here${dxfLib.sheetsOf(full).length ? ` (${$('fhsheet').hidden ? 'the' : 'File >'} "Model" menu shows a layout)` : ''}`); // (R159-5) // (folded into File on a phone: R129-8) // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
@@ -6367,6 +6367,7 @@ function buildTree() {
       if (e.key === 'Enter') {
         e.preventDefault();
         select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent);
+        sayIfUnseen(ids, label.textContent);
       } else if (e.key === ' ') {
         e.preventDefault();
         cb.click();
@@ -6395,7 +6396,7 @@ function buildTree() {
     // (R58-1)
     const ctl = (e) => e.target.closest('.tw[role=button], .cbwrap');
     pressFocus(row, label);
-    row.onclick = (e) => { if (!ctl(e)) select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent); };
+    row.onclick = (e) => { if (!ctl(e)) { select(ids, e.shiftKey || e.ctrlKey || e.metaKey, label.textContent); sayIfUnseen(ids, label.textContent); } };
     row.ondblclick = (e) => { if (!ctl(e)) fitParts(ids); };
     return li;
   };
@@ -7066,6 +7067,38 @@ app.pickAt = async (x, y) => {
   }
 };
 
+// A part chosen in the list that lies inside or behind others is said so, with the way to see it
+// (the rack greyed and the part nowhere: R159-1). Picks at each body's centre and at its box's
+// corners pulled halfway in (at most 4 bodies), stopping at the first that lands on the selection.
+async function sayIfUnseen(ids, name) {
+  const want = ids.filter((id) => !app.hidden.has(id));
+  if (!want.length || app.dxf || app.section.axis !== 'off' || !app.renderer?.pick || !globalThis.requestAnimationFrame) return;
+  const sel = new Set(app.selected), same = () => app.selected.size === sel.size && [...sel].every((id) => app.selected.has(id));
+  await new Promise((r) => requestAnimationFrame(r));
+  const v = measureView(), c = app.renderer.canvas, m = v.vp, pts = [];
+  for (const id of want.slice(0, 4)) {
+    const b = drawnBox([id]);
+    if (!b) continue;
+    const mid = [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
+    pts.push(mid);
+    for (let n = 0; n < 8; n++) pts.push([0, 1, 2].map((k) => (mid[k] + (n >> k & 1 ? b.max[k] : b.min[k])) / 2));
+  }
+  let tried = 0;
+  for (const p of pts) {
+    const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (w <= 0) continue;
+    const x = ((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w + 1) / 2 * c.width, y = (1 - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w) / 2 * c.height;
+    if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
+    if (!same()) return;
+    const id = await app.pickAt(x, y);
+    if (id === null) return;
+    if (sel.has(id)) return;
+    tried++;
+  }
+  if (tried && same()) tell(`${name} is inside or behind other parts: Isolate${coarseOnly() ? '' : ' (I)'} shows it alone`, 5000);
+}
+app.sayIfUnseen = sayIfUnseen; // (for tests)
+
 function wireInput() {
   const stage = $('stage');
   // the pickers offer what the loader opens (js/formats.js): Open… every format, Add model… the
@@ -7635,7 +7668,10 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
-    announce(`isolated: ${fmtInt(app.selected.size)} shown`); // (said, as its Undo is: R135-5)
+    // (a part far smaller than the model is left small at the model's framing: the note names Fit, R159-3)
+    const diag = (b) => (b ? Math.hypot(...[0, 1, 2].map((k) => b.max[k] - b.min[k])) : 0);
+    const small = diag(drawnBox([...app.selected])) < 0.25 * diag(drawnBox(null));
+    tell(`isolated: ${fmtInt(app.selected.size)} shown${small ? ` · ${coarseOnly() ? 'Fit frames' : 'Fit (F) frames'} ${app.selected.size === 1 ? 'it' : 'them'}` : ''}`, small ? 4000 : 1500); // (said, as its Undo is: R135-5)
     if (!noSurface([...app.selected], 'nothing to show')) uncover(); // (blank, unsaid: R33-2)
   };
   $('hide').onclick = () => {
