@@ -893,7 +893,8 @@ export function createMeasure(deps) {
 
   // Esc: the results list, a half-made measurement, then Measure itself
   function escape() {
-    if (st.listOpen) { setList(false); return true; }
+    // (the focus from inside the list back to its button, not to Open…, 38 Tabs away: R157-1)
+    if (st.listOpen) { const inside = !!$('measlist').contains?.(document.activeElement); setList(false); if (inside) $('measchip').focus(); return true; }
     if (st.pending.length) { st.pending = []; syncRow(); deps.tell('point dropped', 2000); deps.queueFrame(); return true; } // (said: R128-5)
     if (st.on) { setOn(false, true); return true; }
     return false;
@@ -1067,7 +1068,9 @@ export function createMeasure(deps) {
         // (Enter while measuring a distance or an angle: the hole's centre is a point, the keyboard's
         // one way to place one -- R127-1)
         const h = st.holes.list[r.n - 1];
-        if (key && st.on && (st.mode === 'distance' || st.mode === 'angle') && h) {
+        // (a Note too, its field opened at the hole's centre: the keyboard pinned none -- R157-5)
+        if (key && st.on && (st.mode === 'distance' || st.mode === 'angle' || st.mode === 'note') && h) {
+          if (st.mode === 'note') st.pending = [];
           st.pending.push({ p: h.centre.slice(), kind: 'centre' });
           deps.tell(`${said}: point ${st.pending.length} of ${need()}`, 3000);
           if (st.pending.length >= need()) finish(); else syncRow();

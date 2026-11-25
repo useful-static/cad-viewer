@@ -351,10 +351,7 @@ function setPanel(open, focusBack = false) {
 const partsStop = () => [$('tree').querySelector('.label[tabindex="0"]'),
   ...$('parts').querySelectorAll('button, select, input, summary')].find((c) => c && !c.disabled && c.getClientRects().length);
 
-// Filter parts while typing: an on-screen keyboard that shrinks the window
-// under 500 px opens the slide-out around the field rather than closing it
-// under the typing (review r22); it closes once the window is wide (r23).
-// Returns whether it did.
+// Filter parts while typing: a window an on-screen keyboard shrank keeps the slide-out open (r22, r23)
 function keepFilter(f) {
   if (f !== $('treefilter') || f.hidden || !narrowLayout() || document.body.classList.contains('panel-open')) return false;
   setPanel(true);
@@ -1326,9 +1323,7 @@ function applyView(v, link = false) {
 }
 
 app.exportMesh = (fmt) => exportMesh(fmt); // (for tests/ui-checks.py)
-// (for tests/ui-checks.py tour-leaves-no-state: a tour from an object, the tour maker's capture,
-// a load from a URL without leaving the page)
-// (both through the page's one start, startTourIn: an arm that took startTour tested a path the page never takes)
+// (for tests/ui-checks.py tour-leaves-no-state, through the page's one start, startTourIn)
 app.playTour = (t) => startTourIn(parseTour(JSON.stringify(t), location.href), null);
 app.playTourIn = app.playTour;
 app.captureStep = (o) => captureStep(o);
@@ -2410,9 +2405,7 @@ async function tourPictures(tour, base = null) {
   if (!makerTour(tour)) return 0;
   setTourPlaying(false);
   app.tour.cut = true;
-  // (the tour the pictures are of: ended meanwhile -- the maker closed, Esc, ✕, another model -- the
-  // pictures stop there and those taken are kept, as tourVideo stops; showTourStep on a tour that had
-  // ended threw, and nothing was saved: r117 M1)
+  // (the tour ended meanwhile: the pictures stop there, those taken kept -- r117 M1)
   const t = app.tour;
   const files = [];
   try {
@@ -2780,9 +2773,7 @@ function turn() {
     if (!app.turntable) return;
     const dt = turnLast ? Math.min(0.1, (t - turnLast) / 1000) : 0;
     turnLast = t;
-    // (not while a tour is shown: a step's camera is the step's -- a static step spun off it, an
-    // orbit step turned faster than recorded, and its pictures were taken off it)
-    // (nor walking: it turned about a point just ahead of the eye -- R123-1)
+    // (not while a tour is shown, nor walking -- R123-1)
     if (app.header && !app.tour && !app.walk && !document.hidden && performance.now() - app.lastInput > IDLE_MS) {
       turnAbout(app.cam, orientUp(app.cam.orient), TURN_RAD_S * dt);
       viewChanged();
@@ -4902,9 +4893,8 @@ async function runClearance() {
   ranges.forEach((r, m) => { if (m !== mA) for (let id = r.first; id < r.first + r.count; id++) if (shown(id)) B.push(id); });
   const tris = (ids) => ids.map((id) => { const m = app.header.meshes[id - 1]; return [m.idxStart / 3, m.idxCount / 3]; });
   const what = inOne ? `the ${sel.length === 1 ? 'selected part' : `${fmtInt(sel.length)} selected parts`}` : app.scene[0].name;
-  // (every state of the read in one place, its tooltip with it: "nothing shown to measure between"
-  // kept the run before's "N triangle pairs compared", and app.lastClearance its result)
-  const say = (text, title = '') => { $('clearval').textContent = text; $('clearval').title = title; };
+  // (every state of the read in one place, its tooltip with it; said once, by announce -- R157-2)
+  const say = (text, title = '') => { $('clearval').textContent = text; $('clearval').title = title; announce(text); };
   app.lastClearance = null;
   if (!A.length || !B.length) { say('nothing shown to measure between'); return; }
   say(`checking ${what}…`);
@@ -5256,10 +5246,7 @@ async function loadAny(buf, name, seq, extras = []) {
   await loadBuffer(buf, name, seq);
 }
 
-// A mesh file read into a .cadmesh, then opened as one: Save .cadmesh keeps
-// it. drop: the other files dropped, picked or zipped with it (an OBJ's
-// .mtl, a .gltf's .bin), this load's alone (a re-read in another unit keeps
-// them in app.meshSource)
+// A mesh file read into a .cadmesh, then opened as one. drop: its companions (an OBJ's .mtl)
 async function loadMeshFile(buf, name, seq, drop = []) {
   if (isGzip(buf) && !(buf = await unpackGz(buf, name, seq))) return;
   name = name.replace(/\.gz$/i, '');
@@ -5887,9 +5874,7 @@ function tessellate(buf, format, seq, name, threads) {
         const inStep = (now - stepAt) / 1000;
         const f = conv.fraction;
         const quiet = (now - conv.moved) / 1000;
-        // once a step has said "longer than expected" it keeps saying so: a 1%
-        // twitch after a long stall would otherwise bring back a short pace
-        // (and through the steps after: it switched back to a fresh estimate at each -- R133-4)
+        // once a step has said "longer than expected" it keeps saying so, the steps after too (R133-4)
         const left = overStep >= 0 && st >= overStep ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
         if (typeof left !== 'number') overStep = st;
         // the bar: the forecast's share of the conversion done, never moving back
@@ -6229,9 +6214,7 @@ function shownLabels(header) {
 
 const meshLabel = (id) => app.meshLabel[id - 1];
 
-// A name as the model list labels it (its entry's labels), else as is. Matched as tours, notes and
-// "hide" match a name (js/tour.js partIndex: trimmed, any case), so "hdmi_1_3": "HDMI" labels the
-// tree's HDMI_1_3 as the tour that names "HDMI" finds it
+// A name as the model list labels it, else as is; matched as js/tour.js partIndex matches
 let labelIndex = { of: null, map: new Map() };
 const partLabel = (s) => {
   if (!app.partLabels) return s;
@@ -6307,9 +6290,7 @@ function buildTree() {
     // the deepest wins; and the body is labelled by it and the row above, as the list names them
     // ("bolt #2", "COMPOUND #2 › mesh 12": the hover, selection, holes and links said "bolt" -- R36-1)
     if (ids.length === 1 && !app.rowOf.has(ids[0])) { app.rowOf.set(ids[0], li); app.meshLabel[ids[0] - 1] = up && up !== name ? `${up} › ${name}` : name; }
-    // (the names the list shows, for a tour's or a note's, each with every row so named, as a file's
-    // name -- R36-5; and "owner › name" as the labels read: the first row of a name alone took the
-    // first bracket's "bolt #2" for the second's, R37-1)
+    // (the names the list shows, each with every row so named -- R36-5, R37-1)
     const put = (m, key) => { let s = m.get(key); if (!s) m.set(key, (s = new Set())); for (const id of ids) s.add(id); };
     put(app.rowNames, name.trim().toLowerCase());
     if (up) put(app.rowPaths, pathKey(`${up} › ${name}`));
@@ -6459,7 +6440,12 @@ function filterTree(q) {
   const found = top ? walk(top, false) : true;
   // (no match said, not an empty list: R119-2)
   $('treenone').hidden = !q || found;
-  $('treenone').textContent = q && !found ? `No part's name contains “${q}”` : '';
+  const none = q && !found ? `No part's name contains “${q}”` : '';
+  $('treenone').textContent = none;
+  // (said once typing pauses, and only when it changed: a live line said it at every key -- R157-3)
+  clearTimeout(filterTree.t);
+  if (!none) filterTree.said = '';
+  else if (none !== filterTree.said) filterTree.t = setTimeout(() => { if ($('treenone').textContent === none) { filterTree.said = none; announce(none); } }, 700);
   keepTabStop();
 }
 
@@ -7625,6 +7611,7 @@ function wireInput() {
   // (y up); the choice holds for the next model that names no orientation
   $('up').onclick = () => {
     app.userOrient = app.cam.orient.startsWith('+z') ? DEFAULT_ORIENT : Z_UP_ORIENT;
+    app.fileOrient = null; // (the visitor's choice over the file's own, a re-read too: R157-6)
     app.cam.orient = app.userOrient;
     updateButtons();
     showInfo(); // above / below are along the new up
@@ -8102,6 +8089,13 @@ function wireHelp() {
   addEventListener('pointerdown', (e) => {
     if (helpOpen() && !e.target.closest('#helppop, #helpbtn')) setHelp(false);
   }, true);
+  // (Tab off either end of the box closes it, the focus back on ?: it fell to the page, the box left
+  // open -- R157-4)
+  $('helppop').addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const f = [$('helppop'), ...$('helppop').querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])')].filter((x) => x.getClientRects().length);
+    if (document.activeElement === (e.shiftKey ? f[0] : f[f.length - 1])) { e.preventDefault(); setHelp(false, true); }
+  });
   // (a phone turned keeps the box, placed again under ?; closed only if ? left the window: R154-5)
   addEventListener('resize', () => {
     if (!helpOpen()) return;
@@ -8336,9 +8330,7 @@ function tourOver() {
   app.urlTourPending = false;
   if (app.header) app.autoTourFor = autoTourKey();
 }
-// A file picked or dropped while the GPU starts: the model of those picked, its companions kept
-// with it (pickModelFile) (the first file was taken, an .obj with its .mtl opened the .mtl: r50 A2;
-// the .mtl lost to a load started before it: r51 A3, Q2)
+// A file picked or dropped while the GPU starts: the model, its companions kept (r50 A2, r51 A3)
 const earlyPick = (files) => (files.length ? pickModelFile(files) : null);
 // File › Add model…: the picked model joins the scene; one over the size refused before anything
 // starts (Add model… called loadFile, whose own check came after beginLoad: r50 A1)

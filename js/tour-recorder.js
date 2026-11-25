@@ -407,7 +407,9 @@ export function createTourRecorder(api) {
   // one Esc closed both, the focus to File -- R119-1)
   el.panel.addEventListener('keydown', (e) => {
     // (Ctrl/⌘+Z in the maker, outside a text field: its own deletion back, not a part's colour -- R155-2)
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea')) {
+    // (a field that takes typing keeps its own undo; a checkbox or a select does not -- R157-8)
+    const t = e.target || {}, typed = t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file', 'range', 'color'].includes(t.type));
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !typed) {
       // (nothing of the maker's to undo: the key goes on to the view's Undo -- R156-4)
       if (!undo) return;
       e.preventDefault();

@@ -1047,7 +1047,7 @@
     <div id="scene" hidden><div class="holeshead"><b>Models</b>
       <button id="clearbtn" class="mini" title="The smallest gap between the selected parts (else the first model) and the other models' shown parts, drawn as a distance">Clearance</button></div>
       <ul id="scenelist"></ul>
-      <div id="clearval" role="status"></div></div>
+      <div id="clearval"></div></div>
     <div id="infounits" hidden><b>units</b> <span id="unitsrc"></span>, shown in
       <select id="unitsel" autocomplete="off" aria-label="Display unit" title="The unit lengths are shown in. Auto: the display unit nearest the one the file was drawn in (in for feet), mm for a model in metres under a metre across, mm when it does not say (a choice other than Auto is remembered in this browser)">
         <option value="auto">Auto</option>
@@ -1064,7 +1064,7 @@
     <button id="paintbtn" aria-pressed="false" disabled title="Paint faces: while on, a click paints the face under it in the swatch's colour (Reset all, with nothing selected, clears them)">Paint</button>
     <button id="partreset" disabled title="Give the selected parts their scheme's colour again">Reset</button></span></div>
   <input id="treefilter" type="search" placeholder="Filter parts" aria-label="Filter parts by name" autocomplete="off" spellcheck="false" hidden><!-- (no red line under "C0402": R151-9) -->
-  <p id="treenone" role="status" hidden></p>
+  <p id="treenone" hidden></p>
   <ul id="tree"></ul>
   <div id="cachebar" hidden title="Converted STEP / IGES / BREP files are kept in this browser, on this device only, so opening the same file again is instant"><span id="cacheinfo"></span><button id="cacheclear" title="Delete the conversions saved in this browser">Clear</button></div>
 </aside>
@@ -1077,12 +1077,12 @@
   <!-- the tour maker (File > Make a tour…, js/tour-recorder.js) -->
   <div id="touredit" role="dialog" aria-label="Tour maker" hidden>
     <div class="tehead"><b>Make a tour</b><button id="teclose" aria-label="Close the tour maker" title="Close (Esc)">×</button></div>
-    <p class="tehint">Set the view: pin notes with Measure first, then turn it, colour parts with the swatch, hide or explode them. Then Add step.</p>
+    <p class="tehint">Set the view: pin notes with Measure first, then turn it, colour parts with the swatch, hide, cut or explode them. Then Add step.</p>
     <label class="tefield">Title <input id="tetitle" type="text" autocomplete="off"></label>
     <div class="terow"><label>Plays <select id="temode" autocomplete="off"><option value="static">step by step</option><option value="animated">by itself</option></select></label>
       <label><input id="teloop" type="checkbox" autocomplete="off"> Loop</label></div>
     <ol id="testeps" aria-label="Steps"></ol>
-    <div class="terow"><button id="teadd">Add step</button><button id="teopen">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
+    <div class="terow"><button id="teadd">Add step</button><button id="teopen" aria-label="Open a tour…" title="Open a saved tour file">Open…</button><input id="tefile" type="file" accept=".json,application/json" hidden></div>
     <div id="testep" hidden>
       <label class="tefield">Step title <input id="tes-title" type="text" autocomplete="off"></label>
       <label class="tefield">Text <textarea id="tes-text" rows="3"></textarea></label>
@@ -1095,7 +1095,7 @@
     </div>
     <div class="terow"><button id="teplay" disabled>Preview</button><button id="tesave" class="primary" disabled>Save tour</button><a class="helplink noembed" href="/help/share-tour.html" target="_blank" rel="noopener">Share or embed it ↗</a></div>
     <div class="terow">Also as <button id="tepics" disabled title="Each step as a picture at twice the view's size, its caption drawn in, all in a zip">Pictures (zip)</button><button id="tevideo" disabled title="The tour played once through, recorded as a WebM video in this browser (as long as the tour plays)">Video (WebM)</button></div>
-    <p id="tenote" class="note" role="status"></p>
+    <p id="tenote" class="note"></p>
   </div>
   <!-- a tour (?tour=, js/tour.js): the step's caption, and the controls
        that step it and leave it -->
