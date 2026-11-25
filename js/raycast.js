@@ -1,12 +1,6 @@
-// CPU ray casting against a decoded model's bodies, for Measure: the surface
-// point under the cursor, and whether a snap candidate is visible (nothing in
-// front of it on the segment from the eye). Also windsAgainstNormals, the one
-// test of a triangle wound against its vertex normals (export's turn of each
-// triangle, js/export-mesh.js, and Clearance's of a solid, js/clearance.js). Bodies carry no transform, so
-// rays are cast in model coordinates. A body over BVH_MIN triangles is
-// queried through a bounding-volume hierarchy built on its first query
-// (median split, 8 triangles a leaf); smaller ones are scanned.
-// Moved from tests/webgpu-offscreen.html's Möller-Trumbore scan. Pure, no DOM.
+// CPU ray casting against a decoded model's bodies, in model coordinates, for Measure (the surface
+// under the cursor, a snap's visibility) and windsAgainstNormals (export, Clearance). A body over
+// BVH_MIN triangles through a median-split tree (8 a leaf) built on its first query. Pure, no DOM.
 
 export const BVH_MIN = 10_000;
 const LEAF = 8;
@@ -47,11 +41,8 @@ export function edgeNearness(P, I, t, o, d) {
   return Math.min(u, v, 1 - u - v);
 }
 
-// Whether the ray o + t d meets triangle t on its inside -- the view's own cut test: the vertex
-// normals (N, snorm16 x4) interpolated at the hit, as each fragment's is (js/renderer-webgl.js
-// FS_SHADE: dot(vNrm, v) < 0 is the cut face), looking along d. The three normals' sum, the
-// centroid's, disagreed with the view on a smooth curved face near its outline: 31 of 41 grazing
-// views of a 12-segment cylinder's triangle. Null when the ray misses the triangle's plane.
+// Whether the ray o + t d meets triangle t on its inside, the view's own cut test (the vertex normals
+// interpolated at the hit, as FS_SHADE's); null when it misses the triangle's plane.
 export function seesInside(P, N, I, t, o, d) {
   const a = I[3 * t] * 3, b = I[3 * t + 1] * 3, c = I[3 * t + 2] * 3;
   const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
@@ -70,9 +61,7 @@ export function seesInside(P, N, I, t, o, d) {
   return s > 0;
 }
 
-// Whether the triangle of vertices a, b, c (numbers into P, float xyz, and N, snorm16 x4) is wound
-// against its vertex normals (their sum): the normals are its outside to the view, so a writer and
-// a test of material turn such a triangle round (js/export-mesh.js bodyOf, js/clearance.js)
+// Whether triangle a, b, c is wound against its vertex normals' sum (export-mesh.js bodyOf, clearance.js)
 export function windsAgainstNormals(P, N, a, b, c) {
   const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
   const vx = P[3 * c] - P[3 * a], vy = P[3 * c + 1] - P[3 * a + 1], vz = P[3 * c + 2] - P[3 * a + 2];
@@ -101,7 +90,24 @@ function buildBvh(P, I, t0, nt) {
     tris[i] = t;
     for (let k = 0; k < 3; k++) cen[3 * i + k] = (P[I[3 * t] * 3 + k] + P[I[3 * t + 1] * 3 + k] + P[I[3 * t + 2] * 3 + k]) / 3;
   }
-  const order = Array.from({ length: nt }, (_, i) => i);
+  const order = new Uint32Array(nt);
+  for (let i = 0; i < nt; i++) order[i] = i;
+  // order[s..e) partitioned in place about its k-th centroid on axis ax (quickselect): the median
+  // split a sort found, in linear time -- the sort at every node built the rack's 846k-triangle frame
+  // in 2.3 s on the page's thread (R151-1)
+  const select = (s, e, k, ax) => {
+    let lo = s, hi = e - 1;
+    while (hi > lo) {
+      const pv = cen[3 * order[(lo + hi) >> 1] + ax];
+      let i = lo, j = hi;
+      while (i <= j) {
+        while (cen[3 * order[i] + ax] < pv) i++;
+        while (cen[3 * order[j] + ax] > pv) j--;
+        if (i <= j) { const t = order[i]; order[i] = order[j]; order[j] = t; i++; j--; }
+      }
+      if (k <= j) hi = j; else if (k >= i) lo = i; else break;
+    }
+  };
   const nodes = [];
   const box = (s, e) => {
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -114,19 +120,23 @@ function buildBvh(P, I, t0, nt) {
     }
     return [lo, hi];
   };
+  // (a leaf's box from its triangles, a parent's the union of its children's, the split axis the
+  // centroids' widest: every node's box read every triangle under it -- R151-1)
   const build = (s, e) => {
-    const [lo, hi] = box(s, e);
-    const n = { lo, hi, s, e, l: -1, r: -1 };
+    const n = { lo: null, hi: null, s, e, l: -1, r: -1 };
     const idx = nodes.length;
     nodes.push(n);
-    if (e - s > LEAF) {
-      const ax = [0, 1, 2].reduce((m, k) => (hi[k] - lo[k] > hi[m] - lo[m] ? k : m), 0);
-      const part = order.slice(s, e).sort((x, y) => cen[3 * x + ax] - cen[3 * y + ax]);
-      for (let i = s; i < e; i++) order[i] = part[i - s];
-      const mid = (s + e) >> 1;
-      n.l = build(s, mid);
-      n.r = build(mid, e);
-    }
+    if (e - s <= LEAF) { [n.lo, n.hi] = box(s, e); return idx; }
+    const cl = [Infinity, Infinity, Infinity], ch = [-Infinity, -Infinity, -Infinity];
+    for (let i = s; i < e; i++) for (let k = 0; k < 3; k++) { const v = cen[3 * order[i] + k]; if (v < cl[k]) cl[k] = v; if (v > ch[k]) ch[k] = v; }
+    const ax = ch[1] - cl[1] > ch[0] - cl[0] ? (ch[2] - cl[2] > ch[1] - cl[1] ? 2 : 1) : (ch[2] - cl[2] > ch[0] - cl[0] ? 2 : 0);
+    const mid = (s + e) >> 1;
+    select(s, e, mid, ax);
+    n.l = build(s, mid);
+    n.r = build(mid, e);
+    const a = nodes[n.l], b = nodes[n.r];
+    n.lo = [0, 1, 2].map((k) => Math.min(a.lo[k], b.lo[k]));
+    n.hi = [0, 1, 2].map((k) => Math.max(a.hi[k], b.hi[k]));
     return idx;
   };
   build(0, nt);

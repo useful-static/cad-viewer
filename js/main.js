@@ -2583,9 +2583,7 @@ function syncStyleBg() {
 }
 
 // ---------- looks (feature review item 22) ----------
-// light background (the shaded styles on paper), ghosted hidden parts, and
-// the turntable: the model turned slowly about its up axis while the view is
-// left alone for IDLE_MS. Never under prefers-reduced-motion (not offered).
+// light background, ghosts, and the turntable (after IDLE_MS left alone; never with reduced motion)
 const GHOST_ALPHA = 0.15;
 const TURN_RAD_S = 0.35; // about 18 s a turn
 const IDLE_MS = 2500;
@@ -7553,10 +7551,7 @@ function wireInput() {
   }, { passive: false });
   tb.addEventListener('scroll', moreHint);
   new ResizeObserver(moreHint).observe(tb);
-  // contents can widen without the row resizing (Save appears once a STEP
-  // import enables it, and hides again for a .cadmesh)
-  // (once a frame at most, and not where the row wraps: every slider move and hover laid out the whole
-  // page, ~20 ms with an 1,800-row list -- R150-6)
+  // contents widen without the row resizing; checked once a frame at most, where it scrolls (R150-6)
   let hintQueued = false;
   new MutationObserver(() => {
     if (hintQueued) return;
