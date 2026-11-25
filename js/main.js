@@ -8089,12 +8089,17 @@ function wireHelp() {
   addEventListener('pointerdown', (e) => {
     if (helpOpen() && !e.target.closest('#helppop, #helpbtn')) setHelp(false);
   }, true);
-  // (Tab off either end of the box closes it, the focus back on ?: it fell to the page, the box left
-  // open -- R157-4)
+  // (Tab off either end of the box closes it, the focus back on ? (R157-4, R158-1); Tab from ? goes
+  // into an open box (R158-2))
+  const helpStops = () => [...$('helppop').querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])')].filter((x) => x.getClientRects().length);
   $('helppop').addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
-    const f = [$('helppop'), ...$('helppop').querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])')].filter((x) => x.getClientRects().length);
-    if (document.activeElement === (e.shiftKey ? f[0] : f[f.length - 1])) { e.preventDefault(); setHelp(false, true); }
+    const f = helpStops(), a = document.activeElement, pop = $('helppop');
+    if (e.shiftKey ? (a === pop || a === f[0]) : (a === f[f.length - 1] || (a === pop && !f.length))) { e.preventDefault(); setHelp(false, true); }
+  });
+  $('helpbtn').addEventListener('keydown', (e) => {
+    const f = e.key === 'Tab' && !e.shiftKey && helpOpen() && helpStops();
+    if (f && f.length) { e.preventDefault(); f[0].focus(); }
   });
   // (a phone turned keeps the box, placed again under ?; closed only if ? left the window: R154-5)
   addEventListener('resize', () => {
