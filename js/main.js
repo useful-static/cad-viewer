@@ -490,10 +490,8 @@ const rendererWaiters = [];
 
 const isDead = (r) => !r || r.isLost();
 
-// Resolves once app.renderer is no longer `old` (recovery adopted a new one);
-// rejects when recovery gives up (failRendererWaiters). The timeout is only a
-// backstop: recovery with its retries and backoff can take ~25 s, and a fixed
-// 20 s wait used to drop a load that recovery was about to serve.
+// Resolves once app.renderer is no longer `old`, rejects when recovery gives up; the timeout a
+// backstop past recovery's ~25 s
 function nextRenderer(old, ms = 120000) {
   if (app.renderer !== old) return Promise.resolve();
   // recovery is over: no renderer will come, so fail now rather than at the backstop
@@ -781,10 +779,8 @@ function refreshEdges() {
   }).catch(() => {});
 }
 
-// A lost GPU device / WebGL context takes every buffer with it: make a new
-// renderer (the fallback order applies again) and sync app.wanted onto it.
-// A loss that arrives while recovering (the NEW renderer dying) is not dropped:
-// it re-runs recovery once the current attempt ends, up to 3 attempts.
+// A lost GPU: a new renderer (the fallback order again) with app.wanted synced onto it; a loss during
+// recovery re-runs it after, up to 3 attempts
 let recovering = false;
 let lossPending = null;
 let recoveries = 0;
@@ -1654,10 +1650,8 @@ function saveDrawing() {
   tell(`saved ${name}: ${VIEW_NAMES[preset]} view, ${d.width.toFixed(1)} × ${d.height.toFixed(1)} mm`, 3000);
 }
 
-// The model in the address, one way only: with a ?list=, a model the list
-// names is ?model=<its id> when its entry has one (a name that survives the
-// list's reordering), else ?index=<n>, its place in the list (1 = its first
-// model); any other model is ?src=<its URL>. So ?src always means a URL.
+// The model in the address, one way only: a list's by ?model=<id>, else ?index=<n> (1-based); any
+// other ?src=<URL>
 const MODEL_PARAMS = ['model', 'index', 'src'];
 function setModelParam(u, url) {
   const list = url && params.getAll('list').length ? app.listEntries || [] : [];
@@ -3230,10 +3224,8 @@ function keepFocus() {
   new MutationObserver(lost).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled', 'hidden'] });
 }
 
-// A resize or rotation that leaves the focused control outside the window
-// scrolls it back into view: the help's summary at the foot of the open
-// slide-out stayed below the window's edge after 390x844 -> 844x390 (r23).
-// Only at a resize: a control the user scrolled away from stays where it is.
+// A resize that leaves the focused control outside the window scrolls it back into view (r23); only
+// at a resize
 function showFocus() {
   const a = document.activeElement;
   if (!a || a === document.body || !a.getClientRects().length) return;
@@ -3393,10 +3385,7 @@ function showModelName() {
   const entry = cur && [...sel.options].find((o) => o.value && o.value === cur);
   const label = entry ? entry.textContent : app.sourceName;
   const s = app.stats;
-  // (counted as the info panel counts: "1,391 bodies", and "1 body")
-  // the name and the counts in spans of their own: the narrow footer drops
-  // the counts (the info panel has them), so a phone shows the whole name
-  // (it read "Le Potato AML-S905X-CC · 2,833 bodies…": feature review 2026-10-29)
+  // (counted as the info panel counts; name and counts in spans, a narrow footer dropping the counts)
   const nm = document.createElement('span');
   nm.className = 'mname';
   nm.textContent = label;
@@ -3808,10 +3797,7 @@ function wireHistory() {
       openStart(src);
     } else loadListed(src);
   });
-  // (a #view= edited in: the view the address now names, waiting for its model as the start's does
-  // -- applied at once, an edit made while the ?add=s loaded was then overwritten by the start's
-  // older view: r59 A2, Q3)
-  // (a #view= taken out: no view waits -- the start's still landed: r60 A4)
+  // (a #view= edited in waits for its model as the start's does; taken out, none waits -- r59 A2, Q3, r60 A4)
   window.addEventListener('hashchange', () => {
     // (a pick downloading: where the page now is in its chain -- an entry of the chain's at its own
     // depth, an edit made on one of them one deeper, anything else outside it: unwindPick)
@@ -3970,7 +3956,8 @@ function secEdit() {
     const m = inp.value.trim().replace(/^(-?\d*),(\d*)/, '$1.$2').match(/^(-?[\d.]+(?:e-?\d+)?)\s*(mm|cm|m|in|inch|inches|")?$/i);
     if (!m) return NaN;
     const u = m[2] ? m[2].toLowerCase().replace(/^(inch|inches|")$/, 'in') : null;
-    return u && geomMm() && MM_PER[u] ? (Number(m[1]) * MM_PER[u]) / MM_PER[curUnit()] : Number(m[1]);
+    if (u && !geomMm()) return NaN; // (no unit to convert from: refused, not ignored -- R149-8)
+    return u && MM_PER[u] ? (Number(m[1]) * MM_PER[u]) / MM_PER[curUnit()] : Number(m[1]);
   };
   const done = (apply) => {
     if (over) return;
@@ -3996,7 +3983,9 @@ function secEdit() {
     // (the arrows step it, as the number fields: 1, Shift 10 -- R123-3)
     else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && Number.isFinite(val())) {
       e.preventDefault();
-      inp.value = String(+(val() + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1)).toFixed(6));
+      // (the number as typed stepped, its unit kept: "1 in" became "26.4" -- R149-6)
+      const m = inp.value.trim().replace(/^(-?\d*),(\d*)/, '$1.$2').match(/^(-?[\d.]+(?:e-?\d+)?)(.*)$/);
+      inp.value = `${+(Number(m[1]) + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1)).toFixed(6)}${m[2]}`;
       inp.removeAttribute('aria-invalid');
     }
   });
@@ -5001,9 +4990,8 @@ const tapWord = () => (matchMedia(TOUCH_ONLY).matches ? 'tap' : 'click');
 // the last press's pointer: a finger names a tapped layer on any device (R12-4)
 addEventListener('pointerdown', (e) => { app.pointerType = e.pointerType; }, { capture: true, passive: true });
 
-// While the pointer, or the keyboard's focus, is in the parts / layer list, the info panel keeps its
-// height (scrolling inside itself): a selection's lines wrap to their own height, and the list moved
-// under the pointer. Let go on leaving, a press elsewhere, a resize, and a new list (rounds 15-17).
+// The info panel keeps its height while the pointer or focus is in the list (it moved under the
+// pointer), let go on leaving, a press elsewhere, a resize or a new list (rounds 15-17)
 {
   const info = $('info'), tree = $('tree');
   const parts = $('parts');
@@ -6153,10 +6141,8 @@ async function loadUrl(url) {
   return loadAny(buf, name, seq);
 }
 
-// The file a drop carries, or null with the reason said: a link, text or a
-// page's image carries none; a folder is a file with no bytes to read; of
-// several, the first opens. One function for the startup drop and the wired
-// one (the startup one opened a folder, and said nothing of the rest: r23).
+// The file a drop carries, or null with the reason said (a link, text, a folder); of several, the
+// first. One function for the startup drop and the wired one (r23)
 function droppedFile(e) {
   const dt = e.dataTransfer;
   const files = dt ? dt.files : [];
@@ -6547,9 +6533,7 @@ function revealRow(id) {
   li.querySelector('.row').scrollIntoView({ block: 'nearest' });
 }
 
-// One source of truth for every row: a node is checked while any body under it
-// is visible (half-checked while only some are), and highlighted while every
-// body under it is selected.
+// Every row from one truth: checked while any body under it shows (half: some), lit while all are selected
 // The model's flat sheet bodies (the converter's b-rep kind "sheet": a
 // board's pads, silkscreen and labels), ids
 const sheetIds = () => (app.header ? app.header.meshes.flatMap((m, i) => (m.kind === 'sheet' ? [i + 1] : [])) : []);
@@ -6676,6 +6660,8 @@ app.currentView = () => currentView(); // (for tests: the view a link or a tour'
 // change forgets it.
 function select(ids, additive, name = null) {
   const before = app.selected.size;
+  // (a recolour's "it shows once deselected" gone with the selection it spoke of: R149-9)
+  if (globalThis.document && $('hover').textContent.endsWith('shows once deselected')) tell($('hover').textContent, 1, '');
   if (!additive) app.selected.clear();
   for (const id of ids) app.selected.add(id);
   // an additive pick that added nothing leaves the selection, and its name, as they were
@@ -6969,9 +6955,13 @@ function fillInfo(el) {
   // a tree row chosen on its own: its full name (the row truncates it)
   // (a part's copies called so, as "all N" calls them: R141-11)
   const copies = ids.length > 1 && sameParts(ids[0]).length === ids.length && sameParts(ids[0]).every((id) => ids.includes(id));
-  if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${ids.length} ${copies ? 'copies' : 'bodies'}` : app.selName;
+  // (counts as the panel writes them, and every body by the panel's name for that set: "Scene · 1790
+  // bodies" beside "whole scene" and "1,790" -- R149-2)
+  const everything = ids.length > 1 && ids.length === app.header.meshes.length;
+  if (everything) title = `${title} · ${fmtInt(ids.length)} bodies`;
+  else if (ids.length && app.selName) title = ids.length > 1 ? `${app.selName} · ${fmtInt(ids.length)} ${copies ? 'copies' : 'bodies'}` : app.selName;
   else if (ids.length === 1) title = meshLabel(ids[0]);
-  else if (ids.length > 1) title = `${ids.length} bodies`;
+  else if (ids.length > 1) title = `${fmtInt(ids.length)} bodies`;
   const tris = (ids.length ? ids.map((id) => app.header.meshes[id - 1].idxCount) : [app.header.indexCount]).reduce((a, x) => a + x, 0) / 3;
   // instance count (feature review item 24): one part selected, how many
   // copies of it the model holds (the same name, triangle count and size), on
@@ -7446,12 +7436,17 @@ function wireInput() {
       return;
     }
     if (!d.moved && e.button === 0 && app.mesh && !d.dismiss) {
-      const additive = e.ctrlKey || e.metaKey;
+      // (Shift too, as the parts list: a Shift press that does not move is a click, not a pan -- R149-1)
+      const additive = e.ctrlKey || e.metaKey || e.shiftKey;
       app.hoverSeq++; // a click supersedes any pending hover answer
       lastClick = app.pickAt(...devicePx(e)).then((id) => {
         if (id === null) return false;
+        const had = app.selected.size;
         select(id ? [id] : [], additive);
         if (id) revealRow(id);
+        // (said, as a list pick is: a screen reader heard nothing of a pick in the view -- R149-10)
+        if (id) announce(app.selected.size > 1 ? `${meshLabel(id)} added: ${fmtInt(app.selected.size)} selected` : `${meshLabel(id)} selected`);
+        else if (had) announce('selection cleared');
         // a finger has no hover: the view's name label shows what a tap picked
         if (d.type === 'touch') hoverLabel(id ? meshLabel(id) : '', true);
         return true;
@@ -7852,13 +7847,25 @@ function wireInput() {
     if (!p) return;
     const dec = ($('secval').textContent.match(/\d\.(\d+)/)?.[1].length) ?? 0;
     app.section.held = null;
-    setSectionAt(p[3] * (app.section.flip ? -1 : 1) + dir * lenBack(10 ** -dec * (big ? 10 : 1)));
+    // (Shift no further than PageUp's tenth of the model: 1.0 mm on a 2 mm plate -- R149-7)
+    const k = { x: 0, y: 1, z: 2 }[app.section.axis], { min, max } = sectionBox();
+    const step = Math.min(lenBack(10 ** -dec * (big ? 10 : 1)), big ? (max[k] - min[k]) / 10 : Infinity);
+    setSectionAt(p[3] * (app.section.flip ? -1 : 1) + dir * step);
   };
   $('secpos').addEventListener('keydown', (e) => {
     const dir = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
     if (dir) { e.preventDefault(); secStep(dir, e.shiftKey); }
   });
-  $('secpos').addEventListener('wheel', (e) => { e.preventDefault(); secStep(e.deltaY < 0 ? 1 : -1, e.shiftKey); }, { passive: false });
+  // (its direction from either axis -- a sideways or Shift wheel sends deltaX, and always cut down --
+  // and one step a notch, ~100 px, not one per trackpad event: R149-4, R149-5)
+  let secWheel = 0;
+  $('secpos').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+    if (!d) return;
+    secWheel += d;
+    while (Math.abs(secWheel) >= 100) { secStep(secWheel < 0 ? 1 : -1, e.shiftKey); secWheel -= Math.sign(secWheel) * 100; }
+  }, { passive: false });
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
   const pal = $('palette');
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));
@@ -8021,10 +8028,8 @@ function wireInput() {
       if (!e.repeat) viewKey(digit);
       return;
     }
-    // The camera from the keyboard: arrows turn the view as a drag does,
-    // Shift+arrows pan, + and - zoom; where the focus is the 3D view itself
-    // or nowhere (a control's own arrows win: the tree, a slider, a select).
-    // Only presets moved it from the keyboard before (feature review r2).
+    // The camera from the keyboard (arrows turn, Shift pans, + - zoom) where the focus is the view or
+    // nowhere; a control's own arrows win
     const onView = t === $('view') || t === $('view2d') || t === document.body || t === document.documentElement || !(t instanceof Node);
     // a drawing from the keyboard: arrows pan (as a drag), + and - zoom about the middle; it had
     // only F, so a keyboard user could not move it (UI design round 11 R11-1)
@@ -8055,7 +8060,8 @@ function wireInput() {
     }
     // Letters match in either case (Caps Lock), or by place on a non-Latin layout. Esc, one thing
     // a press: the panel, Measure's list, point, Measure, Paint, Walk, Explode, Section, selection
-    const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? (setWalk(false), true)
+    // (Walk by its bar's ×, the focus to the view: from "Walk ×" it fell to Open… -- R149-3)
+    const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? ($('walkoff').click(), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), tell('point dropped', 2000), true)) /* (as 3D: R129-4) */ || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
         // (then a selected layer, then an active embed lets the page have the wheel back, as in 3D: round 10 R10-2)
@@ -8445,9 +8451,7 @@ async function startFromAddress(early) {
   // viewer, for a model this page opens from a URL that its list entry does
   // not orient (orientFor). A bad one is no orientation, never an error.
   app.urlOrient = orientOrNull(params.get('orient'));
-  // #view=…: the view a shared link names, applied when the model its address names has loaded (with
-  // none named, the next one opened from the device, never the model list's first): viewIsFor, by
-  // the address. (A bad escape decodeURIComponent throws on is no view: it stopped the model loading.)
+  // #view=…: a shared link's view, applied when its model has loaded (viewIsFor); a bad escape is no view
   setPendingView(params, location.hash);
   // ?src opens at once, ?list= read beside it (no ?src: its first, r19); a poster shows the picture
   // until View in 3D (r53, r54); ?tour= read beside, its own model opened without a ?src
@@ -8589,10 +8593,7 @@ async function selftest() {
         // (the file's edges kept while its facts failed: the edges reported, the facts' error beside)
         closed: e.facts ? e.facts.closed.filter(Boolean).length : null, ...(e.facts ? {} : { factsError: app.baseMesh?.edgeInfo?.error || 'none' }) }
         : { error: app.baseMesh?.edgeInfo?.error || 'none' };
-      // ?bench=N: orbit the camera one step per animation frame for N frames
-      // (each step redraws the whole model) and report the frame intervals.
-      // Frames run on the display's vsync, so a GPU that keeps up reads as the
-      // refresh rate; a slower one shows as longer intervals.
+      // ?bench=N: orbit one step a frame for N frames and report the intervals (vsync-bound)
       const n = Math.min(2000, Number(params.get('bench')) || 0);
       if (n > 0) {
         const f0 = app.frameCount;
