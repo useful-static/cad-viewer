@@ -2655,10 +2655,7 @@ function wireLooks() {
   sync();
   turn();
 }
-// The ground shadow on the light background (the shaded styles): an ellipse
-// on the plane under the model's drawn box, along its up axis, a little wider
-// than its footprint, darkest under its middle; faded out as the eye comes
-// down to the ground, so it never shows from the side or below
+// The light background's ground shadow: an ellipse under the model, faded as the eye nears the ground
 const GROUND_ALPHA = 0.3;
 app.groundShadow = () => groundShadow(); // (for tests/ui-checks.py)
 function groundShadow() {
@@ -2899,7 +2896,7 @@ function undoVisibility() {
   pushState();
   showInfo();
   viewChanged();
-  tell(`undone: ${e.what} (${app.hidden.size ? `${app.hidden.size} hidden` : 'everything shown'})`, 2500);
+  tell(`undone: ${e.what} (${app.hidden.size ? `${fmtInt(app.hidden.size)} hidden` : 'everything shown'})`, 2500); // (counts as the tree writes them: R150-3)
 }
 
 // ---------- toolbar menus ----------
@@ -3669,9 +3666,7 @@ function openListed(url, refocus = false, keepMenu = false) {
   // entry, and a failure landed there, the address naming a model not shown: r62 A2)
   const chain = app.pickPending && app.pickChain ? app.pickChain : null;
   const u = new URL(location.href);
-  // (the pick opens its model alone: the address it pushes names that model, with the page's lists,
-  // not the first entry's ?add=s and ?tour=, which a reload of it then opened and played, nor its
-  // view -- a view of the last model is not a view of this one: r59 A4, Q1; dropAddressModel)
+  // (the pick's address names its model alone, with the lists: r59 A4, Q1; dropAddressModel)
   dropAddressModel(u);
   setModelParam(u, url);
   // a pick is a step in the history: Back opens the model before it again
@@ -3956,7 +3951,8 @@ function secEdit() {
     const m = inp.value.trim().replace(/^(-?\d*),(\d*)/, '$1.$2').match(/^(-?[\d.]+(?:e-?\d+)?)\s*(mm|cm|m|in|inch|inches|")?$/i);
     if (!m) return NaN;
     const u = m[2] ? m[2].toLowerCase().replace(/^(inch|inches|")$/, 'in') : null;
-    if (u && !geomMm()) return NaN; // (no unit to convert from: refused, not ignored -- R149-8)
+    // (no unit to convert from: refused, not ignored -- R149-8 -- but the file's own taken: R150-9)
+    if (u && !geomMm()) return u === lenUnit() ? Number(m[1]) : NaN;
     return u && MM_PER[u] ? (Number(m[1]) * MM_PER[u]) / MM_PER[curUnit()] : Number(m[1]);
   };
   const done = (apply) => {
@@ -3965,7 +3961,7 @@ function secEdit() {
     // (not a number: the field kept open and said so, not closed with nothing done -- R123-2)
     if (apply && inp.value.trim() && !Number.isFinite(v)) {
       inp.setAttribute('aria-invalid', 'true');
-      tell(`type a position in ${lenUnit()}, e.g. 12.5`, 4000);
+      tell(`type a position in ${lenUnit() === 'in' ? 'inches' : lenUnit()}, e.g. 12.5`, 4000); // ("in in": R150-9)
       return;
     }
     over = true;
@@ -4129,10 +4125,8 @@ function pushState() {
 
 // ---------- loading ----------
 
-// Every load takes a sequence number; a load that finishes after a newer one
-// started is discarded instead of replacing the newer model.
-// The Save button and its buffer change only when a new model actually loads
-// (in loadBuffer): a failed load leaves the old model, and Save, as they were.
+// Every load takes a sequence number, a load finishing after a newer one discarded; Save changes only
+// when a model actually loads
 function beginLoad() {
   app.loadSeq++;
   // (every load's card offers Cancel: hidden for a list's own read, it stayed hidden over a file the
@@ -4437,10 +4431,8 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   app.loadQ = app.cam.q; // the view it opened at (fillModelList)
   // (recolour refuses while an upload is under way, so the pick waited here)
   if (app.palette !== scheme) recolour();
-  // a view link (#view=…) applies to the model the page opened with; a link
-  // with no ?src (its model was opened from a device) to the next one opened
-  // from a device, never to a model list's first (review r16 M2)
-  // (with ?add= models still to come, after them: its ids are the scene's)
+  // a view link applies to the model the page opened with (a device's link to the next device file,
+  // never a list's first), after any ?add=s (r16 M2)
   landPendingView();
   const tris = mesh.header.indexCount / 3;
   app.stats = { meshes: mesh.header.meshes.length, triangles: tris, vertices: mesh.header.vertexCount,
@@ -4927,9 +4919,7 @@ async function runClearance() {
   say(`checking ${what}…`);
   await nextPaint();
   const base = app.baseMesh;
-  // (each set's closed bodies, for a part lying wholly inside one: closedOf -- the facts awaited
-  // when they are on their way: skipped, a pin inside a block read 4 mm after every scene change)
-  // (on the facts, not the value: a scene's edges in hand are its value before its facts arrive)
+  // (each set's closed bodies, closedOf, the facts awaited when on their way)
   await factsReady(base);
   // (the scene changed while it waited: said, not left at "checking …")
   const stopped = () => { if (app.baseMesh !== base) { say('stopped: the scene changed'); return true; } return false; };
@@ -6157,10 +6147,7 @@ function droppedFile(e) {
   return pickModelFile([...files]);
 }
 
-// Of several files dropped or picked together, the model (the first that is
-// not a companion: an .mtl, a .bin, a picture), the companions kept for it
-// with it (companionsOf: an OBJ's colours, a .gltf's buffers), which its
-// load takes (loadFile) whatever else is picked or loaded meanwhile
+// Of several files together, the model (the first non-companion) and its companions kept with it
 const companionsOf = new WeakMap();
 function pickModelFile(files) {
   // (the model by formats.js zipModel: a format it opens, then a zip, else the first non-companion,
@@ -6972,10 +6959,15 @@ function fillInfo(el) {
     sel.className = 'mini';
     sel.textContent = `all ${fmtInt(n)}`; // ("bolt #2 [1 of 6]": two numbers for one part -- R37-3)
     sel.title = `${fmtInt(n)} copies of this part in the model: select them all`;
-    sel.setAttribute('aria-label', `select all ${n} copies`); // (R38-6)
+    sel.setAttribute('aria-label', `select all ${fmtInt(n)} copies`); // (R38-6, R150-3)
     // (from a key, the focus to Measure from selection: R42-1)
-    // (the copies named, and only a key press moves the focus on: R139-8)
-    sel.onclick = (e) => { const kb = e.detail === 0; select(sameParts(ids[0]), false, meshLabel(ids[0]).replace(/ #\d+$/, '')); if (kb) ($('refset').disabled ? $('refclear') : $('refset')).focus(); }; // (off: the ×, R115-4)
+    // (the copies named, and only a key press moves the focus on: R139-8; said: R150-8)
+    sel.onclick = (e) => {
+      const kb = e.detail === 0, name = meshLabel(ids[0]).replace(/ #\d+$/, '');
+      select(sameParts(ids[0]), false, name);
+      announce(`${name}: ${fmtInt(n)} copies selected`);
+      if (kb) ($('refset').disabled ? $('refclear') : $('refset')).focus();
+    }; // (off: the ×, R115-4)
     add('selection', ...nameWithButton(title, sel));
   } else add('selection', nameWords(title));
   // the part's id and description from the STEP file (js/step-meta.js), when
@@ -7445,8 +7437,11 @@ function wireInput() {
         select(id ? [id] : [], additive);
         if (id) revealRow(id);
         // (said, as a list pick is: a screen reader heard nothing of a pick in the view -- R149-10)
-        if (id) announce(app.selected.size > 1 ? `${meshLabel(id)} added: ${fmtInt(app.selected.size)} selected` : `${meshLabel(id)} selected`);
-        else if (had) announce('selection cleared');
+        // (what changed: an added click on the background keeps the selection, one on a part already in
+        // it adds nothing -- R150-2)
+        if (id && app.selected.size === had && additive) announce(`${meshLabel(id)} already selected: ${fmtInt(had)} selected`);
+        else if (id) announce(app.selected.size > 1 ? `${meshLabel(id)} added: ${fmtInt(app.selected.size)} selected` : `${meshLabel(id)} selected`);
+        else if (had && !app.selected.size) announce('selection cleared');
         // a finger has no hover: the view's name label shows what a tap picked
         if (d.type === 'touch') hoverLabel(id ? meshLabel(id) : '', true);
         return true;
@@ -7572,7 +7567,14 @@ function wireInput() {
   new ResizeObserver(moreHint).observe(tb);
   // contents can widen without the row resizing (Save appears once a STEP
   // import enables it, and hides again for a .cadmesh)
-  new MutationObserver(moreHint).observe(tb, { attributes: true, subtree: true, childList: true, characterData: true });
+  // (once a frame at most, and not where the row wraps: every slider move and hover laid out the whole
+  // page, ~20 ms with an 1,800-row list -- R150-6)
+  let hintQueued = false;
+  new MutationObserver(() => {
+    if (hintQueued) return;
+    hintQueued = true;
+    requestAnimationFrame(() => { hintQueued = false; if (getComputedStyle(tb).flexWrap === 'nowrap' || header.classList.contains('more-right')) moreHint(); });
+  }).observe(tb, { attributes: true, subtree: true, childList: true, characterData: true });
   // A drop anywhere on the page loads the file: left to the browser, a drop on
   // the sidebar or header would open or download it and lose the view.
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -7688,7 +7690,7 @@ function wireInput() {
     syncTreeChecks();
     pushState();
     viewChanged();
-    announce(`isolated: ${app.selected.size} shown`); // (said, as its Undo is: R135-5)
+    announce(`isolated: ${fmtInt(app.selected.size)} shown`); // (said, as its Undo is: R135-5)
     if (!noSurface([...app.selected], 'nothing to show')) uncover(); // (blank, unsaid: R33-2)
   };
   $('hide').onclick = () => {
@@ -7701,7 +7703,7 @@ function wireInput() {
     pushState();
     showInfo();
     viewChanged();
-    announce(`${n} hidden`);
+    announce(`${fmtInt(n)} hidden`);
   };
   $('sheets').onchange = (e) => setSheets(e.target.checked);
   $('savepic').onclick = () => { closeMenus(); savePicture(); };
@@ -7856,13 +7858,16 @@ function wireInput() {
     const dir = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
     if (dir) { e.preventDefault(); secStep(dir, e.shiftKey); }
   });
-  // (its direction from either axis -- a sideways or Shift wheel sends deltaX, and always cut down --
-  // and one step a notch, ~100 px, not one per trackpad event: R149-4, R149-5)
-  let secWheel = 0;
+  // (either axis, one step a ~100 px notch or a mouse notch of any size, the rest let go on a reversal
+  // or a pause -- R149-4, R149-5, R150-5)
+  let secWheel = 0, secWheelAt = 0;
   $('secpos').addEventListener('wheel', (e) => {
     e.preventDefault();
-    const d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+    let d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
     if (!d) return;
+    if (Math.sign(d) !== Math.sign(secWheel) || e.timeStamp - secWheelAt > 300) secWheel = 0;
+    secWheelAt = e.timeStamp;
+    if (Math.abs(d) >= 50) d = Math.sign(d) * 100;
     secWheel += d;
     while (Math.abs(secWheel) >= 100) { secStep(secWheel < 0 ? 1 : -1, e.shiftKey); secWheel -= Math.sign(secWheel) * 100; }
   }, { passive: false });
@@ -7966,6 +7971,17 @@ function wireInput() {
     // (Z by the key's place on a layout that types no Latin letter, as the
     // letter shortcuts below: review r17)
     const zKey = e.key.toLowerCase() === 'z' || (nonLatinLetter(e.key) && e.code === 'KeyZ');
+    // Ctrl/⌘+A outside a field: every body shown selected, not the page's text (R150-1)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === 'a' || (nonLatinLetter(e.key) && e.code === 'KeyA'))) {
+      const t0 = e.target;
+      if ((t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type)) || t0.tagName === 'TEXTAREA' || t0.isContentEditable || !app.header || app.dxf) return;
+      e.preventDefault();
+      const ids = [];
+      for (let id = 1; id <= app.header.meshes.length; id++) if (!app.hidden.has(id)) ids.push(id);
+      select(ids, false);
+      announce(`${fmtInt(ids.length)} ${ids.length === 1 ? 'body' : 'bodies'} selected`);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && zKey) {
       const t0 = e.target;
       const field = (t0.tagName === 'INPUT' && !NOT_TYPED.includes(t0.type))
@@ -8179,9 +8195,7 @@ async function main() {
   await startFromUrl(early);
 }
 
-// The start-up's own loads (the address's model, its adds, a tour's model, a list's first) and the
-// one test, untouched(), of whether the visitor opened something since: none of them goes over it
-// (the list's named model and the next ?add= did, cancelling the visitor's file: r51 A4, Q1)
+// The start-up's own loads, none over a file the visitor opened since (untouched(): r51 A4, Q1)
 const untouched = () => app.loadSeq === app.startSeq;
 function startUpLoad(url) {
   const p = loadListed(url);
@@ -8497,9 +8511,7 @@ async function startFromAddress(early) {
       poster = false;
       setStatus('idle', idleText());
     }
-    // a tour with no model of its own, or one that could not be read, on a page given only a list:
-    // the list's first model, as without a tour (a tour that failed left the page with no model:
-    // r56 Q1); for a name the list lacks, said so now, its first being what opens (r56 A6, Q9)
+    // a modelless or unread tour over only a list: the list's first, a lacking name said (r56 Q1, A6, Q9)
     let firstOpened = false;
     if (!app.header && !src && !poster && !tourOwn && untouched() && app.listEntries?.length) {
       firstOpened = true;

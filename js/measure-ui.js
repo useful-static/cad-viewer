@@ -11,10 +11,8 @@ import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometry, distance, faceGap, holesOf,
 // A hole row's Ø with its wider rim's, one text for the table, summary and words (r68 A8, r69 A4).
 // r: { d, head }; fmt: the number's writer.
 export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at its rim)` : ''}`;
-// The rims a hole table leaves out, said: one sentence for the summary, the CSV and the announcement
-// (the summary alone said it, the copy and the announcement "41 holes" did not -- r67 A3, Q5), and
-// the through-holes left out as their other rim is one of them, their own rim told (counted among
-// the rims, it was one too small to tell that was not: r69 Q7)
+// The rims a hole table leaves out, one sentence for the summary, the CSV and the announcement, the
+// through-holes' own rims told (r67 A3, Q5, r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // A label's box ({ left, right, top, bottom }) brought inside the bounds b ({ left, right, top,
 // bottom }), then moved clear of those placed before it, up first, down where up leaves them ->
@@ -83,12 +81,9 @@ const INK = {
 };
 const HOLE = '#5fd3ff';
 
-// deps: { $, scene: { mesh, header, hidden, sphere }, view() -> { vp, eye, dir, right, up, ortho,
-//   tanV, w, h, target, dist }, sectionPlane(), lenText(mm), num(mm), unit(), announce(text),
-//   tell(text, ms, said) (main.js's: r46 A3), queueFrame(), syncOptbar(), coarse(), showsHidden(),
-//   closed(mi), beforeOn() }
-// The point of segment a-b nearest the ray { o, d }: the edge point under the pointer, in perspective
-// as in ortho. Parallel to the ray (an edge seen end on), t: the screen parameter's point.
+// deps: { $, scene, view(), sectionPlane(), lenText, num, unit, announce, tell, queueFrame,
+//   syncOptbar, coarse, showsHidden, closed, beforeOn } (main.js wires them)
+// The point of segment a-b nearest the ray { o, d } (parallel to it: the screen parameter's point)
 export function nearestOnRay(a, b, ray, t) {
   const u = sub(b, a), w = sub(a, ray.o);
   const A = dot(u, u), B = dot(u, ray.d), C = dot(ray.d, ray.d), D = dot(u, w), E = dot(ray.d, w);
@@ -297,10 +292,8 @@ export function createMeasure(deps) {
       for (const c of g.corners) consider(c, 'vertex');
       for (const m of g.mids) if (!m.closed) consider(m.p, 'mid', { length: m.len });
       for (const c of g.circles) consider(c.centre, 'centre', { diameter: 2 * c.radius });
-      // the nearest point of each edge, in screen space, lifted back to 3D
-      // (each edge's bounding sphere, once a body: an edge whose sphere cannot reach the pointer's
-      // radius is passed over whole -- every segment of the rack's long edges projected took a warm
-      // snap to 50-97 ms before any visibility test: r135 L2)
+      // the nearest point of each edge in screen space, lifted back to 3D; an edge whose bounding sphere
+      // cannot reach the pointer passed over whole (r135 L2)
       const sph = edgeSpheres(g);
       for (let e = 0; e < g.edges.length; e++) {
         const line = g.edges[e];
@@ -494,10 +487,7 @@ export function createMeasure(deps) {
   }
 
   // ---- dragging a placed end dot ----
-  // The end dot within 11 CSS px (a 22 px target) of (x, y), nearest first:
-  // { r, i } (result, point index) | null. A Face to face result's ends are
-  // picks of faces, and a distance found elsewhere (the clearance check) is
-  // that check's; neither is dragged.
+  // The end dot within 11 CSS px of (x, y): { r, i } | null (not a Face to face's nor a clearance's)
   function dotAt(x, y) {
     if (!st.on || !scene.header) return null;
     const v = projector();
@@ -618,10 +608,7 @@ export function createMeasure(deps) {
     for (const s of pend) if (s) el('circle', { cx: s[0], cy: s[1], r: 4, class: 'mdot' }, layer);
     // the hole table's holes, numbered as its rows
     if (st.holes) {
-      // (a number only where it clears the ones before it, the picked hole's always: a board's
-      // numbers overprinted into clusters, R24-2; the table lists every one)
-      // (every ring first, then the numbers, the picked one placed first: later rings covered numbers,
-      // and the picked number printed over another -- R25-1)
+      // (rings first, then the numbers where they clear those before, the picked one first -- R24-2, R25-1)
       const at = st.holes.list.map((h) => v.toScreen(h.centre));
       at.forEach((s, i) => { if (s) el('circle', { cx: s[0], cy: s[1], r: i === st.holes.pick ? 9 : 6, class: i === st.holes.pick ? 'mhole pick' : 'mhole' }, layer); });
       for (const [i, s] of holeNumbers(at, st.holes.pick, 1)) {
@@ -755,11 +742,8 @@ export function createMeasure(deps) {
 
   // ---- the options bar row ----
   function syncRow() {
-    // the bar shows while measuring, and while results stay drawn with
-    // Measure off -- then only what removes them (the list, Clear all): the
-    // results on screen are always removable from the screen
-    // (results the user made; a tour's callouts and the notes a list or a
-    // view link pins are the page's, and never pop the bar up on their own)
+    // the bar shows while measuring, and while the user's results stay drawn with Measure off (then
+    // only the list and Clear all); a tour's or a link's notes never pop it up
     if (deps.view2d?.()) { sync2D(deps.view2d()); return; } // (a drawing's bar is its own)
     const kept = !st.on && st.results.some((r) => !r.given);
     $('measopt').hidden = !st.on && !kept;
@@ -852,6 +836,21 @@ export function createMeasure(deps) {
     // corners, edges or circles to snap to, which nothing said: r121 L2)
     if (on) onNote(true); else deps.tell('measure off', 3000, 'measure off');
     if (focus) (on ? $('measoff') : offFocus()).focus();
+    if (on) warmUp();
+  }
+  // the bodies' trees and geometry built in 8 ms slices while Measure is on, so a dense model's first
+  // aim does not build them all at once (1.5 s frozen on a 1,790-body scene: R150-4)
+  function warmUp() {
+    const m = model();
+    if (!m || !st.caster?.warm) return;
+    let mi = 0;
+    const slice = () => {
+      if (!st.on || st.model !== m) return;
+      const end = performance.now() + 8;
+      while (mi < m.header.meshes.length && performance.now() < end) { st.caster.warm(mi); if (!geomOf(mi, end)) break; mi++; }
+      if (mi < m.header.meshes.length) setTimeout(slice, 0);
+    };
+    setTimeout(slice, 0);
   }
   // Measure's note; again, unsaid, as the hole table opens or closes (its "or Enter on a hole row"
   // kept to the table, and said with "measure on": R128-4)
@@ -898,10 +897,8 @@ export function createMeasure(deps) {
   }
 
   // ---- the hole table ----
-  // The holes of the parts in ids (a board: its mounting holes), from the
-  // reference box's min corner (js/datum.js's corner), in the two file axes
-  // across the hole's axis when that is a file axis (a board's X and Y), all
-  // three otherwise. ids null closes it.
+  // The holes of the parts in ids from the reference's min corner, in the two axes across them (all
+  // three otherwise); ids null closes it
   function holeRows(ids, ref) {
     model();
     const list = [];
@@ -924,10 +921,8 @@ export function createMeasure(deps) {
     };
     const first = list.length ? axesOf(list[0]).join() : '';
     const vals = (h, axes) => axes.map((j) => deps.num(h.centre[j] - ref.min[j]));
-    // all three where one direction's two would not tell the rows apart: a table of mixed
-    // directions, or two rows alike across their axis -- the RK3399's side dimples a part apart
-    // (R28-1, R29-2). The axes in the column's head, numbers only in the cells: a letter in each
-    // wrapped every row of the 300 px panel, its letter from its number (R29-1)
+    // all three where two would not tell the rows apart; the axes in the head, numbers in the cells
+    // (R28-1, R29-1, R29-2)
     const across = list.map((h) => vals(h, axesOf(h)).join(', '));
     const all3 = !list.every((h) => axesOf(h).join() === first) || new Set(across).size < across.length;
     const axes = all3 ? [0, 1, 2] : first.split(',').map(Number);

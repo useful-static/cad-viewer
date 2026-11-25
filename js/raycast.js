@@ -176,7 +176,9 @@ export function makeCaster(model) {
     }
     return best;
   }
-  return { cast, body, built: () => bvh.size };
+  // warm(mi): body mi's tree built ahead of its first ray (Measure's idle slices: R150-4)
+  const warm = (mi) => { const m = meshes[mi]; if (m.idxCount / 3 >= BVH_MIN && !bvh.has(mi)) bvh.set(mi, buildBvh(P, I, m.idxStart / 3, m.idxCount / 3)); };
+  return { cast, body, warm, built: () => bvh.size };
 }
 
 // The b-rep face a triangle belongs to (a global face number), by binary
