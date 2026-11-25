@@ -54,6 +54,7 @@ Example: `<iframe src="https://cad.place/?embed=1&src=https://example.com/parts/
 - [List the holes in a STEP part](https://cad.place/help/list-holes)
 - [Check the clearance between two models](https://cad.place/help/clearance)
 - [Share a link to a view](https://cad.place/help/share-view)
+- [Make and share a guided tour](https://cad.place/help/share-tour)
 - [Show your models on your own site](https://cad.place/help/models-on-your-site)
 
 ## Source

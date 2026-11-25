@@ -768,6 +768,7 @@ const withRecorder = async (api, f) => {
     Object.defineProperty(list, 'textContent', { set() { list.kids = []; }, get() { return ''; } });
     els.set('testeps', list);
     els.set('tourmaker', { hidden: true, addEventListener() {} });
+    els.set('tenote', plain('p')); // (its Undo button kept among its kids: R155-2)
     globalThis.document = { getElementById: $, createElement: plain };
     const full = { announce() {}, capture: () => ({ view: 'iso' }), model: () => ({ key: 'k', name: 'board', unit: 'mm', url: 'b.cadmesh' }), modelUrl: () => 'b.cadmesh', validate() {}, orient: () => null, stopPreview() {}, ...api };
     const rec = createTourRecorder(full);
@@ -776,6 +777,23 @@ const withRecorder = async (api, f) => {
     if (had) Object.defineProperty(globalThis, 'document', had); else delete globalThis.document;
   }
 };
+await test('tour-recorder.js: a step deleted by its × is offered back: "step 2 deleted" with an Undo that puts it back in its place (R155-2)', async () => {
+  let n = 0;
+  await withRecorder({ capture: () => ({ view: ['iso', 'top', 'front'][n++] }) }, async ({ rec, $, list }) => {
+    $('teadd').onclick(); $('teadd').onclick(); $('teadd').onclick();
+    const titles = () => rec.toJSON().steps.map((s) => s.view);
+    assert.equal(rec.toJSON().steps.length, 3);
+    list.kids[1].kids[3].onclick();
+    const note = $('tenote');
+    assert.deepEqual(titles(), ['iso', 'front'], 'deleted');
+    assert.equal(note.textContent, 'step 2 deleted');
+    const undo = note.kids.at(-1);
+    assert.equal(undo.textContent, 'Undo');
+    undo.onclick({ stopPropagation() {} });
+    assert.equal(note.textContent, 'step 2 back');
+    assert.deepEqual(titles(), ['iso', 'top', 'front'], 'back in its place');
+  });
+});
 await test('tour-recorder.js: show(true) opens the maker without stopping a preview; show(false) closes it and stops the preview once (r113 M2 tour-recorder-R30, B39)', async () => {
   let stopped = 0;
   await withRecorder({ stopPreview: () => { stopped++; } }, async ({ rec }) => {
@@ -824,7 +842,7 @@ test('tour.js: a step "style" not in STYLE_IDS ("hidden-line") is refused naming
 });
 await test('tour-recorder.js: Save after one step calls api.save once with the untitled tour named after its model, "board.cadtour.json", and says so (r114 M3 tour-recorder-R26, R141-6; R142-5: its case kept, a title slugged)', async () => {
   for (const [name, title, want] of [['LC-Board.cadmesh.gz', '', 'LC-Board.cadtour.json'], ['LC-Board.cadmesh.gz', 'My Tour', 'my-tour.cadtour.json'],
-    ['A.cadmesh.gz + B.stp', '', 'A+B.cadtour.json']]) { // (a scene as main.js saveBase names it: R143-4)
+    ['A.cadmesh.gz + B.stp', '', 'A.cadtour.json']]) { // (a scene's tour after its own model, the one it plays on: R155-5)
     const got = [];
     await withRecorder({ model: () => ({ key: 'k', name, unit: 'mm', url: 'b.cadmesh' }), validate: () => ({ steps: [{}] }), save: (text, n) => got.push(n) }, async ({ $ }) => {
       if (title) { $('tetitle').value = title; $('tetitle').fire('input'); }

@@ -1803,8 +1803,9 @@ function tourFloor(tour) {
   const sets = new Set(tour.steps.map((s) => [s.explode ? 'xpopt' : '', s.section && s.section.axis !== 'off' ? 'secopt' : ''].filter(Boolean).join(' ')));
   for (const set of sets) {
     if (!set) continue;
-    const bars = set.split(' ').map($), o = $('optbar'), was = [o.hidden, ...bars.map((b) => b.hidden)];
-    o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = false;
+    // (the set's bars alone: one still shown for Measure counted too -- R155-4)
+    const o = $('optbar'), bars = [...o.children], on = set.split(' ').map($), was = [o.hidden, ...bars.map((b) => b.hidden)];
+    o.style.visibility = 'hidden'; o.hidden = false; for (const b of bars) b.hidden = !on.includes(b);
     floor = Math.max(floor, o.offsetHeight);
     o.hidden = was[0]; bars.forEach((b, i) => { b.hidden = was[i + 1]; }); o.style.visibility = '';
   }
@@ -1889,7 +1890,7 @@ function applyStepState(s) {
   if (Array.isArray(s.show)) for (const id of ids(s.show)) hidden.delete(id);
   // what the step is about: the parts it colours, else the parts it frames
   const subject = new Set(s.colour ? ids(Object.keys(s.colour)) : Array.isArray(s.frame) ? ids(s.frame) : []);
-  const overrides = new Map(base.overrides);
+  const overrides = new Map(base.clean ? [] : base.overrides);
   for (const [name, hex] of Object.entries(s.colour || {})) for (const id of tourParts([name]).ids) overrides.set(id - 1, hexToRgb(hex));
   app.tourGhost = false;
   // (what the dim alone did, so the tour maker records the step and not its dimming: captureStep)
@@ -1913,7 +1914,7 @@ function applyStepState(s) {
   // (a step's own callouts are pinned by showTourStep, where the parts will be)
   // (the visitor's own notes shown as the page's while the tour plays: they
   // do not open Measure's bar over it; leaving gives them back as theirs)
-  if (app.measure && !s.callouts) app.measure.setNotes((base.view.notes || []).map((n) => ({ ...n, own: false })));
+  if (app.measure && !s.callouts) app.measure.setNotes((base.clean ? [] : base.view.notes || []).map((n) => ({ ...n, own: false })));
   pushState();
   updateButtons();
   viewChanged();
@@ -2164,7 +2165,10 @@ function startTour(tour, url, only = null, at = 0) {
   // what the visitor had: each step is applied to it, and leaving puts it back
   // (styleChoice: the visitor's own, not a step's; leaving puts it back)
   const base = prev ? prev.base : { view: saved, hidden: [...app.hidden], overrides: new Map(app.overrides), faceOverrides: app.faceOverrides, styleChoice: app.styleChoice,
-    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk };
+    explode: { on: app.explode.on && app.explode.for === app.header, t: app.explode.t, mode: app.explode.mode, mine: app.explode.for === app.header }, walk: !!app.walk,
+    // (the maker's steps played over the file's own colours and no notes, as the saved tour opens: the
+    // author's showed on every step without its own -- R155-3)
+    clean: !!app.inMaker };
   app.tour = { tour, full, url, i: 0, saved, base, playing: false };
   // (in place of another tour: the visitor's orientation, unless this one sets its own)
   if (prev && saved.cam && saved.cam.orient && saved.cam.orient !== app.cam.orient) {
@@ -2245,9 +2249,7 @@ function endTour(restore = true) {
     updateButtons();
     viewChanged();
   }
-  // the visitor's own style choice and Explode amount and direction, however the tour ends (a new
-  // model or a drawing ending it kept the last step's style pinned over the next model and its
-  // list entry's style, and its explode: the next Explode read "exploded 0 %")
+  // the visitor's own style and Explode back, however the tour ends
   app.styleChoice = base.styleChoice;
   if (!restore) { app.explode.t = base.explode.t; app.explode.mode = base.explode.mode; }
   // (a preview ended from its card, the maker still open: the focus back to Preview, not File or none
@@ -2287,7 +2289,7 @@ function captureStep({ camera = 'exact' } = {}) {
   let hiddenNow = app.hidden;
   if (dim) {
     for (const id of dim.grey) {
-      const own = app.tour.base.overrides.get(id - 1);
+      const own = !app.tour.base.clean && app.tour.base.overrides.get(id - 1);
       if (own) overrides.set(id - 1, own); else overrides.delete(id - 1);
     }
     hiddenNow = new Set([...app.hidden].filter((id) => !dim.hidden.has(id)));
@@ -2302,9 +2304,7 @@ function captureStep({ camera = 'exact' } = {}) {
     s.colour = {};
     for (const [h, ids] of byHex) for (const nm of names(ids)) s.colour[nm] = h;
   }
-  // (every field the step takes is written, "nothing" included: a field left out means "keep
-  // the page's", so a step taken after Show all says "show": "all", and a step with no cut
-  // "section": "off" -- else a list's hidden parts and a visitor's cut stayed in the tour)
+  // (every field written, "nothing" too: one left out means "keep the page's")
   if (hiddenNow.size) {
     if (hiddenNow.size > n / 2) {
       const shown = [];
@@ -2739,9 +2739,7 @@ function setWalk(on) {
     levelOrbitBy(c, orientUp(c.orient), 0, 0);
     viewChanged();
   } else {
-    // (the eye kept, the turning point moved out to the model's depth: the next orbit or turntable
-    // turned about a point a few mm ahead -- R124-2; with the model's middle out of view, the view
-    // turned onto it, or every turn swung about empty space -- R125-1)
+    // (the eye kept, the turning point moved out to the model's depth: R124-2, R125-1)
     const c = app.cam, d = camDir(c), s = app.sphereBase || app.sphere;
     const eye = [0, 1, 2].map((k) => c.target[k] + d[k] * c.dist);
     const v = s.center.map((x, k) => x - eye[k]), far = Math.hypot(...v);
@@ -3274,9 +3272,7 @@ function wireMenus() {
       // (a toggle, and a disclosure -- Save picture's ▾ -- leave it open)
       if (b.hasAttribute('aria-pressed') || b.hasAttribute('aria-expanded')) return;
       setMenu(m, false);
-      // a menu left with nothing to do is disabled (Undo, Show's last live
-      // item): its neighbour then; the focus fell to the page and the next
-      // Tab went to the full-screen button, past the toolbar (review r19)
+      // a menu with nothing left to do is disabled: its neighbour then (review r19)
       // (not when the item moved it itself: R43-1)
       if (back && (document.activeElement === document.body || m.contains(document.activeElement))) focusBeside(btn);
     });
@@ -3296,10 +3292,7 @@ function wireMenus() {
 }
 
 // ---------- options bar ----------
-// Along the bottom of the 3D view, the controls of each tool that is on (one
-// .opt row each). It is hidden while a card (empty state, loading) shows, and
-// its height is published as --optbar-h, which lifts #hover above it and
-// insets Fit.
+// Along the 3D view's foot, one .opt row per tool on; hidden under a card; its height is --optbar-h.
 
 // Undo pressable whenever it has something to take back -- Measure's too, as Ctrl+Z does (R137-6)
 function syncUndo() {
@@ -4498,9 +4491,7 @@ function askBigConversion(buf, name, seq) {
 // app.baseMesh is their merge (a tree node each, ids running on), merged again on a move.
 
 // Start a load whose model joins the scene instead of replacing it
-// (offset: where the address's ?addat= puts it -- the add's own, ended with it: kept on the app, an
-// address add that never arrived (404, Cancel, refused) put the visitor's next Add model… there:
-// r117 M2)
+// (offset: where ?addat= puts it, the add's own and ended with it: r117 M2)
 function startAdd(fn, offset = null) {
   if (!app.scene) return Promise.resolve();
   const p = startLoad(() => {
@@ -4598,11 +4589,14 @@ async function showScene(models, { newTree = false } = {}) {
   app.hover = 0;
   app.hoverSeq++;
   app.viewGen++;
+  // (said, as Clear says it: a pinned note went unsaid -- R155-12)
+  const gone = app.measure ? app.measure.results.length : 0, cleared = gone ? `, ${gone} Measure result${gone === 1 ? '' : 's'} cleared` : '';
   if (app.measure) app.measure.reset(); // its points were on bodies that may have moved
   app.sourceName = models.map((m) => m.name).join(' + ');
+  // (said: hidden parts came back and Undo emptied unsaid -- R135-4)
+  const afresh = newTree && app.hidden.size && app.scene?.length > 1;
+  if (afresh || cleared) tell(afresh ? `the scene starts afresh: every part shown, Undo cleared${cleared}` : `the scene changed${cleared}`, 4000);
   if (newTree) {
-    // (said: hidden parts came back and Undo emptied unsaid -- R135-4)
-    if (app.hidden.size && app.scene?.length > 1) tell('the scene starts afresh: every part shown, Undo cleared', 4000);
     app.selected.clear();
     app.hidden.clear();
     app.visUndo = [];
@@ -4948,9 +4942,7 @@ async function runClearance() {
   if (r.distance > 0 && app.measure) app.measure.addDistance(r.pa, r.pb, 'clearance');
   announce(`clearance ${text}`);
 }
-// A clearance read forgotten, its line, its tooltip and its result together, by a new model or a
-// scene change (a new model cleared the text alone, its tooltip kept "N triangle pairs compared" --
-// r93 A7; and the result kept, the unit picker wrote the line again -- r92 A2)
+// A clearance read forgotten whole (line, tooltip, result) by a new model or scene (r92 A2, r93 A7)
 function forgetClearance() {
   $('clearval').textContent = '';
   $('clearval').title = '';
@@ -5065,13 +5057,9 @@ function edgesOf(base) {
   // worded by what is missing -- the file's edges are drawn when only the facts failed; the same
   // words are not told twice (sayNoFacts)
   const fail = (v) => {
-    // (no module worker: said as why there are neither edges nor volume -- the page builds neither,
-    // in its read either: r44 Q3; "could start here", not "this browser runs none": a file:// page
-    // or a worker file that fails to load is no browser's want -- r45 A5)
+    // (no module worker: said as why there are no edges nor volume -- r44 Q3, r45 A5)
     info.error = v.stopped || v.error || `no module worker could start here, and the page builds no edges or volume itself (${v.noWorker})`;
-    // (a stop is no failure -- the one test of it, sceneEdges' too; a failure of the model itself
-    // is remembered, one of the moment not -- until its second try: one that fails the same way
-    // every time started a worker and copied the model at every move -- r40 A3, Q2)
+    // (a stop is no failure; the model's own failure remembered, a momentary one not: r40 A3, Q2)
     info.stopped = !!v.stopped;
     if (v.transient) info.tries = (info.tries || 0) + 1;
     if (!v.stopped && (!v.transient || info.tries >= MOMENT_TRIES)) info.failed = true;
@@ -5512,9 +5500,7 @@ function setSheet(i) {
   app.measure?.sync2D(app.dxf.view); // (R45-2)
 }
 
-// A model or drawing from the device is not the ?model / ?index / ?src (and ?unit) a list
-// pick or a link left in the address: a reload would open that instead (review r16 L7; a drawing
-// opened from the device kept them -- the one rule for both, loadBuffer and show2D)
+// A model or drawing from the device clears the address's model keys, or a reload opens that (r16 L7)
 function forgetAddressModel() {
   const q = new URLSearchParams(location.search);
   if (app.sourceUrl || (![...ADDRESS_MODEL_PARAMS].some((k) => q.has(k)) && !location.hash.startsWith('#view='))) return;
@@ -5989,9 +5975,7 @@ const converterBuild = () => converterBuildP || (converterBuildP = fetch(new URL
 // The file name a URL names: js/formats.js fileNameOfUrl (check.html reads the same)
 const fileName = fileNameOfUrl;
 
-// A fetch that threw: from another site, a no-cors HEAD tells whether it answered at all (then no
-// CORS, or no such file -- the browser hides the 404) or is down or unreachable.
-// lead: how the sentence starts ("could not download part.stp"; a tour's: "could not be read")
+// A fetch that threw: a no-cors HEAD tells no CORS / no file from down or unreachable; lead starts it
 async function fetchFailedText(url, name, e, lead = `could not download ${name}`) {
   let host = null;
   try {
@@ -6172,8 +6156,7 @@ function openFile(f) {
   startLoad(() => loadFile(f));
 }
 
-// (every caller refuses a file over the size first, refusedForSize -- its own check here came after
-// beginLoad, so it cancelled the running load: r21, r50 A1; dead since, and gone: r51 A9)
+// (every caller refuses a file over the size first: refusedForSize, r51 A9)
 // extras: the companions picked with it (pickModelFile), carried down to its reader
 async function loadFile(file, extras = companionsOf.get(file) || []) {
   const seq = beginLoad();
@@ -6840,8 +6823,6 @@ function setRef(on) {
   announce(app.ref ? `positions measured from ${app.ref.name}` : 'positions measured from the whole model');
 }
 
-// The info block leads with the selection, its size, position, volume and mass; the file and
-// graphics facts are in a Details fold at its foot, its open state kept here.
 // a name as shown: " #2" kept with it (R39-1; its "-" left breakable, a copy pasting as typed: R40-2)
 const nameWords = (s) => String(s).replace(/ #(\d)/g, ' #$1');
 // (a copy of text alone pastes plain spaces, R40-2; over controls, the browser's own, R41-2)
@@ -7960,9 +7941,8 @@ function wireInput() {
     tell(err ? `could not clear the saved conversions: ${err.message || err}` : 'saved conversions cleared', err ? 6000 : 3000); // (told: r49 A4)
   };
   window.addEventListener('keydown', (e) => {
-    // leave browser shortcuts (Ctrl/Cmd/Alt+key) and typing in fields alone
-    // ...except Ctrl/Cmd+Z, which undoes a visibility change (outside text fields)
-    // (Z by the key's place on a layout that types no Latin letter, as the
+    // browser shortcuts and typing left alone, but Ctrl/Cmd+Z outside a field undoes a visibility
+    // change (Z by the key's place on a layout that types no Latin letter, as the
     // letter shortcuts below: review r17)
     const zKey = e.key.toLowerCase() === 'z' || (nonLatinLetter(e.key) && e.code === 'KeyZ');
     // Ctrl/⌘+A outside a field: every body shown selected, not the page's text (R150-1)
@@ -8226,9 +8206,8 @@ function linkViewOf(hash) {
 // The model the page as first opened shows from its address (its start's first load, else the list's
 // first): Back's and a #view='s first page; none for a file or pick shown first (r56 A2, r57 Q4)
 const addressModel = () => app.addressUrl || (app.visitorFirst ? null : app.listEntries?.[0]?.url) || null;
-// ?src= and then its ?add=s (each with an optional ?addat=x,y,z in mm, in the same order), and a view
-// link (#view=) that waits for them, its part ids the scene's: the one chain, at start-up or from
-// View in 3D (behind an embed's poster every ?add= was dropped: r51 A5)
+// ?src=, its ?add=s (each with an optional ?addat=x,y,z in mm) and a #view= that waits for them: the one
+// chain, at start-up or from View in 3D (r51 A5)
 function openStart(src) {
   const opening = startUpLoad(src);
   const adds = params.getAll('add'), ats = params.getAll('addat');

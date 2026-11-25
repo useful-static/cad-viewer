@@ -79,7 +79,21 @@ export function createTourRecorder(api) {
   el.sTitle.maxLength = TITLE_MAX;
   el.sText.maxLength = TEXT_MAX;
 
-  const note = (t) => { el.note.textContent = t; if (t) api.announce(t); };
+  // (undo: a press that takes the last deletion back, offered in the note -- R155-2)
+  let undo = null;
+  const note = (t, back = null) => {
+    el.note.textContent = t;
+    undo = back;
+    if (back) {
+      const b = document.createElement('button');
+      b.textContent = 'Undo';
+      b.onclick = (e) => { e.stopPropagation(); back(); };
+      el.note.append(' ', b);
+    }
+    if (t) api.announce(t);
+  };
+  // (a note said once, cleared by the next press that says nothing: it stayed through them -- R155-10)
+  el.panel.addEventListener('click', (e) => { if (!el.note.contains(e.target)) note(''); }, true);
 
   // The model the draft's steps were made on: a tour plays over one model, so with another
   // open, its steps are not added to, shown or saved (saved, they named the other model)
@@ -177,7 +191,7 @@ export function createTourRecorder(api) {
   }
 
   function remove(i) {
-    draft.steps.splice(i, 1);
+    const [gone] = draft.steps.splice(i, 1), sel = draft.sel;
     // (a step deleted above the one being edited moves it up one: the editor kept its index and
     // held the next step)
     if (i < draft.sel) draft.sel--;
@@ -187,7 +201,14 @@ export function createTourRecorder(api) {
     // (the focus to the × of the step now in its place, else the one above, else Add step: R79-3)
     const row = rows[Math.min(i, draft.steps.length - 1)];
     (row ? row[3] : el.add).focus();
-    note(`step ${i + 1} deleted`);
+    note(`step ${i + 1} deleted`, () => {
+      draft.steps.splice(i, 0, gone);
+      draft.sel = sel;
+      renderList();
+      fillEditor();
+      rows[i][0].focus();
+      note(`step ${i + 1} back`);
+    });
   }
 
   // the view as a step: the camera as chosen, and what the editor holds
@@ -291,11 +312,13 @@ export function createTourRecorder(api) {
     let t;
     try { api.validate(text()); t = text(); } catch (e) { note(`not saved: ${e.message}`); return; }
     // (an untitled tour named after its model as other saves keep it, not "tour": R141-6, R142-5)
-    // (as main.js saveBase names a scene, "a+b": R143-4)
-    const base = (api.model()?.name || '').split(' + ').map((n) => n.replace(/\.gz$/i, '').replace(/\.[^.]+$/, '')).filter(Boolean).join('+').replace(/[\\/:*?"<>|]+/g, '-');
+    // (after its own model only, the one it plays on; an added model is said to be left out -- R155-5)
+    const [first, ...added] = (api.model()?.name || '').split(' + ');
+    const base = (first || '').replace(/\.gz$/i, '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, '-');
     const slug = draft.title || !base ? tourSlug(draft.title) : base;
     api.save(`${t}\n`, `${slug}.cadtour.json`);
-    note(api.modelUrl() ? `saved ${slug}.cadtour.json` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)`);
+    const also = added.length ? `; it plays on ${first} alone, without ${added.length === 1 ? 'the added model' : `the ${added.length} added models`}` : '';
+    note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
   };
 
   // the tour as files: its pictures (a zip), or a video of it playing
@@ -366,13 +389,22 @@ export function createTourRecorder(api) {
       if (tour && at > 0 && at < draft.steps.length) draft.sel = at;
       renderList();
       fillEditor();
-      (draft.steps.length ? el.list.querySelector('li.sel .tename') || el.list.querySelector('.tename') : el.add).focus();
+      const to = draft.steps.length ? el.list.querySelector('li.sel .tename') || el.list.querySelector('.tename') : el.add;
+      // (a phone's list folded while a tour plays: Preview, the row shown -- it stayed on File: R155-11)
+      (to.offsetParent ? to : el.play).focus();
     } else api.stopPreview();
   }
   el.close.onclick = () => show(false);
   // (Esc during a preview leaves the preview only, as its card's × says; the next Esc closes the maker:
   // one Esc closed both, the focus to File -- R119-1)
   el.panel.addEventListener('keydown', (e) => {
+    // (Ctrl/⌘+Z in the maker, outside a text field: its own deletion back, not a part's colour -- R155-2)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea')) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (undo) undo(); else note('nothing in the maker to undo');
+      return;
+    }
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     e.preventDefault();
     e.stopPropagation();
