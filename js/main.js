@@ -551,10 +551,8 @@ function gpuSync() {
   return run;
 }
 
-// The drawn mesh's edge instances onto renderer r. Built once per mesh and edge
-// value -- a build's edges replacing a file's drawn before are built again (a
-// recolour makes a new mesh, whose instances carry the new colours). Never
-// throws: edges the GPU cannot hold are left out, and the model stays.
+// The drawn mesh's edge instances onto renderer r, once per mesh and edges; never throws (edges the
+// GPU cannot hold left out)
 const edgeData = new WeakMap();
 
 // ---------- Explode (plan feature 8) ----------
@@ -694,10 +692,8 @@ function setExplode(on, focus = false) {
 function setExplodeNow(on, focus) {
   const x = app.explode;
   if (on && (!app.header || !app.renderer)) return;
-  // Measure and Explode exclude each other: Measure's points are where the
-  // bodies are, not where Explode draws them
-  // (told, not kept on the ready line, which stayed with Measure back on: r47 A6; read out too -- its
-  // reason reached no screen reader, Measure saying only "measure off": r48 Q8)
+  // Measure and Explode exclude each other (Measure's points are where the bodies are), told and
+  // read out (r47 A6, r48 Q8)
   if (on && app.measure && app.measure.on) {
     app.measure.setOn(false);
     tell('Measure is off while exploded: it measures the parts where they are, not where Explode draws them', 6000);
@@ -2012,10 +2008,8 @@ function flyTo(to, ortho, secs, ease, explodeTo = 0, done = null) {
   app.tourRaf = requestAnimationFrame(frame);
 }
 
-// A playing tour's hold: the step's `hold` seconds, turning `orbit` degrees
-// about the model's up axis (not where the system asks for reduced motion),
-// then the next step (the first again for a looping tour; the end of one that
-// does not loop stops it). The visitor's own drag, wheel or key pauses it.
+// A playing tour's hold: `hold` seconds turning `orbit` degrees (not with reduced motion), then the
+// next step; the visitor's input pauses it
 function holdStep() {
   const t = app.tour;
   if (!t || !t.playing) return;
@@ -2404,9 +2398,7 @@ function paintCaption(ctx, w, h, scale, title, text) {
 const slugOf = tourSlug; // (the one rule: js/tour.js -- r76 A8)
 const nextFrame = () => new Promise((ok) => requestAnimationFrame(() => ok()));
 
-// A tour as pictures: each step applied at once (no flight), its colours on
-// the GPU, rendered at twice the view's size with its caption painted in;
-// the pictures zipped, in order. -> the number of pictures
+// A tour as pictures, each step at twice the view's size with its caption, zipped. -> how many
 // the maker's tour (Show, Preview, an export); its close gives back the watched one (R74-2, R76-1)
 function makerTour(tour, at = 0) {
   const t = app.tour;
@@ -3329,7 +3321,9 @@ function syncOptbar() {
     xp.style.flex = ''; xp.style.width = ''; $('xpval').style.minWidth = '';
     if (!$('secopt').hidden && !$('xpopt').hidden && !$('optbar').hidden) {
       xp.style.flex = '0 0 auto'; xp.style.width = `${sp.getBoundingClientRect().width}px`;
-      $('xpval').style.minWidth = `${$('secval').getBoundingClientRect().width}px`; // (the groups after them aligned too: R140-8)
+      // (the groups after them aligned too, R140-8 -- where the row has room: at 320 Explode's "90 %"
+      // was pushed to a line of its own, R148-2)
+      if (innerWidth >= 360) $('xpval').style.minWidth = `${$('secval').getBoundingClientRect().width}px`;
     }
   }
   const bar = $('optbar');
@@ -3389,10 +3383,7 @@ function blurAfterPick(sel) {
   sel.addEventListener('change', () => { if (!typing) sel.blur(); });
 }
 
-// The model shown, by its name: the model list's name for it when it is one
-// of the list's (a product name, as a shop's list gives it), else its file
-// name; in the footer and the tab's title. The board was never named: the
-// title was the viewer's and the footer the file's (live end-to-end review).
+// The model shown by its name (the list's, else its file's), in the footer and the tab's title
 const BASE_TITLE = document.title;
 const SHORT_TITLE = BASE_TITLE.split(' — ')[0]; // "CAD viewer"
 function showModelName() {
@@ -3973,8 +3964,14 @@ function secEdit() {
   inp.focus();
   inp.select();
   let over = false;
-  // (a lone comma a decimal point: R123-2)
-  const val = () => Number(inp.value.trim().replace(/^(-?\d*),(\d*)$/, '$1.$2'));
+  // (a lone comma a decimal point: R123-2; a unit after it taken and converted, "25.4 mm" or "1 in",
+  // as the readout itself writes one: R148-4)
+  const val = () => {
+    const m = inp.value.trim().replace(/^(-?\d*),(\d*)/, '$1.$2').match(/^(-?[\d.]+(?:e-?\d+)?)\s*(mm|cm|m|in|inch|inches|")?$/i);
+    if (!m) return NaN;
+    const u = m[2] ? m[2].toLowerCase().replace(/^(inch|inches|")$/, 'in') : null;
+    return u && geomMm() && MM_PER[u] ? (Number(m[1]) * MM_PER[u]) / MM_PER[curUnit()] : Number(m[1]);
+  };
   const done = (apply) => {
     if (over) return;
     const v = val();
@@ -5406,10 +5403,7 @@ function setMeshUnit(u) {
   // choice back to mm during the inches re-read compared with mm, the unit it was still in, and was
   // nothing; the model ended in inches, the visitor's last choice mm -- r66 A2, Q1)
   if (!src || u === (rereading() ? app.rereadUnit : src.unit) || !MM_PER[u]) return Promise.resolve();
-  // (after the address's ?add=s, as Add model… waits for them: the re-read is a load, and it aborted
-  // the add under way, the address naming a model the scene lacked -- r63 A3)
-  // (and with them joined, a scene has no unit to choose: that is said -- the choice was dropped
-  // without a word: r65 Q9)
+  // (after the address's ?add=s; a scene has no unit to choose, which is said -- r63 A3, r65 Q9)
   if (app.addsPending && app.addsChain) {
     return app.addsChain.then(() => (app.meshSource ? setMeshUnit(u) : tell(`not read in ${unitName(u)}: models were added beside it`)));
   }
@@ -6952,7 +6946,7 @@ function fillInfo(el) {
     };
     if (e && e.page) {
       const u = new URL(e.page);
-      add('page', outLink(e.page, `${u.host}${u.pathname.replace(/\/$/, '')} ↗`));
+      add('page', outLink(e.page, `${u.host}${u.pathname.replace(/\/$/, '')} ↗`)); // (R148-7)
     }
     // its other pages (the list's `links`), each by its name and its host:
     // a list on any site can name any page, so whose page it is always shows
@@ -7607,7 +7601,8 @@ function wireInput() {
   });
   $('clearbtn').onclick = () => runClearance();
   $('paintbtn').onclick = () => setPaint(!app.paintFaces);
-  $('walk').onclick = () => setWalk(!app.walk);
+  // (on, the Display menu closed over the view and the focus to Walk's own bar: R148-9)
+  $('walk').onclick = () => { setWalk(!app.walk); if (app.walk) { closeMenus(); $('walkoff')?.focus(); } };
   $('walkoff').onclick = () => { setWalk(false); $('view').focus?.(); };
   // the installed app opened with a file (manifest.webmanifest file_handlers)
   if ('launchQueue' in window) {
@@ -7850,6 +7845,20 @@ function wireInput() {
     announce('everything shown');
   };
   $('secpos').oninput = (e) => { app.section.t = Number(e.target.value) / 1000; app.section.held = null; updateButtons(); viewChanged(); };
+  // the arrows and the wheel step the cut by the readout's last digit (Shift: ten): a thousandth of a
+  // thin board moved "Z = 9.4 mm" not at all, and the wheel did nothing -- R148-3, R148-8
+  const secStep = (dir, big) => {
+    const p = sectionPlane();
+    if (!p) return;
+    const dec = ($('secval').textContent.match(/\d\.(\d+)/)?.[1].length) ?? 0;
+    app.section.held = null;
+    setSectionAt(p[3] * (app.section.flip ? -1 : 1) + dir * lenBack(10 ** -dec * (big ? 10 : 1)));
+  };
+  $('secpos').addEventListener('keydown', (e) => {
+    const dir = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+    if (dir) { e.preventDefault(); secStep(dir, e.shiftKey); }
+  });
+  $('secpos').addEventListener('wheel', (e) => { e.preventDefault(); secStep(e.deltaY < 0 ? 1 : -1, e.shiftKey); }, { passive: false });
   $('secflip').onclick = () => { app.section.flip = !app.section.flip; updateButtons(); viewChanged(); };
   const pal = $('palette');
   for (const p of PALETTES) pal.add(new Option(p.label, p.id));

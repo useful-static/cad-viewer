@@ -364,7 +364,10 @@
   #stage #gallery { width:min(760px, calc(100% - 24px)); text-align:left; }
   /* (held at the card's top while the pictures scroll: × scrolled away with them, a phone's only
      way to close -- R147-2) */
-  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; position:sticky; top:-20px; z-index:1;
+  /* (a card the keys focus scrolled clear of it, not 58 px under it: R148-1; top -21 px, no 1 px line
+     of the cards' text above it at 390: R148-10) */
+  #stage #gallery { scroll-padding-top:76px; }
+  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; position:sticky; top:-21px; z-index:1;
     margin:-20px -22px 0; padding:20px 22px 8px; background:var(--panel); }
   #gallery .galhead h2 { margin:0; }
   #gallerygrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(136px, 1fr)); gap:10px; } /* (two a row at 390 with a scrollbar too: R147-9) */
@@ -920,7 +923,7 @@
   #secoff, #xpoff { min-width:88px; } /* (over either's own width on touch too: 84 vs 85 px -- R141-12) */
   /* (under 360 px the slider gives way to the 13-character readout: Flip went to a third line at 320 --
      R115-2) */
-  @media (max-width: 359px) { #secpos { flex-basis:72px; min-width:72px; } }
+  @media (max-width: 359px) { #secpos, #xppos { flex-basis:72px; min-width:72px; } } /* (both: R148-2) */
 </style>
 </head>
 <body>
