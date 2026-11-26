@@ -879,7 +879,7 @@ export function createMeasure(deps) {
   // kept to the table, and said with "measure on": R128-4)
   function onNote(say = false) {
     if (!st.on) return;
-    const plain = scene.mesh && !scene.mesh.faces, row = !touchOnly() && !$('holes').hidden;
+    const plain = scene.mesh && !scene.mesh.faces, row = !$('holes').hidden; // (touch too: a tap on a row is a point, R165-1)
     deps.tell(`Measure: ${touchOnly() ? `tap points on the model${row ? ' or a hole row' : ''}` : `click points on the model${row ? ' or a hole row' : ''} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}`,
       plain ? 6000 : 3000, say ? `measure on${row ? ', or a hole row for a point' : ''}` : ''); // (R65-1)
   }
