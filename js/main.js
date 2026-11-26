@@ -1719,12 +1719,15 @@ function embedCode() {
   const u = new URL(viewLink());
   u.searchParams.set('embed', '1');
   if ($('embedtheme').value === 'light') u.searchParams.set('theme', 'light');
-  const title = `${app.dxf ? app.dxf.name : app.sourceName || 'A model'} in cad.place`.replace(/["<>&]/g, '');
+  // (named as the viewer names it, a list's name: R162-6)
+  const title = `${app.dxf ? app.dxf.name : $('model').textContent || app.sourceName || 'A model'} in cad.place`.replace(/["<>&]/g, '');
   return { url: u.href, code: `<iframe src="${u.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" width="640" height="420" style="border:0; max-width:100%" allow="fullscreen" allowfullscreen title="${title}"></iframe>` };
 }
 function syncEmbed() {
   const ok = !!(app.dxf ? app.dxf.url : app.sourceUrl), e = ok ? embedCode() : { url: '', code: '' };
   $('embedcode').value = e.code;
+  // (a drawing's code carries no view: R162-5)
+  $('embedwhat').textContent = `Paste this into your page's HTML: it shows ${app.dxf ? 'this drawing, fitted to its frame' : 'this model at this view'}, and visitors can ${app.dxf ? 'zoom it' : 'turn it'} and open it here.`;
   $('embedsee').hidden = !ok;
   if (ok) $('embedsee').href = e.url;
   $('embedcopy').disabled = !ok;
@@ -1735,6 +1738,9 @@ function openEmbed() {
   closeMenus();
   syncEmbed();
   $('embedcard').hidden = false;
+  // (the code follows the view while the card is open: a drag beside it left the old view's -- R162-1)
+  clearInterval(app.embedTick);
+  app.embedTick = setInterval(() => { if ($('embedcard').hidden) clearInterval(app.embedTick); else if (embedCode().code !== $('embedcode').value) syncEmbed(); }, 400);
   ($('embedcopy').disabled ? $('embedclose') : $('embedcopy')).focus();
 }
 function closeEmbed(focusBack = true) {
@@ -3864,6 +3870,8 @@ function landPendingView() {
   if (app.header && !app.addsPending && pendingViewIsFor()) {
     applyLinkView(app.pendingView.view);
     app.pendingView = null;
+  } else if (app.header && !app.sourceUrl && app.pendingView?.search.get('file')) {
+    tell(`The link's view is of ${app.pendingView.search.get('file')}: open that file to see it`, 5000);
   }
 }
 
@@ -5777,7 +5785,12 @@ function fillInfo2D(el) {
     // in Auto's unit for the drawing's, by its size, as 2D Measure and the 3D panel: by the one rule
     // (js/units.js unconvertedNum: r89 A5, r90 A2)
     // (the span and the unit's word by 2D Measure's own functions: r91 A2, Q3)
-    row(...dxfViewLib.sizeRow(e, d.units));
+    // (named for what it spans, dimensions and frame included -- read as the part's; a chosen layer's
+    // own in its place, the rows below held still: R162-3)
+    const l = app.dxf.view.selected, of = (it) => dxfLib.layersOf(it).includes(l);
+    const lb = l ? dxfLib.itemsBox({ paths: d.paths.filter((p) => of(p) && dxfLib.isShape(p)), texts: [] }) : null;
+    const [k, v] = dxfViewLib.sizeRow(lb || e, d.units);
+    row(k.replace(/^size/, lb ? `size of layer ${l}` : 'size of all it draws'), v);
   }
   row('units', d.units ? `${unitWord(d.units)} ($INSUNITS ${d.insunits})` : 'not stored in the file');
   // (the layers the list shows, of the sheet shown: "layers 2" over one row -- R129-2)
@@ -7669,6 +7682,12 @@ function wireInput() {
   // the slide-out where there is one (the window's keydown)
   $('treefilter').addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ''; filterTree(''); }
+    // (↓ to the first row whose name matches, past the rows shown for context: R162-8)
+    if (e.key === 'ArrowDown') {
+      const q = e.target.value.trim().toLowerCase(), rows = [...$('tree').querySelectorAll('.label')].filter((l) => !l.closest('[hidden]'));
+      const to = rows.find((l) => q && l.textContent.toLowerCase().includes(q)) || rows[0];
+      if (to) { e.preventDefault(); to.focus(); to.scrollIntoView({ block: 'nearest' }); }
+    }
   });
   // Cancel a running load: making it stale stops its fetch at the next chunk,
   // terminates a tessellation worker (beginLoad), and keeps any upload from
@@ -8051,7 +8070,7 @@ function wireInput() {
       e.preventDefault();
       // (never the page's text -- a drawing's and the empty page's turned blue, R151-2 -- and nothing
       // behind the ? box, a menu or the gallery: R151-7)
-      if (!app.header || app.dxf || helpOpen() || document.querySelector('.menu-btn[aria-expanded="true"]') || !$('gallery').hidden) return;
+      if (!app.header || app.dxf || helpOpen() || document.querySelector('.menu-btn[aria-expanded="true"]') || !$('gallery').hidden || !$('embedcard').hidden) return;
       const ids = [];
       for (let id = 1; id <= app.header.meshes.length; id++) if (!app.hidden.has(id)) ids.push(id);
       select(ids, false);
@@ -8303,7 +8322,9 @@ function startUpLoad(url) {
 // once its list has it; one naming none, for a model from the device (r16 M2, r57 A2, r58 A4, r59 A1)
 function viewIsFor(search) {
   const names = !!(search.get('src') || modelNameIn(search));
-  if (!names) return !app.sourceUrl;
+  // (a device file's link waits for the file it names: another file opened first took the view, and
+  // the right one then opened bare -- R162-2)
+  if (!names) return !app.sourceUrl && (!search.get('file') || search.get('file') === app.sourceName);
   const url = modelUrlIn(search);
   return !!url && app.sourceUrl === url;
 }

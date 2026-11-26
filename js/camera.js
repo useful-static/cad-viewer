@@ -1,12 +1,5 @@
-// Orbit-camera math, pure (no DOM) so tests/test-camera.mjs can check it in Node.
-// cam: { target:[x,y,z], dist, q, yaw, pitch, fov, up:'y'|'z' }
-//
-// The camera's orientation is the unit quaternion q (camera frame -> world):
-// the eye sits along q·(0,0,1) from the target and the screen's up is q·(0,1,0).
-// A drag rotates q about the SCREEN's axes (orbitBy), so the model turns freely
-// about every axis, through the poles and upside down, with no clamp. yaw /
-// pitch / up describe the view presets only (quatFromView); a cam with no q
-// falls back to them (the tests build such cams).
+// Orbit-camera math, pure. cam: { target, dist, q, yaw, pitch, fov, up }: q (camera -> world) puts
+// the eye along q·(0,0,1); a drag turns q about the screen's axes, no clamp; yaw / pitch the presets.
 
 import { lookAt } from './mat4.js';
 import { cross, dot, unit as nrm } from './vec3.js';
@@ -75,14 +68,8 @@ export function quatFromView(yaw, pitch, up) {
   return qFromBasis(x, y, z);
 }
 
-// One orbit step for a drag of (dx, dy) px: the model follows the pointer,
-// turning about the screen's vertical axis for dx and its horizontal axis for
-// dy, by `rate` radians per px. Rotating in the CAMERA frame (q * r) is what
-// makes every axis free: there is no pole to stop at and no world-up to keep.
-// From a preset with the world up on screen, a horizontal drag starts exactly
-// like the old yaw orbit.
-// (A cam with no q -- here and below -- turns by its yaw and pitch about cam.up: the tests' cams.
-// The page's camera always has one, from main.js camQ, which reads the model's orientation.)
+// One orbit step for a drag of (dx, dy) px, in the camera frame (q * r): no pole, no world-up. (A cam
+// with no q turns by yaw and pitch: the tests'.)
 export function orbitBy(cam, dx, dy, rate = 0.008) {
   if (!cam.q) cam.q = quatFromView(cam.yaw, cam.pitch, cam.up);
   let q = qMul(cam.q, qAxis([0, 1, 0], -dx * rate));
@@ -171,13 +158,8 @@ export function fitDistance(radius, fov, aspect) {
   return (radius / Math.sin(half)) * 1.05;
 }
 
-// Frame a box as this camera sees it: the target at the centre of the box's
-// projected extent, and the distance at which all eight corners fit the view
-// (half-angle fov/2 vertically, aspect × that horizontally), in perspective
-// and in ortho alike, so switching projection never cuts it. A sphere fit
-// frames the box's bounding sphere, which is no closer for an iso view of a
-// board (239.7 against 242.2) but leaves a board seen from its end, the
-// portrait view, a fifth of the width unused. -> { target, dist }
+// Frame a box as this camera sees it: all eight corners in view, in perspective and ortho alike
+// (a sphere fit left a fifth of a portrait view unused). -> { target, dist }
 export function fitBox(cam, bbox, fov, aspect, margin = 1.05) {
   const d = camDir(cam), u = camUp(cam);
   const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];

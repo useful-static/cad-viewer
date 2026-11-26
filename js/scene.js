@@ -1,11 +1,5 @@
-// More than one model in the view (feature review item 18): the models are
-// merged into ONE decoded .cadmesh (js/cadmesh.js decodeCadmesh's shape), so
-// everything that works on bodies -- picking, the tree, hide and isolate,
-// Explode, Measure, the section -- works across them unchanged. Each model
-// becomes one top-level node of the tree, named for its file; the second and
-// later ones can be moved by an offset in mm (merged again on a move).
-//
-// Pure ES module, no DOM.
+// More than one model in the view: merged into one decoded .cadmesh, so everything that works on
+// bodies works across them; each a top-level tree node, the later ones movable. Pure.
 
 import { bodyAngle, geomIsMm, idToBytes } from './cadmesh.js';
 import { LENGTH_MM, headerUnitWord, lengthUnitOf, unitSaid } from './units.js';

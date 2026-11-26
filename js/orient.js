@@ -1,14 +1,5 @@
-// Which of the FILE's axes points where on screen, whatever frame the file was
-// drawn in: "up:+z,front:-y" says the model's +z is up and its -y faces the
-// viewer in the Front view (so its +x is to the right). Any two of up, front
-// and right name it (the third follows); each is one of +x -x +y -y +z -z, and
-// the two must be perpendicular. The view presets (Front, Top, Iso, ...) are
-// then taken in that frame, and a load fits the model to the view, so the
-// same orientation shows two files the same way wherever their origins are.
-//
-// Written canonically as up and front: "+z-y". The default, "+y+z", is the
-// file's own frame (y up, +z toward the viewer); "+z-y" is the Z up toggle.
-// Pure, for tests/test-orient.mjs.
+// Which of the file's axes points where on screen: "up:+z,front:-y" (any two of up, front, right),
+// canonically "+z-y"; the view presets are taken in that frame. Default "+y+z"; "+z-y" is Z up. Pure.
 
 import { qFromBasis } from './camera.js';
 import { cross } from './vec3.js';

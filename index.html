@@ -811,7 +811,8 @@
     button, select, label.btn, a.btn { min-height:40px; padding:6px 12px; }
     #secsel { min-width:40px; } /* one glyph: 34 px wide without it */
     #secval:not(:empty) { min-height:40px; display:inline-flex; align-items:center; } /* (the tap-to-type value was 18 px: R20-5) */
-    #galleryclose { min-width:40px; } /* (R20-9) */
+    #galleryclose, #embedclose { min-width:40px; } /* (R20-9, R162-4) */
+    #embedcode { font-size:16px; } /* (R162-4) */
     #pictoast button { min-height:40px; } /* (R20-10) */
     #tree .row { min-height:34px; }
     #tree input, #sheetsrow input { width:20px; height:20px; }
@@ -1240,7 +1241,7 @@
   <!-- File > Embed in a page…: the code to put this model, at this view, into another page (R161-1) -->
   <div id="embedcard" class="card" hidden role="dialog" aria-labelledby="embedtitle">
     <div class="galhead"><h2 id="embedtitle">Embed in a page</h2><button id="embedclose" aria-label="Close the embed code" title="Close (Esc)">×</button></div>
-    <p>Paste this into your page's HTML: it shows this model at this view, and visitors can turn it and open it here.</p>
+    <p id="embedwhat">Paste this into your page's HTML: it shows this model at this view, and visitors can turn it and open it here.</p>
     <p class="row"><label for="embedtheme">Theme</label><select id="embedtheme" autocomplete="off"><option value="dark">Dark</option><option value="light">Light, for a white page</option></select></p>
     <textarea id="embedcode" rows="4" readonly spellcheck="false" aria-label="The embed code"></textarea>
     <p class="row"><button id="embedcopy" class="primary">Copy the code</button><a id="embedsee" class="btn" target="_blank" rel="noopener">See it as a visitor ↗</a><a class="helplink" href="/help/models-on-your-site.html" target="_blank" rel="noopener">More options ↗</a></p>
