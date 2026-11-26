@@ -1624,7 +1624,7 @@ await test('the note contract: each page state against each writer of a note or 
       const shown = [], heard = [], frames = [];
       const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
       const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {} });
-      const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: !s.poster } };
+      const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), emptyview: el(), poster: { hidden: !s.poster } };
       // (an embed's card asks the document for its parts: the poster row is an embed)
       const doc = { querySelector: () => el(), createElement: () => el(), documentElement: { classList: { add() {} } } };
       const run = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'MAX_FILE_BYTES',
@@ -1661,7 +1661,7 @@ await test('the note contract: each page state against each writer of a note or 
     const heard = [];
     const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
     const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
-    const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: true } };
+    const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), emptyview: el(), poster: { hidden: true } };
     const frames = [];
     const { failApart } = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG',
       `${body}; return { failApart };`)(app, (id) => dom[id], () => {}, new Set(['loading', 'tessellating']), (f) => frames.push(f), (n) => String(n), 'IDLE');
@@ -1676,7 +1676,7 @@ await test('the note contract: each page state against each writer of a note or 
     const heard = [];
     const live = { set textContent(t) { if (t) heard.push(t); this.t = t; }, get textContent() { return this.t || ''; } };
     const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {} });
-    const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), poster: { hidden: true } };
+    const dom = { status: el(), progress: el(), announce: live, empty: el(), emptyerr: el(), emptyview: el(), poster: { hidden: true } };
     const { cannotHold, cancelLoad } = new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'beginLoad',
       `${body}; return { cannotHold, cancelLoad };`)(app, (id) => dom[id], () => {}, new Set(['loading', 'tessellating']), () => {}, (n) => String(n), 'IDLE', () => {});
     cannotHold();
@@ -1690,7 +1690,7 @@ await test('the note contract: each page state against each writer of a note or 
   const seq = (start) => {
     const app = { dxf: null, embed: false, backend: 'webgl2', error: 'too big', unmeshedFaces: 0, listNote: '', noFacts: null, hidden: new Set(), cam: { orient: 'z' }, ...start };
     const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false, before() {} });
-    const dom = { status: el(), progress: el(), announce: el(), empty: el(), emptyerr: el(), poster: { hidden: true } };
+    const dom = { status: el(), progress: el(), announce: el(), empty: el(), emptyerr: el(), emptyview: el(), poster: { hidden: true } };
     return [app, new Function('app', '$', 'flashHover', 'PROGRESS_STATES', 'requestAnimationFrame', 'fmtInt', 'IDLE_MSG', 'beginLoad',
       `${body}; return { cannotHold, cancelLoad, recovered, recoveryStarts, setStatus, readyText };`)(app, (id) => dom[id], () => {}, new Set(['loading', 'tessellating']), () => {}, (n) => String(n), 'IDLE', () => {})];
   };

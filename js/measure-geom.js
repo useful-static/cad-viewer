@@ -1,36 +1,15 @@
-// The geometry Measure snaps to and the hole table lists, built per body on
-// first use from a decoded model's global arrays (position, index, faces,
-// header). Pure, no DOM.
-//
-// OpenCascade meshes every b-rep face with its own vertices, and shared
-// boundary points come out with identical float bits (measured on real board
-// files). So:
-//   - a face's boundary is its edges used by one of ITS triangles, chained
-//     into loops by vertex index;
-//   - across faces, welding the boundary points on their exact bits joins the
-//     faces' copies of each edge: a welded point where other than two boundary
-//     segments meet is a b-rep vertex (a corner), and the runs between corners
-//     are the b-rep edges (their midpoints);
-//   - a face loop is a circle (a hole's rim, a boss) when it has at least
-//     ceil(2π / a) - 1 points, a being the angular deflection the file was
-//     meshed at (squares and hexes have 4 and 6), is planar, and its points
-//     lie within 1 % of one radius. Off for a >= 2π/9, where 8 points would
-//     do and an octagon could pass. Far from the origin a loop the stored
-//     positions cannot tell -- their step past the test, or the loop within a
-//     step of it -- is "untold": no circle, and counted (circleOf, untoldAt).
-//
-// Coordinates are the model's (mm).
+// The geometry Measure snaps to and the hole table lists, per body on first use. Pure. A face's
+// boundary loops by vertex index; boundary points welded on exact bits give corners and edges; a
+// planar loop of enough points within 1 % of one radius is a circle (circleOf; "untold" where the
+// stored positions cannot tell). Model coordinates.
 
 const EPS_PLANAR = 1e-3; // of the radius: a rim's points off its plane
 // (a loop's points within this share of its radius from one circle: a circle -- circleOf's `dev`)
 export const RADIUS_TOL = 0.01;
 const PLANE_FLOOR_MM = 1e-3; // a face is flat to a micrometre at least (planeOf)
 const FLAT_SHARE = 3e-5; // and to this share of its size (planeOf: measured, r67)
-// what float32 positions can tell apart near a coordinate of size `far`: its step, four times over
-// -- planeOf's floor, a plane's thickness from many points, each rounded at most half a step in
-// each coordinate (1.7 steps across). (By storedUlp, the one step -- r68 A9. It was 16 steps, 8 x
-// 2^-23 x far before: 131 m out a drill point 0.13 mm deep read as a flat face, the bottom of a
-// countersunk blind hole as its exit -- r69, the position test's shapes)
+// what float32 positions can tell apart near a coordinate of size `far`: four steps, planeOf's
+// floor (r68 A9, r69)
 const storedFloor = (far) => 4 * storedUlp(far);
 // a point's distance from a centre, as stored: one unit in the last place (2^-23 of `far`) -- the
 // floor of circleOf and wallJoins. Eight let a loop 2.8% off a circle pass as a hole a few metres
@@ -533,13 +512,8 @@ function nodeFaces(geom) {
   return m;
 }
 
-// A curved face as a surface of revolution about the axis (c, n) whose radius runs one way along
-// it: a cylinder, a cone, a fillet, a drill point -- each vertex's distance from the axis, taken by
-// its place along it, never back past the farthest yet the other way, to the radius test (and no
-// finer than the positions are stored); none wider than rMax. (A cone's straight line only: a rim
-// filleted into its bore stopped the walk, and both rims read as blind holes at the fillet's Ø,
-// 24 rows of a private model: r69 Q2.) -> { t0, r0, t1, r1, cyl } (its two ends along n, their
-// radii, and whether every vertex is at r0: a cylinder) | null
+// A curved face as a surface of revolution about (c, n) whose radius runs one way along it, none
+// wider than rMax (r69 Q2) -> { t0, r0, t1, r1, cyl } | null
 function revolution(geom, f, c, n, rMax) {
   const { P, I } = geom;
   const at = [];
@@ -575,16 +549,9 @@ function revolution(geom, f, c, n, rMax) {
   return { t0: p0[0], r0: p0[1], t1: p1[0], r1: p1[1], cyl };
 }
 
-// A hole's wall from rim a, as the body's faces join it: the curved faces that adjoin the rim, and
-// those that adjoin them, until the planar faces it ends on. Each a cylinder, a cone or a fillet
-// about a's axis, within four times a's radius; the cylinders one radius, the bore; the cones narrowing from a
-// rim to it, or past it, a drill point. -> null when it is no such wall (a counterbore's step, a
-// stepped or undercut hole, a face that is not of revolution, a wall that runs on past
-// WALL_FACES), else { bore, end } with
-// end: { face } of the planar face it comes out on, facing the other way (a through-hole's), or
-// null where it stops inside (a blind hole's bottom, or a drill point) (round 23 Q5, carried open;
-// r67; r68: two separate coaxial faces were taken as a wall, merging across a web, and a hole
-// chamfered at both ends listed its bore nowhere)
+// A hole's wall from rim a: the faces of revolution about its axis joined to it, up to the planar
+// faces it ends on. -> null (no such wall), else { bore, end: the planar face it comes out on, or
+// null where it stops inside } (r67, r68)
 const WALL_FACES = 64;
 function holeWall(geom, a, faceN) {
   const nf = nodeFaces(geom);
@@ -599,10 +566,7 @@ function holeWall(geom, a, faceN) {
     const fi = queue.pop(), f = geom.faces[fi];
     if (f.plane) { ends.push(fi); continue; }
     if (walls.length >= WALL_FACES) return null;
-    // (no wider than four times the rim: walked from a hole's narrow end, its other end's chamfer is
-    // wider than this rim -- capped at the rim, the walk was refused, which showed where the wide rim
-    // was untold and only the narrow one walked: 262 m out, a hole split into a blind row -- r69.
-    // A wall wider between is refused by the cones' and the bore's tests below)
+    // (up to four times the rim: a far chamfer is wider than a narrow rim, r69)
     const rv = revolution(geom, f, c, n, 4 * a.radius);
     if (!rv) return null;
     walls.push(rv);

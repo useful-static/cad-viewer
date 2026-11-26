@@ -288,6 +288,11 @@ function showEmpty() {
   $('empty').hidden = somethingShown() || busy || posterUp();
   $('emptyerr').hidden = app.status !== 'error';
   $('emptyerr').textContent = app.status === 'error' ? $('status').textContent : '';
+  // (a view link of a file from its sender's device names the file, and its view lands once it is
+  // opened: the plain card said nothing of either -- R161-2)
+  const pv = !app.embed && app.pendingView && !app.pendingView.search.get('src') && !modelNameIn(app.pendingView.search) ? app.pendingView.search.get('file') || 'its model' : null;
+  $('emptyview').hidden = !pv;
+  if (pv) $('emptyview').textContent = `This link holds a view of ${pv}, a file it cannot carry: open that file and the view comes back.`;
   // In an embed the card is for the host page's visitor, who chose nothing to
   // open: it says the model could not be shown, and why, and offers the full
   // viewer -- never "Choose a file…" or the drop hint
@@ -1666,6 +1671,7 @@ function viewLink() {
   // the model lists too, in their order, so the link keeps the drop-down
   for (const l of params.getAll('list')) u.searchParams.append('list', l);
   if (app.sourceUrl) setModelParam(u, app.sourceUrl);
+  else if (app.sourceName && !app.dxf) u.searchParams.set('file', app.sourceName); // (named on the empty page: R161-2)
   if (app.sourceUrl && readUnit() !== 'mm') u.searchParams.set('unit', readUnit());
   // the added models opened from a URL, and where they were moved to
   for (const m of linkAdds().carried) {
@@ -1707,6 +1713,43 @@ async function shareView() {
   const said = linkToldText(copied, !!app.sourceUrl, nNotes, linkAdds().left, nMeas, !!app.dxf, !app.dxf && (app.overrides?.size || 0) > 0, !app.dxf && (app.faceOverrides?.size || 0) > 0, !app.dxf && !!app.ref && app.section.axis !== 'off');
   if (said) tell(said, copied ? 3000 : 4000);
 }
+// File > Embed in a page…: the iframe for this model at this view, its theme, Copy and a look as a
+// visitor (only a guide's example iframe and an unnamed &theme= led there: R161-1)
+function embedCode() {
+  const u = new URL(viewLink());
+  u.searchParams.set('embed', '1');
+  if ($('embedtheme').value === 'light') u.searchParams.set('theme', 'light');
+  const title = `${app.dxf ? app.dxf.name : app.sourceName || 'A model'} in cad.place`.replace(/["<>&]/g, '');
+  return { url: u.href, code: `<iframe src="${u.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" width="640" height="420" style="border:0; max-width:100%" allow="fullscreen" allowfullscreen title="${title}"></iframe>` };
+}
+function syncEmbed() {
+  const ok = !!(app.dxf ? app.dxf.url : app.sourceUrl), e = ok ? embedCode() : { url: '', code: '' };
+  $('embedcode').value = e.code;
+  $('embedsee').hidden = !ok;
+  if (ok) $('embedsee').href = e.url;
+  $('embedcopy').disabled = !ok;
+  $('embednote').hidden = ok;
+  $('embednote').textContent = ok ? '' : 'This model was opened from this device: an embed needs it at a web address. Put the file on your site, open it from there, then embed it.';
+}
+function openEmbed() {
+  closeMenus();
+  syncEmbed();
+  $('embedcard').hidden = false;
+  ($('embedcopy').disabled ? $('embedclose') : $('embedcopy')).focus();
+}
+function closeEmbed(focusBack = true) {
+  if ($('embedcard').hidden) return false;
+  $('embedcard').hidden = true;
+  if (focusBack) ($('filemenu').classList.contains('folded') ? $('filemenu').querySelector('.menu-btn') : $('embedbtn')).focus();
+  return true;
+}
+async function copyEmbed() {
+  let copied = false;
+  try { await navigator.clipboard.writeText($('embedcode').value); copied = true; } catch { /* no clipboard */ }
+  if (!copied) { $('embedcode').focus(); $('embedcode').select(); }
+  tell(copied ? 'Embed code copied: paste it into your page' : 'Copy the selected code (Ctrl+C)', 3000);
+}
+
 // What Copy view link tells: copied, and what the link does not carry (r49 A6, Q6; r50 Q6)
 function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = false, coloured = false, painted = false, refd = false) {
   const meas = nMeas === 1 ? 'measurement' : `${nMeas} measurements`; // (a drawing has no notes or list: R26-3)
@@ -2948,6 +2991,7 @@ const toolFocus = (id) => ($('viewpanel').contains($('tools')) && $('viewmenu').
 
 // a folded menu with nothing it could do is disabled, like its items
 function syncMenuButtons() {
+  $('embedbtn').disabled = $('sharelink').disabled; // (and why not, said in the card: openEmbed)
   $('showmenu').querySelector('.menu-btn').disabled = ['isolate', 'hide', 'showall', 'undo'].every((id) => $(id).disabled);
   // (Copy view link is in it too: a model opened from a URL has nothing to
   // save, and its link is then the menu's one live item)
@@ -3404,6 +3448,10 @@ function fillModelList(entries) {
   sel.hidden = entries.length === 0;
   // Browse models: a list with pictures to browse (R24-5)
   $('gallerybtn').hidden = entries.length < 2 || !entries.some((e) => e.image);
+  // (a list's Add model… offers its boards, put beside: its file wording did not fit -- R161-4)
+  const am = $('addmodelbtn');
+  am.dataset.t ||= am.title;
+  am.title = entries.length && !app.embed ? 'Put one of the list\'s models beside this one, upright as the list stands it, or a file of your own: then move it in the info panel, and check the clearance' : am.dataset.t;
   syncModelList();
   refold();
   showModelName(); // a model shown before the list came is named from it now
@@ -3635,7 +3683,7 @@ function openGallery(add = false) {
     const t = document.createElement('span');
     t.textContent = e.name;
     b.append(t);
-    b.onclick = () => { closeGallery(false); if (add) addWith(() => loadUrl(e.url), true); else if (e.url !== listedNow()) openListed(e.url); };
+    b.onclick = () => { closeGallery(false); if (add) { addWith(() => loadUrl(e.url), true); $('view').focus(); } else if (e.url !== listedNow()) openListed(e.url); };
     grid.append(b);
   }
   closeMenus();
@@ -6628,7 +6676,7 @@ function select(ids, additive, name = null) {
   const before = app.selected.size;
   // (a recolour's "it shows once deselected" gone with the selection it spoke of: R149-9)
   // (and a part's "inside or behind" note with the choice it spoke of: R160-1)
-  if (globalThis.document && /shows once deselected$| is inside or behind other parts: /.test($('hover').textContent)) tell($('hover').textContent, 1, '');
+  if (globalThis.document && /shows once deselected$| behind other parts: Isolate/.test($('hover').textContent)) tell($('hover').textContent, 1, '');
   if (!additive) app.selected.clear();
   for (const id of ids) app.selected.add(id);
   // an additive pick that added nothing leaves the selection, and its name, as they were
@@ -7118,7 +7166,7 @@ async function sayIfUnseen(ids, name) {
   for (const [id, n] of res.counts) if (sel.has(id)) px += n;
   app.lastUnseen = { px, area: (x1 - x0) * (y1 - y0) }; // (for tests)
   if (px >= Math.min(400, 0.02 * (x1 - x0) * (y1 - y0))) return;
-  tell(`${name} is inside or behind other parts: Isolate${coarseOnly() ? '' : ' (I)'} shows it alone`, 5000);
+  tell(`${name} is ${px > 20 ? 'mostly hidden behind' : 'inside or behind'} other parts: Isolate${coarseOnly() ? '' : ' (I)'} shows it alone`, 5000); // (a lit stripe: R161-3)
 }
 app.sayIfUnseen = sayIfUnseen; // (for tests)
 
@@ -7956,6 +8004,19 @@ function wireInput() {
   $('partcolour').onchange = (e) => setPartColour(e.target.value);
   $('partreset').onclick = () => resetPartColour();
   $('sharelink').onclick = () => shareView();
+  $('embedbtn').onclick = () => openEmbed();
+  $('embedclose').onclick = () => closeEmbed();
+  $('embedcopy').onclick = () => copyEmbed();
+  $('embedtheme').onchange = () => syncEmbed();
+  // (Esc closes it, Tab stays in it, as the gallery's)
+  $('embedcard').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeEmbed(); return; }
+    if (e.key !== 'Tab') return;
+    const all = [...$('embedcard').querySelectorAll('button, select, textarea, a[href]')].filter((x) => !x.disabled && x.getClientRects().length);
+    const i = all.indexOf(document.activeElement);
+    e.preventDefault();
+    all[e.shiftKey ? (i <= 0 ? all.length - 1 : i - 1) : (i + 1) % all.length]?.focus();
+  });
   $('export').onclick = async () => {
     if (!app.lastStepBuffer) return;
     const name = app.sourceName;

@@ -137,18 +137,9 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   return out;
 }
 
-// The scene's edges, silhouettes and per-body facts from its models' own (their vertex numbers
-// moved after the models before; nothing built), set on the merged scene `out` -- by mergeModels,
-// and again by the viewer once the models that had none of today's have their own built (each on
-// its own unmoved arrays: a scene's built on the moved float32 copy and split back gave a model
-// moved 100,000 mm a volume 1 % low, kept after it was moved back). The edges and the facts only
-// when every model has them, the facts' rule only when every model's is the same one; with the
-// edges, the silhouettes any model has (one whose file left them out counts them omitted), left
-// out and counted past the cap (two models each under it merged past it: 2,454,650 drawn).
-// (Built into its own arrays and set on `out` only at the end: one that failed part way -- an
-// allocation refused -- left the shown scene's edges zero-filled, and drawn: r42 A2, Q1. The cap
-// asked of the count before the silhouettes are allocated: 10 models' were copied, ~456 MB a move,
-// then dropped: r42 A4.)
+// The scene's edges, silhouettes and per-body facts from its models' own (renumbered; nothing
+// built), set on `out` only at the end (r42 A2): edges and facts when every model has them,
+// silhouettes past the cap left out and counted, asked before allocating (r42 A4).
 export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   const header = out.header;
   let ec = 0, sc = 0, omitted = 0;

@@ -368,9 +368,14 @@
   /* (a card the keys focus scrolled clear of it, not 58 px under it: R148-1; top -21 px, no 1 px line
      of the cards' text above it at 390: R148-10) */
   #stage #gallery { scroll-padding-top:76px; }
-  #gallery .galhead { display:flex; align-items:center; justify-content:space-between; position:sticky; top:-21px; z-index:1;
+  #gallery .galhead, #embedcard .galhead { display:flex; align-items:center; justify-content:space-between; position:sticky; top:-21px; z-index:1;
     margin:-20px -22px 0; padding:20px 22px 8px; background:var(--panel); }
-  #gallery .galhead h2 { margin:0; }
+  #gallery .galhead h2, #embedcard .galhead h2 { margin:0; }
+  /* File > Embed in a page…: the code, its theme, Copy (R161-1) */
+  #stage #embedcard { width:min(560px, calc(100% - 24px)); text-align:left; }
+  #embedcard p { margin:8px 0; }
+  #embedcode { width:100%; box-sizing:border-box; font:12px/1.4 ui-monospace, monospace; background:var(--field); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px; resize:vertical; }
+  #embedcard .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   #gallerygrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(136px, 1fr)); gap:10px; } /* (two a row at 390 with a scrollbar too: R147-9) */
   #gallerygrid button { display:flex; flex-direction:column; gap:6px; padding:6px; text-align:center; }
   #gallerygrid button[aria-current="true"] { border-color:var(--acc); }
@@ -962,7 +967,7 @@
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
       <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Put another model in this view, where its own file places it (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
-      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, projection, style, section, explode, hidden and selected parts, notes">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
+      <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, projection, style, section, explode, hidden and selected parts, notes">Copy view link</button><button id="embedbtn" autocomplete="off" disabled title="The code to show this model, at this view, in your own web page or slide">Embed in a page…</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <!-- Save: every file the viewer writes, under one verb -->
       <span class="mhead" aria-hidden="true">Save</span>
       <span class="split"><button id="savepic" autocomplete="off" disabled aria-keyshortcuts="P" title="Save the view as a PNG picture at the size and background chosen in the picture options (▾), without the hover highlight, with Measure's results drawn in (P)">Save picture</button><button id="picmore" class="mini" autocomplete="off" disabled aria-expanded="false" aria-controls="picopts" aria-label="Picture options" title="Picture options: size, background, selection">▾</button></span>
@@ -1166,7 +1171,7 @@
         <dt><kbd>A</kbd></dt><dd>Show all</dd>
         <dt><kbd>Ctrl+A</kbd></dt><dd>Select every part shown</dd><!-- (R151-6) -->
         <dt><kbd>Ctrl+Z</kbd></dt><dd>Undo</dd></dl></section>
-      <section class="keys"><h3>Parts list</h3><dl>
+      <section class="keys noembed"><h3>Parts list</h3><dl><!-- (an embed has no parts list: R161-7) -->
         <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move (<span class="nobr"><kbd>Home</kbd> <kbd>End</kbd>:</span> first, last)</dd>
         <dt><kbd>Enter</kbd></dt><dd>Select</dd>
         <dt><kbd>Space</kbd></dt><dd>Show / hide</dd>
@@ -1225,11 +1230,21 @@
   <div id="empty" class="card" hidden>
     <svg class="cube" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/></svg>
     <h2>Open a CAD file</h2>
+    <p id="emptyview" hidden></p><!-- (a view link of a file from its sender's device: R161-2) -->
     <p class="drop-hint">Drop <span id="dropwhat">a model file</span> here,&nbsp;or</p><!-- ("or" never alone on a line: R122-3) -->
     <p class="drop-now">Drop to open</p>
     <button id="emptyopen" class="primary">Choose a file…</button>
     <p class="note">Your file is opened on this device and never uploaded.<br><a class="helplink" href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p><!-- (its own line, whole: R152-6) -->
     <p id="emptyerr" class="err" hidden></p>
+  </div>
+  <!-- File > Embed in a page…: the code to put this model, at this view, into another page (R161-1) -->
+  <div id="embedcard" class="card" hidden role="dialog" aria-labelledby="embedtitle">
+    <div class="galhead"><h2 id="embedtitle">Embed in a page</h2><button id="embedclose" aria-label="Close the embed code" title="Close (Esc)">×</button></div>
+    <p>Paste this into your page's HTML: it shows this model at this view, and visitors can turn it and open it here.</p>
+    <p class="row"><label for="embedtheme">Theme</label><select id="embedtheme" autocomplete="off"><option value="dark">Dark</option><option value="light">Light, for a white page</option></select></p>
+    <textarea id="embedcode" rows="4" readonly spellcheck="false" aria-label="The embed code"></textarea>
+    <p class="row"><button id="embedcopy" class="primary">Copy the code</button><a id="embedsee" class="btn" target="_blank" rel="noopener">See it as a visitor ↗</a><a class="helplink" href="/help/models-on-your-site.html" target="_blank" rel="noopener">More options ↗</a></p>
+    <p id="embednote" class="note" hidden></p>
   </div>
   <!-- the model list as pictures (an entry's "image"), from File > Browse models -->
   <div id="gallery" class="card" hidden role="dialog" aria-labelledby="gallerytitle">

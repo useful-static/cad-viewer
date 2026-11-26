@@ -24,6 +24,7 @@
 <p>Before you publish, open the <a href="/check">list check</a> with your list's address: <code>https://cad.place/check?list=https://example.com/models/models.json</code>. It fetches every entry the way the viewer does and tells you what fails and why.</p>
 <h2>4. Embed the viewer in your page</h2>
 <pre>&lt;iframe src="https://cad.place/?embed=1&amp;src=https://example.com/models/bracket.step" width="800" height="600" allowfullscreen&gt;&lt;/iframe&gt;</pre>
-<p>The embedded view shows the model alone, with Fit, full screen (where the frame has <code>allowfullscreen</code>) and a link to open it in cad.place. Add <code>&amp;poster=&lt;picture address&gt;</code> to show a picture first and load the model only when a visitor asks for it.</p>
+<p>The embedded view shows the model alone, with Fit, full screen (where the frame has <code>allowfullscreen</code>) and a link to open it in cad.place. Add <code>&amp;poster=&lt;picture address&gt;</code> to show a picture first and load the model only when a visitor asks for it, and <code>&amp;theme=light</code> for a white page (the default is dark).</p>
+<p>The quickest way: open the model in cad.place, set the view, then <strong>File › Embed in a page…</strong> gives this code for that view, with the theme to choose and a Copy button.</p>
 </body>
 </html>
