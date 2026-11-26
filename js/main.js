@@ -10,7 +10,7 @@ import { withoutBom } from './step-text.js';
 import { stepProducts } from './step-meta.js';
 import { cacheAvailable, cacheClear, cacheDelete, cacheGet, cacheKey, cacheList, cachePut } from './mesh-cache.js';
 import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './palettes.js';
-import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
+import { READ_TIMEOUT_MS, answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qAxis, qFromBasis, qMul, qNorm, qRotate, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
 import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientTurn, orientUp } from './orient.js';
@@ -29,7 +29,6 @@ import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, style
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
 import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
 import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, tourSlug } from './tour.js';
-import { createTourRecorder } from './tour-recorder.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
 import { WebGLRenderer } from './renderer-webgl.js';
@@ -180,16 +179,17 @@ function sayNow(text) {
 // A note for the user, shown on the hover line for ms and read out (`said`, if it differs): the one
 // way a note reaches anyone (r45 A1); flashHover only from here. Empty text: read only; said null
 // or '': shown only.
-function tell(text, ms = 1500, said = text) {
-  if (text) flashHover(text, ms);
+// (a long note held long enough to read it: 6 s and 60 ms a character, at most 20 s -- R167-1)
+function tell(text, ms = 1500, said = text, firm = false) {
+  if (text) flashHover(text, ms >= 6000 ? Math.min(20000, Math.max(ms, 6000 + 60 * text.length)) : ms, firm);
   if (said) announce(said);
 }
 
 // A note added to the ready line, written only while the page is ready (a load, an error or a
 // recovery keeps its own line), and the words alone told (r45 A2, Q4, r46 A2, Q1)
-function tellReady(words, ms = 6000) {
+function tellReady(words, ms = 6000, firm = false) {
   if (app.status === 'ready') setStatus('ready', `${readyText()} · ${words}`);
-  tell(words, ms);
+  tell(words, ms, words, firm);
 }
 
 // States whose status text is progress, rewritten per fetch chunk or per
@@ -205,7 +205,7 @@ function setStatus(s, msg) {
   // (an error while a model or drawing stays is shown in the view: the error card shows it only
   // when nothing does, and the line is not drawn -- a load's failure over a model was read out
   // and drawn nowhere: r47 Q1)
-  if (s === 'error' && somethingShown()) tell(text, 6000, null);
+  if (s === 'error' && somethingShown()) tell(text, 6000, null, true);
   app.status = s;
   app.statusMsg = msg || s; // (what the line says: sayNoFacts writes its word in place, showBase takes it back)
   $('status').textContent = msg || s;
@@ -236,7 +236,7 @@ function somethingShown() { return !!(app.mesh || app.dxf); }
 // else the page's error (r48-r52); own: the start's own read failed (r57 I2, r58 Q7).
 function failApart(msg, own = false) {
   if (somethingShown() || posterUp() || !(app.status === 'idle' || app.status === 'init') || (!own && (app.readingList || app.starting))) {
-    tellReady(msg);
+    tellReady(msg, 6000, true);
     // (behind a poster too: a tour alone takes it down with nothing behind it)
     if (app.starting && !own) app.heldFailure = msg;
   } else { setStatus('error', msg); announce(msg); }
@@ -1180,11 +1180,13 @@ function viewKey(digit) {
 
 // A short note where the hovered part's name goes, for ms (1.5 s); one of 4 s or more holds the line
 // for its time, and its end puts back the last label a view gave (r46 Q5, r47 A3, Q5)
-let noteHeldUntil = 0, lastLabel = '';
-function flashHover(text, ms = 1500) {
+let noteHeldUntil = 0, lastLabel = '', noteFirm = false;
+// firm: a failure's words, which a tap's part name does not replace while held (R167-1)
+function flashHover(text, ms = 1500, firm = false) {
   const hov = $('hover');
   hov.textContent = text;
   noteHeldUntil = ms >= 4000 ? performance.now() + ms : 0;
+  noteFirm = firm && !!noteHeldUntil;
   clearTimeout(viewNameTimer);
   viewNameTimer = setTimeout(() => { noteHeldUntil = 0; if (hov.textContent === text) hov.textContent = lastLabel; }, ms);
 }
@@ -1193,7 +1195,7 @@ function flashHover(text, ms = 1500) {
 function hoverLabel(text, asked = false) {
   lastLabel = text;
   if (asked && text && $('hover').textContent === TOUCH_HINT) setPref('cadv.touchHint', '1');
-  if (!(asked && text) && performance.now() < noteHeldUntil) return;
+  if ((!(asked && text) || noteFirm) && performance.now() < noteHeldUntil) return;
   noteHeldUntil = 0;
   $('hover').textContent = String(text ?? '').replace(/ #(\d)/g, ' #$1'); // (" #3" kept with its name: R39-7)
 }
@@ -1486,7 +1488,7 @@ function copyPicture() {
   });
   navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]).then(
     () => tell('picture copied', 3000),
-    (e) => tell(`the picture could not be copied: ${e.message || e}`, 4000));
+    (e) => tell(`the picture could not be copied (${e.message || e}): use Save picture instead`, 6000)); // (R167-8)
 }
 
 // The picture options (File > Save picture ▾), remembered in this browser:
@@ -3865,9 +3867,11 @@ function wireHistory() {
 function setPendingView(search, hash) {
   const view = linkViewOf(hash);
   app.pendingView = view ? { search, view } : null;
+  app.badLinkView = !view && hash.startsWith('#view='); // (said when the model is in: R167-10)
 }
 // The waiting view lands when it is for the scene shown and its ?add=s are in (viewIsFor; r60 A3)
 function landPendingView() {
+  if (app.badLinkView && app.header) { app.badLinkView = false; tellReady('the view in the link could not be read (cut short or changed): the model opens at its first view', 8000); }
   if (app.header && !app.addsPending && pendingViewIsFor()) {
     applyLinkView(app.pendingView.view);
     app.pendingView = null;
@@ -5224,7 +5228,29 @@ async function unpackGz(buf, name, seq) {
 
 // extras: the file's companions (an OBJ's .mtl, a .gltf's .bin) carried down to its reader, not in a
 // global another pick wrote over (r52 A1, Q2)
+// A file's bytes opened by their kind. Refused first: an empty file, and a web page given for a
+// model (a sign-in or error page, R167-4, R167-5); a reader's failure gets what to do next (R167-2)
 async function loadAny(buf, name, seq, extras = []) {
+  if (!buf.byteLength) throw new Error(`${name} is empty (0 bytes): export or download it again`);
+  const page = webPage(buf);
+  if (page) throw new Error(`${name} is a web page${page.title ? ` (“${page.title}”)` : ''}, not a model file: save the model file itself, then open it here`);
+  try { return await readAny(buf, name, seq, extras); } catch (e) { throw nextStep(e, name); }
+}
+// (a page's first bytes, its title if it has one; null for anything else)
+function webPage(buf) {
+  const head = new TextDecoder().decode(new Uint8Array(buf, 0, Math.min(4096, buf.byteLength))).trimStart();
+  if (!/^(<!doctype html|<html|<head)/i.test(head)) return null;
+  const t = /<title[^>]*>([^<]{1,80})/i.exec(head);
+  return { title: t ? t[1].trim() : '' };
+}
+// (words that already say what to do, or are not about the file, are kept as they are)
+const KEEPS_NEXT_STEP = /again|this viewer opens|may work|Add model|Make a tour|graphics|memory|GB, more than/i;
+function nextStep(e, name) {
+  const m = String(e && e.message || e);
+  if (!(e instanceof Error) || KEEPS_NEXT_STEP.test(m)) return e;
+  return new Error(`${m.includes(name) ? m : `${name}: ${m}`} -- it may be damaged or cut short: download it again, or export it again`);
+}
+async function readAny(buf, name, seq, extras) {
   // a load superseded while it was reading/fetching must not start a worker
   // (it would also take over app.cancelTess from the newer load)
   if (stale(seq)) return;
@@ -5491,7 +5517,7 @@ async function loadZip(buf, name, seq) {
   // (the entry it opens by the one choice, the list check's too: js/formats.js zipModel -- r75 A2)
   const { files, opens, model, threeMf, others } = zipModel(z.names);
   // (a 3MF by its directory, whatever its name: opened as one -- r76 A6)
-  if (threeMf) return loadAny(buf, `${name.replace(/\.[^./]*$/, '')}.3mf`, seq);
+  if (threeMf) return readAny(buf, `${name.replace(/\.[^./]*$/, '')}.3mf`, seq);
   if (!model) throw new Error(`${name} holds no model this viewer opens: ${OPENS}`);
   // (each read to the budget the ones before it leave, loadMeshFile's `max`, refused in its words past
   // it: each was inflated whole before the total was held, and a 2.9 MB zip held 3000 MB first -- r79 A7)
@@ -5504,7 +5530,7 @@ async function loadZip(buf, name, seq) {
   }
   if (stale(seq)) return;
   if (others) announce(`opening ${model} from ${name} (${others} more in it not opened)`);
-  return loadAny(inner, model.split('/').pop(), seq, extras);
+  return readAny(inner, model.split('/').pop(), seq, extras);
 }
 
 // ---------- 2D DXF (plan feature 23; js/dxf.js, js/dxf-view.js) ----------
@@ -5521,12 +5547,15 @@ async function loadDxf(buf, name, seq) {
   if (stale(seq)) return;
   // a DWG read into a DXF's group codes, a DXF as its bytes, off the page's thread where it can be
   // (one that draws nothing refused by readDrawing: r87 A2)
+  // (a DXF with no EOF is cut short: what was read is shown, and that said -- R167-11)
+  const ended = format !== 'DXF' || /EOF/.test(new TextDecoder('latin1').decode(new Uint8Array(buf, Math.max(0, buf.byteLength - 64))));
   const got = await readInWorker({ kind: '2d', buf, format, name }, name);
   if (stale(seq)) return;
   await twoD();
   const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, format, name });
   if (stale(seq)) return;
   show2D(drawing, name, app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null);
+  if (!ended) tellReady(`${name} may be cut short (it has no end mark): only what was read is shown -- download it again`, 8000);
 }
 
 // the 2D view's name, the layers the shown sheet draws on as the panel counts them, on opening and
@@ -6038,13 +6067,15 @@ const converterBuild = () => converterBuildP || (converterBuildP = fetch(new URL
 const fileName = fileNameOfUrl;
 
 // A fetch that threw: a no-cors HEAD tells no CORS / no file from down or unreachable; lead starts it
-async function fetchFailedText(url, name, e, lead = `could not download ${name}`) {
+async function fetchFailedText(url, name, e, lead = `could not download ${name}`.trim()) {
   let host = null;
   try {
     const u = new URL(url, location.href);
     if (u.origin !== location.origin) host = u.host;
-  } catch { /* an unparsable URL: treated as this site's */ }
-  if (!host) return `${lead}: the server did not answer (${e.message || e})`;
+  } catch { return `${lead}: “${url}” is not a web address: give the file's full URL`; } // (R167-13)
+  // (offline, said so: it read "the server did not answer (Failed to fetch)" -- R167-7)
+  if (navigator.onLine === false) return `${lead}: this device is offline -- open a file from this device, or try again when online`;
+  if (!host) return `${lead}: this site did not answer -- check the connection, then try again`;
   // (a cross-origin isolated page -- cad.place is -- refuses a no-cors answer
   // that carries no Cross-Origin-Resource-Policy, so there the probe cannot
   // tell an answer from silence: the message names all three)
@@ -6123,14 +6154,22 @@ async function loadUrl(url) {
     const chunks = [];
     let got = 0;
     const rd = res.body.getReader();
+    let frac = null;
     for (;;) {
-      let step;
+      let step, quiet, stop;
+      // (nothing coming: said after 5 s, given up after a list's wait -- it sat frozen: R167-6)
+      const t0 = performance.now(), STALLED = {};
       try {
-        step = await rd.read();
+        quiet = setInterval(() => {
+          const s = Math.floor((performance.now() - t0) / 1000);
+          if (s >= 5 && !stale(seq)) showProgress(`Downloading ${name}`, frac, `nothing has come for ${s} s: the connection may have stopped -- wait, or Cancel`);
+        }, 1000);
+        step = await Promise.race([rd.read(), new Promise((_, no) => { stop = setTimeout(() => no(STALLED), READ_TIMEOUT_MS); })]);
       } catch (e) {
         if (stale(seq)) return; // aborted mid-body
+        if (e === STALLED) { rd.cancel().catch(() => {}); throw new Error(`the download of ${name} stopped: nothing came for ${READ_TIMEOUT_MS / 1000} s -- check the connection, then open it again`); }
         throw e;
-      }
+      } finally { clearInterval(quiet); clearTimeout(stop); }
       const { done, value } = step;
       if (done) break;
       if (stale(seq)) { rd.cancel(); return; }
@@ -6151,7 +6190,8 @@ async function loadUrl(url) {
       setStatus('loading', pct ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${all}` : `fetching ${soFar} ${unit}`);
       const secs = (performance.now() - tf) / 1000;
       const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
-      showProgress(`Downloading ${name}`, pct ? Math.min(1, got / total) : null,
+      frac = pct ? Math.min(1, got / total) : null;
+      showProgress(`Downloading ${name}`, frac,
         pct ? `${soFar}${kb ? ' KB' : ''} of ${all}${rate}` : `${soFar} ${unit}${rate}`);
     }
     const all = new Uint8Array(got);
@@ -6162,6 +6202,8 @@ async function loadUrl(url) {
     buf = await res.arrayBuffer();
   }
   app.fetchMs = Math.round(performance.now() - tf);
+  const page = buf.byteLength ? webPage(buf) : null; // (a sign-in or error page at the address: R167-5)
+  if (page) throw new Error(`the address gave a web page${page.title ? ` (“${page.title}”)` : ''}, not the model file: use the file's direct download link, or download it and open it here`);
   return loadAny(buf, name, seq);
 }
 
@@ -7849,8 +7891,8 @@ function wireInput() {
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
   // a press in a caption that scrolls takes the focus there, so the keys scroll it (R72-3)
   $('tourbody').addEventListener('click', (e) => { const b = e.currentTarget; if (b.scrollHeight > b.clientHeight) b.focus({ preventScroll: true, focusVisible: false }); });
-  // the tour maker: File > Make a tour… (a tour playing is opened in it)
-  app.recorder = createTourRecorder({
+  // the tour maker: File > Make a tour… (a tour playing is opened in it), loaded on its first open
+  const recorderApi = {
     capture: captureStep,
     captureNote: () => captureNote,
     preview: (tour, from, play) => { if (makerTour(tour, from || 0)) setTourPlaying(play); }, // (at its step: R79-5)
@@ -7880,8 +7922,10 @@ function wireInput() {
     pictures: tourPictures,
     video: tourVideo,
     announce,
-  });
-  $('tourmake').onclick = () => { closeMenus(); uncover(); app.previewing = app.watched = null;
+  };
+  app.loadRecorder = async () => (app.recorder ||= (await import('./tour-recorder.js')).createTourRecorder(recorderApi));
+  $('tourmake').onclick = async () => { closeMenus(); uncover(); app.previewing = app.watched = null;
+    await app.loadRecorder();
     const t = app.tour, f = t && (t.full || t.tour);
     app.recorder.show(true, f, f ? f.steps.indexOf(t.tour.steps[t.i]) : 0);
   };

@@ -90,8 +90,9 @@ export function createMeasure(deps) {
   const { $, scene } = deps;
   // text to the clipboard, said when copied and when not (a failure, or no clipboard: said
   // nowhere before -- r46 Q6)
-  const copyText = (text, done) => {
-    const fail = (e) => deps.tell(`could not copy: ${e?.message || e || 'no clipboard here'}`, 4000);
+  // (with what to do instead: it said only "Write permission denied." -- R167-8)
+  const copyText = (text, done, instead = 'select the text and copy it') => {
+    const fail = (e) => deps.tell(`could not copy (${e?.message || e || 'no clipboard here'}): ${instead}`, 6000);
     if (!navigator.clipboard?.writeText) { fail(); return; }
     navigator.clipboard.writeText(text).then(() => deps.tell(done), fail);
   };
@@ -1108,8 +1109,8 @@ export function createMeasure(deps) {
       const html = `<table>${lines.map((l) => `<tr>${l.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`;
       if (globalThis.ClipboardItem && navigator.clipboard?.write) {
         navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([tsv], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
-          .then(() => deps.tell('hole table copied: paste it into a spreadsheet'), () => copyText(tsv, 'hole table copied: paste it into a spreadsheet'));
-      } else copyText(tsv, 'hole table copied: paste it into a spreadsheet');
+          .then(() => deps.tell('hole table copied: paste it into a spreadsheet'), () => copyText(tsv, 'hole table copied: paste it into a spreadsheet', 'select the table\'s rows and copy them'));
+      } else copyText(tsv, 'hole table copied: paste it into a spreadsheet', 'select the table\'s rows and copy them');
     };
     // no hole at all: one line saying so, not an empty table under a caption (UI design round 5 V-2)
     const none = !t.list.length;

@@ -1211,8 +1211,8 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
-  const body = line('let saySeq = 0') + cut('function announce(text) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text) {')
-    + cut('function tellReady(words, ms = 6000) {') + cut('function setStatus(s, msg) {') + line('function somethingShown() {');
+  const body = line('let saySeq = 0') + cut('function announce(text) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text, firm = false) {')
+    + cut('function tellReady(words, ms = 6000, firm = false) {') + cut('function setStatus(s, msg) {') + line('function somethingShown() {');
   const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
   const dom = { status: el(), progress: el(), announce: el() };
   const app = { status: 'idle', statusMsg: 'idle' }, heard = [], shown = [];
@@ -1375,7 +1375,7 @@ test('the hover line: a note of 4 s or more holds it against labels, its end put
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
-  const body = line('let viewNameTimer = ') + line('let noteHeldUntil = 0') + cut('function flashHover(text, ms = 1500) {') + cut('function hoverLabel(text, asked = false) {') + cut('function clearHover() {');
+  const body = line('let viewNameTimer = ') + line('let noteHeldUntil = 0') + cut('function flashHover(text, ms = 1500, firm = false) {') + cut('function hoverLabel(text, asked = false) {') + cut('function clearHover() {');
   let now = 0;
   const timers = [];
   const hov = { textContent: '' };
@@ -1397,6 +1397,12 @@ test('the hover line: a note of 4 s or more holds it against labels, its end put
   assert.equal(hov.textContent, 'one finger turns · …', 'a tap on the background asks for nothing: the note held (r48 A8)');
   hoverLabel('pcb', true);
   assert.deepEqual([hov.textContent, prefs['cadv.touchHint']], ['pcb', '1'], 'a tap shows through the hold, and the hint it followed counts as seen (r48 Q9)');
+  flashHover('could not add b.stl: not found (404)', 9000, true);
+  hoverLabel('pcb', true);
+  assert.equal(hov.textContent, 'could not add b.stl: not found (404)', 'a failure\'s note is not replaced by a tap\'s name while held (R167-1)');
+  advance(9000);
+  hoverLabel('pcb', true);
+  assert.equal(hov.textContent, 'pcb', 'after it, a tap names the part again');
   flashHover('could not save m.step: x', 6000);
   clearHover();
   hoverLabel('lid');
@@ -1478,14 +1484,14 @@ await test('the converter: a copy that cannot be posted rejects in words, the wo
 });
 await test('Measure\'s copy: said when copied, and when the clipboard refuses or is not there (r46 Q6, r47 A4, Q4)', async () => {
   const src = readFileSync(new URL('../js/measure-ui.js', import.meta.url), 'utf8');
-  const at = src.indexOf('const copyText = (text, done) => {'), code = src.slice(at, src.indexOf('\n  };', at) + 5);
+  const at = src.indexOf('const copyText = (text, done, instead ='), code = src.slice(at, src.indexOf('\n  };', at) + 5);
   const told = [];
   const make = (nav) => new Function('deps', 'navigator', `${code}; return copyText;`)({ tell: (t) => told.push(t) }, nav);
   make({ clipboard: { writeText: async () => {} } })('12.7 mm', 'copied');
   make({})('12.7 mm', 'copied');
   make({ clipboard: { writeText: async () => { throw new Error('denied'); } } })('12.7 mm', 'copied');
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(told.sort(), ['copied', 'could not copy: denied', 'could not copy: no clipboard here']);
+  assert.deepEqual(told.sort(), ['copied', 'could not copy (denied): select the text and copy it', 'could not copy (no clipboard here): select the text and copy it']); // (what to do instead: R167-8)
 });
 
 // ---------- The note contract (r47: rounds 43-46 each found a high in this path, fixed case by
@@ -1537,14 +1543,15 @@ const NOTE_STATES = {
 // recovery running, carrying the error when there is one (showEmpty's own code, r48 A3).
 // (The note's time is the contract's too: a hold shortened or dropped passed every test -- r48 Q3)
 const same = 'same';
-const busyRun = (s) => s.status === 'loading' || s.status === 'tessellating';
+const H = (t) => Math.min(20000, 6000 + 60 * t.length); // (a 6 s note held long enough to read: R167-1)
+const busyRun =(s) => s.status === 'loading' || s.status === 'tessellating';
 // a failure apart from the load (failApart): the page's error only when nothing is shown and nothing
 // runs (idle, no model); else told, the state kept -- a load's own error on the card kept, and a
 // recovery left to end (r49 Q3, Q4: the card lost why the model failed; a recovery ended on an error)
 // (a list read for its named model hides the card: told then too -- the cell said error, shown
 // nowhere: r52 Q3)
 const apart = (s, words) => (s.shows || s.poster || s.readingList || s.status !== 'idle')
-  ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, 6000]], [words]] : ['error', words, [], [words]];
+  ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, H(words)]], [words]] : ['error', words, [], [words]];
 const LOST = 'GPU context lost (device lost); recovering', LIST = 'model list l.json: HTTP 404';
 // (a row's idle words: an embed's poster its own, an embed none of the open-a-file words -- r51 Q5)
 const idleOf = (s) => (s.poster ? 'View in 3D loads the model' : s.embed ? 'no model to show' : 'IDLE');
@@ -1553,24 +1560,24 @@ const NOTE_CONTRACT = {
   tell: (r) => [same, same, [['copied', 3000]], ['copied']],
   // tellReady(words): told in every state; the line gains the words only while ready, after the
   // ready text (an export's progress replaced)
-  tellReady: (r, s) => [same, s.status === 'ready' ? `${s.ready} · ${W}` : same, [[W, 6000]], [W]],
+  tellReady: (r, s) => [same, s.status === 'ready' ? `${s.ready} · ${W}` : same, [[W, H(W)]], [W]],
   // sayNoFacts(word): told when new, in every state; written into a ready line in place
-  sayNoFacts: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${N} · ${GOING}` : `${s.ready} · ${N}`) : same, [[N, 6000]], [N]],
+  sayNoFacts: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${N} · ${GOING}` : `${s.ready} · ${N}`) : same, [[N, H(N)]], [N]],
   // a load's own failure, setStatus('error', …): the page's error; shown in the view when a model or
   // a drawing stays (the error card shows it only when nothing does); read out
-  loadFails: (r, s) => ['error', E, s.shows ? [[E, 6000]] : [], [E]],
+  loadFails: (r, s) => ['error', E, s.shows ? [[E, H(E)]] : [], [E]],
   // Cancel on the loading card: back to what is shown -- a drawing is shown too
   cancel: (r, s) => !busyRun(s) ? null
     // (the shown model off the GPU: said as not drawn, not "ready" over an empty view -- r50 Q2)
-    : s.gpuLacks ? ['error', LACK, [[LACK, 6000]], [`loading cancelled · ${LACK}`]]
+    : s.gpuLacks ? ['error', LACK, [[LACK, H(LACK)]], [`loading cancelled · ${LACK}`]]
     : (s.shows ? ['ready', s.ready, [], [`loading cancelled · ${s.ready}`]] : ['idle', idleOf(s), [], [`loading cancelled · ${idleOf(s)}`]]),
   // the recovery's end on a renderer that cannot hold the shown model: the page's error (shown in
   // the view with a model kept); under a load, told and noted for Cancel (r50 A4, Q2); the same
   // error again is not news (shown, not read out again)
-  cannotHold: (r, s) => busyRun(s) ? [same, same, [[CH, 6000]], [CH]] : ['error', CH, s.shows ? [[CH, 6000]] : [], s.msg === CH ? [] : [CH]],
+  cannotHold: (r, s) => busyRun(s) ? [same, same, [[CH, H(CH)]], [CH]] : ['error', CH, s.shows ? [[CH, H(CH)]] : [], s.msg === CH ? [] : [CH]],
   // a model list that failed beside lists that answered: told; written into a ready line in place
   // (r50 A6: the line was rewritten whole)
-  listPartial: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${LIST} · ${GOING}` : `${s.ready} · ${LIST}`) : same, [[LIST, 6000]], [LIST]],
+  listPartial: (r, s) => [same, s.status === 'ready' ? (r === 'exporting' ? `ready · ${LIST} · ${GOING}` : `${s.ready} · ${LIST}`) : same, [[LIST, H(LIST)]], [LIST]],
   // a file over the size refused, and any failure apart from the load (a GPU error, a tour that
   // could not be read): one rule (r48 A1, Q1, Q2)
   oversize: (r, s) => apart(s, O),
@@ -1585,7 +1592,7 @@ const NOTE_CONTRACT = {
   // its question, told (r49 Q1: a loss under "convert it?" hid the question and the load hung)
   // (not within a recovery: recoverRenderer keeps a second loss for after the first)
   // (an error up kept too: the card lost a failed ?src's 404 through recovering, then idle -- r50 A3, Q4)
-  recoveryStarts: (r, s) => s.status === 'recovering' ? null : (busyRun(s) || s.status === 'error') ? [same, same, [[LOST, 6000]], [LOST]]
+  recoveryStarts: (r, s) => s.status === 'recovering' ? null : (busyRun(s) || s.status === 'error') ? [same, same, [[LOST, H(LOST)]], [LOST]]
     : ['recovering', LOST, [], [LOST]],
   // a model list that could not be read, with nothing in it to open: a failure apart from the load,
   // by failApart's one rule (r49 A2: its own rule put it on the card and in the note at once, and
@@ -1601,8 +1608,8 @@ await test('the note contract: each page state against each writer of a note or 
   const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
-  const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text) {',
-    'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
+  const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text, firm = false) {',
+    'function tellReady(words, ms = 6000, firm = false) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
     'function openFile(f', 'async function exportMesh(fmt) {', 'function failApart(msg', 'function recovered() {', 'function showEmpty() {',
     'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {', 'function cannotHold() {', 'function refusedForSize(f) {',
     'function rewriteReady(change) {'].map(cutIf).join('')
@@ -1739,7 +1746,7 @@ await test('a file\'s companions reach its reader whatever is picked, refused or
     const held = new Promise((res) => { release = res; });
     const f = new Function('app', 'MAX_FILE_BYTES', 'isCompanion', 'announce', 'failApart', 'posterUp', 'startLoad', 'setStatus', 'showProgress', 'mb', 'sizeText',
       'stale', 'loadAny', 'meshReaders', 'nextPaint', 'formatOfName', 'OPENS', 'zipModel', 'isGzip', 'unpackGz', 'zipCompanions', 'StopRead', 'companionsOverText',
-      `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
+      `const readAny = loadAny; const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n${line('const companionsOf = ')}${cut('function pickModelFile(files) {')}${cut('function refusedForSize(f) {')}${line('const oversizeText = ')}`
       + `${cut('function openFile(f) {')}${cut('async function loadFile(file, extras')}${cut('function beginLoad() {')}${cut('async function loadZip(buf, name, seq) {')}`
       + '; return { pickModelFile, openFile, loadZip, beginLoad };')(
       app, 2 * 2 ** 30, isCompanion, () => {}, () => {}, () => false, (fn) => fn(), () => {}, () => {}, () => '0', () => '1 KB',
@@ -2142,7 +2149,7 @@ await test('loadUrl takes the model\'s early download and readLists the early re
   const el = () => ({ hidden: false, textContent: '' });
   const f = new Function('app', '$', 'setStatus', 'announce', 'fileName', 'showProgress', 'directFor', 'earlyFetch', 'fetchFailedText', 'isRelative',
     'MAX_FILE_BYTES', 'oversizeText', 'rateText', 'mb', 'loadAny', 'location', 'earlyLists', 'fetchModelLists', 'timedFetch', 'fillModelList', 'listsRead', 'startUpLoad', 'mbSoFar', 'percentKnown',
-    `${cut('function beginLoad() {')}${cut('function stale(seq) {')}${cut('async function loadUrl(url) {')}${cut('async function readLists(lists, openFirst) {')}; return { loadUrl, readLists };`)(
+    `const READ_TIMEOUT_MS = 20000; const webPage = () => null;\n${cut('function beginLoad() {')}${cut('function stale(seq) {')}${cut('async function loadUrl(url) {')}${cut('async function readLists(lists, openFirst) {')}; return { loadUrl, readLists };`)(
     app, () => el(), () => {}, () => {}, (u) => u.split('/').pop(), () => {}, (u) => ({ url: u }), ef.earlyFetch, async () => 'x', isRelative,
     2 ** 31, (n) => n, () => '', () => '0', async (buf, name) => { got.push([name, buf.byteLength]); }, loc,
     ef.earlyLists, fetchModelLists, (u) => fetch(u), (e) => { app.listEntries = e; }, () => false, async () => {}, () => '0', (await import('../js/import-progress.js')).percentKnown); // (mbSoFar: r74 A10; percentKnown: r85 Q4)

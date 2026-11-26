@@ -351,7 +351,9 @@ export async function fetchModelLists(urls, base, fetchFn = fetch) {
       return { entries: parseModelList(text, from).map((e) => Object.defineProperty(e, 'listUrls', { value: [from], enumerable: false })) };
     } catch (e) {
       // fetch's own TypeError says only "Failed to fetch": no CORS, or no answer
+      // (offline, said so, not blamed on CORS: R167-7)
       const message = e instanceof TypeError && !url ? 'not a URL'
+        : e instanceof TypeError && globalThis.navigator?.onLine === false ? 'this device is offline'
         : e instanceof TypeError ? NOT_FETCHED
           : isTimeout(e) ? 'no answer in time' : e.message;
       return { entries: [], error: { url: url || u, message } };
