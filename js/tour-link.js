@@ -26,7 +26,7 @@ export async function packTour(text) {
 }
 // z:… -> the tour's text; throws when it is not one (cut short in copying, or edited)
 export async function unpackTour(s) {
-  const cut = () => new Error('it was cut short or changed: copy the link again');
+  const cut = () => new Error('it was cut short or changed: ask for the link again (or for the tour file)');
   let bin;
   try { bin = atob(s.slice(TOUR_IN_LINK.length).replace(/-/g, '+').replace(/_/g, '/')); } catch { throw cut(); }
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));

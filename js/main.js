@@ -6856,7 +6856,7 @@ function syncHoles() {
   const faces = !!(app.baseMesh && app.baseMesh.faces), shown = shownIds();
   $('holesbtn').disabled = !faces || (!app.selected.size && !shown.length);
   $('holesbtn').title = faces
-    ? 'List the holes of the selected parts, or of every part shown: diameter, position from the reference\'s corner, and how far apart they lie'
+    ? 'List the holes of the selected parts, or of every part shown: diameter, position from the corner of the whole model (or of the parts chosen with Measure from selection), and how far apart they lie'
     : 'Holes need a CAD file\'s faces: a STEP, IGES or BREP file, or a .cadmesh saved with them';
   if (app.holesFor?.shown && app.measure) {
     if (!shown.length) { showHoles(null); return; }
