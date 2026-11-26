@@ -986,7 +986,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     const t = make(false, 2e6, false, true), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
     t.app.baseMesh = b;
     await t.edgesOf(b);
-    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: no module worker could start here, and the page builds no edges or volume itself (module workers are not supported)']]);
+    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: this browser could not run the part that works them out: reload the page, or try a newer browser']]); // (R169-8)
   }
   // a size limit met when the file was read, written in it under today's rule: remembered at once,
   // no worker (r43 A3); one of the moment, or one written under another rule, built (r44 A1, Q2)
@@ -1169,7 +1169,7 @@ test('the ready line: the missing faces, the list\'s note, a 2D drawing\'s word,
   assert.match(src, /markStarted\(app\.tour, missing\.length > 0\);\n {2}showTourStep\(at < tour\.steps\.length \? at : 0\);/);
   assert.match(src, /\n {2}tellStepMissing\(t\);\n/);
   // (a GPU error and a tour unread go through failApart, the one rule for a failure apart from the load -- r48 A1, Q1, Q2)
-  assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; failApart\(`GPU error: \$\{msg\}`\); \} \};/);
+  assert.match(src, /r\.onerror = \(msg\) => \{ if \(app\.renderer === r\) \{ app\.error = msg; app\.gpuReason = msg; failApart\('the graphics could not draw the model: close other tabs or apps, then reload the page'\); \} \};/);
   // (the start-up's own read through failApart's own-read form since r57: the start's failure, told)
   assert.equal([...src.matchAll(/failApart\(`the tour \$\{r\.error\}`(, true)?\)/g)].length, 2, 'both tour reads');
   assert.match(src, /\n {6}recovered\(\);\n/, 'the recovery\'s end through recovered()');
@@ -1503,9 +1503,10 @@ await test('Measure\'s copy: said when copied, and when the clipboard refuses or
 // The line is drawn nowhere, so what the visitor learns is only what is shown and what is heard:
 // a cell whose shown and heard are empty while it says something is the fault this table guards.
 const W = 'could not move B: x', N = 'no volume for this model: v', E = 'not loaded: z.step: no surfaces';
-const O = 'big.stl is over 2 GB, more than this viewer opens', G = 'GPU error: device lost', REC = 'recovered on webgl2';
+// (the graphics' own reasons only in the ? box: R169-4, R169-5)
+const O = 'big.stl is over 2 GB, more than this viewer opens', G = 'the graphics could not draw the model: close other tabs or apps, then reload the page', REC = 'the graphics restarted; your view is as it was';
 const GOING = 'exporting 1 body as STL…', SAVED = 'saved m.stl: 1 body, 1 KB'; // (KB under a megabyte: R141-4)
-const CH = 'recovered on webgl2, but it cannot hold this model: too big', LACK = 'recovered on webgl2, but it cannot hold this model: earlier';
+const CH = 'the graphics restarted but cannot draw this model: close other tabs or apps, or open it on a computer', LACK = 'the graphics restarted but cannot draw this model: earlier';
 // (r48: three rows with nothing shown -- a first load, its failure, a recovery -- ran no cell of
 // Cancel's idle branch or the error card: r48 A3)
 const NOTE_STATES = {
@@ -1552,7 +1553,7 @@ const busyRun =(s) => s.status === 'loading' || s.status === 'tessellating';
 // nowhere: r52 Q3)
 const apart = (s, words) => (s.shows || s.poster || s.readingList || s.status !== 'idle')
   ? [same, s.status === 'ready' ? `${s.ready} · ${words}` : same, [[words, H(words)]], [words]] : ['error', words, [], [words]];
-const LOST = 'GPU context lost (device lost); recovering', LIST = 'model list l.json: HTTP 404';
+const LOST = 'the graphics stopped; restarting them', LIST = 'model list l.json: HTTP 404';
 // (a row's idle words: an embed's poster its own, an embed none of the open-a-file words -- r51 Q5)
 const idleOf = (s) => (s.poster ? 'View in 3D loads the model' : s.embed ? 'no model to show' : 'IDLE');
 const NOTE_CONTRACT = {
@@ -1618,7 +1619,8 @@ await test('the note contract: each page state against each writer of a note or 
     + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const ownHidden = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`
     // (exportMesh says a cut or an explode leaves the file whole: no cut in these states -- r129)
-    + 'const sectionPlane = () => null;\n';
+    + 'const sectionPlane = () => null;\n'
+    + 'const showInfo = () => {};\n'; // (the ? box follows a recovery's end: R169-6)
   const failed = [];
   for (const [row, s] of Object.entries(NOTE_STATES)) {
     for (const [col, want] of Object.entries(NOTE_CONTRACT)) {

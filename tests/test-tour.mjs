@@ -909,7 +909,7 @@ await test('tour.js: packTour/unpackTour round-trip a tour as z:<base64url>; a l
   await assert.rejects(unpackTour(bomb), /too large/);
 });
 await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved board.webm, 3.0 MB", Pictures resolving 4 "saved board-pictures.zip, 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30; the file named: R156-8)', async () => {
-  for (const [bytes, pics, want] of [[3145728, 4, ['saved board.webm, 3.0 MB', 'saved board-pictures.zip, 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {
+  for (const [bytes, pics, want] of [[3145728, 4, ['saved board.webm, 3.0 MB', 'saved board-pictures.zip, 4 pictures']], [0, 0, ['no video: the graphics gave nothing back: try again, or with a smaller window', 'no pictures: the graphics gave nothing back: try again, or with a smaller window']]]) {
     const notes = [];
     await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), video: async () => bytes, pictures: async () => pics }, async ({ $ }) => {
       $('teadd').onclick();

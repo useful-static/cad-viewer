@@ -411,7 +411,8 @@ export function gunzip(buf, max = MAX_FILE_BYTES, stop = null) {
 export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error(`this file is ${what}-compressed, and this browser cannot decompress (no DecompressionStream)`);
+    // (the file is fine: the browser is too old -- not "damaged", R169-3)
+    throw new Error(`this file is ${what}-compressed, and this browser is too old to open compressed files: update it, or try another browser`);
   }
   // ONE output buffer, filled as the chunks arrive: holding the chunks and then copying them into
   // their total kept two copies of the whole file at the peak (a 1.9 GB model needed 3.8 GB). Its
@@ -436,7 +437,7 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
 // whole (its trailer is the LAST member's size, mod 4 GiB: r73 Q1)
 // (onChunk: each chunk as it comes, none kept -- the list check's CRC of a zip entry: r80 Q4)
 export async function inflateCount(buf, format = 'gzip', max = MAX_FILE_BYTES, onChunk = null) {
-  if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot decompress (no DecompressionStream)');
+  if (typeof DecompressionStream === 'undefined') throw new Error('this browser is too old to open compressed files: update it, or try another browser');
   // (each byte once, in order: a gzip member read again in Chromium hands the same output over from its
   // start -- passed on only past what was handed already, so a CRC over it is the file's: r81 A11)
   let next = 0;

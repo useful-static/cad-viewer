@@ -354,7 +354,7 @@ export function createTourRecorder(api) {
       const r = kind === 'video' ? await api.video(tour, base) : await api.pictures(tour, base);
       // (KB under a megabyte, one picture singular: R89-1, R89-2; the file named, as every save: R156-8)
       if (typeof r === 'number' && r > 0) note(kind === 'video' ? `saved ${base}.webm, ${r < 1048576 ? `${Math.max(1, Math.round(r / 1024))} KB` : `${(r / 1048576).toFixed(1)} MB`}` : `saved ${base}-pictures.zip, ${r} picture${r === 1 ? '' : 's'}`);
-      else note(`no ${kind === 'video' ? 'video' : 'pictures'}: ${typeof r === 'string' ? r : 'nothing came back from the GPU'}`);
+      else note(`no ${kind === 'video' ? 'video' : 'pictures'}: ${typeof r === 'string' ? r : 'the graphics gave nothing back: try again, or with a smaller window'}`);
     } finally {
       busy = false;
       renderList();

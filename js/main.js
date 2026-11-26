@@ -246,18 +246,22 @@ const posterUp = () => !!app.embed && !!$('poster') && !$('poster').hidden;
 
 // The GPU recovery's start: the page 'recovering', but a load under way or an error up keeps its
 // state, card and question, the loss told (r49 Q1, r50 A3, Q4)
+// (the reason, often the browser's raw words, only in the ? box's graphics line: R169-5)
 function recoveryStarts(why) {
-  const text = `GPU context lost (${why}); recovering`;
+  app.lossWhy = why;
+  const text = 'the graphics stopped; restarting them';
   if (PROGRESS_STATES.has(app.status) || app.status === 'error') tell(text, 6000);
   else setStatus('recovering', text);
 }
 // The recovery's end on a renderer that cannot hold the model: the page's error, or told under a load;
 // noted (app.gpuLacks) so a Cancel says the model is not drawn (r50 A4, Q2, r51 A1)
 function cannotHold() {
-  const msg = `recovered on ${app.backend}, but it cannot hold this model: ${app.error}`;
+  const msg = 'the graphics restarted but cannot draw this model: close other tabs or apps, or open it on a computer';
+  app.gpuReason = app.error;
   app.gpuLacks = { mesh: app.mesh, msg };
   if (PROGRESS_STATES.has(app.status)) tell(msg, 6000);
   else setStatus('error', msg);
+  showInfo(); // (the ? box no longer says "recovering": R169-6)
 }
 // Whether the shown model is the one the recovered renderer could not hold (a drawing is no model:
 // a note of none matched it, and Cancel over a drawing said its model could not be held -- r51 Q3 c)
@@ -271,7 +275,8 @@ function recovered() {
     if (somethingShown()) setStatus('ready', readyText());
     else setStatus('idle', idleText());
   }
-  tell(`recovered on ${app.backend}`, 4000);
+  tell('the graphics restarted; your view is as it was', 4000);
+  showInfo(); // (the ? box no longer says "recovering": R169-6)
 }
 // What the line says with nothing shown: an embed's poster its own words, an embed none of the
 // open-a-file words (its visitor chose nothing to open), else what the page opens (r51 Q5: read out
@@ -400,8 +405,10 @@ const nextPaint = () => new Promise((resolve) => {
 async function makeRenderer() {
   app.attempts = [];
   const forced = params.get('backend');
-  const order = { webgpu: ['webgpu'], webgl2: ['webgl2'], webgl1: ['webgl1'] }[forced]
-    || ['webgpu', 'webgl2', 'webgl1'];
+  // (a forced backend tried first, then the others: one the browser lacks left a dead "No 3D" page,
+  // its failure now only in the ? box -- R169-9)
+  const all = ['webgpu', 'webgl2', 'webgl1'];
+  const order = all.includes(forced) ? [forced, ...all.filter((b) => b !== forced)] : all;
   // a software WebGPU adapter is passed over for WebGL, and taken only when
   // WebGL fails too (or ?backend=webgpu asks for WebGPU whatever it runs on)
   let softwareGpu = false;
@@ -455,7 +462,7 @@ function adoptRenderer(r) {
     reported = true;
     recoverRenderer(why);
   };
-  r.onerror = (msg) => { if (app.renderer === r) { app.error = msg; failApart(`GPU error: ${msg}`); } };
+  r.onerror = (msg) => { if (app.renderer === r) { app.error = msg; app.gpuReason = msg; failApart('the graphics could not draw the model: close other tabs or apps, then reload the page'); } };
   // lost between creation and here (onlost was not wired yet): report it now
   if (isDead(r)) queueMicrotask(() => r.onlost && r.onlost('lost before it was adopted'));
   $('backend').textContent = app.backend.toUpperCase();
@@ -474,8 +481,11 @@ function graphicsNote() {
   if (!app.backend) return '';
   const skipped = (app.adoptedAttempts || []).filter((a) => !a.ok)
     .map((a) => `${NAMES[a.backend] || a.backend} not available: ${a.error}`);
-  const lost = app.status === 'recovering' ? ' (lost; recovering)' : '';
-  return `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}`;
+  // (the recovery itself, not the status line, which a load keeps: R169-6); the loss's and a GPU
+  // failure's own reasons are kept here, out of the visitor's notes (R169-4, R169-5)
+  const lost = recovering ? ` (lost: ${app.lossWhy}; recovering)` : '';
+  const why = app.gpuReason ? ` -- last GPU failure: ${app.gpuReason}` : '';
+  return `${NAMES[app.backend] || app.backend}${lost}${skipped.length ? ` -- ${skipped.join('; ')}` : ''}${why}`;
 }
 
 // ---------- GPU model sync ----------
@@ -492,7 +502,7 @@ const isDead = (r) => !r || r.isLost();
 function nextRenderer(old, ms = 120000) {
   if (app.renderer !== old) return Promise.resolve();
   // recovery is over: no renderer will come, so fail now rather than at the backstop
-  if (gaveUp) return Promise.reject(new Error(gaveUp));
+  if (gaveUp) return Promise.reject(new Error(gaveUpWords));
   return new Promise((resolve, reject) => {
     const w = (err) => { clearTimeout(t); err ? reject(err) : resolve(); };
     const t = setTimeout(() => {
@@ -785,12 +795,28 @@ const RECOVERY_QUIET_MS = 5000;
 
 // Recovery is over without a renderer: say so, and fail every load waiting on
 // one, now and later (the page needs a reload).
+// gaveUp: the technical reason (the ? box); gaveUpWords: the visitor's. The 3D model goes and the
+// card says what to do, with a Reload button; a drawing stays (R169-1).
 let gaveUp = null;
+let gaveUpWords = '';
 function giveUp(msg) {
   gaveUp = msg;
+  const name = app.mesh && app.sourceName, device = !!name && !app.sourceUrl;
+  gaveUpWords = `The graphics stopped working and did not restart: reload the page${device ? `, then open ${name} again` : ''}`;
   beginLoad(); // a load still fetching or tessellating goes stale and stops painting progress
-  setStatus('error', msg);
-  failRendererWaiters(msg);
+  failRendererWaiters(gaveUpWords);
+  $('backend').textContent = 'no 3D';
+  if (app.dxf) { tellReady(`${gaveUpWords} to see 3D models`, 6000, true); showInfo(); return; }
+  if (app.mesh) clearModel();
+  document.body.classList.add('nogpu');
+  const h2 = document.querySelector('#empty h2');
+  if (h2) h2.textContent = 'The 3D graphics stopped';
+  const b = $('emptyopen');
+  b.textContent = 'Reload the page';
+  b.onclick = () => location.reload();
+  b.hidden = false;
+  setStatus('error', gaveUpWords);
+  announce(gaveUpWords);
   showInfo(); // its renderer line must stop naming the dead renderer
 }
 async function recoverRenderer(why) {
@@ -1409,7 +1435,7 @@ async function savePicture(print = false) {
   // (said, and a frame drawn to say it, before the view freezes for the picture: R119-3)
   if (!print) { tell('preparing the picture…', 30000); await notePainted(); }
   const pic = await renderPicture(print ? { ...app.pic, bg: 'white' } : app.pic); // (paper: R20-2)
-  if (!pic) { tell('the picture could not be read from the GPU', 4000); return; }
+  if (!pic) { tell('the picture could not be made: try again, or with a smaller window', 6000); return; }
   const out = pic.canvas;
   const png = await new Promise((ok) => out.toBlob(ok, 'image/png'));
   if (print) return printPng(png);
@@ -1483,7 +1509,7 @@ function savePicOpts() {
 function copyPicture() {
   if (!app.header || !app.renderer) return;
   const png = renderPicture().then((pic) => {
-    if (!pic) throw new Error('the picture could not be read from the GPU');
+    if (!pic) throw new Error('the picture could not be made: try again, or with a smaller window');
     return new Promise((ok) => pic.canvas.toBlob(ok, 'image/png'));
   });
   navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]).then(
@@ -4284,8 +4310,19 @@ function handBack(mesh) {
     // no GPU at all (recovery gave up, or it is still recovering): the model
     // is not the problem, so keep it and the status line's GPU message
     if (gaveUp || isDead(app.renderer)) return;
-    dropModel(`could not put ${app.sourceName} back on the GPU: ${e.message || e}`);
+    dropModel(gpuFull(e, app.sourceName).message);
   });
+}
+
+// A model the graphics could not hold, in the visitor's words; the renderer's own reason kept for the
+// ? box's graphics line. Anything else is passed through as it is (R169-4).
+const GPU_FAULT = /GPU|WebGL|state texture|allocating/;
+function gpuFull(e, name) {
+  const m = String(e?.message || e);
+  if (!GPU_FAULT.test(m)) return e;
+  app.gpuReason = m;
+  showInfo();
+  return new Error(`${name || 'this model'} is too big for this device's graphics memory: close other tabs or apps, or open it on a computer`);
 }
 
 function dropModel(msg) {
@@ -4404,7 +4441,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
   const mesh = inScheme(base, overrides, new Map()); // (painted faces are the old model's)
   const scheme = app.palette; // a scheme picked during the upload is drawn after it
   const decodeMs = performance.now() - t1;
-  checkFits(app.renderer, mesh);
+  try { checkFits(app.renderer, mesh); } catch (e) { throw gpuFull(e, name); }
   if (stale(seq)) return; // a newer load owns app.wanted; never upload a stale model
   if (!(await phase('uploading', `uploading ${fmtInt(mesh.header.indexCount / 3)} ${mesh.header.indexCount === 3 ? 'triangle' : 'triangles'} to the GPU`))) return;
   app.wanted = mesh;
@@ -4414,7 +4451,7 @@ async function loadBuffer(buf, name, seq, stepBuf = null, conversion = null, rea
     await gpuSync();
   } catch (e) {
     handBack(mesh);
-    throw e;
+    throw isDead(app.renderer) || gaveUp ? e : gpuFull(e, name);
   }
   if (stale(seq)) {
     // superseded during our upload: if no newer load has claimed the GPU yet
@@ -4593,7 +4630,7 @@ async function addToScene(base, name, seq, unmeshed = 0) {
   showProgress(`Adding ${name}`, null, `uploading ${fmtInt(base.header.indexCount / 3)} more ${base.header.indexCount === 3 ? 'triangle' : 'triangles'} to the GPU`);
   await nextPaint();
   if (stale(seq)) return;
-  if (!(await showScene(models, { newTree: true }))) return;
+  try { if (!(await showScene(models, { newTree: true }))) return; } catch (e) { throw isDead(app.renderer) || gaveUp ? e : gpuFull(e, name); }
   setView('iso');
   setStatus('ready', readyText());
   // (two versions of one part laid over each other, one colour: the way to tell them apart said -- R163-3)
@@ -5131,7 +5168,9 @@ function edgesOf(base) {
   // words are not told twice (sayNoFacts)
   const fail = (v) => {
     // (no module worker: said as why there are no edges nor volume -- r44 Q3, r45 A5)
-    info.error = v.stopped || v.error || `no module worker could start here, and the page builds no edges or volume itself (${v.noWorker})`;
+    // (the browser's reason kept for the console only: R169-8)
+    if (v.noWorker) console.warn('no module worker:', v.noWorker);
+    info.error = v.stopped || v.error || 'this browser could not run the part that works them out: reload the page, or try a newer browser';
     // (a stop is no failure; the model's own failure remembered, a momentary one not: r40 A3, Q2)
     info.stopped = !!v.stopped;
     if (v.transient) info.tries = (info.tries || 0) + 1;
@@ -5244,7 +5283,7 @@ function webPage(buf) {
   return { title: t ? t[1].trim() : '' };
 }
 // (words that already say what to do, or are not about the file, are kept as they are)
-const KEEPS_NEXT_STEP = /again|re-export|this viewer opens|may work|Add model|Make a tour|graphics|memory|GB, more than/i;
+const KEEPS_NEXT_STEP = /again|re-export|this viewer opens|may work|Add model|Make a tour|graphics|memory|browser|GB, more than/i;
 // (said once: a reader's "cadmesh: " dropped, and a reason that already says damaged gets only the
 // next step -- R168-1, R168-3)
 function nextStep(e, name) {
@@ -6021,8 +6060,10 @@ function tessellate(buf, format, seq, name, threads) {
     };
     const cancel = () => done(reject, new Error('superseded by a newer load'));
     app.cancelTess = cancel;
+    let heard = false;
     w.onmessage = (ev) => {
       const m = ev.data;
+      heard = true;
       if (m.type === 'progress') {
         stage = m.stage;
         if (!tStart && m.converting) tStart = performance.now();
@@ -6051,7 +6092,10 @@ function tessellate(buf, format, seq, name, threads) {
       else if (m.type === 'done') done(resolve, { buffer: m.buffer, unmeshedFaces: m.unmeshedFaces || 0, threads, phases: phaseSecs(performance.now()) });
       else done(reject, new Error(crashText(m.message).replace('could not read this file', `could not read ${name}`))); // (named: R142-3)
     };
-    w.onerror = (e) => done(reject, new Error(crashText(e.message || 'the worker stopped')));
+    // (a worker that never spoke was never downloaded: said as the converter's own download is, not
+    // as a crash -- R169-7)
+    w.onerror = (e) => done(reject, new Error(heard ? crashText(e.message || 'the worker stopped')
+      : 'converter unavailable: it could not be downloaded (offline, or the connection dropped). Reconnect and open the file again'));
     show();
     // the multi-core try is sent a copy (the bytes kept for a one-thread retry); a copy that does not
     // fit fails this try, its worker and timer ended (r49 A1)
@@ -6296,7 +6340,7 @@ function guard(p, seq = null) {
 function startLoad(fn) {
   // with no GPU left there is nothing to load onto: refuse before a fetch or a
   // long tessellation, and keep the give-up message on the status line
-  if (gaveUp) { setStatus('error', gaveUp); announce(`not loaded: ${gaveUp}`); return Promise.resolve(); }
+  if (gaveUp) { setStatus('error', gaveUpWords); announce(`not loaded: ${gaveUpWords}`); return Promise.resolve(); }
   const p = fn();
   return guard(p, app.loadSeq);
 }
@@ -7628,6 +7672,13 @@ function wireInput() {
     queueFrame();
   }).observe(stage);
   window.addEventListener('resize', queueFrame); // devicePixelRatio changes (browser zoom) keep the CSS size
+  // (a window dragged to a sharper screen fires no resize: drawn at the old sharpness until a turn --
+  // R169-10; a query for the ratio now, armed again at each change)
+  const sharp = () => {
+    const q = window.matchMedia?.(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    q?.addEventListener?.('change', () => { queueFrame(); app.dxf?.view.draw(); sharp(); }, { once: true });
+  };
+  sharp();
   // ☰ from the keyboard moves the focus into the slide-out's parts list; Esc gives it back (review r18)
   $('panelbtn').onclick = (e) => {
     const open = !panelOpen();
@@ -7711,8 +7762,10 @@ function wireInput() {
   }
   // offline install (sw.js): not in an embed (another site's page), and only
   // where a service worker may run
-  if ('serviceWorker' in navigator && !app.embed && window.isSecureContext && !params.has('nosw')) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* the viewer works without it */ });
+  // (a browser naming a service worker it cannot give, navigator.serviceWorker undefined, stopped the
+  // page at start: R169-2)
+  if (navigator.serviceWorker && !app.embed && window.isSecureContext && !params.has('nosw')) {
+    try { navigator.serviceWorker.register('sw.js').catch(() => { /* the viewer works without it */ }); } catch { /* nor this */ }
   }
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
@@ -7892,6 +7945,14 @@ function wireInput() {
   }
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
+  // (a playing tour paused while its tab is hidden, and played on when it is shown: it went on
+  // stepping unseen -- R169-11)
+  document.addEventListener('visibilitychange', () => {
+    const t = app.tour;
+    if (!t) return;
+    if (document.hidden && t.playing) { setTourPlaying(false); t.hiddenPaused = true; }
+    else if (!document.hidden && t.hiddenPaused) { t.hiddenPaused = false; t.ended = false; if (!t.playing) setTourPlaying(true); }
+  });
   // a press in a caption that scrolls takes the focus there, so the keys scroll it (R72-3)
   $('tourbody').addEventListener('click', (e) => { const b = e.currentTarget; if (b.scrollHeight > b.clientHeight) b.focus({ preventScroll: true, focusVisible: false }); });
   // the tour maker: File > Make a tour… (a tour playing is opened in it), loaded on its first open
