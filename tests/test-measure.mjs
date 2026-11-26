@@ -770,8 +770,9 @@ await test('the hole table\'s "Copy as CSV" puts the header and the hole\'s row 
       const n0 = told.length;
       $('holescsv').onclick();
       await new Promise((r) => setTimeout(r, 5));
-      assert.deepEqual(clip, ['n,diameter (mm),"X, Y (mm)",depth (mm),rim diameter (mm)\n1,3.20,"20.00, 30.00",1.60,']);
-      assert.deepEqual(told.slice(n0), ['hole table copied']);
+      // (tab-separated, X and Y each a column, the corner named: a spreadsheet's paste -- R163-1)
+      assert.deepEqual(clip, ['Positions from the corner of board\n#\tØ (mm)\tX (mm)\tY (mm)\tdepth (mm)\trim Ø (mm)\n1\t3.20\t20.00\t30.00\t1.60\t']);
+      assert.deepEqual(told.slice(n0), ['hole table copied: paste it into a spreadsheet']);
     });
   } finally {
     if (had) Object.defineProperty(globalThis, 'navigator', had); else delete globalThis.navigator;

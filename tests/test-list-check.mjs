@@ -259,6 +259,20 @@ await test('a model whose body drops after its headers is that model\'s red row,
   assert.match(r.entries[1].checks[0].detail, /could not be read: network error/);
 });
 
+await test('a field cad.place does not read is named, with the field it likely meant (R163-2)', async () => {
+  const list = JSON.stringify({ 'a.stl': { name: 'A', picture: 'a.png', 'product page': 'https://x.test/a', author: 'Me' }, 'b.stl': { name: 'B', image: 'b.png' } });
+  const stl = new TextEncoder().encode(STL_TRI('x'));
+  const fetchFn = async (url) => {
+    if (String(url).endsWith('list.json')) return new Response(list, { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(stl, { status: 200, headers: { 'content-length': String(stl.length) } });
+  };
+  const r = await checkLists(['https://x.test/list.json'], 'https://x.test/', { fetchFn, parallel: 1 });
+  const f = (e) => e.checks.find((c) => c.what === 'fields');
+  assert.equal(f(r.entries[0])?.level, 'warn');
+  assert.equal(f(r.entries[0]).detail, 'not read by cad.place: "picture" (did you mean "image"?), "product page" (did you mean "page"?)');
+  assert.equal(f(r.entries[1]), undefined, 'must not fire on known fields');
+});
+
 await test('whole-list', async () => {
   const seen = [];
   const r = await checkLists([`${B}models.json`], 'https://cad.place/', { fetchFn: fakeFetch, onEntry: (e) => seen.push(e.name) });

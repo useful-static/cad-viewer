@@ -954,7 +954,7 @@ export function createMeasure(deps) {
     const rows = list.map((h, i) => {
       const v = all3 ? vals(h, axes) : vals(h, axesOf(h));
       // (head: a countersunk hole's countersink diameter -- js/measure-geom.js holesOf, r67)
-      return { n: i + 1, d: h.diameter, at: v.join(', '), said: v.map((x, q) => `${'XYZ'[axes[q]]} ${x}`).join(', '), through: h.rims > 1, depth: h.depth, head: h.head || 0 };
+      return { n: i + 1, d: h.diameter, at: v.join(', '), v, said: v.map((x, q) => `${'XYZ'[axes[q]]} ${x}`).join(', '), through: h.rims > 1, depth: h.depth, head: h.head || 0 };
     });
     const posHead = list.length ? `${axes.map((j) => 'XYZ'[j]).join(', ')} (${deps.unit()})` : `position (${deps.unit()})`;
     // per size (a Ø within 1e-4, or fit noise far out, of the one before it; a countersink apart),
@@ -1002,7 +1002,7 @@ export function createMeasure(deps) {
       (g.axes ||= new Set()).add(na.indexOf(Math.max(na[0], na[1], na[2])));
       for (let j = 0; j < 3; j++) { g.lo[j] = Math.min(g.lo[j], h.centre[j]); g.hi[j] = Math.max(g.hi[j], h.centre[j]); }
     }
-    return { list, rows, groups: [...groups.values()], posHead, untold, unpaired };
+    return { list, rows, groups: [...groups.values()], posHead, axes, untold, unpaired };
   }
   function showHoles(ids, ref = null, name = '') {
     const box = $('holes');
@@ -1095,12 +1095,20 @@ export function createMeasure(deps) {
       if (st.holes.pick === r.n - 1) { tr.classList.add('pick'); tr.setAttribute?.('aria-current', 'true'); } // (a kept pick: R26-1)
       tb.append(tr);
     }
+    // (a spreadsheet's paste: tab-separated, X / Y / Z each a column, the corner they are from named,
+    // and an HTML table where the clipboard takes one -- commas put every line in column A: R163-1)
     $('holescsv').onclick = () => {
       const u = deps.unit();
-      const csv = [`n,diameter (${u}),"${t.posHead}",depth (${u}),rim diameter (${u})`,
-        ...t.rows.map((r) => `${r.n},${deps.num(r.d)},"${r.at}",${r.through ? deps.num(r.depth) : ''},${r.head ? deps.num(r.head) : ''}`),
-        ...(t.untold || t.unpaired ? [`# ${untoldText(t.untold, t.unpaired)}`] : [])].join('\n');
-      copyText(csv, 'hole table copied');
+      const lines = [[$('holesfrom').textContent], ['#', `Ø (${u})`, ...t.axes.map((j) => `${'XYZ'[j]} (${u})`), `depth (${u})`, `rim Ø (${u})`],
+        ...t.rows.map((r) => [r.n, deps.num(r.d), ...r.v, r.through ? deps.num(r.depth) : '', r.head ? deps.num(r.head) : '']),
+        ...(t.untold || t.unpaired ? [[untoldText(t.untold, t.unpaired)]] : [])];
+      const tsv = lines.map((l) => l.join('\t')).join('\n');
+      const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      const html = `<table>${lines.map((l) => `<tr>${l.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`;
+      if (globalThis.ClipboardItem && navigator.clipboard?.write) {
+        navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([tsv], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
+          .then(() => deps.tell('hole table copied: paste it into a spreadsheet'), () => copyText(tsv, 'hole table copied: paste it into a spreadsheet'));
+      } else copyText(tsv, 'hole table copied: paste it into a spreadsheet');
     };
     // no hole at all: one line saying so, not an empty table under a caption (UI design round 5 V-2)
     const none = !t.list.length;

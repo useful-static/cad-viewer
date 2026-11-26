@@ -878,7 +878,7 @@ await test('tour-recorder.js: Save after one step calls api.save once with the u
     $('tesave').onclick();
   });
   assert.deepEqual(saved, [['board.cadtour.json', 1]]);
-  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json']);
+  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json: send the file to share it (they open the model, then Make a tour… › Open…), or put it on your site for a link']);
 });
 await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved board.webm, 3.0 MB", Pictures resolving 4 "saved board-pictures.zip, 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30; the file named: R156-8)', async () => {
   for (const [bytes, pics, want] of [[3145728, 4, ['saved board.webm, 3.0 MB', 'saved board-pictures.zip, 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {

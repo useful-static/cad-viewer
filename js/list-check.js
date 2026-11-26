@@ -11,7 +11,7 @@
 // the URL it tried. Pure apart from fetch, which the caller passes (tests
 // pass a fake): tests/test-list-check.mjs.
 
-import { NOT_FETCHED, READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
+import { FIELD_MEANT, NOT_FETCHED, READ_TIMEOUT_MS, answeredFrom, fetchModelLists, isTimeout, readCapped, timedFetch } from './model-list.js';
 import { MAX_TOUR_BYTES, parseTour } from './tour.js';
 import { FORMATS, MAX_TEXT_BYTES, SNIFF_BYTES, TEXT_LIMIT_WORDS, dwgRefusal, fileNameOfUrl, formatOfName, mbTenth, opensAsZip, readsAsText, sizeMb, sizeOver, sniffFormat as sniffBytes, GLB_BIN, GLB_JSON, GLTF_WORDS, companionOf, glbChunks, gltfBufferRefusal, takesCompanions, tooMuchText, meshReaderOf, readerOf, stlIsBinary, textBytes, textOverWords, zipCompanions, zipModel } from './formats.js';
 import { threeMfRoot } from './xml-walk.js';
@@ -1097,6 +1097,11 @@ export async function checkLists(urls, base, { fetchFn = fetch, onEntry = null, 
     if (e.step) await add('STEP', e.step, () => checkFile(e.step, { fetchFn, method: 'HEAD', download: true }));
     // (the name in curly quotes, as the results' quotes: R108-5)
     for (const t of e.tours || []) await add(`tour “${t.name}”`, t.url, () => checkTour(t.url, readFn));
+    // (a field the viewer does not read, named with the one it likely meant: R163-2)
+    if (e.unknown?.length) {
+      const meant = (k) => FIELD_MEANT[k.toLowerCase().replace(/[\s_-]/g, '')];
+      checks.push({ what: 'fields', level: 'warn', url: e.url, detail: `not read by cad.place: ${e.unknown.map((k) => `"${k}"${meant(k) ? ` (did you mean "${meant(k)}"?)` : ''}`).join(', ')}` });
+    }
     const out = { name: e.name, url: e.url, id: e.id || null, checks };
     if (onEntry) onEntry(out, i, n);
     return out;

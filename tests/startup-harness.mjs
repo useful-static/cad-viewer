@@ -70,7 +70,8 @@ const arrow = (head) => { const at = src.indexOf(head); return at < 0 ? miss(hea
 // (addToScene's own tail, after its scene is shown: what it does once a model has joined -- the
 // harness called landPendingView itself, and a mutant that took it out of addToScene passed: r60)
 const ADD_TAIL = (() => {
-  const head = '  announce(`${name} added: ${models.length} models in the view`);\n';
+  // (from the comment before its pending view lands: the announce became a branch, R163-3)
+  const head = '  // (a #view= edited in while it loaded lands on the scene it joined: r60 A3)\n';
   const at = src.indexOf(head);
   return at < 0 ? miss(head) : src.slice(at + head.length, src.indexOf('\n}\n', at));
 })();

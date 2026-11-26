@@ -1,34 +1,7 @@
-// Model lists: ?list=<url> names a JSON file of the models a site offers, and
-// the viewer shows their names in a drop-down that opens the one picked. Also
-// the address's rules the page (main.js) and its early fetch (js/early.js)
-// share: the model it names (modelUrlFrom, modelNameFrom), whether a poster
-// holds it back (posterAsked), and a list's or tour's read (timedFetch).
-// ?list= may be given more than once; the lists are joined in the order the
-// URL gives them, and a file named twice keeps its first place and name.
-//
-// A list file is one JSON object, file -> display name, in the order shown:
-//
-//   { "boards/main-board.cadmesh.gz": "Main board",
-//     "https://example.com/case.stp.gz": "Case" }
-//
-// A file is a URL, resolved against the list's own URL (so a list names the
-// files beside it by their bare names). A name may also be { "name": "…" },
-// with an "orient" beside it: which of that file's axes is up and which faces
-// the viewer (js/orient.js), so files drawn in different frames open the same
-// way round:
-//
-//   { "board-a.cadmesh.gz": { "name": "Board A", "orient": "up:+z,front:-y" },
-//     "board-b.cadmesh.gz": { "name": "Board B", "orient": "up:+z,front:+x" } }
-//
-// It may also carry step, page, links, image, author, license, labels, style and notes (extras,
-// below); a field it does not know is ignored, a known one that is wrong is
-// refused with the reason.
-// JavaScript orders an object's integer-like keys ("10", "2") first, by
-// number: a list whose files are named so can be an array of pairs instead,
-// [["10", "Ten"], ["2", "Two"]], which keeps its order whatever the names.
-// Like ?src=, a list on another site must be served with CORS.
-// A file must be http(s), or on the list's own scheme and host (an app that
-// serves the viewer and its files from its own scheme, js/same-place.js).
+// Model lists (?list=<url>, joined in order) and the address's rules main.js and js/early.js share.
+// A list is one JSON object, file (a URL against the list's) -> name, or -> { "name", "orient", and
+// the fields of ENTRY_FIELDS (extras, below) }, or an array of [file, name] pairs. An unknown field
+// is ignored (and named by the check page); a wrong known one refused. CORS as ?src=.
 
 import { parseOrient } from './orient.js';
 import { samePlace } from './same-place.js';
@@ -80,6 +53,9 @@ export function parseModelList(text, listUrl) {
     }
     if (v && typeof v === 'object') Object.assign(entry, extras(file, v, listUrl));
     if (v && typeof v === 'object') Object.assign(entry, names(file, v));
+    // (a field the viewer does not read, kept for the check page to name: "picture" passed as none -- R163-2)
+    const unknown = v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).filter((k) => !ENTRY_FIELDS.includes(k)) : [];
+    if (unknown.length) entry.unknown = unknown;
     return entry;
   });
   // (an id or an alias names one model of the list: a second is refused)
@@ -202,36 +178,14 @@ export function modelNameFrom(search, lists) {
   return isRelative(search.get('src')) ? `"${search.get('src')}"` : null;
 }
 
-// An entry's other fields, all optional, each checked (a wrong one refuses the
-// list, naming the file and the field, as orient does):
-//   step     the source CAD file the model was converted from: File >
-//            Download STEP (a URL, resolved against the list's)
-//   page     the model's own page (a product page): the info panel links it
-//   links    [{ "name": "Board layout", "url": "<an http(s) page>" }] (at most
-//            10): more pages about it, which the info panel lists after the
-//            page, each by its name and its site's host (a list on any site
-//            can name any page, so the host is never left out)
-//   image    a picture of it: File > Browse models shows the list by them, and
-//            the download's card while it opens (loaded with CORS: the
-//            viewer's page is cross-origin isolated)
-//   author, license   who made it and on what terms: the info panel says so
-//   labels   { "<a part's name>": "<what to call it>" }: names the parts show
-//            in the tree, on hover and in the info panel (the file's own name
-//            stays in the tooltip)
-//   style    the display style it opens in when this browser has no choice of
-//            its own (js/styles.js ids)
-//   tours    [{ "name": "A tour of the board", "url": "<a .cadtour.json>" }]:
-//            File offers each (js/tour.js), resolved against the list's URL
-//   notes    [{ "text": "HDMI", "part": "HDMI_1_3" } or { "text": …, "at": [x, y, z] }]:
-//            notes pinned on the model (a part's at the top of it), as
-//            Measure's Note makes them, unless a view link brings its own
-//   id       a fixed name, which a link names the model by: ?model=<id>
-//            (a-z, 0-9, "-"; one model's in the joined lists, MODEL_ID)
-//   aliases  [ "<an id it had before>", … ]: links made then still open it
-//   hide     [ "<a part's name>", … ]: parts hidden when it opens (a heatsink
-//            over the chips), unless a view link brings its own view; Show all
-//            brings them back. Names as a tour names parts (js/tour.js
-//            resolveParts: a label, a node, a body, a path, or "#<id>")
+// An entry's other fields, all optional, each checked (a wrong one refuses the list):
+//   step (source CAD file: Download STEP), page (its own page), links [{ name, url }] (<= 10),
+//   image (Browse models, the load card; CORS), author, license, labels { part: label },
+//   style (js/styles.js id), tours [{ name, url }], notes [{ text, part | at }], id (?model=<id>),
+//   aliases [ids], hide [part names, as a tour names parts]
+// every field an entry may carry; and the one a visitor's word likely meant (the check page's hint)
+export const ENTRY_FIELDS = ['name', 'orient', 'step', 'page', 'image', 'author', 'license', 'labels', 'style', 'tours', 'links', 'notes', 'id', 'aliases', 'hide'];
+export const FIELD_MEANT = { picture: 'image', photo: 'image', thumbnail: 'image', img: 'image', url: 'page', link: 'page', product: 'page', productpage: 'page', source: 'step', download: 'step', licence: 'license', title: 'name', label: 'labels', tour: 'tours', hidden: 'hide' };
 function extras(file, v, listUrl) {
   const out = {};
   const bad = (field, why) => new Error(`"${file}": its ${field} ${why}`);

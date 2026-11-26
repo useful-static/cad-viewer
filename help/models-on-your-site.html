@@ -20,7 +20,10 @@
 <h2 id="list">3. Offer them all as a list</h2>
 <p>Write a JSON list of your models, each file (relative to the list) with the name to show, and put it beside them:</p>
 <pre>{"bracket.step": "Bracket", "case.stl": "Case"}</pre>
-<p><code>https://cad.place/?list=https://example.com/models/models.json</code> opens the first; the others are in the model list in the toolbar (in the <strong>File</strong> menu, under <strong>Open…</strong>, on a phone). When the entries have pictures, <strong>File › Browse models…</strong> shows them as a grid. An entry can also carry a picture, a link to its product page, the source STEP file to download, its author and licence.</p>
+<p><code>https://cad.place/?list=https://example.com/models/models.json</code> opens the first; the others are in the model list in the toolbar (in the <strong>File</strong> menu, under <strong>Open…</strong>, on a phone). When the entries have pictures, <strong>File › Browse models…</strong> shows them as a grid. An entry can also carry a picture, a link to its product page, the source STEP file to download, its author and licence, by these names:</p>
+<pre>{"bracket.step": {"name": "Bracket", "image": "bracket.png", "page": "https://example.com/bracket",
+                  "step": "bracket.step", "author": "Example Co.", "license": "CC BY 4.0"}}</pre>
+<p>A field cad.place does not know is left out without a word in the viewer; the list check below names it.</p>
 <p>Before you publish, open the <a href="/check">list check</a> with your list's address: <code>https://cad.place/check?list=https://example.com/models/models.json</code>. It fetches every entry the way the viewer does and tells you what fails and why.</p>
 <h2>4. Embed the viewer in your page</h2>
 <pre>&lt;iframe src="https://cad.place/?embed=1&amp;src=https://example.com/models/bracket.step" width="800" height="600" allowfullscreen&gt;&lt;/iframe&gt;</pre>

@@ -1010,7 +1010,7 @@ function viewChanged() {
 
 // The camera framing bbox seen with q -> { target, dist, bar }, above `cover` px; pad >= 0 (a tour
 // step) by fitWindow (R82-4, R90-1, R91-1, R91-2), pad < 0 (Fit) by fitBox.
-function fitPose(bbox, q, margin = 1.05, cover = optbarHeight(), pad = -1, ortho = app.cam.ortho, top = 0) {
+function fitPose(bbox, q, margin = 1.05, cover = viewCover(), pad = -1, ortho = app.cam.ortho, top = 0) {
   const c = { ...app.cam, q, ortho };
   const box = $('stage');
   const h = Math.max(1, box.clientHeight), w = Math.max(1, box.clientWidth);
@@ -1212,7 +1212,7 @@ let TOUCH_HINT = 'one finger turns · two pinch and pan · tap selects a part ·
 function touchHintOnce() {
   // (after the load's own note, not instead of it: R144-3)
   if (carriedNote && $('hover').textContent === carriedNote && performance.now() < noteHeldUntil) { setTimeout(touchHintOnce, noteHeldUntil - performance.now() + 50); return; }
-  if (app.embed || !coarseOnly() || $('hover').textContent) return; // (embedded: its own hint)
+  if (app.embed || !coarseOnly() || $('hover').textContent || !$('touredit').hidden) return; // (embedded: its own hint; not over the maker, R163-4)
   // (storage off: shown every time, which is harmless)
   if (getPref('cadv.touchHint')) return;
   TOUCH_HINT = `one finger turns · two pinch and pan · tap selects a part${$('panelbtn').getClientRects().length ? ' · ☰ for parts' : ''}`;
@@ -1720,7 +1720,7 @@ function embedCode() {
   u.searchParams.set('embed', '1');
   if ($('embedtheme').value === 'light') u.searchParams.set('theme', 'light');
   // (named as the viewer names it, a list's name: R162-6)
-  const title = `${app.dxf ? app.dxf.name : $('model').textContent || app.sourceName || 'A model'} in cad.place`.replace(/["<>&]/g, '');
+  const title = `${app.dxf ? app.dxf.name : listEntry(app.sourceUrl)?.name || app.sourceName || 'A model'} in cad.place`.replace(/["<>&]/g, ''); // (not the toolbar's counts: R163-6)
   return { url: u.href, code: `<iframe src="${u.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" width="640" height="420" style="border:0; max-width:100%" allow="fullscreen" allowfullscreen title="${title}"></iframe>` };
 }
 function syncEmbed() {
@@ -3359,7 +3359,7 @@ function syncOptbar() {
   // shrinks leaves the view; nor under a measurement (R133-6)
   // (nor while walking: a fit ends Walk)
   const measuring = (app.measure?.on && app.measure.results?.length) || app.walk;
-  if (!card && !measuring && app.header && atLastFit() && Math.min(optbarHeight(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
+  if (!card && !measuring && app.header && atLastFit() && Math.min(viewCover(), $('stage').clientHeight - 1) > app.lastFit.bar) fitTo(app.lastFit.bbox);
 }
 
 // the camera is where the last Fit put it (nothing has moved it since)
@@ -3369,6 +3369,8 @@ function atLastFit() {
 }
 
 const optbarHeight = () => ($('optbar').hidden ? 0 : $('optbar').offsetHeight);
+// and the tour maker where it sits over the view's foot (a phone): a fit frames above both (R163-4)
+const viewCover = () => optbarHeight() + (!$('touredit').hidden && innerWidth < 520 && !$('stage').classList.contains('touring') ? $('touredit').offsetHeight + 8 : 0);
 
 // a row's right edge fades while more of it lies past the edge (as #tb's)
 function optFade(o) {
@@ -4593,7 +4595,12 @@ async function addToScene(base, name, seq, unmeshed = 0) {
   if (!(await showScene(models, { newTree: true }))) return;
   setView('iso');
   setStatus('ready', readyText());
-  announce(`${name} added: ${models.length} models in the view`);
+  // (two versions of one part laid over each other, one colour: the way to tell them apart said -- R163-3)
+  const o = offset || [0, 0, 0], a = s && b0 && geomMm() ? turn ? turnBox(turn, b0) : b0 : null;
+  const vol = (lo, hi) => [0, 1, 2].reduce((p, k) => p * Math.max(0, hi[k] - lo[k]), 1);
+  const lap = a ? vol(a.min.map((v, k) => Math.max(v + o[k], s.min[k])), a.max.map((v, k) => Math.min(v + o[k], s.max[k]))) / Math.max(1e-12, Math.min(vol(a.min, a.max), vol(s.min, s.max))) : 0;
+  if (lap > 0.5) tell(`${name} added over the model it joins: Colours › By assembly gives each its own colour, the X-ray style shows both`, 7000, `${name} added over the model it joins: ${models.length} models in the view`);
+  else announce(`${name} added: ${models.length} models in the view`);
   // (a #view= edited in while it loaded lands on the scene it joined: r60 A3)
   landPendingView();
 }
@@ -7097,7 +7104,7 @@ if (self.ResizeObserver) { // (R69-1..R71-3)
   });
   const sync = () => {
     raf = 0;
-    if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; }
+    if (open !== !te.hidden) { open = !te.hidden; h = 0; te.scrollTop = 0; syncOptbar(); } // (a phone's maker opened: the view framed above it, R163-4)
     h = st.classList.contains('touring') ? Math.max(h, c.offsetHeight) : c.offsetHeight;
     if (st.style.getPropertyValue('--tourcard-h') !== `${h}px`) st.style.setProperty('--tourcard-h', `${h}px`);
     if (!c.hidden) markScrolls($('tourbody'));

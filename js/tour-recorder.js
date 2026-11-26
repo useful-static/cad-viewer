@@ -325,7 +325,9 @@ export function createTourRecorder(api) {
     const slug = fileBase();
     api.save(`${t}\n`, `${slug}.cadtour.json`);
     const also = added.length ? `; it plays on ${first} alone, without ${added.length === 1 ? 'the added model' : `the ${added.length} added models`}` : '';
-    note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}` : `saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
+    // (how to share it said: send the file, or put it online for a link -- the guide's web address
+    // left a visitor with no site no way: R163-5)
+    note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}: send the file to share it (they open the model, then Make a tour… › Open…), or put it on your site for a link` :`saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
   };
 
   // the tour as files: its pictures (a zip), or a video of it playing
