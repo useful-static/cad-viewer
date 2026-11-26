@@ -679,6 +679,26 @@ await test('a hole table row is picked from the keyboard by Enter and Space, not
     if (had === undefined) delete globalThis.document; else globalThis.document = had;
   }
 });
+// a click (or tap) on a hole row while measuring takes the hole's centre as a point, as Enter does;
+// with Measure off it only names the hole (R164-1)
+await test('a hole row clicked while measuring is a point; clicked with Measure off it names the hole (R164-1)', async () => {
+  const had = globalThis.document;
+  const made = [];
+  globalThis.document = { createElement: (tag) => { const e = { tag, kids: [], textContent: '', classList: { toggle() {}, add() {} }, append(...c) { this.kids.push(...c); } }; made.push(e); return e; } };
+  try {
+    const { meas, told } = await measureAt([BOARD(), { name: 'washer', faces: washer(1.6, 4, 1.6, 48, 20, 30) }]);
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    const row = () => made.filter((e) => e.tag === 'tr').pop();
+    row().onclick();
+    assert.match(told[told.length - 1], /^hole 1: Ø /, 'Measure off: named');
+    meas.setOn(true);
+    meas.showHoles([2], { min: [0, 0, 0], name: 'board' }, 'washer');
+    row().onclick();
+    assert.match(told[told.length - 1], /: point 1 of 2$/, 'must fire: the click placed no point');
+  } finally {
+    if (had === undefined) delete globalThis.document; else globalThis.document = had;
+  }
+});
 // (r112 M measure-ui-B41, untriaged in M's report) while a note's text is being typed, a click
 // places nothing more
 await test('while a note\'s text is typed, a click on the model places nothing more (r112 M measure-ui-B41)', async () => {

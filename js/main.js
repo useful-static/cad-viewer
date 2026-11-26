@@ -1119,7 +1119,7 @@ for (const v of VIEW_ROWS) {
   b.dataset.view = v.id;
   b.textContent = v.name;
   if (v.key) {
-    b.title = `${v.name} view (${v.key})`;
+    b.title = v.id === 'iso' ? `Iso view, as the model opened (${v.key})` : `${v.name} view (${v.key})`; // (the way back to the start named: R164-4)
     b.setAttribute('aria-keyshortcuts', v.key);
     const k = document.createElement('kbd');
     k.textContent = v.key;
@@ -4599,7 +4599,7 @@ async function addToScene(base, name, seq, unmeshed = 0) {
   const o = offset || [0, 0, 0], a = s && b0 && geomMm() ? turn ? turnBox(turn, b0) : b0 : null;
   const vol = (lo, hi) => [0, 1, 2].reduce((p, k) => p * Math.max(0, hi[k] - lo[k]), 1);
   const lap = a ? vol(a.min.map((v, k) => Math.max(v + o[k], s.min[k])), a.max.map((v, k) => Math.min(v + o[k], s.max[k]))) / Math.max(1e-12, Math.min(vol(a.min, a.max), vol(s.min, s.max))) : 0;
-  if (lap > 0.5) tell(`${name} added over the model it joins: Colours › By assembly gives each its own colour, the X-ray style shows both`, 7000, `${name} added over the model it joins: ${models.length} models in the view`);
+  if (lap > 0.5) tell(`${name} added over the model it joins: the X-ray style shows both, Colours › By assembly gives each its own colour`, 7000, `${name} added over the model it joins: ${models.length} models in the view`);
   else announce(`${name} added: ${models.length} models in the view`);
   // (a #view= edited in while it loaded lands on the scene it joined: r60 A3)
   landPendingView();

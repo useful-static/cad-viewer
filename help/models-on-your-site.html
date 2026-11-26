@@ -23,7 +23,7 @@
 <p><code>https://cad.place/?list=https://example.com/models/models.json</code> opens the first; the others are in the model list in the toolbar (in the <strong>File</strong> menu, under <strong>Open…</strong>, on a phone). When the entries have pictures, <strong>File › Browse models…</strong> shows them as a grid. An entry can also carry a picture, a link to its product page, the source STEP file to download, its author and licence, by these names:</p>
 <pre>{"bracket.step": {"name": "Bracket", "image": "bracket.png", "page": "https://example.com/bracket",
                   "step": "bracket.step", "author": "Example Co.", "license": "CC BY 4.0"}}</pre>
-<p>A field cad.place does not know is left out without a word in the viewer; the list check below names it.</p>
+<p>More fields: <code>orient</code> (which axis is up, e.g. <code>"up:+z,front:-y"</code>, so files drawn in different frames open alike), <code>tours</code> (<code>[{"name": "…", "url": "….cadtour.json"}]</code>), <code>links</code>, <code>labels</code>, <code>notes</code>, <code>hide</code>, <code>style</code>, <code>id</code> and <code>aliases</code>. A field cad.place does not know is left out without a word in the viewer; the list check below names it.</p>
 <p>Before you publish, open the <a href="/check">list check</a> with your list's address: <code>https://cad.place/check?list=https://example.com/models/models.json</code>. It fetches every entry the way the viewer does and tells you what fails and why.</p>
 <h2>4. Embed the viewer in your page</h2>
 <pre>&lt;iframe src="https://cad.place/?embed=1&amp;src=https://example.com/models/bracket.step" width="800" height="600" allowfullscreen&gt;&lt;/iframe&gt;</pre>

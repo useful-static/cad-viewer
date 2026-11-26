@@ -880,8 +880,8 @@ export function createMeasure(deps) {
   function onNote(say = false) {
     if (!st.on) return;
     const plain = scene.mesh && !scene.mesh.faces, row = !touchOnly() && !$('holes').hidden;
-    deps.tell(`Measure: ${touchOnly() ? 'tap points on the model' : `click points on the model${row ? ', or Enter on a hole row' : ''} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}`,
-      plain ? 6000 : 3000, say ? `measure on${row ? ', or Enter on a hole row for a point' : ''}` : ''); // (R65-1)
+    deps.tell(`Measure: ${touchOnly() ? `tap points on the model${row ? ' or a hole row' : ''}` : `click points on the model${row ? ' or a hole row' : ''} (Esc to stop)`}${plain ? '. This file has triangles only, no CAD faces: points snap to the surface, not to corners, edges or centres' : ''}`,
+      plain ? 6000 : 3000, say ? `measure on${row ? ', or a hole row for a point' : ''}` : ''); // (R65-1)
   }
 
   // (said, and the gone result's note ended with it: silent, it read "24.37 mm" for 4 s -- R135-7)
@@ -1082,7 +1082,8 @@ export function createMeasure(deps) {
         } else deps.tell(said, 3000);
         deps.queueFrame();
       };
-      tr.onclick = () => pick(false);
+      // (a click or tap too: only Enter made a row a point, and touch had no way -- R164-1)
+      tr.onclick = () => pick(true);
       tr.onkeydown = (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(true); return; }
         const rows = [...tb.children], i = rows.indexOf(tr);
