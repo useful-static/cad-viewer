@@ -15,6 +15,7 @@
 //   model()                the model open now: { key, unit, name } (the draft is tied to one), or null
 //   orient()               the view's orientation ("+z-y"), written into a new tour
 //   save(text, name)       download the file
+//   link(text)             a link carrying the tour, copied -> { url, copied } or { error }
 //   validate(text)         the tour parser: throws naming what is wrong
 //   pictures(tour)         each step as a picture, zipped -> how many
 //   video(tour)            the tour played and recorded -> bytes, or why not
@@ -70,7 +71,7 @@ export function createTourRecorder(api) {
 
   const el = {
     panel: $('touredit'), title: $('tetitle'), mode: $('temode'), loop: $('teloop'), list: $('testeps'),
-    add: $('teadd'), open: $('teopen'), file: $('tefile'), close: $('teclose'), play: $('teplay'), save: $('tesave'),
+    add: $('teadd'), open: $('teopen'), file: $('tefile'), close: $('teclose'), play: $('teplay'), save: $('tesave'), link: $('telink'),
     note: $('tenote'), step: $('testep'), pics: $('tepics'), video: $('tevideo'), sTitle: $('tes-title'), sText: $('tes-text'), sCam: $('tes-cam'), sDim: $('tes-dim'),
     sFly: $('tes-transition'), sHold: $('tes-hold'), sOrbit: $('tes-orbit'), sUpdate: $('tes-update'), sGo: $('tes-go'),
   };
@@ -150,7 +151,7 @@ export function createTourRecorder(api) {
       el.list.append(li);
     });
     el.step.hidden = draft.sel < 0;
-    el.play.disabled = el.save.disabled = el.pics.disabled = el.video.disabled = !draft.steps.length || busy;
+    el.play.disabled = el.save.disabled = el.link.disabled = el.pics.disabled = el.video.disabled = !draft.steps.length || busy;
     // (one step does not loop: R84-1, R85-1)
     el.loop.disabled = draft.steps.length < 2;
     el.loop.title = el.loop.disabled ? 'Loop needs two steps or more' : '';
@@ -327,7 +328,16 @@ export function createTourRecorder(api) {
     const also = added.length ? `; it plays on ${first} alone, without ${added.length === 1 ? 'the added model' : `the ${added.length} added models`}` : '';
     // (how to share it said: send the file, or put it online for a link -- the guide's web address
     // left a visitor with no site no way: R163-5)
-    note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}: send the file to share it (they open the model, then Make a tour… › Open…), or put it on your site for a link` :`saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
+    note(api.modelUrl() ? `saved ${slug}.cadtour.json${also}: send the file to share it (they open the model, then Make a tour… › Open…), or Copy link` :`saved ${slug}.cadtour.json (the model was opened from this device: the file names no model, so open the model, then the tour)${also}`);
+  };
+  // Copy link: the tour carried in the link itself, for a visitor with no site (R163-5)
+  el.link.onclick = async () => {
+    if (!sameModel('linked')) return;
+    let t;
+    try { api.validate(text()); t = text(); } catch (e) { note(`no link: ${e.message}`); return; }
+    if (!JSON.parse(t).model) { note('no link: the model was opened from this device, so a link cannot open it. Save tour and send the file with the model'); return; }
+    const r = await api.link(t);
+    note(r.error ? `no link: ${r.error}` : `${r.copied ? 'link copied' : 'link shown to copy'}: it opens the model and plays the tour`);
   };
 
   // the tour as files: its pictures (a zip), or a video of it playing

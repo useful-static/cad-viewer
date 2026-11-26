@@ -1808,6 +1808,10 @@ function tourParts(names) {
 }
 
 async function readTour(url) {
+  // (carried in the link itself, z:…: js/tour-link.js -- R163-5)
+  if (url.startsWith('z:')) {
+    try { return { tour: parseTour(await (await import('./tour-link.js')).unpackTour(url), location.href) }; } catch (e) { return { error: `in the link could not be read: ${e.message}` }; }
+  }
   let abs;
   // (a tour shared as a GitHub page or a Dropbox link is read from the file, and its model
   // resolves against that file: js/open-url.js fileUrl)
@@ -3437,9 +3441,7 @@ function showModelName() {
 }
 
 // ---------- model lists (?list=, js/model-list.js) ----------
-// The models a site offers, by name, in a drop-down beside Open…; picking
-// one opens it as ?src= would (and puts it in ?src=, so a reload or a view
-// link opens the same model).
+// The models a site offers, in a drop-down; a pick opens it as ?src= would.
 
 function fillModelList(entries) {
   app.listEntries = entries;
@@ -3649,10 +3651,7 @@ function loadListed(url) {
   });
 }
 
-// File > Browse models: the list as pictures (an entry's image, else a
-// placeholder) with their names; a pick opens it, Esc or × closes
-// add: Add model… on a list page -- a pick joins the view, and "A file…" ends the grid (a list board
-// could be put beside another only by typing ?add=: R160-2)
+// File > Browse models: the list as pictures; a pick opens it (add: joins the view, R160-2)
 function openGallery(add = false) {
   const grid = $('gallerygrid');
   grid.replaceChildren();
@@ -3963,9 +3962,7 @@ function setSectionAt(at) {
   viewChanged();
 }
 
-// The readout turned into a field: type the cut position in the unit its readout shows (lenUnit),
-// Enter puts the cut there, Esc (or leaving it) keeps it where it was
-// The cut's position from the reference's corner, as the info panel's (rangesFrom): R112-1
+// The readout as a field: the cut's position from the reference's corner, Enter sets it (R112-1)
 function secOrigin() {
   const ref = app.ref ? bboxOf(app.ref.ids) : app.header?.bbox;
   return ref ? ref.min[{ x: 0, y: 1, z: 2 }[app.section.axis]] || 0 : 0;
@@ -5299,10 +5296,7 @@ async function loadAny(buf, name, seq, extras = []) {
     conversion.ms = Math.round(performance.now() - tConv); // (in app.stats: the selftest's)
     if (stale(seq)) return;
     const out = conversion.buffer;
-    // an incomplete conversion is shown (it is what the converter could do)
-    // but never saved as if it were the model
-    // (nor one loadBuffer refuses, such as a file with no surfaces: saved
-    // once it is shown, in the background, r22)
+    // (an incomplete conversion is shown, never saved; nor one loadBuffer refuses: r22)
     await loadBuffer(out, name, seq, out, conversion);
     if (key && !conversion.unmeshedFaces && !stale(seq)) saveConversion(key, out, name);
     return;
@@ -5789,11 +5783,7 @@ function fillInfo2D(el) {
   if (app.dxf.sheet >= 0) row('sheet', `${full.layouts[app.dxf.sheet].name} (a layout: its sheet, and the drawing seen through its windows)`);
   const e = d.extents;
   if (e) {
-    // in Auto's unit for the drawing's, by its size, as 2D Measure and the 3D panel: by the one rule
-    // (js/units.js unconvertedNum: r89 A5, r90 A2)
-    // (the span and the unit's word by 2D Measure's own functions: r91 A2, Q3)
-    // (named for what it spans, dimensions and frame included -- read as the part's; a chosen layer's
-    // own in its place, the rows below held still: R162-3)
+    // (Auto's unit by js/units.js, 2D Measure's words; a chosen layer's size in the row's place: R162-3)
     const l = app.dxf.view.selected, of = (it) => dxfLib.layersOf(it).includes(l);
     const lb = l ? dxfLib.itemsBox({ paths: d.paths.filter((p) => of(p) && dxfLib.isShape(p)), texts: [] }) : null;
     const [k, v] = dxfViewLib.sizeRow(lb || e, d.units);
@@ -6089,9 +6079,7 @@ async function loadUrl(url) {
   let res;
   const ac = typeof AbortController === 'function' ? new AbortController() : null;
   app.fetchAbort = ac;
-  // a host's share page (a GitHub blob, a Dropbox ?dl=0, a Drive file page)
-  // fetched as the file it shares (js/open-url.js); the address keeps the link
-  // (fileUrl's own rule, with the host it was rewritten from, for the message: js/open-url.js)
+  // a host's share page fetched as the file it shares (js/open-url.js fileUrl)
   const direct = directFor(url);
   if (direct.from) announce(`${direct.from} link: opening the file it shares`);
   try {
@@ -7216,10 +7204,7 @@ function wireInput() {
     coarse: () => matchMedia('(pointer: coarse)').matches,
     // where hidden edges are drawn, everything drawn can be snapped
     showsHidden: () => currentStyle().seesHidden,
-    // Measure's points are where the bodies are, not where Explode draws them
-    // (Measure, Paint and Explode exclude each other: a click goes to one,
-    // and Measure and Paint pick the parts where they are, not where Explode
-    // draws them)
+    // Measure, Paint and Explode exclude each other: points are where the bodies are
     beforeOn: () => {
       // (no note of its own: setExplode says "explode off", and Measure's hint replaced a note here in
       // the same task, unseen -- r46 Q4, r48 A5)
@@ -7883,6 +7868,14 @@ function wireInput() {
     // the model open now, by its content, and the unit it is read in (null for a STEP or a .cadmesh)
     model: () => (app.header ? { key: modelKeyOf(app.header), unit: tourReading(), name: app.sourceName || 'another model' } : null),
     save: (text, name) => downloadText(text, name, 'application/json'),
+    link: async (text) => {
+      const { packTour, MAX_TOUR_LINK } = await import('./tour-link.js');
+      const u = new URL(location.pathname, location.href);
+      u.searchParams.set('tour', await packTour(text));
+      const url = u.href.replace('tour=z%3A', 'tour=z:');
+      if (url.length > MAX_TOUR_LINK) return { error: `the tour is too long for a link (${url.length} characters, at most ${MAX_TOUR_LINK}): Save tour and send the file` };
+      try { await navigator.clipboard.writeText(url); return { url, copied: true }; } catch { window.prompt('Copy this link to the tour:', url); return { url, copied: false }; }
+    },
     validate: (text) => parseTour(text, location.href),
     pictures: tourPictures,
     video: tourVideo,
@@ -8176,9 +8169,7 @@ function wireInput() {
         return;
       }
     }
-    // Letters match in either case (Caps Lock), or by place on a non-Latin layout. Esc, one thing
-    // a press: the panel, Measure's list, point, Measure, Paint, Walk, Explode, Section, selection
-    // (Walk by its bar's ×, the focus to the view: from "Walk ×" it fell to Open… -- R149-3)
+    // Letters in either case or by place; Esc closes one thing a press (Walk by its ×: R149-3)
     const escTool = () => (app.paintFaces ? (setPaint(false), true) : app.walk ? ($('walkoff').click(), true)
       : app.explode.on ? (setExplode(false, true), true) : app.section.axis !== 'off' ? ($('secoff').click(), true) : false);
     const acts = { f: () => $('fit').click(), Escape: () => (panelOpen() ? setPanel(false, true) : app.dxf ? ((app.dxf.view.escapeMeasure() && (app.measure?.sync2D(app.dxf.view), tell('point dropped', 2000), true)) /* (as 3D: R129-4) */ || (app.dxf.view.measuring ? (toggle2DMeasure(), true)
@@ -8207,9 +8198,7 @@ function wireInput() {
 }
 
 // ---------- the ? box ----------
-//
-// The controls and shortcuts, and the renderer with why a faster one was skipped, in a box from ?
-// (the button or the key; Esc or a press elsewhere closes it, the focus back to ?).
+// The controls, shortcuts and renderer, in a box from ? (Esc or a press elsewhere closes it).
 const helpOpen = () => !$('helppop').hidden;
 // under ?, its right edge with ?'s, but inside the window: a phone's box
 // is nearly the window's width, and aligned to ? it ran off the left
@@ -8363,10 +8352,7 @@ function openStart(src) {
     const joins = () => app.sourceUrl === src;
     for (const [i, raw] of adds.entries()) {
       if (!joins()) break;
-      // (a relative ?add= the list names is its entry, as a relative ?src= is: the list read first
-      // -- r54 A6)
-      // (not when the list's own read opened this first model: its entries are in, and the read waits
-      // on this chain -- r58 A2)
+      // (a relative ?add= is the list's entry: the list read first, unless it opened this -- r54, r58)
       if (lists.length && isRelative(raw) && app.listRead && !app.listEntries) await app.listRead;
       if (!app.scene || !untouched() || app.startChain !== chain) break;
       const u = (lists.length && listedUrlFrom(raw, lists, app.listEntries, location.href)) || raw;

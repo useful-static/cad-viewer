@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { encodeCadmesh } from '../js/cadmesh.js';
 import { crc32 } from '../js/crc32.js';
 import { parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, namesFor, DEFAULTS, DIMS, MODES, MAX_TOUR_BYTES, PART_NAME_MAX, PART_NAMES_MAX, RANGES } from '../js/tour.js';
+import { TOUR_IN_LINK, packTour, unpackTour } from '../js/tour-link.js';
 import { checkTour } from '../js/list-check.js';
 import { parseModelList } from '../js/model-list.js';
 import { EXPLODE_MODES } from '../js/view-link.js';
@@ -878,7 +879,34 @@ await test('tour-recorder.js: Save after one step calls api.save once with the u
     $('tesave').onclick();
   });
   assert.deepEqual(saved, [['board.cadtour.json', 1]]);
-  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json: send the file to share it (they open the model, then Make a tour… › Open…), or put it on your site for a link']);
+  assert.deepEqual(notes.filter((n) => !/^step \d+ added/.test(n)), ['saved board.cadtour.json: send the file to share it (they open the model, then Make a tour… › Open…), or Copy link']);
+});
+await test('tour-recorder.js: Copy link hands api.link the tour naming its model and says it was copied; a model from this device gets no link and is told why (R163-5)', async () => {
+  const linked = [], notes = [];
+  await withRecorder({ announce: (t) => notes.push(t), validate: () => ({ steps: [{}] }), link: async (t) => { linked.push(JSON.parse(t)); return { url: 'u', copied: true }; } }, async ({ $ }) => {
+    $('teadd').onclick();
+    await $('telink').onclick();
+  });
+  assert.equal(linked.length, 1);
+  assert.equal(linked[0].model, 'b.cadmesh');
+  assert.equal(notes.at(-1), 'link copied: it opens the model and plays the tour');
+  const notes2 = [];
+  await withRecorder({ announce: (t) => notes2.push(t), modelUrl: () => null, validate: () => ({ steps: [{}] }), link: async () => assert.fail('no link for a device model') }, async ({ $ }) => {
+    $('teadd').onclick();
+    await $('telink').onclick();
+  });
+  assert.match(notes2.at(-1), /^no link: the model was opened from this device/);
+});
+await test('tour.js: packTour/unpackTour round-trip a tour as z:<base64url>; a link cut short is refused in words; an inflate past MAX_TOUR_BYTES is stopped (R163-5)', async () => {
+  const text = JSON.stringify(tour2({ title: 'Ünïcode — step', text: 'x'.repeat(1500) }));
+  const z = await packTour(text);
+  assert.ok(z.startsWith(TOUR_IN_LINK) && /^z:[A-Za-z0-9_-]+$/.test(z), z.slice(0, 40));
+  assert.ok(z.length < text.length, `${z.length} < ${text.length}`);
+  assert.equal(await unpackTour(z), text);
+  await assert.rejects(unpackTour(z.slice(0, z.length >> 1)), /cut short or changed/);
+  await assert.rejects(unpackTour('z:!!!'), /cut short or changed/);
+  const bomb = await packTour(' '.repeat(MAX_TOUR_BYTES + 1));
+  await assert.rejects(unpackTour(bomb), /too large/);
 });
 await test('tour-recorder.js: Video resolving 3,145,728 bytes says "saved board.webm, 3.0 MB", Pictures resolving 4 "saved board-pictures.zip, 4 pictures"; a 0 says "no video" (r114 M3 tour-recorder-C30; the file named: R156-8)', async () => {
   for (const [bytes, pics, want] of [[3145728, 4, ['saved board.webm, 3.0 MB', 'saved board-pictures.zip, 4 pictures']], [0, 0, ['no video: nothing came back from the GPU', 'no pictures: nothing came back from the GPU']]]) {

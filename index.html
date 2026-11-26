@@ -463,7 +463,7 @@
   #testeps .tename.untitled, #touredit input::placeholder { color:#aab3bf; opacity:1; } #testeps .tename.untitled { font-style:italic; }
   html.light #testeps .tename.untitled { color:var(--dim); } html.light #touredit input::placeholder { color:var(--dim); } /* (a pseudo-element is not allowed in :is(): R80-4) */
   #testeps li button:not(.tename) { padding:3px 6px; } /* (the height of the step name beside it) */
-  #touredit #tesave { padding:3px 8px; } /* (one height with Preview: R155-7) */
+  #touredit #tesave, #touredit #telink { padding:3px 8px; } /* (one height with Preview: R155-7) */
   #touredit .terow label { display:inline-flex; align-items:center; gap:4px; } /* (Loop's box on its word's line) */
   #touredit input[type=number] { -moz-appearance:textfield; appearance:textfield; } /* (no spinners, as every number field: R121-6) */
   #touredit input[type=number]::-webkit-inner-spin-button, #touredit input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
@@ -1099,7 +1099,7 @@
         <label>Orbit <input id="tes-orbit" type="number" min="-360" max="360" step="5" autocomplete="off">°</label></div>
       <div class="terow"><button id="tes-update" title="This step takes the view as it is now">Update from the view</button><button id="tes-go" title="Show this step as the tour will">Show step</button></div>
     </div>
-    <div class="terow"><button id="teplay" disabled>Preview</button><button id="tesave" class="primary" disabled>Save tour</button><a class="helplink noembed" href="/help/share-tour.html" target="_blank" rel="noopener">Share or embed it ↗</a></div>
+    <div class="terow"><button id="teplay" disabled>Preview</button><button id="tesave" class="primary" disabled>Save tour</button><button id="telink" disabled title="Copy a link that carries the tour: it opens the model and plays it, with no file to put online">Copy link</button><a class="helplink noembed" href="/help/share-tour.html" target="_blank" rel="noopener">Share or embed it ↗</a></div>
     <div class="terow">Also as <button id="tepics" disabled title="Each step as a picture at twice the view's size, its caption drawn in, all in a zip">Pictures (zip)</button><button id="tevideo" disabled title="The tour played once through, recorded as a WebM video in this browser (as long as the tour plays)">Video (WebM)</button></div>
     <p id="tenote" class="note"></p>
   </div>
