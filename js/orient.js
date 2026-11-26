@@ -64,6 +64,22 @@ export function orientOrNull(s) {
   try { return s == null ? null : parseOrient(s); } catch { return null; }
 }
 
+// The turn that stands a model drawn in orientation `from` as one drawn in `to` stands (an added
+// list board in the first's frame: R160-3): rows [axis, sign], out[r] = sign * in[axis]; null when
+// either is unknown or they agree. A signed permutation, so exact.
+export function orientTurn(from, to) {
+  if (!from || !to || from === to) return null;
+  const basis = (o) => { const u = vec(o.slice(0, 2)), f = vec(o.slice(2)); return [u, f, cross(u, f)]; };
+  const a = basis(from), b = basis(to);
+  return [0, 1, 2].map((r) => {
+    for (let c = 0; c < 3; c++) {
+      const s = a[0][c] * b[0][r] + a[1][c] * b[1][r] + a[2][c] * b[2][r];
+      if (s) return [c, s];
+    }
+    return [r, 1];
+  });
+}
+
 // canonical -> { up, front, right } as axis names, for display
 export function orientRoles(o) {
   const up = vec(o.slice(0, 2)), front = vec(o.slice(2));

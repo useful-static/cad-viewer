@@ -960,7 +960,7 @@
       <!-- a drawing's sheet select, where the row is short (main.js refold) -->
       <span class="mhead" id="fhsheet" aria-hidden="true" hidden>Sheet</span>
       <span class="mhead" id="fhopen" aria-hidden="true">Open</span>
-      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Open another model into this view, at its own origin (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
+      <button id="gallerybtn" autocomplete="off" hidden title="Every model of the list, by its picture">Browse models…</button><span id="tourlinks"></span><button id="addmodelbtn" autocomplete="off" disabled title="Put another model in this view, where its own file places it (a board in its case, two boards): move it in the info panel, and check the clearance between them">Add model…</button><input id="addmodel" type="file" multiple hidden>
       <span class="mhead" aria-hidden="true">Share</span>
       <button id="sharelink" autocomplete="off" disabled title="Copy a link that opens this model at this view: camera, projection, style, section, explode, hidden and selected parts, notes">Copy view link</button><a id="checklist" class="btn" hidden target="_blank" rel="noopener" title="Check this page's model list, for its owner: each model, picture, STEP file and tour fetched as the viewer fetches them, with the reason for any it cannot open (a new tab)">Check this list…</a><button id="tourmake" autocomplete="off" disabled title="Make a tour of this model: a sequence of views, part colours and captions, played step by step or by itself, saved as a file of its own">Make a tour…</button>
       <!-- Save: every file the viewer writes, under one verb -->
@@ -974,7 +974,7 @@
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program, turned as the view is oriented, whole (not cut or exploded)">Save as <!-- one button per format: main.js builds them from js/export-mesh.js EXPORTS --></span>
     </div></div>
   <span class="sep"></span>
-  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the model, or a layout" title="The drawing (Model), or one of its layouts: a print sheet showing the drawing through its windows"></select>
+  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the drawing, or a layout" title="The drawing (Model), or one of its layouts: a print sheet showing the drawing through its windows"></select>
   <!-- the tools, together: each puts its controls in the options bar along
        the bottom of the view (UI organization review rank 2); on the
        narrowest screens they move into View's panel, named there -->
@@ -994,7 +994,7 @@
       <span class="presets"><!-- the named views: main.js builds them from js/orient.js VIEWS --></span>
       <span class="kbdnote"><kbd>9</kbd> The opposite view</span>
         </div></div>
-      <button id="proj" aria-pressed="false" title="Orthographic projection (off: perspective) (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
+      <button id="proj" aria-pressed="false" title="A flat view without perspective, as a drawing shows it: orthographic (5)" aria-keyshortcuts="5">Ortho<kbd>5</kbd></button><button id="up" aria-pressed="false" title="Treat Z as the model's up axis (off: Y up); returns to the Iso view">Z up</button>
       <select id="style" autocomplete="off" aria-label="Display style" aria-keyshortcuts="E" title="Display style. E switches the edges on and off in the Shaded styles (a choice is remembered in this browser)"></select>
       <!-- how the view looks and moves, remembered in this browser (feature
            review item 22): a menu of its own after Style (one button in the

@@ -12,19 +12,20 @@ import { LENGTH_MM, headerUnitWord, lengthUnitOf, unitSaid } from './units.js';
 import { SILHOUETTE_CAP, FACTS_RULE, factsCurrent, BODY_FACTS, factValue, overSilhouetteCap } from './edges.js';
 
 const add3 = (a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]];
+// a model's turn (js/orient.js orientTurn: rows [axis, sign]) on a point, a box, and 4-wide normals
+const turned = (t, a) => (t ? t.map(([c, s]) => s * a[c]) : a);
+export const turnBox = (t, b) => { const p = turned(t, b.min), q = turned(t, b.max); return { min: p.map((v, k) => Math.min(v, q[k])), max: p.map((v, k) => Math.max(v, q[k])) }; };
+function setNormals(dst, at, src, t) {
+  if (!t) { dst.set(src, at); return; }
+  for (let i = 0; i < src.length; i += 4) {
+    for (let r = 0; r < 3; r++) dst[at + i + r] = t[r][1] * src[i + t[r][0]];
+    dst[at + i + 3] = src[i + 3];
+  }
+}
 
-// models: [{ base: decoded cadmesh, name, offset: [x, y, z] mm }], at least 1.
-// Returns a decoded cadmesh of them all. The faces are kept when any model has
-// them (a model without: its bodies one face each); the edges, silhouettes and
-// body facts by sceneEdgesFacts (below). Each body keeps its
-// model's angular deflection (the default where the model records none); the
-// scene has none of its own. opts.silhouetteCap: past it the scene's silhouettes are left out and
-// counted (js/edges.js SILHOUETTE_CAP; the viewer passes a phone's smaller cap).
-// Why these models cannot share one scene, or null: their geometry in different units. A scene has one
-// header and one unit (js/cadmesh.js geomIsMm, the display's, the exports' and the mass's rule), and
-// an inch model added to a mm one was shown, measured and exported as mm (r85 A1). The words name
-// the first model in another unit than the first's. (A unit by its one name, js/units.js
-// lengthUnitOf: "in" and "inch" were refused as two units -- r86 A8.)
+// models: [{ base, name, offset: [x, y, z] mm, turn }] -> one decoded cadmesh of them all (faces kept
+// when any has them; edges and facts by sceneEdgesFacts). Why these models cannot share one scene
+// (one unit to a scene: r85 A1, r86 A8), or null.
 const unitKey = (h) => (geomIsMm(h) ? 'mm' : lengthUnitOf(h.units) || String(h.units));
 export function sceneUnitsRefusal(models) {
   const first = unitKey(models[0].base.header);
@@ -66,18 +67,20 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   let v0 = 0, i0 = 0, m0 = 0, t0 = 0, f0 = 0;
   const units = new Set();
-  for (const { base, name, offset: mmOffset = [0, 0, 0] } of models) {
+  for (const { base, name, offset: mmOffset = [0, 0, 0], turn: t = null } of models) {
     const h = base.header;
     const offset = offsetInUnit(h, mmOffset, name);
     const n = h.vertexCount;
-    // vertices: moved by the offset; ids renumbered after the models before
+    // vertices: turned (an added model in its own list frame), moved by the offset; ids renumbered
+    // after the models before
     const p = base.position;
+    const [a0, a1, a2] = t ? t.map(([c]) => c) : [0, 1, 2], [s0, s1, s2] = t ? t.map(([, s]) => s) : [1, 1, 1];
     for (let v = 0; v < n; v++) {
-      out.position[(v0 + v) * 3] = p[v * 3] + offset[0];
-      out.position[(v0 + v) * 3 + 1] = p[v * 3 + 1] + offset[1];
-      out.position[(v0 + v) * 3 + 2] = p[v * 3 + 2] + offset[2];
+      out.position[(v0 + v) * 3] = s0 * p[v * 3 + a0] + offset[0];
+      out.position[(v0 + v) * 3 + 1] = s1 * p[v * 3 + a1] + offset[1];
+      out.position[(v0 + v) * 3 + 2] = s2 * p[v * 3 + a2] + offset[2];
     }
-    out.normal.set(base.normal, v0 * 4);
+    setNormals(out.normal, v0 * 4, base.normal, t);
     out.color.set(base.color, v0 * 4);
     for (const [mi, m] of h.meshes.entries()) {
       const b = idToBytes(m0 + mi + 1);
@@ -97,14 +100,14 @@ export function mergeModels(models, { silhouetteCap = SILHOUETTE_CAP } = {}) {
       // scene's one -- the smallest -- set every model's. A model that records none, a .cadmesh
       // older than the field, is the converter's default, never the angle of a model beside it.)
       c.angularDeflection = bodyAngle(h, m);
-      if (m.bbox) c.bbox = { min: add3(m.bbox.min, offset), max: add3(m.bbox.max, offset) };
+      if (m.bbox) { const b = t ? turnBox(t, m.bbox) : m.bbox; c.bbox = { min: add3(b.min, offset), max: add3(b.max, offset) }; }
       if (base.faces && m.faceStart !== undefined) c.faceStart = m.faceStart + f0 / 2;
       else if (out.faces) { c.faceStart = f0 / 2; c.faceCount = 0; }
       meshes.push(c);
     }
     children.push(shiftNode({ ...h.root, name: name || h.root.name }, m0));
     if (h.bbox) {
-      const b = { min: add3(h.bbox.min, offset), max: add3(h.bbox.max, offset) };
+      const hb = t ? turnBox(t, h.bbox) : h.bbox, b = { min: add3(hb.min, offset), max: add3(hb.max, offset) };
       for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], b.min[k]); max[k] = Math.max(max[k], b.max[k]); }
     }
     units.add(h.sourceUnits || 'unknown');
@@ -162,11 +165,11 @@ export function sceneEdgesFacts(out, models, { silhouetteCap = SILHOUETTE_CAP } 
   const silhouetteNormals = silhouettes ? new Int16Array(sc * 4) : null;
   const facts = models.every((m) => m.base.header.facts) ? Object.fromEntries(BODY_FACTS.map((f) => [f.key, []])) : null;
   let v0 = 0, e0 = 0, s0 = 0;
-  for (const { base } of models) {
+  for (const { base, turn = null } of models) {
     if (edges) { for (let i = 0; i < base.edges.length; i++) edges[e0 + i] = base.edges[i] + v0; e0 += base.edges.length; }
     if (silhouettes && base.silhouettes && base.silhouetteNormals) {
       for (let i = 0; i < base.silhouettes.length; i++) silhouettes[s0 + i] = base.silhouettes[i] + v0;
-      silhouetteNormals.set(base.silhouetteNormals, s0 * 4);
+      setNormals(silhouetteNormals, s0 * 4, base.silhouetteNormals, turn);
       s0 += base.silhouettes.length;
     }
     if (facts) {

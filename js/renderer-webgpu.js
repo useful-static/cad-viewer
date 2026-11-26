@@ -836,6 +836,49 @@ export class WebGPURenderer {
     }
   }
 
+  // The ids drawn over a w x h rectangle at (x, y), with their pixel counts (renderer-webgl.js
+  // pickRect's contract)
+  pickRect(x, y, w, h, frameFn) {
+    return this._enqueue(async () => {
+      const mesh = this.drawn || null;
+      if (this.lost) return null;
+      if (!this.vbs || !this.drawCount) return { counts: new Map(), mesh };
+      const frame = typeof frameFn === 'function' ? frameFn() : frameFn;
+      let buf = null;
+      try {
+        this._targets();
+        x = Math.min(Math.max(0, x | 0), this.size[0] - 1); y = Math.min(Math.max(0, y | 0), this.size[1] - 1);
+        w = Math.max(1, Math.min(w | 0, this.size[0] - x)); h = Math.max(1, Math.min(h | 0, this.size[1] - y));
+        this._uniforms(frame);
+        const enc = this.device.createCommandEncoder();
+        const pass = enc.beginRenderPass({
+          colorAttachments: [{ view: this.pickTex.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
+          depthStencilAttachment: { view: this.pickDepth.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+        });
+        pass.setScissorRect(x, y, w, h);
+        this._encodeDraw(pass, 'pick');
+        pass.end();
+        const bpr = Math.ceil((w * 4) / 256) * 256;
+        buf = this.device.createBuffer({ size: bpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        enc.copyTextureToBuffer({ texture: this.pickTex, origin: [x, y] }, { buffer: buf, bytesPerRow: bpr }, [w, h]);
+        this.device.queue.submit([enc.finish()]);
+        await buf.mapAsync(GPUMapMode.READ);
+        const px = new Uint8Array(buf.getMappedRange()), counts = new Map();
+        for (let r = 0; r < h; r++) {
+          for (let i = r * bpr, end = i + w * 4; i < end; i += 4) {
+            const id = (px[i] | (px[i + 1] << 8) | (px[i + 2] << 16)) >>> 0;
+            if (id) counts.set(id, (counts.get(id) || 0) + 1);
+          }
+        }
+        buf.unmap();
+        return { counts, mesh };
+      } catch (e) {
+        if (this.lost) return null;
+        throw e;
+      } finally { buf?.destroy(); }
+    });
+  }
+
   // Resolves once every submitted frame has finished on the GPU. For ?gpubench.
   sync() {
     return this.lost ? Promise.resolve() : this.device.queue.onSubmittedWorkDone();

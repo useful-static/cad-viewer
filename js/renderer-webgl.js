@@ -1140,6 +1140,43 @@ export class WebGLRenderer {
     return { id: (px[0] | (px[1] << 8) | (px[2] << 16)) >>> 0, mesh };
   }
 
+  // The ids drawn over a w x h rectangle at (x, y), with their pixel counts: { counts: Map, mesh },
+  // null with no answer (a part chosen in the list told when none of it is in sight: R160-1)
+  async pickRect(x, y, w, h, frameFn) {
+    const gl = this.gl;
+    if (gl.isContextLost()) return null;
+    const mesh = this.drawn || null, counts = new Map();
+    if (!this.vb) return { counts, mesh };
+    const frame = typeof frameFn === 'function' ? frameFn() : frameFn;
+    x = Math.min(Math.max(0, x | 0), this.canvas.width - 1); y = Math.min(Math.max(0, y | 0), this.canvas.height - 1);
+    w = Math.max(1, Math.min(w | 0, this.canvas.width - x)); h = Math.max(1, Math.min(h | 0, this.canvas.height - y));
+    this._ensurePickFbo();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    const py = this.canvas.height - y - h;
+    gl.disable(gl.DITHER);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(x, py, w, h);
+    gl.enable(gl.DEPTH_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    this._bind(this.pickProg, frame);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    this._draw();
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(x, py, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.enable(gl.DITHER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (gl.isContextLost()) return null;
+    for (let i = 0; i < px.length; i += 4) {
+      const id = (px[i] | (px[i + 1] << 8) | (px[i + 2] << 16)) >>> 0;
+      if (id) counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    return { counts, mesh };
+  }
+
   // Resolves once every draw issued so far has finished on the GPU (a 1-pixel
   // read-back blocks until then). For ?gpubench timing.
   sync() {

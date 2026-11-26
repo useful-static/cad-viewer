@@ -104,14 +104,14 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
   // (and its hidden parts, held back as its tour is: r59 Q4)
   + block('  if (app.header && e && e.hide && app.listHideFor !== autoTourKey()') + '}\n';
 const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
-  'async function startFromUrl(early) {', 'async function startFromAddress(early) {', 'function applyLinkView(view) {', 'function addPicked(files) {',
+  'async function startFromUrl(early) {', 'async function startFromAddress(early) {', 'function applyLinkView(view) {', 'function addPicked(files) {', 'function addWith(load, beside = false) {',
   'async function readLists(lists, openFirst) {', 'function listsRead(r, openFirst) {', 'function loadListed(url) {', 'function startLoad(fn) {',
   'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
   'function tell(text, ms = 1500, said = text) {', 'function tellReady(words, ms = 6000) {', 'function setStatus(s, msg) {', 'function readyText() {',
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
   'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {', 'function syncUnitParam() {', 'function addressUnit(url) {',
   src.includes('async function unwindPick(c) {') ? 'async function unwindPick(c) {' : 'async function unwindPick(n, before) {',
-  'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn, offset = null) {', 'function pickModelFile(files) {',
+  'function setPendingView(search, hash) {', 'function landPendingView() {', 'function startAdd(fn, offset = null, beside = false) {', 'function pickModelFile(files) {',
   'function startUpLoad(url) {', 'function openStart(src) {', 'function rewriteReady(change) {', 'function tourOver() {', 'function tourReadyNote() {',
   'function openListed(url, refocus = false, keepMenu = false) {', 'function wireHistory() {', src.includes('async function addressTourEnds(r, ownFailed) {') ? 'async function addressTourEnds(r, ownFailed) {' : 'function addressTourEnds(r, ownFailed) {',
   'function viewIsFor(search) {', 'function linkViewOf(hash) {', 'function setModelParam(u, url) {', 'function setMeshUnit(u) {',

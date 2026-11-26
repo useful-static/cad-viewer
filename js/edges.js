@@ -9,20 +9,11 @@ import { itemsIn } from './box-tree.js';
 import { surfaceTree, treeDistance } from './tri-distance.js';
 
 export const SILHOUETTE_CAP = 2_000_000;
-// The rule the body facts are built by, written beside them (js/cadmesh.js factsRule): bumped when
-// a fact changes meaning, so the viewer rebuilds the facts of a file or kept conversion made by
-// an older one (2: the volume by the material's rule, and `net`; before it, the signed sum. 3:
-// `unchecked` beside `net`, which no longer covers an overlap test past its budget. 4: no
-// region's share of the volume below 0 -- a body read 771.75 under 3 that today reads 1000. 5: past
-// the nesting budget, the shells' signed sum -- under 4 a block's 3,000 cavities were added to it,
-// r68 Q5). The facts are versioned by this alone: a change of it needs no CACHE_VERSION bump
-// (js/mesh-cache.js)
+// The rule the body facts are built by, written beside them: bumped when a fact changes meaning,
+// so older facts are rebuilt (5: past the nesting budget, the shells' signed sum, r68 Q5); the
+// facts' only version (no CACHE_VERSION bump). Rule 4's facts with neither flag read as today's
+// (r69 A1).
 export const FACTS_RULE = 5;
-// (a rule's facts that read as today's: 4's differ from 5's only in a body past the nesting budget,
-// which 4 flagged `unchecked` -- or, with a branched shell, `net`, the stop not said: so a file or
-// kept conversion of 4 with neither flag is current, kept conversions' rebuilt facts not written
-// back, round 38 Q8, and each rebuilt at every open. A net body of 4 cannot be told from a stopped
-// one, and is built again -- r69 A1)
 const anyFlag = (facts, key) => (facts?.[key] || []).some(Boolean);
 export const factsRuleHolds = (rule, facts) => rule === FACTS_RULE || (rule === 4 && !anyFlag(facts, 'unchecked') && !anyFlag(facts, 'net'));
 // whether a header's facts can be shown as they are: present, and built by today's rule (main.js
@@ -125,13 +116,8 @@ export function buildEdges({ position, index, meshes }, { silhouetteCap = SILHOU
   };
 }
 
-// The one rule for a build's failure that depends on the moment, tried again (js/edges-worker.js
-// says it `transient`; main.js remembers a model's after MOMENT_TRIES): every failure but a
-// size limit the model meets at every try -- a Map past its size, an array or string past its
-// length, a recursion too deep -- named here in the words each engine was seen to use. (Naming the moment's instead
-// -- V8's "allocation failed" -- left Safari's "Out of memory" the model's own, never tried again.)
-// (V8, SpiderMonkey and JavaScriptCore words, as each was seen: "Invalid array buffer length" and
-// Firefox's "allocation size overflow" too -- r42 A8, Q8)
+// A build failure tried again (`transient`): every one but a size limit the model meets every
+// time, in each engine's words (r42 A8, Q8).
 const SIZE_LIMIT = /maximum (call stack )?size exceeded|invalid (typed )?array( buffer)? length|invalid string length|too much recursion|allocation size overflow/i;
 export const momentaryFailure = (e) => !SIZE_LIMIT.test(String(e?.message ?? e));
 
@@ -167,13 +153,8 @@ export function flagCounts(facts, bodies) {
   return out;
 }
 
-// The per-body facts, one list for every place that builds, writes, reads, checks or merges them
-// (js/cadmesh.js roundFacts and the decoder's checks, js/scene.js sceneEdgesFacts): a fact added here
-// is carried by all (one named in seven places was dropped by a merge that then called the
-// scene's facts current). always: written for every model; else written only when one body has it.
-// net: the body's shells touch or cross -- or one is branched, or a part lies in two outer shells
-// -- so its volume may not be its material's; unchecked: its overlaps not checked, past the budget
-// (materialVolume).
+// The per-body facts, the one list every builder, writer, reader and merge uses. always: written
+// for every model. net / unchecked: materialVolume's.
 export const BODY_FACTS = [
   { key: 'closed', kind: 'flag', always: true },
   { key: 'area', kind: 'number', always: true },
@@ -315,13 +296,8 @@ function materialVolume(pos, index, t0, nt, shell, shellOpen, shellBranched, clo
   let net = anyBranched, unchecked = false;
   // (a part in two outer shells)
   for (let s = 0; s < ns && !net; s++) if (nest.roots(s).length > 1) net = true;
-  // Which shells' surfaces meet. Asked of each shell and its parent, and of two shells whose boxes
-  // cross with neither in the other's line of holders: a shell that meets not its parent, inside
-  // a parent that meets not its own, lies wholly inside that one too, so no other holder need be
-  // asked (every holder asked against every shell it holds, each pair's trees built again, was
-  // 10.8 s for a 200,000-triangle housing of 120 parts, then net by the budget). Each shell's
-  // triangle tree built once; the budget counts the distance search's steps, and past it the
-  // body is `unchecked`, not said to meet.
+  // Which shells' surfaces meet: each shell and its parent, and two whose boxes cross with neither
+  // holding the other; each tree built once; past the budget, `unchecked`.
   if (!net) {
     // (the holders' lines by an Euler tour of the parents: one test whether a holds b)
     const kids = new Int32Array(ns).fill(-1), sib = new Int32Array(ns).fill(-1);
@@ -441,17 +417,10 @@ function triangleFacts(pos, index, t0, nt, bb) {
   return { tn, degenerate, vol, A, V };
 }
 
-// The one test of "is this mesh closed" (the facts' closed, and the weld's turning of a shell
-// wound the wrong way): on the welded vertices, every edge used at least twice (more than twice
-// is non-manifold, not open). A triangle whose welded corners are not three is no part of it; one
-// of three distinct corners on a line is (a polygon fan-triangulated through a collinear corner
-// closes a T-junction with one: skipped, a closed cube read open). Per shell too: the shells are
-// the triangles joined across shared edges -- not across a shared vertex, which made two parts
-// touching at a corner one shell, turned by their summed volume. A shell with an edge used more
-// than twice (two parts face to face) is branched: its outside is no one answer. Returns {
-// closed, shell: Int32Array, a triangle's shell (-1: its corners collapsed), shellOpen and
-// shellBranched: Uint8Array per shell }. Typed tables throughout: a Map of edges at the 10 M-
-// triangle cap was 8.7 s and 683 MB.
+// The one "is this mesh closed" test: on welded vertices every edge used at least twice; a
+// triangle with collapsed corners left out. Shells join across shared edges (not vertices); an edge
+// used more than twice makes its shell branched. -> { closed, shell (per triangle, -1 collapsed),
+// shellOpen, shellBranched }. Typed tables (a Map at the 10 M cap was 8.7 s, 683 MB).
 function shellsOf(index, t0, nt, weld, v0, nv) {
   const parent = new Int32Array(nt);
   for (let t = 0; t < nt; t++) parent[t] = t;
@@ -533,15 +502,9 @@ export function bodyShells(position, index) {
   return shellsOf(index, 0, nt, weldBits(bits, 0, nv), 0, nv);
 }
 
-// The shells of one body (position: float32 xyz; index: corner ids into it, its own), by the
-// facts' own test (shellsOf) on the float32 positions the body is stored with, and the triangles
-// of each closed, unbranched shell wound the wrong way: an outer shell (WHOLLY inside none of the
-// body's other closed shells) whose signed volume is negative, and every shell wholly inside it
-// with it (below). Wholly inside, by js/solid.js nesting (its box within the other's, and most
-// of three points on it inside the other). (A shell counted as nested whenever a ray from it
-// crossed another an odd number of times turned one of two cubes passing through each other, and
-// a box resting on a plate.) Returns { shell, flip: a Uint8Array per triangle, or null when none
-// is turned }.
+// One body's shells (shellsOf) and the triangles of each closed, unbranched outer shell wound
+// inward, with the shells wholly inside it (js/solid.js nesting). -> { shell, flip: per triangle,
+// or null when none is turned }.
 export function shellTurns(position, index) {
   const nt = index.length / 3;
   if (!nt) return { shell: new Int32Array(0), flip: null };
@@ -555,20 +518,11 @@ export function shellTurns(position, index) {
   // when the body is one shell)
   const nest = closedShells.length ? nesting(position, index, shell, ns, shellOpen, shellBranched) : null;
   const V = nest ? nest.V : null; // (each shell's signed volume: nesting's, the one count)
-  // (nesting stopped past its budget: no shell turned -- a shell it never placed read as outer, and a
-  // cavity wound inward would be turned inside out -- kept as written: r67, round 31 Q4. Said by
-  // the facts of a closed body, whose own nesting stops at the same budget and flags it `unchecked`;
-  // an open body's facts nest nothing, and nothing says its shells were kept as written: r68 A7)
+  // (nesting past its budget: none turned, r67, r68 A7)
   if (nest && nest.stopped) return { shell, flip: null, stopped: true };
-  // An outer shell (in no other) wound inward is turned (a mirrored placement, a writer that winds
-  // the other way). A shell inside another is turned with its outer shell, never by its own sign:
-  // a cavity is wound inward and a part embedded in another (a pin in a connector's body) outward,
-  // and once in one body the two cannot be told apart -- by its own sign and its depth, a board's
-  // STL read back turned five of its parts inside out. Kept as written: a branched outer shell
-  // (two parts face to face: no one outside), one an open shell's box holds (no answer: a part's
-  // cavity under an outer surface with a gap, and a cube in a lidless tray was turned upright and
-  // not upside down), and a shell whose outer shells do not agree (a part in the overlap of one
-  // wound in and one wound out: its answer turned on the order of the file).
+  // An outer shell wound inward is turned, and a shell inside one with it, never by its own sign (a
+  // cavity and an embedded part cannot be told apart). Kept: branched outer shells, one an open
+  // shell's box holds, and one whose outer shells disagree.
   const outerTurn = (r) => !shellOpen[r] && !shellBranched[r] && V[r] < 0 && !nest.inOpen[r];
   for (const s of closedShells) {
     const rs = nest.roots(s), turn = outerTurn(rs[0]);

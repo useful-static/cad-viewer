@@ -21,7 +21,7 @@ import { box, washer } from './brep-model.mjs';
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped } from '../js/model-list.js';
 import { fileUrl } from '../js/open-url.js';
 import { MAX_TOUR_BYTES, parseTour } from '../js/tour.js';
-import { orientOrNull } from '../js/orient.js';
+import { DEFAULT_ORIENT, Z_UP_ORIENT, orientOrNull, orientTurn } from '../js/orient.js';
 import { formatOfName, isCompanion, takesCompanions, zipModel, zipCompanions as zipCompanionsOf } from '../js/formats.js';
 import { readCompanions } from '../js/companions.js';
 
@@ -143,6 +143,24 @@ test('merge: counts, ids, tree, moved bodies', () => {
   assert.equal(h.facts.volume.length, 3);
   assert.equal(h.sourceUnits, 'mm');
   assert.deepEqual(modelRanges([{ base: board }, { base: lid }]), [{ first: 1, count: 2 }, { first: 3, count: 1 }]);
+});
+test('merge: an added model turned into the first one\'s frame -- positions, normals, boxes, then moved (R160-3)', () => {
+  // the lid drawn Z up added to a Y-up view: its +z becomes the view's +y, its -y the view's +z
+  const t = orientTurn(Z_UP_ORIENT, DEFAULT_ORIENT);
+  const plain = mergeModels([{ base: board, name: 'b' }, { base: lid, name: 'l', offset: [0, 0, 1] }]);
+  const s = mergeModels([{ base: board, name: 'b' }, { base: lid, name: 'l', offset: [0, 0, 1], turn: t }]);
+  const m = s.header.meshes[2], v = m.vtxStart, p = lid.position;
+  for (let i = 0; i < lid.header.vertexCount; i++) {
+    assert.deepEqual([...s.position.slice((v + i) * 3, (v + i) * 3 + 3)], [p[i * 3], p[i * 3 + 2], -p[i * 3 + 1] + 1].map(Math.fround));
+    const n = lid.normal.slice(i * 4, i * 4 + 4);
+    assert.deepEqual([...s.normal.slice((v + i) * 4, (v + i) * 4 + 4)], [n[0], n[2], -n[1], n[3]]);
+  }
+  const lb = lid.header.meshes[0].bbox;
+  assert.deepEqual(m.bbox, { min: [lb.min[0], lb.min[2], -lb.max[1] + 1], max: [lb.max[0], lb.max[2], -lb.min[1] + 1] });
+  // the first model is untouched, and with no turn the merge is as before
+  assert.deepEqual([...s.position.slice(0, board.position.length)], [...plain.position.slice(0, board.position.length)]);
+  assert.equal(mergeModels([{ base: board, name: 'b' }, { base: lid, name: 'l', offset: [0, 0, 1], turn: null }]).position.join(), plain.position.join());
+  assert.notEqual(s.position.join(), plain.position.join(), 'must fire: the turn changed nothing');
 });
 
 const trisOf = (s, ids) => ids.map((id) => { const m = s.header.meshes[id - 1]; return [m.idxStart / 3, m.idxCount / 3]; });

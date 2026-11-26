@@ -1,11 +1,5 @@
-// Measure: Distance, Angle (at the middle of three points) and Face to face (the gap along the
-// first, planar face's normal). Points snap within 12 CSS px (24 coarse) to a VISIBLE corner ◆,
-// midpoint ▲, centre ⊙ or edge point ―, else the surface or a section's cut ▪; kept in model
-// coordinates and drawn on an SVG layer projected each frame.
-//
-// main.js owns the input; it calls hover / place, loupe (a finger aiming),
-// dotAt / moveDot / endDot (dragging a placed end dot) and draw, and asks
-// escape() first.
+// Measure: Distance, Angle, Face to face; points snap to a visible corner, midpoint, centre or edge,
+// else the surface; drawn on an SVG layer. main.js owns the input.
 
 import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometrySteps, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
 // A hole row's Ø with its wider rim's, one text for the table, summary and words (r68 A8, r69 A4).
@@ -14,9 +8,8 @@ export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at i
 // The rims a hole table leaves out, one sentence for the summary, the CSV and the announcement, the
 // through-holes' own rims told (r67 A3, Q5, r69 Q7)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-// A label's box ({ left, right, top, bottom }) brought inside the bounds b ({ left, right, top,
-// bottom }), then moved clear of those placed before it, up first, down where up leaves them ->
-// { dx, dy }: the screen's, a picture's and a drawing's labels (UI design rounds 20-22)
+// A label's box brought inside the bounds b, then clear of those placed before it (up first) ->
+// { dx, dy } (rounds 20-22)
 export function clearOf(r, placed, b) {
   const into = (lo, hi, a, z) => (z - a > hi - lo ? lo - a : a < lo ? lo - a : z > hi ? hi - z : 0);
   const dx = into(b.left, b.right, r.left, r.right), y0 = into(b.top, b.bottom, r.top, r.bottom);

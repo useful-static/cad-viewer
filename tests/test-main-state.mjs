@@ -97,7 +97,7 @@ test('the scene\'s missing faces are every model\'s: a first model with none and
   assert.equal(app.unmeshedFaces, 2);
   // the added model carries its count into the scene, and loadBuffer gives it
   assert.match(src, /return addToScene\(base, name, seq, unmeshedFaces\)/);
-  assert.match(cut('async function addToScene('), /offset: offset \? offset\.slice\(\) : \[0, 0, 0\], unmeshed \}/);
+  assert.match(cut('async function addToScene('), /offset: offset \? offset\.slice\(\) : \[0, 0, 0\], unmeshed, turn \}/);
 });
 
 done();

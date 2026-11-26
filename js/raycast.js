@@ -1,6 +1,5 @@
-// CPU ray casting against a decoded model's bodies, in model coordinates, for Measure (the surface
-// under the cursor, a snap's visibility) and windsAgainstNormals (export, Clearance). A body over
-// BVH_MIN triangles through a median-split tree (8 a leaf) built on its first query. Pure, no DOM.
+// CPU ray casting against a model's bodies (Measure, windsAgainstNormals); a body over BVH_MIN
+// triangles through a median-split tree. Pure.
 
 export const BVH_MIN = 10_000;
 const LEAF = 8;
@@ -132,10 +131,8 @@ export function* bvhSteps(P, I, t0, nt) {
     }
     return [lo, hi];
   };
-  // (a leaf's box from its triangles, a parent's the union of its children's, the split axis the
-  // centroids' widest: every node's box read every triangle under it -- R151-1)
-  // depth first, left before right, by a stack of tasks: [s, e, parent, side] makes a node, [-1, idx]
-  // closes one (its box from its children's) -- the recursion's node order, with a place to stop
+  // (a parent's box the union of its children's: R151-1) tasks: [s, e, parent, side] makes a node,
+  // [-1, idx] closes one -- the recursion's order, with a place to stop
   const tasks = [[0, nt, -1, 0]];
   let work = 0;
   while (tasks.length) {

@@ -1,8 +1,5 @@
-// CAD viewer front end: backend selection (WebGPU -> WebGL2 -> WebGL1), loading
-// (.cadmesh direct; .stp/.step/.igs/.brep through the OpenCascade worker; the
-// meshes -- STL, OBJ, PLY, OFF, 3MF, glTF -- a 2D DXF or DWG, and a zip of one
-// through their readers, loaded on first use), orbit camera, part tree,
-// picking, section plane. Rendering is on demand.
+// CAD viewer front end: backend choice, loading (readers on first use), camera, part tree,
+// picking, section. Rendering is on demand.
 
 import { DEFAULT_TESSELLATION, MAX_FILE_BYTES, OVERSIZE_WORDS, bodyLabels, noSurfaces, decodeCadmesh, deflateCadmesh, gunzip, hashName, inflateCadmesh, isGzip, writtenSizeLimit, cadmeshToSave, StopRead, geomIsMm, notMmWords } from './cadmesh.js';
 import { SNIFF_BYTES, extOf, formatOfName, drawingReaderOf, isCompanion, fileNameOfUrl, acceptList, opensShort, opensText, mbTenth, zipModel, zipCompanions, takesCompanions, openedName } from './formats.js';
@@ -16,7 +13,7 @@ import { PALETTES, bodyColours, hexToRgb, rgbToHex, schemeColours } from './pale
 import { answeredFrom, entryByName, fetchModelLists, isRelative, isTimeout, listedUrlFrom, modelNameFrom, modelUrlFrom, posterAsked, readCapped, timedFetch } from './model-list.js';
 import { earlyFetch, earlyLists, releaseEarly } from './early-fetch.js';
 import { camDir, camUp, eyeOf, fitBox, fitDistance, levelOrbitBy, nearFar, orbitBy, panBy, pinchStep, qAxis, qFromBasis, qMul, qNorm, qRotate, quatFromView, refitForAspect, sphereOf, turnAbout, zoomAt, zoomBy } from './camera.js';
-import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientUp } from './orient.js';
+import { DEFAULT_ORIENT, PORTRAIT, VIEWS as VIEW_ROWS, VIEW_PRESETS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientTurn, orientUp } from './orient.js';
 import { deviceFactor, forecast, forecastDone, forecastTotal, percentKnown, rateText, stepOf, timeLeft } from './import-progress.js';
 import { browserEnv, useThreads } from './converter-choice.js';
 import { DISPLAY_UNITS, MM_PER, autoUnit, displayUnit, fmtArea, fmtMass, fmtNum, fmtUnconverted, fmtVolume, headerUnitWord, unconvertedBack, unconvertedNum, unconvertedWord, unitSaid, unitWord } from './units.js';
@@ -26,7 +23,7 @@ import { aboveBelow, pastWords, rangesFrom } from './datum.js';
 import { EXPORTS, NOTHING_TO_EXPORT, exportBasis, exportable } from './export-mesh.js';
 import { drawingSVG } from './drawing-svg.js';
 import { createMeasure, TOUCH_ONLY } from './measure-ui.js';
-import { copiesOf, mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable } from './scene.js';
+import { copiesOf, mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sceneEdgesFacts, staleModels, edgesUsable, turnBox } from './scene.js';
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
@@ -3598,14 +3595,25 @@ function loadListed(url) {
 
 // File > Browse models: the list as pictures (an entry's image, else a
 // placeholder) with their names; a pick opens it, Esc or × closes
-function openGallery() {
+// add: Add model… on a list page -- a pick joins the view, and "A file…" ends the grid (a list board
+// could be put beside another only by typing ?add=: R160-2)
+function openGallery(add = false) {
   const grid = $('gallerygrid');
   grid.replaceChildren();
-  const cur = listedNow();
-  for (const e of app.listEntries || []) {
+  app.galleryAdd = add;
+  $('gallerytitle').textContent = add ? 'Add a model' : 'Models';
+  const cur = add ? null : listedNow();
+  for (const e of [...(app.listEntries || []), ...(add ? [{ file: true, name: 'A file…' }] : [])]) {
     const b = document.createElement('button');
     b.type = 'button';
     if (e.url === cur) b.setAttribute('aria-current', 'true');
+    if (e.file) {
+      b.append(Object.assign(document.createElement('span'), { className: 'noimg', textContent: '+' }), Object.assign(document.createElement('span'), { textContent: e.name }));
+      b.firstChild.setAttribute('aria-hidden', 'true');
+      b.onclick = () => { closeGallery(false); $('addmodel').click(); };
+      grid.append(b);
+      continue;
+    }
     const placeholder = () => {
       const d = document.createElement('span');
       d.className = 'noimg';
@@ -3627,7 +3635,7 @@ function openGallery() {
     const t = document.createElement('span');
     t.textContent = e.name;
     b.append(t);
-    b.onclick = () => { closeGallery(false); if (e.url !== listedNow()) openListed(e.url); };
+    b.onclick = () => { closeGallery(false); if (add) addWith(() => loadUrl(e.url), true); else if (e.url !== listedNow()) openListed(e.url); };
     grid.append(b);
   }
   closeMenus();
@@ -3637,7 +3645,7 @@ function openGallery() {
 function closeGallery(focusBack = true) {
   if ($('gallery').hidden) return false;
   $('gallery').hidden = true;
-  if (focusBack) ($('filemenu').classList.contains('folded') ? $('filemenu').querySelector('.menu-btn') : $('gallerybtn')).focus();
+  if (focusBack) ($('filemenu').classList.contains('folded') ? $('filemenu').querySelector('.menu-btn') : $(app.galleryAdd ? 'addmodelbtn' : 'gallerybtn')).focus();
   return true;
 }
 
@@ -4481,13 +4489,13 @@ function askBigConversion(buf, name, seq) {
 
 // Start a load whose model joins the scene instead of replacing it
 // (offset: where ?addat= puts it, the add's own and ended with it: r117 M2)
-function startAdd(fn, offset = null) {
+function startAdd(fn, offset = null, beside = false) {
   if (!app.scene) return Promise.resolve();
   const p = startLoad(() => {
     app.startingAdd = true; // (loadUrl, run by fn: an added model's load keeps the first's list keys)
     let q;
     try { q = fn(); } finally { app.startingAdd = false; }
-    app.adding = { seq: app.loadSeq, offset }; // (fn's beginLoad numbered it; loadBuffer reads this later)
+    app.adding = { seq: app.loadSeq, offset, beside }; // (fn's beginLoad numbered it; loadBuffer reads this later)
     return q;
   });
   // (held while it loads, for an entry's tour to wait for: entryTourWait)
@@ -4498,14 +4506,27 @@ function startAdd(fn, offset = null) {
 // the scene a move or add builds on: the last asked for (r114 R4-M3)
 const sceneNow = () => app.sceneAsked || app.scene;
 async function addToScene(base, name, seq, unmeshed = 0) {
-  const offset = app.adding && app.adding.seq === seq ? app.adding.offset : null;
+  let offset = app.adding && app.adding.seq === seq ? app.adding.offset : null;
+  const beside = !offset && app.adding?.seq === seq && app.adding.beside;
   app.adding = null;
   if (!app.scene || stale(seq)) return;
   const url = app.urlOfLoad && app.urlOfLoad.seq === seq ? app.urlOfLoad.url : null;
   // (named as its model list entry names it, when one does)
   if (url && listEntry(url)?.name) name = listEntry(url).name;
   if (app.scene.length === 1 && app.scene[0].url && listEntry(app.scene[0].url)?.name) app.scene[0].name = listEntry(app.scene[0].url).name;
-  const models = [...sceneNow(), { base, name, url, offset: offset ? offset.slice() : [0, 0, 0], unmeshed }];
+  // (a list board added stands as its own entry says, in the view's frame: Le Potato lay upside down
+  // beside a board of another frame -- R160-3)
+  const turn = url && listEntry(url)?.orient ? orientTurn(listEntry(url).orient, app.cam.orient) : null;
+  // (a list board picked to compare stands beside the view's models, 10 mm off, on the same ground --
+  // at its own origin it lay through the first: R160-2)
+  const s = app.header?.bbox, b0 = base.header.bbox;
+  if (beside && s && b0 && geomMm() && geomIsMm(base.header)) {
+    const b = turn ? turnBox(turn, b0) : b0, r = orientRoles(app.cam.orient);
+    const side = 'xyz'.indexOf(r.right[1]), up = 'xyz'.indexOf(r.up[1]);
+    offset = [0, 1, 2].map((k) => (k === side ? (r.right[0] === '+' ? s.max[k] - b.min[k] + 10 : s.min[k] - b.max[k] - 10)
+      : k === up ? (r.up[0] === '+' ? s.min[k] - b.min[k] : s.max[k] - b.max[k]) : (s.min[k] + s.max[k] - b.min[k] - b.max[k]) / 2)).map((v) => Math.round(v * 10) / 10);
+  }
+  const models = [...sceneNow(), { base, name, url, offset: offset ? offset.slice() : [0, 0, 0], unmeshed, turn }];
   // (one unit to a scene: refused before anything is shown, as a 2D drawing is -- r85 A1)
   const unitsClash = sceneUnitsRefusal(models);
   if (unitsClash) throw new Error(unitsClash);
@@ -4524,7 +4545,7 @@ async function addToScene(base, name, seq, unmeshed = 0) {
 // Draw `models` as the scene: merged, uploaded, then made the shown model.
 // newTree: the tree is built again (a model added); a move keeps the
 // selection, the hidden parts and the tree. Resolves false if superseded.
-async function showScene(models, { newTree = false } = {}) {
+async function showScene(models, { newTree = false, quiet = false } = {}) {
   // (one that supersedes an add still uploading builds the add's tree: a move typed meanwhile took
   // the GPU from it, and the added model's bodies had no rows -- r115 R5-M3)
   newTree = newTree || !!(app.sceneAsked && app.sceneAskedTree);
@@ -4584,7 +4605,7 @@ async function showScene(models, { newTree = false } = {}) {
   app.sourceName = models.map((m) => m.name).join(' + ');
   // (said: hidden parts came back and Undo emptied unsaid -- R135-4)
   const afresh = newTree && app.hidden.size && app.scene?.length > 1;
-  if (afresh || cleared) tell(afresh ? `the scene starts afresh: every part shown, Undo cleared${cleared}` : `the scene changed${cleared}`, 4000);
+  if (!quiet && (afresh || cleared)) tell(afresh ? `the scene starts afresh: every part shown, Undo cleared${cleared}` : `the scene changed${cleared}`, 4000);
   if (newTree) {
     app.selected.clear();
     app.hidden.clear();
@@ -4759,11 +4780,11 @@ function syncScene() {
       x.onclick = async () => {
         const now = sceneNow();
         if (!now || !now[i]) return;
-        const k = app.measure?.results.length || 0, kb = x.matches(':focus-visible');
-        if (!(await showScene(now.filter((_, j) => j !== i), { newTree: true }))) return;
-        // (the results it clears said: R138-1; the address without its ?add=, so a reload does not bring
-        // it back: R138-6)
-        tell(`${m.name} removed${k ? `; ${k} measurement${k > 1 ? 's' : ''} cleared` : ''}`, 3000);
+        const k = app.measure?.results.length || 0, kb = x.matches(':focus-visible'), hid = app.hidden.size > 0;
+        if (!(await showScene(now.filter((_, j) => j !== i), { newTree: true, quiet: true }))) return;
+        // (the results it clears said: R138-1, once, showScene quiet: R160-5; the address without its
+        // ?add=, so a reload does not bring it back: R138-6)
+        tell(`${m.name} removed${hid ? '; every part shown, Undo cleared' : ''}${k ? `; ${k} measurement${k > 1 ? 's' : ''} cleared` : ''}`, 3000);
         const u = new URL(location.href);
         u.searchParams.delete('add'); u.searchParams.delete('addat');
         for (const c of linkAdds().carried) { u.searchParams.append('add', c.url); u.searchParams.append('addat', c.offset.map((o) => +o.toFixed(4)).join(',')); }
@@ -5481,7 +5502,7 @@ function setSheet(i) {
   });
   for (const n of off) app.dxf.view.setLayerOn(n, false);
   $('measure').setAttribute('aria-pressed', 'false');
-  if (old) { buildLayerList(); showInfo(); sheetLabel(); announce(L ? `${L.name}: a layout` : 'the drawing'); } // (in the visitor's words: R159-5)
+  if (old) { buildLayerList(); showInfo(); sheetLabel(); announce(L ? `layout ${L.name}` : 'the drawing'); } // (in the visitor's words: R159-5, R160-7)
   app.measure?.sync2D(app.dxf.view); // (R45-2)
 }
 
@@ -5726,7 +5747,7 @@ function fillInfo2D(el) {
   // (model space is drawn; a layout's sheet, title block and viewport frames
   // are paper space, left out)
   if (app.dxf.sheet < 0 && full.paperSpace) {
-    row('layouts', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'line or shape' : 'lines and shapes'} on the layouts, not shown here${dxfLib.sheetsOf(full).length ? ` (${$('fhsheet').hidden ? 'the' : 'File >'} "Model" menu shows a layout)` : ''}`); // (R159-5) // (folded into File on a phone: R129-8) // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
+    row('layouts', `${fmtInt(full.paperSpace)} ${full.paperSpace === 1 ? 'line or shape' : 'lines and shapes'} on the layouts, not shown here${dxfLib.sheetsOf(full).length ? ` (${$('fhsheet').hidden ? 'the' : 'File >'} sheet menu, now "Model", shows a layout)` : ''}`); // (R159-5, R160-7) // (folded into File on a phone: R129-8) // (named as it reads on screen; where it stands -- the row, or File on a phone -- moves: round 9 R9-7)
   }
   if (app.dxf.view.selected) {
     const l = app.dxf.view.selected;
@@ -6606,7 +6627,8 @@ app.currentView = () => currentView(); // (for tests: the view a link or a tour'
 function select(ids, additive, name = null) {
   const before = app.selected.size;
   // (a recolour's "it shows once deselected" gone with the selection it spoke of: R149-9)
-  if (globalThis.document && $('hover').textContent.endsWith('shows once deselected')) tell($('hover').textContent, 1, '');
+  // (and a part's "inside or behind" note with the choice it spoke of: R160-1)
+  if (globalThis.document && /shows once deselected$| is inside or behind other parts: /.test($('hover').textContent)) tell($('hover').textContent, 1, '');
   if (!additive) app.selected.clear();
   for (const id of ids) app.selected.add(id);
   // an additive pick that added nothing leaves the selection, and its name, as they were
@@ -7067,35 +7089,36 @@ app.pickAt = async (x, y) => {
   }
 };
 
-// A part chosen in the list that lies inside or behind others is said so, with the way to see it
-// (the rack greyed and the part nowhere: R159-1). Picks at each body's centre and at its box's
-// corners pulled halfway in (at most 4 bodies), stopping at the first that lands on the selection.
+// A part chosen in the list that lies inside or behind others is said so, with Isolate (R159-1): by
+// its own pixels in a pick over its box on screen (R160-1)
 async function sayIfUnseen(ids, name) {
   const want = ids.filter((id) => !app.hidden.has(id));
-  if (!want.length || app.dxf || app.section.axis !== 'off' || !app.renderer?.pick || !globalThis.requestAnimationFrame) return;
+  if (!want.length || app.dxf || app.section.axis !== 'off' || !app.renderer?.pickRect || !globalThis.requestAnimationFrame) return;
   const sel = new Set(app.selected), same = () => app.selected.size === sel.size && [...sel].every((id) => app.selected.has(id));
   await new Promise((r) => requestAnimationFrame(r));
-  const v = measureView(), c = app.renderer.canvas, m = v.vp, pts = [];
-  for (const id of want.slice(0, 4)) {
-    const b = drawnBox([id]);
-    if (!b) continue;
-    const mid = [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
-    pts.push(mid);
-    for (let n = 0; n < 8; n++) pts.push([0, 1, 2].map((k) => (mid[k] + (n >> k & 1 ? b.max[k] : b.min[k])) / 2));
-  }
-  let tried = 0;
-  for (const p of pts) {
+  const b = drawnBox(want);
+  if (!b || !same()) return;
+  const m = measureView().vp, c = app.renderer.canvas;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let n = 0; n < 8; n++) {
+    const p = [0, 1, 2].map((k) => (n >> k & 1 ? b.max[k] : b.min[k]));
     const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
-    if (w <= 0) continue;
+    if (w <= 1e-9) return;
     const x = ((m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w + 1) / 2 * c.width, y = (1 - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w) / 2 * c.height;
-    if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
-    if (!same()) return;
-    const id = await app.pickAt(x, y);
-    if (id === null) return;
-    if (sel.has(id)) return;
-    tried++;
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
   }
-  if (tried && same()) tell(`${name} is inside or behind other parts: Isolate${coarseOnly() ? '' : ' (I)'} shows it alone`, 5000);
+  x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0)); x1 = Math.min(c.width, Math.ceil(x1)); y1 = Math.min(c.height, Math.ceil(y1));
+  if ((x1 - x0) * (y1 - y0) < 100) return; // (too small on screen to tell: a 1 px chip is not "inside")
+  const gen = app.viewGen;
+  let res = null;
+  try { res = await app.renderer.pickRect(x0, y0, x1 - x0, y1 - y0, frameState); } catch (e) { console.warn('pick failed:', e); }
+  if (!res || gen !== app.viewGen || !app.mesh || !sameModel(res.mesh, app.mesh) || !same()) return;
+  // (seen: 2 % of its box or 400 px, the less; not a few through a grille)
+  let px = 0;
+  for (const [id, n] of res.counts) if (sel.has(id)) px += n;
+  app.lastUnseen = { px, area: (x1 - x0) * (y1 - y0) }; // (for tests)
+  if (px >= Math.min(400, 0.02 * (x1 - x0) * (y1 - y0))) return;
+  tell(`${name} is inside or behind other parts: Isolate${coarseOnly() ? '' : ' (I)'} shows it alone`, 5000);
 }
 app.sayIfUnseen = sayIfUnseen; // (for tests)
 
@@ -7568,7 +7591,7 @@ function wireInput() {
   $('addmodelbtn').onclick = () => {
     closeMenus();
     if (PROGRESS_STATES.has(app.status)) { tell('wait for the model that is loading, then Add model…', 4000); return; }
-    $('addmodel').click();
+    if (app.listEntries?.length && !app.embed) openGallery(true); else $('addmodel').click();
   };
   $('addmodel').addEventListener('change', () => {
     const files = [...$('addmodel').files];
@@ -8379,11 +8402,16 @@ function addPicked(files) {
   if (!files.length || !app.scene) return;
   const f = pickModelFile(files);
   if (refusedForSize(f)) return;
+  addWith(() => loadFile(f));
+}
+// a model added (a file, or a list board: load, beside the others) joins the one shown
+function addWith(load, beside = false) {
+  if (!app.scene) return;
   // (a model added joins the one shown, the address's own still there: not the visitor opening
   // something else -- the tour did not play over the address's model: r56 Q7)
   const go = () => {
     const was = untouched();
-    startAdd(() => loadFile(f));
+    startAdd(load, null, beside);
     if (was) app.startSeq = app.loadSeq;
   };
   // (after the address's ?add=s, neither cancelling the other; dropped for a newer open, not for a

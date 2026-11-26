@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_ORIENT, ISO, PORTRAIT, VIEWS as VIEW_ROWS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientUp, parseOrient } from '../js/orient.js';
+import { DEFAULT_ORIENT, ISO, PORTRAIT, VIEWS as VIEW_ROWS, Z_UP_ORIENT, isoView, orientOrNull, orientQuat, orientRoles, orientTurn, orientUp, parseOrient } from '../js/orient.js';
 import { camDir, camUp, qMul, quatFromView } from '../js/camera.js';
 
 import { test, done } from './harness.mjs';
@@ -13,6 +13,22 @@ const close = (a, b, msg) => a.forEach((v, k) => assert.ok(Math.abs(v - b[k]) < 
 const preset = (o, yaw, pitch) => ({ q: qMul(orientQuat(o), quatFromView(yaw, pitch, 'y')) });
 const VIEWS = { iso: [0.7, 0.45], front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0], right: [Math.PI / 2, 0], top: [0, Math.PI / 2 - 1e-4], bottom: [0, -Math.PI / 2 + 1e-4] };
 
+test('orientTurn: a model in one frame stood as another frame stands (R160-3)', () => {
+  const apply = (t, a) => t.map(([c, s]) => s * a[c] + 0); // (+0: -0 is 0 here)
+  const axes = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0], '+z': [0, 0, 1], '-z': [0, 0, -1] };
+  const os = ['+y+z', '+z-y', '-z+y', '+z+x', '-x+y', '+x-z'];
+  for (const from of os) for (const to of os) {
+    const t = orientTurn(from, to);
+    if (from === to) { assert.equal(t, null); continue; }
+    // the from-frame's up and front land on the to-frame's up and front
+    assert.deepEqual(apply(t, axes[from.slice(0, 2)]), axes[to.slice(0, 2)], `${from} -> ${to} up`);
+    assert.deepEqual(apply(t, axes[from.slice(2)]), axes[to.slice(2)], `${from} -> ${to} front`);
+    // a turn, never a mirror: (1,0,0) x (0,1,0) stays the third axis
+    const [a, b, c] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map((v) => apply(t, v));
+    assert.deepEqual([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]].map((v) => v + 0), c, `${from} -> ${to} handed`);
+  }
+  assert.equal(orientTurn(null, Z_UP_ORIENT), null);
+});
 test('two roles in any order, "right" too, canonical up+front', () => {
   assert.equal(parseOrient('up:+z,front:-y'), '+z-y');
   assert.equal(parseOrient('front:-y, up:z'), '+z-y'); // a bare axis is +
