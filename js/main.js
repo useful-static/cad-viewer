@@ -3867,7 +3867,7 @@ function wireHistory() {
 function setPendingView(search, hash) {
   const view = linkViewOf(hash);
   app.pendingView = view ? { search, view } : null;
-  app.badLinkView = !view && hash.startsWith('#view='); // (said when the model is in: R167-10)
+  app.badLinkView = hash.startsWith('#view=') && !(view && Object.keys(view).length); // (said when the model is in; a cut one decodes to {}: R167-10, R168-2)
 }
 // The waiting view lands when it is for the scene shown and its ?add=s are in (viewIsFor; r60 A3)
 function landPendingView() {
@@ -5244,11 +5244,14 @@ function webPage(buf) {
   return { title: t ? t[1].trim() : '' };
 }
 // (words that already say what to do, or are not about the file, are kept as they are)
-const KEEPS_NEXT_STEP = /again|this viewer opens|may work|Add model|Make a tour|graphics|memory|GB, more than/i;
+const KEEPS_NEXT_STEP = /again|re-export|this viewer opens|may work|Add model|Make a tour|graphics|memory|GB, more than/i;
+// (said once: a reader's "cadmesh: " dropped, and a reason that already says damaged gets only the
+// next step -- R168-1, R168-3)
 function nextStep(e, name) {
-  const m = String(e && e.message || e);
+  const m = String(e && e.message || e).replace(/^cadmesh: /, '');
   if (!(e instanceof Error) || KEEPS_NEXT_STEP.test(m)) return e;
-  return new Error(`${m.includes(name) ? m : `${name}: ${m}`} -- it may be damaged or cut short: download it again, or export it again`);
+  const said = /\.\w+ is damaged/.test(m) ? m : m.includes(name) ? m : `${name}: ${m}`;
+  return new Error(`${said} -- ${/damaged|cut short/.test(m) ? '' : 'it may be damaged or cut short: '}download it again, or export it again`);
 }
 async function readAny(buf, name, seq, extras) {
   // a load superseded while it was reading/fetching must not start a worker
@@ -6167,7 +6170,7 @@ async function loadUrl(url) {
         step = await Promise.race([rd.read(), new Promise((_, no) => { stop = setTimeout(() => no(STALLED), READ_TIMEOUT_MS); })]);
       } catch (e) {
         if (stale(seq)) return; // aborted mid-body
-        if (e === STALLED) { rd.cancel().catch(() => {}); throw new Error(`the download of ${name} stopped: nothing came for ${READ_TIMEOUT_MS / 1000} s -- check the connection, then open it again`); }
+        if (e === STALLED) { rd.cancel().catch(() => {}); throw new Error(`the download of ${name} stopped: nothing came for ${READ_TIMEOUT_MS / 1000} s -- check the connection, then reload the page to try again`); } // (R168-5)
         throw e;
       } finally { clearInterval(quiet); clearTimeout(stop); }
       const { done, value } = step;

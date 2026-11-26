@@ -939,6 +939,10 @@
 </style>
 </head>
 <body>
+<!-- what the page is, in words, for a reader with no script and for a screen reader's first heading;
+     its link out of the Tab order, being unseen (marketing audit 2026-11-26-ai-review-four-brands) -->
+<h1 class="sr-only">cad.place: view STEP, IGES and BREP files in your browser</h1>
+<p class="sr-only">Open a 3D CAD model or a 2D drawing here: the file is opened on this device and is never uploaded. <a href="/help/" tabindex="-1">How-to guides</a></p>
 <!-- the first Tab stop, shown only while it has the focus: the 3D view was
      the 21st (UI organization review rank 9) -->
 <button id="skipview" class="skip">Skip to the 3D view</button>
@@ -1098,7 +1102,7 @@
         <label>Orbit <input id="tes-orbit" type="number" min="-360" max="360" step="5" autocomplete="off">°</label></div>
       <div class="terow"><button id="tes-update" title="This step takes the view as it is now">Update from the view</button><button id="tes-go" title="Show this step as the tour will">Show step</button></div>
     </div>
-    <div class="terow"><button id="teplay" disabled title="Play the tour here, as a visitor will see it">Preview</button><button id="tesave" class="primary" disabled title="Save the tour as a .cadtour.json file, to send or put online">Save tour</button><button id="telink" disabled title="Copy a link that carries the tour: it opens the model and plays it, with no file to put online">Copy link</button><a class="helplink noembed" href="/help/share-tour.html" target="_blank" rel="noopener">Share or embed it ↗</a></div>
+    <div class="terow"><button id="teplay" disabled title="Play the tour here, as a visitor will see it">Preview</button><button id="tesave" class="primary" disabled title="Save the tour as a .cadtour.json file, to send or put online">Save tour</button><button id="telink" disabled title="Copy a link that carries the tour: it opens the model and plays it, with no file to put online">Copy link</button><a class="helplink noembed" href="/help/share-tour" target="_blank" rel="noopener">Share or embed it ↗</a></div>
     <div class="terow">Also as <button id="tepics" disabled title="Each step as a picture at twice the view's size, its caption drawn in, all in a zip">Pictures (zip)</button><button id="tevideo" disabled title="The tour played once through, recorded as a WebM video in this browser (as long as the tour plays)">Video (WebM)</button></div>
     <p id="tenote" class="note"></p>
   </div>
@@ -1243,7 +1247,7 @@
     <p id="embedwhat">Paste this into your page's HTML: it shows this model at this view, and visitors can turn it and open it here.</p>
     <p class="row"><label for="embedtheme">Theme</label><select id="embedtheme" autocomplete="off"><option value="dark">Dark</option><option value="light">Light, for a white page</option></select></p>
     <textarea id="embedcode" rows="4" readonly spellcheck="false" aria-label="The embed code"></textarea>
-    <p class="row"><button id="embedcopy" class="primary">Copy the code</button><a id="embedsee" class="btn" target="_blank" rel="noopener">See it as a visitor ↗</a><a class="helplink" href="/help/models-on-your-site.html" target="_blank" rel="noopener">More options ↗</a></p>
+    <p class="row"><button id="embedcopy" class="primary">Copy the code</button><a id="embedsee" class="btn" target="_blank" rel="noopener">See it as a visitor ↗</a><a class="helplink" href="/help/models-on-your-site" target="_blank" rel="noopener">More options ↗</a></p>
     <p id="embednote" class="note" hidden></p>
   </div>
   <!-- the model list as pictures (an entry's "image"), from File > Browse models -->
