@@ -3856,7 +3856,12 @@ function wireHistory() {
     app.entrySearch = location.search;
     // (an entry naming a tour opens as the address opens fresh, the tour played: Back reopened its model
     // alone -- R172-2)
-    if (new URLSearchParams(location.search).get('tour') && !app.tour) { app.leaveOk = true; location.reload(); return; }
+    // (not over a tour being made: the reload would lose its unsaved steps, which nothing asked about --
+    // the model opens alone and the tour is said to wait -- R173-1)
+    if (new URLSearchParams(location.search).get('tour') && !app.tour) {
+      if (!app.recorder?.unsaved?.()) { app.leaveOk = true; location.reload(); return; }
+      tellReady('the tour in this address is not played while your tour has unsaved steps: save it, then reload to play it', 8000);
+    }
     // (onto a device file's step: still shown, kept; else the file is not kept, which is said, and the
     // entry's address opens as the page's would -- R171-2)
     if (file) {
@@ -5687,7 +5692,20 @@ function setSheet(i) {
 // A model or drawing from the device clears the address's model keys, or a reload opens that (r16 L7)
 function forgetAddressModel() {
   const q = new URLSearchParams(location.search);
-  if (app.sourceUrl || (![...ADDRESS_MODEL_PARAMS].some((k) => q.has(k)) && !location.hash.startsWith('#view='))) return;
+  if (app.sourceUrl) return;
+  // (a second file over a device file's step: the step names the file shown now -- it kept the first's
+  // name, and Back asked to leave the wrong one -- R173-3)
+  if (ownEntry(history.state) && history.state.cadvFile) {
+    const s = { ...history.state, cadvFile: app.sourceName || 'the file' }, u = new URL(location.href);
+    dropAddressModel(u); // (and the first file's #view=, not this one's)
+    history.replaceState(s, '', u);
+    app.entryState = app.fileState = s;
+    app.entryFile = s.cadvFile;
+    app.fileHref = u.href;
+    app.entrySearch = u.search;
+    return;
+  }
+  if (![...ADDRESS_MODEL_PARAMS].some((k) => q.has(k)) && !location.hash.startsWith('#view=')) return;
   const u = new URL(location.href);
   dropAddressModel(u);
   // (a file from the device over a model the address names takes its own step, marked as a file's:
@@ -7823,7 +7841,7 @@ function wireInput() {
     // (a new version taken while the page is open: said, not silent -- its later parts would load
     // beside this page's -- R171-7. Not the first visit's own worker taking control, nor an update this
     // page's own load found: the worker fetches network first, so this page is that version -- R172-4)
-    const had = !!navigator.serviceWorker.controller;
+    let had = !!navigator.serviceWorker.controller;
     let own = false;
     const t0 = performance.now(), mine = () => performance.now() - t0 < 5000; // (from the registration, not the page's start: a slow load)
     try {
@@ -7832,7 +7850,13 @@ function wireInput() {
         reg.addEventListener?.('updatefound', () => { if (mine()) own = true; });
       }).catch(() => { /* the viewer works without it */ });
     } catch { /* nor this */ }
-    navigator.serviceWorker.addEventListener?.('controllerchange', () => { if (had && !own) tellReady('the viewer was updated: reload the page to use the new version', 8000); });
+    // (each change of worker judged once: this page's own update consumed, and a page that began with
+    // none, or with its own, told of the next deploy -- R173-2)
+    navigator.serviceWorker.addEventListener?.('controllerchange', () => {
+      if (had && !own) tellReady('the viewer was updated: reload the page to use the new version', 8000);
+      had = true;
+      own = false;
+    });
   }
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
@@ -8242,6 +8266,8 @@ function wireInput() {
   // (the ? box's Forget all: every setting and colour, and the saved conversions; what is open stays
   // as it is until the page is left -- R171-5)
   $('forgetall').onclick = async () => {
+    // (asked first: the ? box's first Tab stop, and no undo -- R173-6)
+    if (!confirm('Forget everything this browser keeps for the viewer: your display choices, the colours you picked and the saved conversions?')) return;
     forgetPrefs();
     coloursSeen.clear();
     // (the open model's colours, still shown, counted as written: the next pick stores itself alone, not
