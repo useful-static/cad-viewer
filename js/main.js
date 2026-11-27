@@ -3838,7 +3838,7 @@ function wireHistory() {
     // tour, ?add=s and view --, by loading it: this page's start and first model are not its)
     if (otherPages(history.state)) { location.reload(); return; }
     // (the last step's "not kept" note ends with it: it stayed through two more Back presses -- R172-7)
-    if (carriedNote.endsWith('is not kept: open it again with Open…')) { if ($('hover').textContent === carriedNote) tell(carriedNote, 1, ''); carriedNote = ''; }
+    if (carriedNote.endsWith('is not kept: open it again with Open…') || carriedNote.startsWith('the tour in this address waits')) { if ($('hover').textContent === carriedNote) tell(carriedNote, 1, ''); carriedNote = ''; }
     // (an entry a #view= edit just made is not yet marked: it is the step it was edited on)
     const wasFile = app.entryFile || null, file = ownEntry(history.state) ? history.state.cadvFile || null : wasFile;
     app.entryFile = file;
@@ -3860,7 +3860,12 @@ function wireHistory() {
     // the model opens alone and the tour is said to wait -- R173-1)
     if (new URLSearchParams(location.search).get('tour') && !app.tour) {
       if (!app.recorder?.unsaved?.()) { app.leaveOk = true; location.reload(); return; }
-      tellReady('the tour in this address is not played while your tour has unsaved steps: save it, then reload to play it', 8000);
+      // (naming the steps' own model, the one they can be saved on, and carried through this entry's
+      // load: "save it" was refused over the model opened here, and the note was gone by ready -- R174-1)
+      const on = app.recorder.madeOn?.(), t = on
+        ? `the tour in this address waits: your unsaved tour was made on ${on} -- open ${on} again to save it, then come back to play this one`
+        : 'the tour in this address waits while your tour has unsaved steps: save it, then come back to play this one';
+      tell((carriedNote = t), 8000, t, true);
     }
     // (onto a device file's step: still shown, kept; else the file is not kept, which is said, and the
     // entry's address opens as the page's would -- R171-2)

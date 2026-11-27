@@ -444,5 +444,6 @@ export function createTourRecorder(api) {
   });
 
   renderList();
-  return { show, isOpen: () => !el.panel.hidden, toJSON, load, unsaved };
+  // (the model the unsaved steps were made on, by name: the page names it when they block a tour -- R174-1)
+  return { show, isOpen: () => !el.panel.hidden, toJSON, load, unsaved, madeOn: () => draft.model?.name || null };
 }
