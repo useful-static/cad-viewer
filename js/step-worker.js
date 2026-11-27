@@ -30,6 +30,43 @@ onmessage = async (ev) => {
     } catch (e) {
       throw unavailable();
     }
+    // its 12 MB of WebAssembly fetched here, how much has come said as it comes, and the module then
+    // built from those bytes: a minute of "loading the converter" on a slow link said only a clock
+    // (R175-5). Not fetched (an old browser, a stream refused): left to the module, as before.
+    let wasmBinary = null;
+    try {
+      const res = await fetch(`${VENDOR}occt-import-js.wasm`);
+      if (!res.ok) throw unavailable();
+      const total = Number(res.headers.get('content-length')) || 0;
+      if (res.body && res.body.getReader) {
+        const rd = res.body.getReader(), parts = [];
+        const mbs = (b) => (b / 2 ** 20).toFixed(1);
+        let got = 0, t0 = 0, g0 = 0, last = 0;
+        for (;;) {
+          const { done, value } = await rd.read();
+          if (done) break;
+          parts.push(value);
+          got += value.length;
+          const now = performance.now();
+          if (!t0) { t0 = now; g0 = got; }
+          if (now - last > 500) {
+            last = now;
+            const secs = (now - t0) / 1000, rate = secs >= 2 && got > g0 ? (got - g0) / secs : 0;
+            const leftS = rate && total > got ? Math.ceil((total - got) / rate) : 0;
+            post(`downloading the converter · ${total && got <= total ? `${mbs(got)} of ${mbs(total)} MB` : `${mbs(got)} MB`}${leftS ? ` · ${leftS < 60 ? `${leftS} s` : `${Math.ceil(leftS / 60)} min`} left` : ''}`);
+          }
+        }
+        const all = new Uint8Array(got);
+        let o = 0;
+        for (const p of parts) { all.set(p, o); o += p.length; }
+        wasmBinary = all.buffer;
+      } else wasmBinary = await res.arrayBuffer();
+      post('starting the converter');
+    } catch (e) {
+      if (e && /converter unavailable/.test(e.message)) throw e;
+      if (e instanceof TypeError) throw unavailable(); // (a network failure)
+      wasmBinary = null;
+    }
     const fmt = await import('./cadmesh.js');
     // the unit the file declares, read before the converter sees the bytes
     const { sourceUnits } = await import('./source-units.js');
@@ -40,6 +77,7 @@ onmessage = async (ev) => {
     // calls it, and the page then goes by its forecast alone.
     // (its 12 MB WebAssembly is fetched here: a failed fetch is the same case)
     const occt = await self.occtimportjs({
+      ...(wasmBinary ? { wasmBinary } : {}),
       locateFile: (p) => VENDOR + p,
       // the multi-core build starts its threads from this script; left to
       // itself it would take this worker's own URL

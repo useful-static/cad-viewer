@@ -222,6 +222,12 @@ function setStatus(s, msg) {
   $('status').title = msg || s; // the whole message, where the line is cut short
   $('status').dataset.state = s;
   if (!PROGRESS_STATES.has(s)) { $('progress').hidden = true; const pd = $('pdetail'); if (pd?.style) pd.style.minHeight = ''; }
+  // (a long load heard every 30 s, where it has got to: a screen reader heard "loading", then two
+  // minutes of nothing -- R175-9)
+  if (PROGRESS_STATES.has(s) && !app.progressBeat) {
+    app.progressBeat = setInterval(() => { if (PROGRESS_STATES.has(app.status)) announce(`still ${app.statusMsg}`); }, 30000);
+    app.progressBeat.unref?.(); // (not holding a test's process open)
+  } else if (!PROGRESS_STATES.has(s) && app.progressBeat) { clearInterval(app.progressBeat); app.progressBeat = 0; }
   // (a card, a model or an error is now the view's to show: index.html's
   // "Loading the 3D viewer…" goes)
   // ("?.": tests/test-scene.mjs runs this function's own code with no page)
@@ -235,6 +241,8 @@ const IDLE_MSG = `open or drop ${opensShort()}`;
 // of text" -- r72 Q8; a tenth kept, for a progress line that moves)
 const mb = mbTenth; // (rounded up to a tenth, as the limits' words say a size: r73 Q4)
 // a saved file's size: KB under 1 MB ("0.0 MB" for 31 KB -- R141-4)
+// a wait's clock: "12 s", "1 min 05 s" (the conversion's, and a drawing's read: R175-7)
+const fmtClock = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
 const sizeText = (n) => (n < 2 ** 20 ? `${Math.max(1, Math.ceil(n / 1024)).toLocaleString('en')} KB` : `${mb(n)} MB`);
 // (and what has come of a download rounded down: rounded up, it read "12.1 of 12.1 MB" still downloading -- r74 A10)
 const mbSoFar = (n) => (Math.floor((n / 2 ** 20) * 10) / 10).toFixed(1);
@@ -5285,10 +5293,26 @@ function readyText() {
 
 // Keep a conversion in this browser, gzipped where the browser can (about a
 // sixth of the raw size), then update the panel's line. Never throws.
+// The gzip and the write in the read worker (its 'save' kind): on the page's thread the gzip froze a
+// converted rack's first frame 2 s, 12 s on a slow phone (R175-2); where no module worker starts, here,
+// after a frame
 async function saveConversion(key, raw, name) {
+  const inWorker = () => new Promise((ok) => {
+    let w;
+    try { w = new Worker(new URL('./read-worker.js', import.meta.url), { type: 'module' }); } catch { ok(false); return; }
+    const end = (v) => { w.terminate(); ok(v); };
+    w.onmessage = (ev) => { if (ev.data.ready) return; end(!!ev.data.ok || 'failed'); };
+    w.onerror = (e) => { e.preventDefault?.(); end(false); };
+    const copy = raw.slice(0); // (the page keeps its own: Save .cadmesh)
+    try { w.postMessage({ kind: 'save', key, raw: copy, name }, [copy]); } catch { end(false); }
+  });
   try {
-    const data = typeof CompressionStream === 'function' ? await deflateCadmesh(raw) : raw.slice(0);
-    await cachePut(key, data, name);
+    const r = await inWorker();
+    if (r === false) {
+      await nextPaint();
+      const data = typeof CompressionStream === 'function' ? await deflateCadmesh(raw) : raw.slice(0);
+      await cachePut(key, data, name);
+    }
   } catch { /* the cache is an optimisation */ }
   refreshCacheBar();
 }
@@ -5651,7 +5675,12 @@ async function loadDxf(buf, name, seq) {
   // (one that draws nothing refused by readDrawing: r87 A2)
   // (a DXF with no EOF is cut short: what was read is shown, and that said -- R167-11)
   const ended = format !== 'DXF' || /EOF/.test(new TextDecoder('latin1').decode(new Uint8Array(buf, Math.max(0, buf.byteLength - 64))));
-  const got = await readInWorker({ kind: '2d', buf, format, name }, name);
+  // (a clock beside the words while it reads: walk.dxf's 40-56 s read said only "reading 106 KB" --
+  // R175-7)
+  const t0 = performance.now(), what = `reading ${sizeText(buf.byteLength)} of ${format}`;
+  const tick = setInterval(() => { if (!stale(seq)) showProgress(`Opening ${name}`, null, `${what} · ${fmtClock((performance.now() - t0) / 1000)} so far`); }, 1000);
+  let got;
+  try { got = await readInWorker({ kind: '2d', buf, format, name }, name); } finally { clearInterval(tick); }
   if (stale(seq)) return;
   await twoD();
   const drawing = got ? got.drawing : (await fileReaders()).readDrawing({ buf, format, name });
@@ -6064,7 +6093,7 @@ function tessellate(buf, format, seq, name, threads) {
     // worker has counted them: from the size alone.
     let fc = forecast({ bytes, step: false }, threads);
     let tStart = 0; // when the conversion started (after the converter loaded)
-    const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s`);
+    const fmt = fmtClock;
     // REAL progress from our converter build (occt-progress/): which step it
     // is on, and how far through it. The stock build sends none, and the
     // forecast alone stands in.
@@ -6103,10 +6132,16 @@ function tessellate(buf, format, seq, name, threads) {
         const f = conv.fraction;
         const quiet = (now - conv.moved) / 1000;
         // once a step has said "longer than expected" it keeps saying so, the steps after too (R133-4)
-        const left = overStep >= 0 && st >= overStep ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
-        if (typeof left !== 'number') overStep = st;
-        // the bar: the forecast's share of the conversion done, never moving back
         const total = forecastTotal(fc) * factor;
+        let left = overStep >= 0 && st >= overStep ? { over: true } : timeLeft(fc, factor, st, f, inStep, quiet);
+        // (a step whose pace says nothing is judged against the whole conversion's forecast: one step
+        // running long read "taking longer than expected" for 80 % of a wait the first estimate got
+        // within 12 % -- R175-6; past the whole forecast, it is said and kept, R133-4)
+        if (typeof left !== 'number') {
+          const whole = total - (now - (tStart || t0)) / 1000;
+          if (whole >= 1) left = whole; else overStep = st;
+        }
+        // the bar: the forecast's share of the conversion done, never moving back
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
         barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));
         frac = barMax;
@@ -6279,7 +6314,7 @@ async function loadUrl(url) {
     const chunks = [];
     let got = 0;
     const rd = res.body.getReader();
-    let frac = null;
+    let frac = null, r0 = null, g0 = 0;
     for (;;) {
       let step, quiet, stop;
       // (nothing coming: said after 5 s, given up after a list's wait -- it sat frozen: R167-6)
@@ -6313,8 +6348,12 @@ async function loadUrl(url) {
       const soFar = kb ? (allIn ? `${Math.max(1, Math.ceil(got / 1024))}` : `${Math.floor(got / 1024).toLocaleString('en')}`) : allIn ? mb(got) : mbSoFar(got), unit = kb ? 'KB' : 'MB';
       const all = pct ? (kb ? sizeText(total) : `${mb(total)} MB`) : '';
       setStatus('loading', pct ? `fetching ${Math.min(100, Math.floor((100 * got) / total))}% of ${all}` : `fetching ${soFar} ${unit}`);
-      const secs = (performance.now() - tf) / 1000;
-      const rate = secs > 0.5 ? ` · ${rateText(got / secs, pct ? total - got : null)}` : '';
+      // (the rate from this read's first chunk, which carries what an early download already had, and
+      // said only after 2 s of it: bytes that came before main.js, divided by the time since, read a
+      // third of the true time left -- R175-3)
+      if (r0 === null) { r0 = performance.now(); g0 = got; }
+      const secs = (performance.now() - r0) / 1000;
+      const rate = secs >= 2 && got > g0 ? ` · ${rateText((got - g0) / secs, pct ? total - got : null)}` : '';
       frac = pct ? Math.min(1, got / total) : null;
       showProgress(`Downloading ${name}`, frac,
         pct ? `${soFar}${kb ? ' KB' : ''} of ${all}${rate}` : `${soFar} ${unit}${rate}`);
@@ -8209,12 +8248,25 @@ function wireInput() {
   };
   $('refset').onclick = () => setRef(true);
   $('refclear').onclick = () => setRef(false);
-  $('holesbtn').onclick = () => {
+  let holesAsk = 0;
+  $('holesbtn').onclick = async () => {
     // (nothing selected: the parts shown -- a one-part board's List holes was greyed with nothing
     // saying to pick it first, R24-4)
     const ids = app.selected.size ? [...app.selected] : shownIds();
     const name = app.selected.size ? app.selName || (ids.length === 1 ? meshLabel(ids[0]) : `${ids.length} bodies`) : 'the parts shown';
     const kb = $('holesbtn').matches(':focus-visible');
+    // (the parts' geometry first, in slices, said as it goes: the first press froze a phone 4 s with
+    // no sign it was taken -- R175-1); a later press or another model takes over
+    const ask = ++holesAsk, mesh = app.mesh;
+    let told = '';
+    const ready = await app.measure.prepareHoles(ids, (k, n) => {
+      // (read out once, shown as it goes)
+      const t = n > 1 ? `finding holes… ${k} of ${n} parts` : 'finding holes…';
+      tell(t, 4000, told ? '' : 'finding holes');
+      told = t;
+    });
+    if (ask !== holesAsk || app.mesh !== mesh || !ready) return;
+    if (told) tell(told, 1, '');
     showHoles({ ids, name, shown: !app.selected.size });
     // (its head in view; from a key, the focus to its Copy: R44-2)
     if (!$('holes').hidden) {

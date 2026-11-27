@@ -141,6 +141,13 @@
   @media (min-width:768px) { html:not(.booted) #tb { height:40px; } } /* (as booted: 46 → 40 px, a 6 px jump -- R136-4) */
   html:not(.started) #stage::before { content:"Loading the 3D viewer…"; position:absolute; left:50%; top:50%;
     transform:translate(-50%, -50%); color:var(--dim); font-size:14px; }
+  /* and a sweeping bar under it, CSS alone: on a slow connection the words stood still for 6-11 s before
+     the code was in (R175-4) */
+  html:not(.started) #stage::after { content:""; position:absolute; left:50%; top:calc(50% + 18px); width:160px; height:4px; margin-left:-80px;
+    border-radius:2px; background:#313844 linear-gradient(90deg, transparent, var(--acc), transparent) no-repeat; background-size:40% 100%;
+    animation:bootsweep 1.4s ease-in-out infinite; }
+  @keyframes bootsweep { from { background-position:-60% 0; } to { background-position:160% 0; } }
+  @media (prefers-reduced-motion: reduce) { html:not(.started) #stage::after { animation:none; background-size:100% 100%; opacity:.5; } }
   * { box-sizing: border-box; }
   /* hidden means hidden: an element's own display rule beat the attribute, and a hidden control stayed
      shown and pressable (Measure's modes R20-1, Full screen without the API R21-1, Open… with no GPU R21-2) */

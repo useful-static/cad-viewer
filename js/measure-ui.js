@@ -1005,6 +1005,28 @@ export function createMeasure(deps) {
     }
     return { list, rows, groups: [...groups.values()], posHead, axes, untold, unpaired };
   }
+  // The bodies' geometry and holes built in 8 ms slices, each slice's progress told, before the table
+  // is laid out: built in one go, the first List holes froze a phone 4 s with no sign it was taken
+  // (R175-1) -> true when ready, false when the model changed meanwhile
+  function prepareHoles(ids, progress = () => {}) {
+    const m = model();
+    if (!m || ids.every((id) => st.geom.get(id - 1)?.holes)) return Promise.resolve(true);
+    return new Promise((done) => {
+      let k = 0;
+      const slice = () => {
+        if (st.model !== m || scene.mesh !== m) { done(false); return; }
+        const end = performance.now() + 8;
+        while (k < ids.length && performance.now() < end) {
+          const g = geomOf(ids[k] - 1, end);
+          if (!g) break;
+          if (!g.holes) { g.holes = holesOf(g); }
+          k++;
+        }
+        if (k < ids.length) { progress(k, ids.length); setTimeout(slice, 0); } else done(true);
+      };
+      setTimeout(slice, 0);
+    });
+  }
   function showHoles(ids, ref = null, name = '') {
     const box = $('holes');
     if (!ids || !ids.length) { const was = !box.hidden; st.holes = null; box.hidden = true; if (was) onNote(); deps.queueFrame(); return null; }
@@ -1181,7 +1203,7 @@ export function createMeasure(deps) {
     // (for tests: whether q is inside a closed body, walked into the plane pl's kept side)
     insideAt: (q, pl) => { model(); return insideClosed(q, scene.header.meshes.map((_, i) => i), pl, null); },
     get loupeShown() { return !!st.loupe; },
-    setOn, hover, place, draw, paint, escape, reset, undo, sync2D, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
+    setOn, hover, place, draw, paint, escape, reset, undo, sync2D, snapAt, faceAt, dotAt, moveDot, endDot, loupe, showHoles, prepareHoles, notes, setNotes, addNote, setMode: (m) => { st.mode = m; st.pending = []; syncRow(); },
     // the results that are not notes (distances, angles...), taken off the view and given back:
     // a tour step holds notes only, so while one plays they are set aside (main.js startTour)
     setAside() {

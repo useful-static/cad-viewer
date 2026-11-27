@@ -1477,8 +1477,8 @@ await test('the converter: a copy that cannot be posted rejects in words, the wo
   const at = src.indexOf('function tessellate(buf, format, seq, name, threads) {'), body = src.slice(at, src.indexOf('\n}\n', at) + 2).replaceAll('import.meta.url', "'file:///x/js/main.js'");
   const app = {}, made = [], cleared = [];
   class Worker { constructor() { made.push(this); } postMessage() { throw new RangeError('Array buffer allocation failed'); } terminate() { this.ended = true; } }
-  const tessellate = new Function('app', 'Worker', 'stale', 'announce', 'forecast', 'forecastTotal', 'mb', 'setStatus', 'showProgress', 'TESS_HINT', 'setInterval', 'clearInterval', 'crashText', 'sizeText',
-    `${body}; return tessellate;`)(app, Worker, () => false, () => {}, () => ({}), () => 0, (n) => String(n), () => {}, () => {}, '', () => 9, (t) => cleared.push(t), (m) => m, (n) => `${n} B`);
+  const tessellate = new Function('app', 'Worker', 'stale', 'announce', 'forecast', 'forecastTotal', 'mb', 'setStatus', 'showProgress', 'TESS_HINT', 'setInterval', 'clearInterval', 'crashText', 'sizeText', 'fmtClock',
+    `${body}; return tessellate;`)(app, Worker, () => false, () => {}, () => ({}), () => 0, (n) => String(n), () => {}, () => {}, '', () => 9, (t) => cleared.push(t), (m) => m, (n) => `${n} B`, (s) => `${s} s`);
   const r = await tessellate(new ArrayBuffer(8), 'step', 1, 'big.step', true).then(() => 'resolved', (e) => e.message);
   assert.deepEqual([r, made[0].ended, cleared, app.cancelTess], ['no room for the file\'s copy: Array buffer allocation failed', true, [9], null]);
 });

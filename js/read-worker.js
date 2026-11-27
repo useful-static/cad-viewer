@@ -8,6 +8,7 @@
 //   { kind: 'mesh', buf, format, name, extras, unit }  -> { ok, raw (a .cadmesh), unitless }
 //   { kind: '2d', buf, format, name }                  -> { ok, drawing }  (format: 'DXF' | 'DWG', js/formats.js drawingReaderOf)
 //   { kind: 'check', mesh, format, buf, name, files }  -> { ok }  (the list check's read: js/list-check.js readOffThread)
+//   { kind: 'save', key, raw, name }                   -> { ok }  (a conversion gzipped and kept: main.js saveConversion)
 //   a refusal                                          -> { ok: false, message }
 
 import { readDrawing, readMeshFile } from './read-file.js';
@@ -16,7 +17,15 @@ import { parseMesh } from './mesh-formats.js';
 onmessage = async (ev) => {
   const m = ev.data;
   try {
-    if (m.kind === 'mesh') {
+    if (m.kind === 'save') {
+      // (gzipped here: on the page's thread a converted rack's gzip froze it 2 s, 12 s on a slow
+      // phone, with its first frame not yet drawn -- R175-2)
+      const { deflateCadmesh } = await import('./cadmesh.js');
+      const { cachePut } = await import('./mesh-cache.js');
+      const data = typeof CompressionStream === 'function' ? await deflateCadmesh(m.raw) : m.raw;
+      await cachePut(m.key, data, m.name);
+      postMessage({ ok: true });
+    } else if (m.kind === 'mesh') {
       const { raw, unitless } = await readMeshFile(m);
       postMessage({ ok: true, raw, unitless }, [raw]);
     } else if (m.kind === 'check') {
