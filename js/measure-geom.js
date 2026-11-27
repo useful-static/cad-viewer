@@ -34,7 +34,7 @@ export const circleSagShare = (a) => { const n = circleMinPoints(a); return Numb
 
 import { cross, dot, len, sub, unit } from './vec3.js';
 import { bodyAngle } from './cadmesh.js';
-import { weldBits } from './edges.js';
+import { weldBitsSteps } from './edges.js';
 
 // Newell's normal and the centroid of a closed polygon
 function newell(pts) {
@@ -239,7 +239,7 @@ export function* bodyGeometrySteps(model, meshIndex) {
   const nodeP = [], nodeNb = [];
   // (a vertex's node, by the first vertex of the body with its bits: -1 until met)
   const v0 = m.vtxStart;
-  const weld = weldBits(new Uint32Array(P.buffer, P.byteOffset, P.length), v0, m.vtxCount);
+  const weld = yield* weldBitsSteps(new Uint32Array(P.buffer, P.byteOffset, P.length), v0, m.vtxCount);
   const idOfRep = new Int32Array(Math.max(1, m.vtxCount)).fill(-1);
   const idOf = (v) => {
     const r = weld[v - v0];
@@ -287,7 +287,7 @@ export function* bodyGeometrySteps(model, meshIndex) {
         nodeNb[kb].add(ka);
       }
     });
-    yield 0.8 * (fi + 1) / faces.length;
+    yield 0.1 + 0.7 * (fi + 1) / faces.length;
   }
   // corners: welded points where other than two boundary segments meet
   const corners = [];
@@ -726,7 +726,7 @@ export function* holesOfSteps(geom) {
     return Math.abs(along);
   };
   for (let i = 0; i < rims.length; i++) {
-    if (!(i & 127)) yield 0.1 + 0.5 * i / rims.length;
+    if (!(i & 31)) yield 0.1 + 0.5 * i / rims.length;
     if (used.has(i)) continue;
     const r = rims[i], k = keys[i];
     // (behind r's face, along its own sorted axis: the direction t grows or falls; among the rims
@@ -768,7 +768,7 @@ export function* holesOfSteps(geom) {
   const unpaired = []; // (the told rims of through-holes whose other end cannot be told)
   let step = 0;
   for (const [i, row] of single) {
-    if (!(++step & 31)) yield 0.6 + 0.3 * step / single.length;
+    if (!(++step & 3)) yield 0.6 + 0.3 * step / single.length; // (a wall's walk is long: R177-3)
     if (drop.has(row)) continue;
     const a = rims[i];
     const w = a.nodes && holeWall(geom, a, faceN);

@@ -172,11 +172,18 @@ const inScheme = (base, overrides = app.overrides, faces = app.faceOverrides || 
 
 // The ONE writer of #announce: each write numbered, a deferred repeat landing only if nothing newer
 // was said; one task's words together, in order (r45 Q2, r46 Q2)
-let saySeq = 0, sayParts = null;
-function announce(text) {
+// (a load's 30 s "still …" (beat) gives way to anything else said with it: "still uploading … ·
+// ready" was read in one breath -- R177-6)
+let saySeq = 0, sayParts = null, sayBeat = null;
+function announce(text, beat = false) {
+  if (beat) sayBeat = text;
   if (sayParts) { if (!sayParts.includes(text)) sayParts.push(text); return; }
   sayParts = [text];
-  setTimeout(() => { const t = sayParts.join(' · '); sayParts = null; sayNow(t); }, 0);
+  setTimeout(() => {
+    const parts = sayParts.length > 1 ? sayParts.filter((p) => p !== sayBeat) : sayParts;
+    sayParts = null; sayBeat = null;
+    sayNow(parts.join(' · '));
+  }, 0);
 }
 function sayNow(text) {
   const el = $('announce');
@@ -231,7 +238,7 @@ function setStatus(s, msg) {
       const m = /(?:^|·\s*)([^·]*\bleft\b[^·]*)/.exec(d);
       return m && !app.statusMsg.includes(m[1].trim()) ? ` · ${m[1].trim()}` : '';
     };
-    app.progressBeat = setInterval(() => { if (PROGRESS_STATES.has(app.status)) announce(`still ${app.statusMsg}${leftOf()}`); }, 30000);
+    app.progressBeat = setInterval(() => { if (PROGRESS_STATES.has(app.status)) announce(`still ${app.statusMsg}${leftOf()}`, true); }, 30000);
     app.progressBeat.unref?.(); // (not holding a test's process open)
   } else if (!PROGRESS_STATES.has(s) && app.progressBeat) { clearInterval(app.progressBeat); app.progressBeat = 0; }
   // (a card, a model or an error is now the view's to show: index.html's
@@ -6155,14 +6162,17 @@ function tessellate(buf, format, seq, name, threads) {
           const whole = total - (now - (tStart || t0)) / 1000;
           if (whole >= 1) left = whole; else overStep = st;
         }
-        // (counted down by the clock, raised only by a real change of pace: it stood 7 s and rose
-        // from ~1 s to ~3 s -- R176-6)
+        // (counted down by the clock, raised only by a change of pace held three ticks, to the least
+        // of them: it rose from ~1 s to ~3 s -- R176-6 -- and one tick's 7 -> 27 -> 10 s, then two
+        // ticks' 1 -> 12 -> 4 s, got through with the count nearer the truth, R177-1)
         if (typeof left === 'number') {
+          let ups = 0, upMin = Infinity;
           if (shownLeft) {
-            const counted = shownLeft.left - (now - shownLeft.at) / 1000;
-            if (left < counted || left <= counted + Math.max(5, 0.5 * Math.max(counted, 0))) left = Math.min(left, Math.max(counted, 0));
+            const counted = Math.max(shownLeft.left - (now - shownLeft.at) / 1000, 0);
+            if (left > counted + Math.max(5, 0.5 * counted)) { ups = shownLeft.ups + 1; upMin = Math.min(shownLeft.upMin - (now - shownLeft.at) / 1000, left); }
+            left = ups >= 3 ? upMin : Math.min(left, counted);
           }
-          shownLeft = { left, at: now };
+          shownLeft = { left, at: now, ups: ups >= 3 ? 0 : ups, upMin };
         } else shownLeft = null;
         // the bar: the forecast's share of the conversion done, never moving back
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
@@ -6177,8 +6187,8 @@ function tessellate(buf, format, seq, name, threads) {
         detail = `step ${st + 1} of ${STEPS.length}: ${STEPS[st]}${pct}${leftText ? ` · ${leftText}` : ''} · ${clock} so far`;
       }
       setStatus('tessellating', conv
-        ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` · ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
-        : `${stage} · ${clock}`);
+        ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` · ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock} so far` // (as the card: R80-5, R128-6, R177-4)
+        : `${stage} · ${clock} so far`);
       // (the time so far named, and the converter's download in the title -- R176-3)
       const fetching = !conv && /^downloading the converter/.test(stage);
       showProgress(fetching ? `Downloading the converter for ${name} (${size})` : `Converting ${name} (${size})`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
@@ -6377,13 +6387,14 @@ async function loadUrl(url) {
       // (the rate from this read's first chunk, which carries what an early download already had, and
       // said only after 2 s of it: bytes that came before main.js, divided by the time since, read a
       // third of the true time left -- R175-3)
-      // (over the last 5 s, from 3 s: a first burst read 1.6-1.9 times the pace -- R176-4)
+      // (over the last 5 s, the first 2 s -- the link's first burst -- left out, said after 2 s of
+      // it: a first burst read 1.4-1.9 times the pace, R176-4, R177-5)
       const tNow = performance.now();
       if (r0 === null) r0 = tNow;
-      rateWin.push([tNow, got]);
+      if (tNow - r0 >= 2000) rateWin.push([tNow, got]);
       while (rateWin.length > 2 && rateWin[1][0] <= tNow - 5000) rateWin.shift();
-      const secs = (tNow - r0) / 1000, [wt, wg] = rateWin[0], wsecs = (tNow - wt) / 1000;
-      const rate = secs >= 3 && wsecs > 0 && got > wg ? ` · ${rateText((got - wg) / wsecs, pct ? total - got : null)}` : '';
+      const [wt, wg] = rateWin[0] || [tNow, got], wsecs = (tNow - wt) / 1000;
+      const rate = wsecs >= 2 && got > wg ? ` · ${rateText((got - wg) / wsecs, pct ? total - got : null)}` : '';
       frac = pct ? Math.min(1, got / total) : null;
       showProgress(`Downloading ${name}`, frac,
         pct ? `${soFar}${kb ? ' KB' : ''} of ${all}${rate}` : `${soFar} ${unit}${rate}`);
@@ -8287,15 +8298,18 @@ function wireInput() {
     const kb = $('holesbtn').matches(':focus-visible');
     // (the parts' geometry first, in slices, said as it goes: the first press froze a phone 4 s with
     // no sign it was taken -- R175-1); a later press or another model takes over
-    const ask = ++holesAsk, mesh = app.mesh;
+    const ask = ++holesAsk, mesh = app.mesh, seq = app.loadSeq;
     let told = '';
+    // (stopped as a load starts: the old model's figure climbed past the new load's words, R177-2)
+    const gone = () => ask !== holesAsk || app.mesh !== mesh || app.loadSeq !== seq;
     const ready = await app.measure.prepareHoles(ids, (pc) => {
+      if (gone()) return;
       // (read out once, shown as it goes: the work's share, R176-1)
       const t = `finding holes… ${pc}%`;
       tell(t, 4000, told ? '' : 'finding holes');
       told = t;
-    });
-    if (ask !== holesAsk || app.mesh !== mesh || !ready) return;
+    }, gone);
+    if (gone() || !ready) return;
     if (told) tell(told, 1, '');
     showHoles({ ids, name, shown: !app.selected.size });
     // (its head in view; from a key, the focus to its Copy: R44-2)

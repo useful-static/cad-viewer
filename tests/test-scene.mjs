@@ -1211,7 +1211,7 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const cut = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
-  const body = line('let saySeq = 0') + cut('function announce(text) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text, firm = false) {')
+  const body = line('let saySeq = 0') + cut('function announce(text, beat = false) {') + cut('function sayNow(text) {') + cut('function tell(text, ms = 1500, said = text, firm = false) {')
     + cut('function tellReady(words, ms = 6000, firm = false) {') + cut('function setStatus(s, msg) {') + line('function somethingShown() {');
   const el = () => ({ textContent: '', title: '', dataset: {}, hidden: false });
   const dom = { status: el(), progress: el(), announce: el() };
@@ -1261,6 +1261,11 @@ await test('a note is told -- shown where the view\'s notes go and read out -- t
   setStatus('error', 'not loaded: c'); await settle();
   tellReady('the tour not found (404): t.json'); await settle();
   assert.deepEqual([app.status, app.statusMsg, heard[heard.length - 1]], ['error', 'not loaded: c', 'the tour not found (404): t.json']);
+  // (a load's 30 s "still …" gives way to what is said with it, and alone is said -- R177-6)
+  announce('still uploading b.step', true); announce('ready'); await settle();
+  assert.equal(heard[heard.length - 1], 'ready');
+  announce('still fetching 30% of 24.5 MB', true); await settle();
+  assert.equal(heard[heard.length - 1], 'still fetching 30% of 24.5 MB');
 });
 await test('the edges drawn are the value\'s: a file\'s drawn while its facts build, then the build\'s uploaded in their place; the same arrays not uploaded again (r40 A1, Q9)', async () => {
   const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
@@ -1610,7 +1615,7 @@ await test('the note contract: each page state against each writer of a note or 
   const cutIf = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n}\n', at) + 2); };
   const line = (head) => { const at = src.indexOf(head); return src.slice(at, src.indexOf('\n', at) + 1); };
   const pc = src.indexOf("$('pcancel').onclick = () => {"), pcBody = src.slice(src.indexOf('{', pc) + 1, src.indexOf('\n  };', pc));
-  const body = line('let saySeq = 0') + ['function announce(text) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text, firm = false) {',
+  const body = line('let saySeq = 0') + ['function announce(text, beat = false) {', 'function sayNow(text) {', 'function tell(text, ms = 1500, said = text, firm = false) {',
     'function tellReady(words, ms = 6000, firm = false) {', 'function setStatus(s, msg) {', 'function readyText() {', 'function sayNoFacts(text) {',
     'function openFile(f', 'async function exportMesh(fmt) {', 'function failApart(msg', 'function recovered() {', 'function showEmpty() {',
     'function recoveryStarts(why) {', 'function listsRead(r, openFirst) {', 'function cannotHold() {', 'function refusedForSize(f) {',

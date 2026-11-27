@@ -107,7 +107,7 @@ const LOAD_RULES = 'function loadOpens() {\n' + line('  if (!app.startingAdd) { 
 const BODY = line('let saySeq = 0') + line('let listPick = 0') + LOAD_RULES + [src.includes('async function viewIn3D(src) {') ? 'async function viewIn3D(src) {' : 'function viewIn3D(src) {',
   'async function startFromUrl(early) {', 'async function startFromAddress(early) {', 'function applyLinkView(view) {', 'function addPicked(files) {', 'function addWith(load, beside = false) {',
   'async function readLists(lists, openFirst) {', 'function listsRead(r, openFirst) {', 'function loadListed(url) {', 'function startLoad(fn) {',
-  'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text) {', 'function sayNow(text) {',
+  'function guard(p, seq = null) {', 'function beginLoad() {', 'function stale(seq) {', 'function announce(text, beat = false) {', 'function sayNow(text) {',
   'function tell(text, ms = 1500, said = text, firm = false) {', 'function tellReady(words, ms = 6000, firm = false) {', 'function setStatus(s, msg) {', 'function readyText() {',
   'function failApart(msg', 'function showEmpty() {', 'function openFile(f', 'function refusedForSize(f) {', 'function modelUrlIn(search) {',
   'async function readTour(url) {', 'function listEntry(src) {', 'function listedNow() {', 'function forgetAddressModel() {', 'function dropAddressModel(u) {', 'function syncUnitParam() {', 'function addressUnit(url) {',

@@ -1025,7 +1025,7 @@ export function createMeasure(deps) {
     ch.port1.onmessage = () => { ch.port1.close(); f(); };
     ch.port2.postMessage(0);
   };
-  function prepareHoles(ids, progress = () => {}) {
+  function prepareHoles(ids, progress = () => {}, stop = () => false) {
     const m = model();
     if (!m || ids.every((id) => st.geom.get(id - 1)?.holes)) return Promise.resolve(true);
     const meshes = m.header?.meshes || [];
@@ -1034,7 +1034,7 @@ export function createMeasure(deps) {
     return new Promise((done) => {
       let k = 0, doneW = 0, said = -1, frac = 0;
       const slice = () => {
-        if (st.model !== m || scene.mesh !== m) { done(false); return; }
+        if (st.model !== m || scene.mesh !== m || stop()) { done(false); return; }
         const end = performance.now() + SLICE_MS;
         frac = 0;
         while (k < ids.length && performance.now() < end) {

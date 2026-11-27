@@ -361,11 +361,20 @@ const mix32 = (v) => { v ^= v >>> 16; v = Math.imul(v, 0x85ebca6b); v ^= v >>> 1
 // weld: each vertex of a body (v0, nv; bits: the positions' float32 bits) -> the first vertex of
 // the body with the same bits (-0 and +0 are one position)
 export function weldBits(bits, v0, nv) {
+  const steps = weldBitsSteps(bits, v0, nv);
+  let r;
+  while (!(r = steps.next()).done);
+  return r.value;
+}
+// (the same in steps, yielding every 65,536 vertices: a board's body welded in one 0.7 s task at the
+// first List holes -- R177-3)
+export function* weldBitsSteps(bits, v0, nv) {
   const wsize = pow2(nv * 2);
   const wtab = new Int32Array(wsize).fill(-1);
   const weld = new Uint32Array(nv);
   const bit = (o) => (bits[o] === 0x80000000 ? 0 : bits[o]);
   for (let v = 0; v < nv; v++) {
+    if (!(v & 65535) && v) yield 0.1 * v / nv;
     const o = (v0 + v) * 3;
     const x = bit(o), y = bit(o + 1), z = bit(o + 2);
     // (each coordinate mixed into the low bits in turn: a float on a whole number has its low

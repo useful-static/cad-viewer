@@ -604,6 +604,15 @@ test('the hole table built in steps (R176-1): holesOfSteps stops many times, say
   rising(hv, 'holes');
   assert.ok(hv.length >= 100, `${hv.length} stops over 16,000 rims`);
   assert.deepEqual(r.value.map((h) => [h.centre, h.diameter, h.rims]), holesOf(geomOf()).map((h) => [h.centre, h.diameter, h.rims]));
+  // the weld in steps (R177-3): stops past 65,536 vertices, the same welds as weldBits
+  const { weldBits, weldBitsSteps } = await import('../js/edges.js');
+  const nv = 200000, bits = new Uint32Array(nv * 3);
+  for (let v = 0; v < nv; v++) { bits[3 * v] = v % 70001; bits[3 * v + 1] = 7; bits[3 * v + 2] = v % 3; }
+  const ws = weldBitsSteps(bits, 0, nv), wv = [];
+  while (!(r = ws.next()).done) wv.push(r.value);
+  assert.ok(wv.length >= 3, `${wv.length} weld stops`);
+  assert.ok(wv.every((x, i) => x >= 0 && x <= 0.1 && (!i || x >= wv[i - 1])), JSON.stringify(wv));
+  assert.deepEqual([...r.value], [...weldBits(bits, 0, nv)]);
   // and a real body's: the washer's hole, the same either way
   const wh = holesOfSteps(bodyGeometry(m, 0));
   while (!(r = wh.next()).done);
