@@ -412,7 +412,7 @@ export async function inflate(buf, format, max = MAX_FILE_BYTES, stop = null) {
   const what = format === 'gzip' ? 'gzip' : 'deflated';
   if (typeof DecompressionStream === 'undefined') {
     // (the file is fine: the browser is too old -- not "damaged", R169-3)
-    throw new Error(`this file is ${what}-compressed, and this browser is too old to open compressed files: update it, or try another browser`);
+    throw new Error(`this file is compressed (${what}), and this browser is too old to open compressed files: update it, or try another browser`);
   }
   // ONE output buffer, filled as the chunks arrive: holding the chunks and then copying them into
   // their total kept two copies of the whole file at the peak (a 1.9 GB model needed 3.8 GB). Its

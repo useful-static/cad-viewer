@@ -153,6 +153,7 @@
   body.nogpu { grid-template-columns:minmax(0, 1fr); } /* (no panel: the card centred over the whole width, R22-4) */
   body.nogpu :is(header, #stage) { grid-column:1 / -1; }
   body.nogpu #tb > .title { display:inline !important; } /* (the page's name in an otherwise empty header, R22-10) */
+  body.nogpu #view { visibility:hidden; } /* (a dead canvas showed white behind the card after a give-up: R170-1) */
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; overscroll-behavior-x:none; } /* (a sideways swipe on a panel was the browser's Back: R154-1) */
   body { display:grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr; height:100vh; }
   /* header = the non-scrolling frame (background, border, the narrow layout's

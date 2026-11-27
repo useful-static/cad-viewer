@@ -249,6 +249,7 @@ const posterUp = () => !!app.embed && !!$('poster') && !$('poster').hidden;
 // (the reason, often the browser's raw words, only in the ? box's graphics line: R169-5)
 function recoveryStarts(why) {
   app.lossWhy = why;
+  if (quietLoss()) return;
   const text = 'the graphics stopped; restarting them';
   if (PROGRESS_STATES.has(app.status) || app.status === 'error') tell(text, 6000);
   else setStatus('recovering', text);
@@ -275,9 +276,11 @@ function recovered() {
     if (somethingShown()) setStatus('ready', readyText());
     else setStatus('idle', idleText());
   }
-  tell('the graphics restarted; your view is as it was', 4000);
+  if (!quietLoss()) tell('the graphics restarted; your view is as it was', 4000);
   showInfo(); // (the ? box no longer says "recovering": R169-6)
 }
+// A drawing shown, no load running: nothing on screen changes through a loss, so nothing is said (R170-4)
+const quietLoss = () => !!app.dxf && !PROGRESS_STATES.has(app.status);
 // What the line says with nothing shown: an embed's poster its own words, an embed none of the
 // open-a-file words (its visitor chose nothing to open), else what the page opens (r51 Q5: read out
 // in an embed by the recovery's end and by Cancel)
@@ -802,7 +805,8 @@ let gaveUpWords = '';
 function giveUp(msg) {
   gaveUp = msg;
   const name = app.mesh && app.sourceName, device = !!name && !app.sourceUrl;
-  gaveUpWords = `The graphics stopped working and did not restart: reload the page${device ? `, then open ${name} again` : ''}`;
+  // (an embed's only button opens the model in cad.place: R170-5)
+  gaveUpWords = `The graphics stopped working and did not restart: reload the page${device ? `, then open ${name} again` : app.embed ? ', or open the model in cad.place' : ''}`;
   beginLoad(); // a load still fetching or tessellating goes stale and stops painting progress
   failRendererWaiters(gaveUpWords);
   $('backend').textContent = 'no 3D';
@@ -818,6 +822,9 @@ function giveUp(msg) {
   setStatus('error', gaveUpWords);
   announce(gaveUpWords);
   showInfo(); // its renderer line must stop naming the dead renderer
+  // (the focused tool went with the tools: the focus to the card's button, not the page -- R170-3)
+  const to = !b.hidden ? b : $('emptyfull');
+  if (to && !to.hidden && document.hasFocus() && document.activeElement !== to) to.focus({ preventScroll: true }); // (never taken from a host page)
 }
 async function recoverRenderer(why) {
   app.gpuLosses = (app.gpuLosses || 0) + 1; // the selftest reports it: a smoke run that recovered is not a normal load
@@ -5170,7 +5177,7 @@ function edgesOf(base) {
     // (no module worker: said as why there are no edges nor volume -- r44 Q3, r45 A5)
     // (the browser's reason kept for the console only: R169-8)
     if (v.noWorker) console.warn('no module worker:', v.noWorker);
-    info.error = v.stopped || v.error || 'this browser could not run the part that works them out: reload the page, or try a newer browser';
+    info.error = v.stopped || v.error || 'this browser could not run the part of the viewer that works this out: reload the page, or try a newer browser'; // (R170-6)
     // (a stop is no failure; the model's own failure remembered, a momentary one not: r40 A3, Q2)
     info.stopped = !!v.stopped;
     if (v.transient) info.tries = (info.tries || 0) + 1;
@@ -5287,8 +5294,10 @@ const KEEPS_NEXT_STEP = /again|re-export|this viewer opens|may work|Add model|Ma
 // (said once: a reader's "cadmesh: " dropped, and a reason that already says damaged gets only the
 // next step -- R168-1, R168-3)
 function nextStep(e, name) {
-  const m = String(e && e.message || e).replace(/^cadmesh: /, '');
-  if (!(e instanceof Error) || KEEPS_NEXT_STEP.test(m)) return e;
+  const raw = String(e && e.message || e), m = raw.replace(/^cadmesh: /, '');
+  if (!(e instanceof Error)) return e;
+  // (a kept reason the reader prefixed: the prefix dropped and the file named -- R170-2)
+  if (KEEPS_NEXT_STEP.test(m)) return m === raw ? e : new Error(m.includes(name) ? m : `${name}: ${m}`);
   const said = /\.\w+ is damaged/.test(m) ? m : m.includes(name) ? m : `${name}: ${m}`;
   return new Error(`${said} -- ${/damaged|cut short/.test(m) ? '' : 'it may be damaged or cut short: '}download it again, or export it again`);
 }

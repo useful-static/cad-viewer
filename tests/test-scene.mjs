@@ -986,7 +986,7 @@ await test('the edges worker\'s copies that do not fit: said, the worker ended, 
     const t = make(false, 2e6, false, true), b = { edgeInfo: { value: null }, position: new Float32Array(9), index: new Uint32Array(3), header: { meshes: [] } };
     t.app.baseMesh = b;
     await t.edgesOf(b);
-    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: this browser could not run the part that works them out: reload the page, or try a newer browser']]); // (R169-8)
+    assert.deepEqual([b.edgeInfo.failed, t.said], [true, ['ready · no edges for this model: this browser could not run the part of the viewer that works this out: reload the page, or try a newer browser']]); // (R169-8, R170-6)
   }
   // a size limit met when the file was read, written in it under today's rule: remembered at once,
   // no worker (r43 A3); one of the moment, or one written under another rule, built (r44 A1, Q2)
@@ -1587,13 +1587,14 @@ const NOTE_CONTRACT = {
   // load begun meanwhile owns the state, and is told too (r48 A7, r49 Q1)
   // (and the page's error that an earlier recovery's "cannot hold" made: ended, the model held now --
   // r51 A2, Q3 b)
-  recovered: (r, s) => (s.status !== 'recovering' && !(s.status === 'error' && s.gpuLacks === s.msg)) ? [same, same, [[REC, 4000]], [REC]]
+  // (a drawing shown, no load: nothing on screen changes, nothing said -- R170-4)
+  recovered: (r, s) => s.shows === 'drawing' && !busyRun(s) ? [same, same, [], []] : (s.status !== 'recovering' && !(s.status === 'error' && s.gpuLacks === s.msg)) ? [same, same, [[REC, 4000]], [REC]]
     : (s.shows ? ['ready', s.ready, [[REC, 4000]], [`ready · ${REC}`]] : ['idle', idleOf(s), [[REC, 4000]], [`${idleOf(s)} · ${REC}`]]),
   // the GPU recovery's start: 'recovering' -- but under a load, which keeps its state, its card and
   // its question, told (r49 Q1: a loss under "convert it?" hid the question and the load hung)
   // (not within a recovery: recoverRenderer keeps a second loss for after the first)
   // (an error up kept too: the card lost a failed ?src's 404 through recovering, then idle -- r50 A3, Q4)
-  recoveryStarts: (r, s) => s.status === 'recovering' ? null : (busyRun(s) || s.status === 'error') ? [same, same, [[LOST, H(LOST)]], [LOST]]
+  recoveryStarts: (r, s) => s.status === 'recovering' ? null : s.shows === 'drawing' && !busyRun(s) ? [same, same, [], []] : (busyRun(s) || s.status === 'error') ? [same, same, [[LOST, H(LOST)]], [LOST]]
     : ['recovering', LOST, [], [LOST]],
   // a model list that could not be read, with nothing in it to open: a failure apart from the load,
   // by failApart's one rule (r49 A2: its own rule put it on the card and in the note at once, and
@@ -1616,7 +1617,7 @@ await test('the note contract: each page state against each writer of a note or 
     'function rewriteReady(change) {'].map(cutIf).join('')
     + line('const listNote = ') + line('const posterUp = ')
     + `const OVERSIZE_WORDS = ${JSON.stringify(OVERSIZE_WORDS)};\n` // (main.js imports it: r72 A8)
-    + ['const shownLacksGpu = ', 'const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const ownHidden = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
+    + ['const shownLacksGpu = ', 'const quietLoss = ','const POSTER_MSG = ', 'const idleText = ', 'const oversizeText = ', 'const ownHidden = ', 'const exportState = '].map((h) => (src.includes(h) ? line(h) : '')).join('')
     + (src.includes('function somethingShown() {') ? line('function somethingShown() {') : '') + `function cancelLoad() {${pcBody}\n}\n`
     // (exportMesh says a cut or an explode leaves the file whole: no cut in these states -- r129)
     + 'const sectionPlane = () => null;\n'
