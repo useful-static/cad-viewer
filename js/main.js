@@ -289,6 +289,9 @@ function recovered() {
   if (!quietLoss()) tell('the graphics restarted; your view is as it was', 4000);
   showInfo(); // (the ? box no longer says "recovering": R169-6)
 }
+// A file from this device shown with measurements: leaving it loses them, and a reload or Back cannot
+// open the file again (R171-1, R172-1)
+const deviceWorkAtRisk = () => somethingShown() && !app.sourceUrl && (app.dxf ? app.dxf.view.results?.length : app.measure?.results?.length) > 0;
 // A drawing shown, no load running: nothing on screen changes through a loss, so nothing is said (R170-4)
 const quietLoss = () => !!app.dxf && !PROGRESS_STATES.has(app.status);
 // What the line says with nothing shown: an embed's poster its own words, an embed none of the
@@ -3834,11 +3837,26 @@ function wireHistory() {
     // (an entry from before a reload: its address opened as it opens fresh -- its model, lists,
     // tour, ?add=s and view --, by loading it: this page's start and first model are not its)
     if (otherPages(history.state)) { location.reload(); return; }
+    // (the last step's "not kept" note ends with it: it stayed through two more Back presses -- R172-7)
+    if (carriedNote.endsWith('is not kept: open it again with Open…')) { if ($('hover').textContent === carriedNote) tell(carriedNote, 1, ''); carriedNote = ''; }
     // (an entry a #view= edit just made is not yet marked: it is the step it was edited on)
     const wasFile = app.entryFile || null, file = ownEntry(history.state) ? history.state.cadvFile || null : wasFile;
     app.entryFile = file;
     if (location.search === app.entrySearch && file === wasFile) return; // (the fragment alone: hashchange's)
+    // (Back or Forward off a measured file from this device asks first, as leaving the page does; kept,
+    // its step is put back -- R172-1)
+    if (wasFile && app.fileHref && deviceWorkAtRisk()
+      && !confirm(`Leave ${wasFile}? Its measurements will be lost: a file opened from this device cannot be opened again from here.`)) {
+      history.pushState(app.fileState, '', app.fileHref);
+      app.entryState = app.fileState;
+      app.entrySearch = new URL(app.fileHref).search;
+      app.entryFile = wasFile;
+      return;
+    }
     app.entrySearch = location.search;
+    // (an entry naming a tour opens as the address opens fresh, the tour played: Back reopened its model
+    // alone -- R172-2)
+    if (new URLSearchParams(location.search).get('tour') && !app.tour) { app.leaveOk = true; location.reload(); return; }
     // (onto a device file's step: still shown, kept; else the file is not kept, which is said, and the
     // entry's address opens as the page's would -- R171-2)
     if (file) {
@@ -5675,7 +5693,8 @@ function forgetAddressModel() {
   // (a file from the device over a model the address names takes its own step, marked as a file's:
   // rewritten in place, Back met an entry of the same address and did nothing -- R171-2)
   history.pushState({ cadvEntry: app.pageId, cadvFile: app.sourceName || 'the file' }, '', u);
-  app.entryState = history.state;
+  app.entryState = app.fileState = history.state;
+  app.fileHref = u.href; // (put back if Back off it is refused: R172-1)
   app.entrySearch = u.search; // (the entry shown, rewritten: wireHistory -- r60 A1)
   app.entryFile = history.state.cadvFile;
 }
@@ -7801,11 +7820,19 @@ function wireInput() {
   // (a browser naming a service worker it cannot give, navigator.serviceWorker undefined, stopped the
   // page at start: R169-2)
   if (navigator.serviceWorker && !app.embed && window.isSecureContext && !params.has('nosw')) {
-    try { navigator.serviceWorker.register('sw.js').catch(() => { /* the viewer works without it */ }); } catch { /* nor this */ }
     // (a new version taken while the page is open: said, not silent -- its later parts would load
-    // beside this page's -- R171-7; the first visit's own worker taking control is no update)
+    // beside this page's -- R171-7. Not the first visit's own worker taking control, nor an update this
+    // page's own load found: the worker fetches network first, so this page is that version -- R172-4)
     const had = !!navigator.serviceWorker.controller;
-    navigator.serviceWorker.addEventListener?.('controllerchange', () => { if (had) tellReady('the viewer was updated: reload the page to use the new version', 8000); });
+    let own = false;
+    const t0 = performance.now(), mine = () => performance.now() - t0 < 5000; // (from the registration, not the page's start: a slow load)
+    try {
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        if (reg.installing && mine()) own = true;
+        reg.addEventListener?.('updatefound', () => { if (mine()) own = true; });
+      }).catch(() => { /* the viewer works without it */ });
+    } catch { /* nor this */ }
+    navigator.serviceWorker.addEventListener?.('controllerchange', () => { if (had && !own) tellReady('the viewer was updated: reload the page to use the new version', 8000); });
   }
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
@@ -7988,10 +8015,8 @@ function wireInput() {
   // Leaving the page asks first when it would throw away work: unsaved tour steps, or measurements
   // on a file from this device, which a reload cannot open again (R171-1)
   addEventListener('beforeunload', (e) => {
-    if (app.embed) return;
-    const measured = (app.dxf ? app.dxf.view.results?.length : app.measure?.results?.length) > 0;
-    const device = somethingShown() && !app.sourceUrl;
-    if (app.recorder?.unsaved?.() || (measured && device)) { e.preventDefault(); e.returnValue = ''; }
+    if (app.embed || app.leaveOk) return;
+    if (app.recorder?.unsaved?.() || deviceWorkAtRisk()) { e.preventDefault(); e.returnValue = ''; }
   });
   // (a playing tour paused while its tab is hidden, and played on when it is shown: it went on
   // stepping unseen -- R169-11)
@@ -8219,6 +8244,9 @@ function wireInput() {
   $('forgetall').onclick = async () => {
     forgetPrefs();
     coloursSeen.clear();
+    // (the open model's colours, still shown, counted as written: the next pick stores itself alone, not
+    // every forgotten colour again -- R172-3)
+    if (app.modelKey) coloursSeen.set(app.modelKey, new Map([...ownOverrides()].map(([i, c]) => [i, rgbToHex(c).toLowerCase()])));
     const err = await cacheClear().then(() => null, (e) => e);
     await refreshCacheBar();
     tell(err ? `the settings and colours were forgotten, but not the saved conversions: ${err.message || err}`
