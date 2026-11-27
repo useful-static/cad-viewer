@@ -30,4 +30,16 @@ export function getPrefJSON(key, fallback = null) {
   try { return JSON.parse(s); } catch { return fallback; }
 }
 
-export const setPrefJSON = (key, value) => setPref(key, value === null || value === undefined ? null : JSON.stringify(value));
+// every "cadv.*" key removed (the ? box's Forget all: R171-5); how many
+export function forgetPrefs() {
+  try {
+    const s = store();
+    if (!s) return 0;
+    const keys = [];
+    for (let i = 0; i < s.length; i++) { const k = s.key(i); if (k && k.startsWith('cadv.')) keys.push(k); }
+    for (const k of keys) s.removeItem(k);
+    return keys.length;
+  } catch { return 0; }
+}
+
+export const setPrefJSON =(key, value) => setPref(key, value === null || value === undefined ? null : JSON.stringify(value));

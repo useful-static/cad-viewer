@@ -121,6 +121,10 @@ export function createTourRecorder(api) {
   // orbits mean that up on any page, whatever the page's own orientation)
   const toJSON = () => draftToTour({ ...draft, orient: draft.orient || (api.orient ? api.orient() : null) }, draft.modelUrl || api.modelUrl());
   const text = () => JSON.stringify(toJSON(), null, 1);
+  // The draft as last saved, linked or read: steps that differ are unsaved, and leaving the page
+  // asks first (R171-1)
+  let kept = null;
+  const unsaved = () => draft.steps.length > 0 && text() !== kept;
 
   const rows = []; // each step's [name, ↑, ↓, ×], as last drawn
   // an untitled step's stand-in name: step 1 takes the tour's title, as on the card (R89-3)
@@ -325,6 +329,7 @@ export function createTourRecorder(api) {
     const [first, ...added] = (api.model()?.name || '').split(' + ');
     const slug = fileBase();
     api.save(`${t}\n`, `${slug}.cadtour.json`);
+    kept = t;
     const also = added.length ? `; it plays on ${first} alone, without ${added.length === 1 ? 'the added model' : `the ${added.length} added models`}` : '';
     // (how to share it said: send the file, or put it online for a link -- the guide's web address
     // left a visitor with no site no way: R163-5)
@@ -337,6 +342,7 @@ export function createTourRecorder(api) {
     try { api.validate(text()); t = text(); } catch (e) { note(`no link: ${e.message}`); return; }
     if (!JSON.parse(t).model) { note('no link: the model was opened from this device, so a link cannot open it. Save tour and send the file with the model'); return; }
     const r = await api.link(t);
+    if (!r.error) kept = t;
     note(r.error ? `no link: ${r.error}` : `${r.copied ? 'link copied' : 'link shown to copy'}: it opens the model and plays the tour`);
   };
 
@@ -392,6 +398,7 @@ export function createTourRecorder(api) {
     el.loop.checked = draft.loop;
     renderList();
     fillEditor();
+    kept = text(); // (a tour read back is kept already: nothing to warn of on leaving)
   }
   el.open.onclick = () => el.file.click();
   el.file.onchange = async () => {
@@ -437,5 +444,5 @@ export function createTourRecorder(api) {
   });
 
   renderList();
-  return { show, isOpen: () => !el.panel.hidden, toJSON, load };
+  return { show, isOpen: () => !el.panel.hidden, toJSON, load, unsaved };
 }

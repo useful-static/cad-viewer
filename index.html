@@ -760,6 +760,8 @@
   a.helplink { color:var(--acc-text); white-space:nowrap; }
   body.embed #helppop .noembed { display:none !important; }
   #helppop .helpmore { margin:10px 0 0; }
+  #helppop .kept { margin:8px 0 0; color:var(--dim); max-width:46em; }
+  #helppop .kept button { margin-left:4px; }
   @media (any-pointer: coarse) { a.helplink { display:inline-flex; align-items:center; min-height:40px; } }
   /* (wraps rather than cut the scheme's name: "File colou" in a phone's drawer) */
   #colours { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 10px 6px; color:var(--dim); font-size:12px; }
@@ -1192,6 +1194,8 @@
     </div>
     <!-- (the help reached from the viewer, R151-4; outside the keys, which touch hides -- R152-3) -->
     <p class="helpmore"><a class="helplink" href="/help/" target="_blank" rel="noopener">How-to guides ↗</a></p>
+    <!-- (what this browser keeps, said where every visitor finds it, and one way to forget it: R171-5) -->
+    <p id="kept" class="kept noembed">Your files are never uploaded. This browser keeps, on this device only, your display choices, the colours you pick for each model and converted copies of STEP, IGES and BREP files, so they open faster. <button id="forgetall" title="Remove every setting, colour and saved conversion this browser keeps for the viewer">Forget all</button></p>
   </div>
   <!-- The options bar: the controls of the tools that are on, one row each
        (scrolling sideways where it is too narrow), each led by the tool's

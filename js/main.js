@@ -27,7 +27,7 @@ import { copiesOf, mergeModels, sceneUnitsRefusal, modelRanges, modelOfBody, sce
 import { clearance } from './clearance.js';
 import { CUT_FILL, EMBED_DARK_BG, PAPER, STYLES, VIEW_BG, edgePasses, rgb, styleById, styleFor, toggleEdges } from './styles.js';
 import { lookAt, multiply, perspective, ortho } from './mat4.js';
-import { getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
+import { forgetPrefs, getPref, getPrefJSON, setPref, setPrefJSON } from './prefs.js';
 import { MAX_TOUR_BYTES, namesFor, parseTour, partIndex, readingScale, resolveParts, tourAt, tourNames, tourSlug } from './tour.js';
 import { EASE, poseAt } from './tour-path.js';
 import { clearestDirection, meshFaceBoxes, obstaclesFor } from './tour-sight.js';
@@ -127,14 +127,18 @@ const app = {
 const modelKeyOf = (header) => `cadv.colours.${header.meshes.length}-${
   hashName(JSON.stringify(header.meshes.map((m) => [m.name, m.vtxCount, m.idxCount]))).toString(36)}`;
 
+// What this tab last read or wrote for each model's colours (key -> body -> hex): a save writes only
+// what changed since, over what is stored now, so another tab's picks are kept (R171-4)
+const coloursSeen = new Map();
 function loadOverrides(key, bodies) {
   const out = new Map();
   // (storage off or a damaged entry: no remembered colours)
   const saved = getPrefJSON(key, {});
+  coloursSeen.set(key, new Map());
   if (!saved || typeof saved !== 'object') return out;
   for (const [i, hex] of Object.entries(saved)) {
     const n = Number(i);
-    if (Number.isInteger(n) && n >= 0 && n < bodies && /^#[0-9a-f]{6}$/i.test(hex)) out.set(n, hexToRgb(hex));
+    if (Number.isInteger(n) && n >= 0 && n < bodies && /^#[0-9a-f]{6}$/i.test(hex)) { out.set(n, hexToRgb(hex)); coloursSeen.get(key).set(n, hex.toLowerCase()); }
   }
   return out;
 }
@@ -147,8 +151,14 @@ const ownOverrides = () => (app.tour ? app.tour.base.overrides : app.overrides);
 const ownFaces = () => (app.tour ? app.tour.base.faceOverrides : app.faceOverrides);
 function saveOverrides() {
   if (!app.modelKey) return;
-  const own = ownOverrides();
-  setPrefJSON(app.modelKey, own.size ? Object.fromEntries([...own].map(([i, c]) => [i, rgbToHex(c)])) : null);
+  const own = ownOverrides(), seen = coloursSeen.get(app.modelKey) || new Map();
+  const stored = getPrefJSON(app.modelKey, {});
+  const out = stored && typeof stored === 'object' ? { ...stored } : {};
+  const now = new Map([...own].map(([i, c]) => [i, rgbToHex(c).toLowerCase()]));
+  for (const [i, hex] of now) if (seen.get(i) !== hex) out[i] = hex;
+  for (const i of seen.keys()) if (!now.has(i)) delete out[i];
+  setPrefJSON(app.modelKey, Object.keys(out).length ? out : null);
+  coloursSeen.set(app.modelKey, now);
 }
 window.__cadv = app;
 app.redraw = () => viewChanged(); // for tests that change a display flag
@@ -3824,8 +3834,18 @@ function wireHistory() {
     // (an entry from before a reload: its address opened as it opens fresh -- its model, lists,
     // tour, ?add=s and view --, by loading it: this page's start and first model are not its)
     if (otherPages(history.state)) { location.reload(); return; }
-    if (location.search === app.entrySearch) return; // (the fragment alone: hashchange's)
+    // (an entry a #view= edit just made is not yet marked: it is the step it was edited on)
+    const wasFile = app.entryFile || null, file = ownEntry(history.state) ? history.state.cadvFile || null : wasFile;
+    app.entryFile = file;
+    if (location.search === app.entrySearch && file === wasFile) return; // (the fragment alone: hashchange's)
     app.entrySearch = location.search;
+    // (onto a device file's step: still shown, kept; else the file is not kept, which is said, and the
+    // entry's address opens as the page's would -- R171-2)
+    if (file) {
+      if (somethingShown() && !app.sourceUrl && app.sourceName === file) { syncModelList(); return; }
+      const t = `${file} was opened from this device and is not kept: open it again with Open…`;
+      tell((carriedNote = t), 8000, t, true); // (carried through the load of the entry's own model, as the list's note is)
+    }
     const search = new URLSearchParams(location.search);
     // (an entry with no ?src is the page as first opened: the model its start opened from the
     // address -- the tour's own model ahead of the list's first, not the list's first always: r56 A2)
@@ -3888,6 +3908,7 @@ function wireHistory() {
       const prev = app.entryState || {};
       const own = { cadvEntry: app.pageId };
       if (prev.cadvFirst) own.cadvFirst = true;
+      if (prev.cadvFile) own.cadvFile = prev.cadvFile; // (a device file's step keeps its mark through a #view= edit: R171-2)
       if (c && prev.cadvPick === c.id) { c.at = prev.depth + 1; own.cadvPick = c.id; own.depth = c.at; } else if (c) c.at = 0;
       history.replaceState(own, '', location.href);
       app.entryState = own;
@@ -5250,8 +5271,10 @@ async function refreshCacheBar() {
   const list = await cacheList();
   const bytes = list.reduce((s, e) => s + e.size, 0);
   $('cachebar').hidden = !list.length;
-  $('cacheinfo').textContent = `Saved conversions: ${list.length} · ${mb(bytes)} MB`;
-  $('cacheinfo').title = list.map((e) => `${e.name} (${mb(e.size)} MB)`).join('\n');
+  // (each named with its size and last use, KB under a megabyte: two files of one name told apart -- R171-6)
+  $('cacheinfo').textContent = `Saved conversions: ${list.length} · ${sizeText(bytes)}`;
+  const when = (t) => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  $('cacheinfo').title = list.map((e) => `${e.name}, ${sizeText(e.size)}, opened ${when(e.used)}`).join('\n');
 }
 
 // One gzip layer unpacked, with its step on the progress card (loadAny's
@@ -5649,8 +5672,12 @@ function forgetAddressModel() {
   if (app.sourceUrl || (![...ADDRESS_MODEL_PARAMS].some((k) => q.has(k)) && !location.hash.startsWith('#view='))) return;
   const u = new URL(location.href);
   dropAddressModel(u);
-  history.replaceState(history.state, '', u);
+  // (a file from the device over a model the address names takes its own step, marked as a file's:
+  // rewritten in place, Back met an entry of the same address and did nothing -- R171-2)
+  history.pushState({ cadvEntry: app.pageId, cadvFile: app.sourceName || 'the file' }, '', u);
+  app.entryState = history.state;
   app.entrySearch = u.search; // (the entry shown, rewritten: wireHistory -- r60 A1)
+  app.entryFile = history.state.cadvFile;
 }
 // What an address loses when another model (a pick or a device file) replaces the one it names:
 // its model, unit, ?add=s and places, tour and view, by one rule for both (r59 A4, r60 A2, I6).
@@ -7775,6 +7802,10 @@ function wireInput() {
   // page at start: R169-2)
   if (navigator.serviceWorker && !app.embed && window.isSecureContext && !params.has('nosw')) {
     try { navigator.serviceWorker.register('sw.js').catch(() => { /* the viewer works without it */ }); } catch { /* nor this */ }
+    // (a new version taken while the page is open: said, not silent -- its later parts would load
+    // beside this page's -- R171-7; the first visit's own worker taking control is no update)
+    const had = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener?.('controllerchange', () => { if (had) tellReady('the viewer was updated: reload the page to use the new version', 8000); });
   }
   $('treefilter').addEventListener('input', (e) => filterTree(e.target.value));
   // Esc in the filter clears it (and stays in the field); a second Esc closes
@@ -7954,6 +7985,14 @@ function wireInput() {
   }
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
+  // Leaving the page asks first when it would throw away work: unsaved tour steps, or measurements
+  // on a file from this device, which a reload cannot open again (R171-1)
+  addEventListener('beforeunload', (e) => {
+    if (app.embed) return;
+    const measured = (app.dxf ? app.dxf.view.results?.length : app.measure?.results?.length) > 0;
+    const device = somethingShown() && !app.sourceUrl;
+    if (app.recorder?.unsaved?.() || (measured && device)) { e.preventDefault(); e.returnValue = ''; }
+  });
   // (a playing tour paused while its tab is hidden, and played on when it is shown: it went on
   // stepping unseen -- R169-11)
   document.addEventListener('visibilitychange', () => {
@@ -8174,6 +8213,16 @@ function wireInput() {
     const err = await cacheClear().then(() => null, (e) => e);
     await refreshCacheBar();
     tell(err ? `could not clear the saved conversions: ${err.message || err}` : 'saved conversions cleared', err ? 6000 : 3000); // (told: r49 A4)
+  };
+  // (the ? box's Forget all: every setting and colour, and the saved conversions; what is open stays
+  // as it is until the page is left -- R171-5)
+  $('forgetall').onclick = async () => {
+    forgetPrefs();
+    coloursSeen.clear();
+    const err = await cacheClear().then(() => null, (e) => e);
+    await refreshCacheBar();
+    tell(err ? `the settings and colours were forgotten, but not the saved conversions: ${err.message || err}`
+      : 'everything this browser kept for the viewer was removed', 6000);
   };
   window.addEventListener('keydown', (e) => {
     // browser shortcuts and typing left alone, but Ctrl/Cmd+Z outside a field undoes a visibility
