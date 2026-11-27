@@ -225,7 +225,13 @@ function setStatus(s, msg) {
   // (a long load heard every 30 s, where it has got to: a screen reader heard "loading", then two
   // minutes of nothing -- R175-9)
   if (PROGRESS_STATES.has(s) && !app.progressBeat) {
-    app.progressBeat = setInterval(() => { if (PROGRESS_STATES.has(app.status)) announce(`still ${app.statusMsg}`); }, 30000);
+    // (with the card's time left -- R176-5)
+    const leftOf = () => {
+      const d = globalThis.document?.getElementById('pdetail')?.textContent || '';
+      const m = /(?:^|·\s*)([^·]*\bleft\b[^·]*)/.exec(d);
+      return m && !app.statusMsg.includes(m[1].trim()) ? ` · ${m[1].trim()}` : '';
+    };
+    app.progressBeat = setInterval(() => { if (PROGRESS_STATES.has(app.status)) announce(`still ${app.statusMsg}${leftOf()}`); }, 30000);
     app.progressBeat.unref?.(); // (not holding a test's process open)
   } else if (!PROGRESS_STATES.has(s) && app.progressBeat) { clearInterval(app.progressBeat); app.progressBeat = 0; }
   // (a card, a model or an error is now the view's to show: index.html's
@@ -5296,7 +5302,13 @@ function readyText() {
 // The gzip and the write in the read worker (its 'save' kind): on the page's thread the gzip froze a
 // converted rack's first frame 2 s, 12 s on a slow phone (R175-2); where no module worker starts, here,
 // after a frame
+// While it runs the cache line says so and leaving asks first: a page left 1 s after ready lost it;
+// a worker's 'failed' is followed by the page's own try too (R176-2).
 async function saveConversion(key, raw, name) {
+  app.savingConversions = (app.savingConversions || 0) + 1;
+  $('cachebar').hidden = false;
+  $('cacheinfo').textContent = 'Saving a copy of this conversion for next time…';
+  $('cacheinfo').title = '';
   const inWorker = () => new Promise((ok) => {
     let w;
     try { w = new Worker(new URL('./read-worker.js', import.meta.url), { type: 'module' }); } catch { ok(false); return; }
@@ -5308,12 +5320,13 @@ async function saveConversion(key, raw, name) {
   });
   try {
     const r = await inWorker();
-    if (r === false) {
+    if (r !== true) {
       await nextPaint();
       const data = typeof CompressionStream === 'function' ? await deflateCadmesh(raw) : raw.slice(0);
       await cachePut(key, data, name);
     }
   } catch { /* the cache is an optimisation */ }
+  app.savingConversions--;
   refreshCacheBar();
 }
 
@@ -5321,6 +5334,7 @@ async function saveConversion(key, raw, name) {
 // a Clear button. Hidden when there are none (or no IndexedDB).
 async function refreshCacheBar() {
   const list = await cacheList();
+  if (app.savingConversions > 0) return; // ("Saving a copy…" stands till the last save ends)
   const bytes = list.reduce((s, e) => s + e.size, 0);
   $('cachebar').hidden = !list.length;
   // (each named with its size and last use, KB under a megabyte: two files of one name told apart -- R171-6)
@@ -6111,12 +6125,12 @@ function tessellate(buf, format, seq, name, threads) {
       return out;
     };
     const STEPS = ['reading the file', 'building the parts', 'meshing', 'writing the result'];
-    let detailH = 0;
+    let detailH = 0, shownLeft = null;
     const show = () => {
       if (stale(seq)) return;
       const now = performance.now();
       const clock = fmt((now - t0) / 1000);
-      let frac = null, detail = `${stage} · ${clock}`, almost = false;
+      let frac = null, detail = `${stage} · ${clock} so far`, almost = false;
       if (!conv && tStart && forecastTotal(fc) > 3) {
         // the stock converter reports nothing: the forecast alone, never shown as done
         const run = (now - tStart) / 1000, tot = forecastTotal(fc);
@@ -6141,6 +6155,15 @@ function tessellate(buf, format, seq, name, threads) {
           const whole = total - (now - (tStart || t0)) / 1000;
           if (whole >= 1) left = whole; else overStep = st;
         }
+        // (counted down by the clock, raised only by a real change of pace: it stood 7 s and rose
+        // from ~1 s to ~3 s -- R176-6)
+        if (typeof left === 'number') {
+          if (shownLeft) {
+            const counted = shownLeft.left - (now - shownLeft.at) / 1000;
+            if (left < counted || left <= counted + Math.max(5, 0.5 * Math.max(counted, 0))) left = Math.min(left, Math.max(counted, 0));
+          }
+          shownLeft = { left, at: now };
+        } else shownLeft = null;
         // the bar: the forecast's share of the conversion done, never moving back
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
         barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));
@@ -6156,7 +6179,9 @@ function tessellate(buf, format, seq, name, threads) {
       setStatus('tessellating', conv
         ? `${STEPS[step]}${(step === 1 || step === 2) && Math.round(conv.fraction * 100) >= 1 && conv.fraction < 1 && !almost ? ` · ${Math.round(conv.fraction * 100)}%` : ''}${almost ? ' · almost done' : ''} · ${clock}` // (as the card: R80-5, R128-6)
         : `${stage} · ${clock}`);
-      showProgress(`Converting ${name} (${size})`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
+      // (the time so far named, and the converter's download in the title -- R176-3)
+      const fetching = !conv && /^downloading the converter/.test(stage);
+      showProgress(fetching ? `Downloading the converter for ${name} (${size})` : `Converting ${name} (${size})`, frac, detail, bytes > 2e6 ? TESS_HINT : '');
       // (the detail line only grows while it converts: Cancel moved 9 px as it rewrapped -- R133-4)
       const pd = globalThis.document?.getElementById('pdetail'); // ("?.": test-scene runs this with no page)
       if (pd) { pd.style.minHeight = ''; detailH = Math.max(detailH, pd.offsetHeight); pd.style.minHeight = `max(${detailH}px, 2.8em)`; } // (two lines from the first tick: R134-7)
@@ -6314,7 +6339,8 @@ async function loadUrl(url) {
     const chunks = [];
     let got = 0;
     const rd = res.body.getReader();
-    let frac = null, r0 = null, g0 = 0;
+    let frac = null, r0 = null;
+    const rateWin = []; // ([time, bytes] of the last 5 s)
     for (;;) {
       let step, quiet, stop;
       // (nothing coming: said after 5 s, given up after a list's wait -- it sat frozen: R167-6)
@@ -6351,9 +6377,13 @@ async function loadUrl(url) {
       // (the rate from this read's first chunk, which carries what an early download already had, and
       // said only after 2 s of it: bytes that came before main.js, divided by the time since, read a
       // third of the true time left -- R175-3)
-      if (r0 === null) { r0 = performance.now(); g0 = got; }
-      const secs = (performance.now() - r0) / 1000;
-      const rate = secs >= 2 && got > g0 ? ` · ${rateText((got - g0) / secs, pct ? total - got : null)}` : '';
+      // (over the last 5 s, from 3 s: a first burst read 1.6-1.9 times the pace -- R176-4)
+      const tNow = performance.now();
+      if (r0 === null) r0 = tNow;
+      rateWin.push([tNow, got]);
+      while (rateWin.length > 2 && rateWin[1][0] <= tNow - 5000) rateWin.shift();
+      const secs = (tNow - r0) / 1000, [wt, wg] = rateWin[0], wsecs = (tNow - wt) / 1000;
+      const rate = secs >= 3 && wsecs > 0 && got > wg ? ` · ${rateText((got - wg) / wsecs, pct ? total - got : null)}` : '';
       frac = pct ? Math.min(1, got / total) : null;
       showProgress(`Downloading ${name}`, frac,
         pct ? `${soFar}${kb ? ' KB' : ''} of ${all}${rate}` : `${soFar} ${unit}${rate}`);
@@ -8081,10 +8111,10 @@ function wireInput() {
   $('tourexit').onclick = () => endTour();
   $('tourplay').onclick = () => app.tour && setTourPlaying(!app.tour.playing);
   // Leaving the page asks first when it would throw away work: unsaved tour steps, or measurements
-  // on a file from this device, which a reload cannot open again (R171-1)
+  // on a file from this device, which a reload cannot open again (R171-1), or a copy being saved (R176-2)
   addEventListener('beforeunload', (e) => {
     if (app.embed || app.leaveOk) return;
-    if (app.recorder?.unsaved?.() || deviceWorkAtRisk()) { e.preventDefault(); e.returnValue = ''; }
+    if (app.recorder?.unsaved?.() || deviceWorkAtRisk() || app.savingConversions > 0) { e.preventDefault(); e.returnValue = ''; }
   });
   // (a playing tour paused while its tab is hidden, and played on when it is shown: it went on
   // stepping unseen -- R169-11)
@@ -8259,9 +8289,9 @@ function wireInput() {
     // no sign it was taken -- R175-1); a later press or another model takes over
     const ask = ++holesAsk, mesh = app.mesh;
     let told = '';
-    const ready = await app.measure.prepareHoles(ids, (k, n) => {
-      // (read out once, shown as it goes)
-      const t = n > 1 ? `finding holes… ${k} of ${n} parts` : 'finding holes…';
+    const ready = await app.measure.prepareHoles(ids, (pc) => {
+      // (read out once, shown as it goes: the work's share, R176-1)
+      const t = `finding holes… ${pc}%`;
       tell(t, 4000, told ? '' : 'finding holes');
       told = t;
     });

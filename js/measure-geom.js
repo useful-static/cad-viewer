@@ -287,7 +287,7 @@ export function* bodyGeometrySteps(model, meshIndex) {
         nodeNb[kb].add(ka);
       }
     });
-    yield;
+    yield 0.8 * (fi + 1) / faces.length;
   }
   // corners: welded points where other than two boundary segments meet
   const corners = [];
@@ -316,12 +316,12 @@ export function* bodyGeometrySteps(model, meshIndex) {
     edgeClosed.push(cur === start);
   };
   for (let k = 0; k < nodeP.length; k++) {
-    if (!(k & 4095)) yield;
+    if (!(k & 4095)) yield 0.8 + 0.1 * k / nodeP.length;
     if (!isCorner(k)) continue;
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   for (let k = 0; k < nodeP.length; k++) {
-    if (!(k & 4095)) yield;
+    if (!(k & 4095)) yield 0.9 + 0.1 * k / nodeP.length;
     for (const n of nodeNb[k]) if (!seen.has(sk(k, n))) walk(k, n);
   }
   // (P / I: what holesOf reads a hole's wall from -- the curved faces' vertices; a: the angular
@@ -437,20 +437,28 @@ export function faceGap(a, b) {
 // rim, its radius round -- passed over: each pair scanned every curved face's vertices)
 function curvedBoxes(geom) {
   if (geom.curvedBoxes) return geom.curvedBoxes;
+  const steps = curvedBoxesSteps(geom);
+  while (!steps.next().done);
+  return geom.curvedBoxes;
+}
+function* curvedBoxesSteps(geom) {
+  if (geom.curvedBoxes) return;
   const { P, I } = geom;
-  geom.curvedBoxes = geom.faces.map((f, fi) => {
-    if (f.plane || !f.ntri) return null;
+  const all = [];
+  let work = 0;
+  for (const [fi, f] of geom.faces.entries()) {
+    if (f.plane || !f.ntri) continue;
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let t = f.tri0; t < f.tri0 + f.ntri; t++) for (let j = 0; j < 3; j++) {
       const v = I[3 * t + j] * 3;
       for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], P[v + k]); hi[k] = Math.max(hi[k], P[v + k]); }
     }
-    return { lo, hi, fi };
-  }).filter(Boolean);
+    all.push({ lo, hi, fi });
+    if ((work += f.ntri) >= 4096) { work = 0; yield; }
+  }
   // Sorted by their low x, with the widest's width: a hole's x range finds its faces by search. A
   // face far wider than most (a panel-long fillet) is kept apart and always looked at: its width
   // set the search's reach, and every rim scanned from the first box (6,400 holes: 290 -> 1,256 ms)
-  const all = geom.curvedBoxes;
   const widths = all.map((x) => x.hi[0] - x.lo[0]).sort((p, q) => p - q);
   const cap = Math.max(16 * (widths[Math.floor(widths.length * 0.9)] || 0), 1e-9);
   geom.curvedBoxes = all.filter((x) => x.hi[0] - x.lo[0] <= cap).sort((p, q) => p.lo[0] - q.lo[0]);
@@ -638,6 +646,15 @@ export function orderHoles(list) {
   return list.sort((a, b) => { const p = k.get(a), q = k.get(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3]; });
 }
 export function holesOf(geom) {
+  const steps = holesOfSteps(geom);
+  let r;
+  while (!(r = steps.next()).done);
+  return r.value;
+}
+// The same in steps, yielding the share done, 0..1 (R176-1; bodyGeometrySteps yields its own)
+export function* holesOfSteps(geom) {
+  yield* curvedBoxesSteps(geom);
+  yield 0.1;
   // a planar face's circle is a hole rim when it is not the face's outer
   // loop: the face lies outside it. A boss's top (a disc, the circle its
   // outer loop) and a washer's rim are not holes.
@@ -709,6 +726,7 @@ export function holesOf(geom) {
     return Math.abs(along);
   };
   for (let i = 0; i < rims.length; i++) {
+    if (!(i & 127)) yield 0.1 + 0.5 * i / rims.length;
     if (used.has(i)) continue;
     const r = rims[i], k = keys[i];
     // (behind r's face, along its own sorted axis: the direction t grows or falls; among the rims
@@ -748,7 +766,9 @@ export function holesOf(geom) {
   for (const [i] of single) for (const k of rims[i].nodes || []) rimAt.set(k, i);
   const drop = new Set();
   const unpaired = []; // (the told rims of through-holes whose other end cannot be told)
+  let step = 0;
   for (const [i, row] of single) {
+    if (!(++step & 31)) yield 0.6 + 0.3 * step / single.length;
     if (drop.has(row)) continue;
     const a = rims[i];
     const w = a.nodes && holeWall(geom, a, faceN);
@@ -810,7 +830,9 @@ export function holesOf(geom) {
   // wallJoins' slack of one -- a quarter of the radius missed the RK3399's parts, a 0.01 mm stub
   // then a dome)
   const shaft = (c) => wallJoins(geom, c, { centre: c.centre.map((v, k) => v + faceN(c)[k] * 4 * PLANE_FLOOR_MM) });
+  step = 0;
   for (const [i, row] of ways.size > 1 ? single : []) {
+    if (!(++step & 31)) yield 0.9 + 0.1 * step / single.length;
     if (drop.has(row) || out[row].rims !== 1 || out[row].head) continue;
     const r = rims[i], k = keys[i];
     let best = null;

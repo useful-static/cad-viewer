@@ -80,8 +80,10 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // after round 27, code: measure-geom.js's pass over two rims alike on one axis; 1010.0 KB after
   // round 34, code: the empty bodies' count, fitParts and noSurface -- no new import; 1015.2 KB after
   // round 39, code: the list's names for parts (rounds 35-39) and the hint's placing -- no new import;
-  // 1020.1 KB after round 45, code: a drawing's Measure bar (rounds 44-45) -- no new import)
-  assert.ok(bytes < 1025e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // 1020.1 KB after round 45, code: a drawing's Measure bar (rounds 44-45) -- no new import; 1027.4 KB
+  // after UI design round 176, code: the hole table and its geometry in steps, the saved copy's line
+  // -- no new import)
+  assert.ok(bytes < 1030e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

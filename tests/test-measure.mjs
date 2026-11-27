@@ -580,6 +580,35 @@ test('a body\'s tree and geometry built in steps (R153-2): warm stops at its dea
   const g = bodyGeometry(m, 0);
   assert.deepEqual([r.value.corners, r.value.edges, r.value.circles.map((c) => [c.centre, c.radius])], [g.corners, g.edges, g.circles.map((c) => [c.centre, c.radius])]);
 });
+test('the hole table built in steps (R176-1): holesOfSteps stops many times, says how far it has got (0..1, never back), and ends with holesOf\'s holes; the geometry\'s steps say so too', async () => {
+  const { bodyGeometrySteps, holesOfSteps } = await import('../js/measure-geom.js');
+  const rising = (vals, what) => {
+    const nums = vals.filter((v) => typeof v === 'number');
+    assert.ok(nums.length >= 3, `${what}: ${nums.length} figures`);
+    for (let i = 0; i < nums.length; i++) {
+      assert.ok(nums[i] >= 0 && nums[i] <= 1, `${what}: figure ${nums[i]}`);
+      if (i) assert.ok(nums[i] >= nums[i - 1], `${what}: went back ${nums[i - 1]} -> ${nums[i]}`);
+    }
+  };
+  const m = model([{ name: 'big', faces: washer(1.6, 4, 1.6, 3000) }]);
+  const gs = bodyGeometrySteps(m, 0), gv = [];
+  let r;
+  while (!(r = gs.next()).done) gv.push(r.value);
+  rising(gv, 'geometry');
+  // 16,000 rims on one axis (the time arm's): many stops, the same rows as holesOf
+  const one = [];
+  for (let i = 0; i < 16000; i++) one.push({ plane: { normal: [0, 0, 1], d: i }, ntri: 0, circles: [{ centre: [0, 0, i], normal: [0, 0, 1], radius: 1, inner: true, face: one.length }] });
+  const geomOf = () => ({ faces: one.map((f) => ({ ...f })), P: new Float32Array(0), I: new Uint32Array(0) });
+  const hs = holesOfSteps(geomOf()), hv = [];
+  while (!(r = hs.next()).done) hv.push(r.value);
+  rising(hv, 'holes');
+  assert.ok(hv.length >= 100, `${hv.length} stops over 16,000 rims`);
+  assert.deepEqual(r.value.map((h) => [h.centre, h.diameter, h.rims]), holesOf(geomOf()).map((h) => [h.centre, h.diameter, h.rims]));
+  // and a real body's: the washer's hole, the same either way
+  const wh = holesOfSteps(bodyGeometry(m, 0));
+  while (!(r = wh.next()).done);
+  assert.deepEqual(JSON.stringify(r.value), JSON.stringify(holesOf(bodyGeometry(m, 0))));
+});
 
 // createMeasure at the viewer's opening camera (the r108 M1 arm's): bodies, the hidden set; the page's
 // elements stubs, made elements recorded, what is told recorded. -> { meas, $, toScreen, made, told }

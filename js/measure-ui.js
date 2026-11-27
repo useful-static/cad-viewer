@@ -1,7 +1,7 @@
 // Measure: Distance, Angle, Face to face; points snap to a visible corner, midpoint, centre or edge,
 // else the surface; drawn on an SVG layer. main.js owns the input.
 
-import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometrySteps, distance, faceGap, holesOf, orderHoles, polyLength, polyMid } from './measure-geom.js';
+import { UNTOLD_SHARE, angleAt, arcOf, bodyGeometrySteps, distance, faceGap, holesOf, holesOfSteps, orderHoles, polyLength, polyMid } from './measure-geom.js';
 // A hole row's Ø with its wider rim's, one text for the table, summary and words (r68 A8, r69 A4).
 // r: { d, head }; fmt: the number's writer.
 export const holeDia = (r, fmt) => `${fmt(r.d)}${r.head ? ` (${fmt(r.head)} at its rim)` : ''}`;
@@ -54,7 +54,7 @@ export function snapOrder(list, dir) {
   const near = (q) => q.p[0] * dir[0] + q.p[1] * dir[1] + q.p[2] * dir[2];
   return list.sort((a, b) => a.run - b.run || near(b) - near(a) || a.dd - b.dd);
 }
-import { edgeNearness, faceOfTri, makeCaster, seesInside, stepUntil } from './raycast.js';
+import { edgeNearness, faceOfTri, makeCaster, seesInside } from './raycast.js';
 import { add, cross, dot, len, mul, sub } from './vec3.js';
 import { PAPER, VIEW_BG } from './styles.js';
 import { NOTES_MAX, NOTE_TEXT_MAX, cutText } from './view-link.js'; // (a note's one limit and its one cut)
@@ -97,7 +97,7 @@ export function createMeasure(deps) {
     navigator.clipboard.writeText(text).then(() => deps.tell(done), fail);
   };
   const st = {
-    on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), geomJobs: new Map(), caster: null, model: null,
+    on: false, mode: 'distance', pending: [], results: [], snap: null, geom: new Map(), geomJobs: new Map(), geomAt: new Map(), holeJobs: new Map(), caster: null, model: null,
     listOpen: false, holes: null, prepared: new Set(), preparing: new Set(),
   };
   const layer = $('measvg');
@@ -107,24 +107,34 @@ export function createMeasure(deps) {
   // ---- the model's caches ----
   function model() {
     const m = scene.mesh;
-    if (m !== st.model) { st.model = m; st.geom = new Map(); st.geomJobs = new Map(); st.caster = m ? makeCaster(m) : null; st.prepared = new Set(); }
+    if (m !== st.model) { st.model = m; st.geom = new Map(); st.geomJobs = new Map(); st.geomAt = new Map(); st.holeJobs = new Map(); st.caster = m ? makeCaster(m) : null; st.prepared = new Set(); }
     return m;
   }
   // a body's geometry, built in steps until `deadline` and taken up again at the next call (one body
   // built whole held the first aim 0.5 s: R153-2) -> the geometry, or null while it is not done
+  // (st.geomAt: each build's share done, R176-1; the edges' lengths and midpoints in steps too, at
+  // each body's own angle g.a -- r126 L1)
+  function* geomSteps(m, mi) {
+    const g = yield* bodyGeometrySteps(m, mi);
+    g.mids = [];
+    for (const [i, e] of g.edges.entries()) {
+      const a = arcOf(e, g.a > 0 ? g.a : 0.5);
+      g.mids.push({ p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] });
+      if (i && !(i & 4095)) yield 1;
+    }
+    return g;
+  }
   function geomOf(mi, deadline) {
     if (st.geom.has(mi)) return st.geom.get(mi);
     if (performance.now() > deadline) return null;
-    if (!st.geomJobs.has(mi)) st.geomJobs.set(mi, bodyGeometrySteps(st.model, mi));
-    const r = stepUntil(st.geomJobs.get(mi), deadline);
-    if (!r.done) return null;
-    st.geomJobs.delete(mi);
-    const g = r.value;
-    // the b-rep edges' lengths and midpoints, once
-    // (each body's own angle, g.a: a scene of added models has no one header value -- r126 L1)
-    g.mids = g.edges.map((e, i) => { const a = arcOf(e, g.a > 0 ? g.a : 0.5); return { p: a ? a.mid : polyMid(e), len: a ? a.length : polyLength(e), closed: g.edgeClosed[i] }; });
-    st.geom.set(mi, g);
-    return g;
+    if (!st.geomJobs.has(mi)) st.geomJobs.set(mi, geomSteps(st.model, mi));
+    const job = st.geomJobs.get(mi);
+    for (;;) {
+      const r = job.next();
+      if (r.done) { st.geomJobs.delete(mi); st.geomAt.delete(mi); st.geom.set(mi, r.value); return r.value; }
+      if (typeof r.value === 'number') st.geomAt.set(mi, r.value);
+      if (performance.now() > deadline) return null;
+    }
   }
 
   // ---- projection ----
@@ -1005,26 +1015,52 @@ export function createMeasure(deps) {
     }
     return { list, rows, groups: [...groups.values()], posHead, axes, untold, unpaired };
   }
-  // The bodies' geometry and holes built in 8 ms slices, each slice's progress told, before the table
-  // is laid out: built in one go, the first List holes froze a phone 4 s with no sign it was taken
-  // (R175-1) -> true when ready, false when the model changed meanwhile
+  // The bodies' geometry and holes built in slices before the table, the share done told (bodies
+  // weighed by triangles): built whole it froze a phone 4 s (R175-1); counted by bodies it stood
+  // still 6 s (R176-1) -> true when ready, false when the model changed
+  const SLICE_MS = 24;
+  const nextTask = (f) => {
+    if (globalThis.scheduler?.postTask) { globalThis.scheduler.postTask(f, { priority: 'user-visible' }); return; }
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => { ch.port1.close(); f(); };
+    ch.port2.postMessage(0);
+  };
   function prepareHoles(ids, progress = () => {}) {
     const m = model();
     if (!m || ids.every((id) => st.geom.get(id - 1)?.holes)) return Promise.resolve(true);
+    const meshes = m.header?.meshes || [];
+    const weight = ids.map((id) => Math.max(1, (meshes[id - 1]?.idxCount || 0) / 3));
+    const total = weight.reduce((s, w) => s + w, 0);
     return new Promise((done) => {
-      let k = 0;
+      let k = 0, doneW = 0, said = -1, frac = 0;
       const slice = () => {
         if (st.model !== m || scene.mesh !== m) { done(false); return; }
-        const end = performance.now() + 8;
+        const end = performance.now() + SLICE_MS;
+        frac = 0;
         while (k < ids.length && performance.now() < end) {
-          const g = geomOf(ids[k] - 1, end);
-          if (!g) break;
-          if (!g.holes) { g.holes = holesOf(g); }
+          const mi = ids[k] - 1;
+          const g = geomOf(mi, end);
+          if (!g) { frac = 0.7 * (st.geomAt.get(mi) || 0); break; }
+          if (!g.holes) {
+            if (!st.holeJobs.has(mi)) st.holeJobs.set(mi, holesOfSteps(g));
+            const job = st.holeJobs.get(mi);
+            let r;
+            while (!(r = job.next()).done) { frac = 0.7 + 0.3 * (r.value || 0); if (performance.now() > end) break; }
+            if (!r.done) break;
+            st.holeJobs.delete(mi);
+            g.holes = r.value;
+          }
+          doneW += weight[k];
+          frac = 0;
           k++;
         }
-        if (k < ids.length) { progress(k, ids.length); setTimeout(slice, 0); } else done(true);
+        if (k < ids.length) {
+          const pc = Math.min(99, Math.floor(100 * (doneW + weight[k] * frac) / total));
+          if (pc !== said) { said = pc; progress(pc, k, ids.length); }
+          nextTask(slice);
+        } else done(true);
       };
-      setTimeout(slice, 0);
+      nextTask(slice);
     });
   }
   function showHoles(ids, ref = null, name = '') {
