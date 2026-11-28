@@ -363,6 +363,8 @@
   /* (before a model Explode is greyed with the rest, not hidden till the GPU is up: the row gained a fifth
      button at the load, R181-5) */
   body:not(.nogpu) #thumbbar:has(#fit:disabled) #explode { display:inline-flex !important; } /* (over [hidden]'s !important) */
+  /* (the header's too: View and what follows it moved 45 px at the load, R182-9) */
+  body:not(.nogpu):not(.mode2d) #tb:has(#fit:disabled) #explode { display:inline-block !important; }
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
@@ -468,15 +470,16 @@
   /* a tour's caption card: bottom left, above the options bar; frames keep
      the strip it covers clear (main.js tourCover) */
   /* (its foot past the Explode bar a tour opens, and one width: a step lifted it and moved its ×, R44-3) */
-  #tourcard { position:absolute; left:12px; bottom:calc(12px + max(var(--optbar-h, 0px), var(--tour-floor, 0px))); z-index:2;
+  /* (the floor counts the phone's row under the bars too: a step's bar lifted the card's buttons 57 px, R182-4) */
+  #tourcard { position:absolute; left:12px; bottom:calc(12px + max(var(--optbar-h, 0px), var(--tour-floor, 0px) + var(--thumb-h, 0px))); z-index:2;
     width:min(440px, calc(100% - 24px)); box-sizing:border-box; padding:10px 12px; border:1px solid var(--line); border-radius:10px;
     background:rgba(37,42,50,.94); box-shadow:0 8px 24px rgba(0,0,0,.45); color:var(--fg); font-size:13px;
-    max-height:min(50%, calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); display:flex; flex-direction:column; }
+    max-height:min(50%, calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px) + var(--thumb-h, 0px)))); display:flex; flex-direction:column; }
   #tourcard > * { flex:none; }
   #tourcard #tourbody { flex:0 1 auto; overflow:auto; min-height:0; touch-action:pan-y; overscroll-behavior:contain; } /* (sideways is the card's swipe: R154-2) */ /* (a long caption scrolls, title and buttons kept: R70-2) */
   /* (at most half the view at any size, the model kept in sight -- R71-3, R80-2, R81-3; and below an
      embed's Fit and Open: R71-4, R81-1) */
-  #stage:has(#embedbar:not([hidden])) #tourcard { max-height:min(50%, calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); }
+  #stage:has(#embedbar:not([hidden])) #tourcard { max-height:min(50%, calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px) + var(--thumb-h, 0px)))); }
   #tourcard[hidden] { display:none; }
   /* (a phone with Section or Explode open over Measure's kept results: the kept row only its Clear all
      and its count, its words left out -- the two bars took 25-38 % of the view, R178-5) */
@@ -486,7 +489,7 @@
   /* (a short landscape window: the card a column at the left, the step framed beside it -- main.js
      TOUR_SIDE, the same query -- R178-2) */
   @media (orientation: landscape) and (max-height: 500px) {
-    #tourcard { width:min(42vw, 320px); max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
+    #tourcard { width:min(42vw, 320px); max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px) + var(--thumb-h, 0px))); }
   }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
   /* the tour maker: a panel at the right of the view */
@@ -498,7 +501,7 @@
   #stage:has(#touredit:not([hidden])) #hover { max-width:calc(100% - min(330px, 100% - 16px) - 36px); }
   /* (a maker too wide to sit beside the card ends above it while its draft plays, by the card's own
      height: it covered the card -- R68-1, R69-1, R69-2) */
-  #stage.touring.tournarrow #touredit { max-height:calc(100% - 28px - var(--tourcard-h, 62px) - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
+  #stage.touring.tournarrow #touredit { max-height:calc(100% - 28px - var(--tourcard-h, 62px) - max(var(--optbar-h, 0px), var(--tour-floor, 0px) + var(--thumb-h, 0px))); }
   /* (an upright phone: a sheet over the view's lower half, above the options bar, the model kept in
      sight to turn for a step; while its draft plays, only its head and Preview row, at the top --
      it covered the whole view, R128-1) */
@@ -969,8 +972,10 @@
     header.more-right::after { content:''; position:absolute; top:0; right:var(--endw, 0px); bottom:var(--sbh, 0px); width:40px;
       background:linear-gradient(to right, transparent, var(--panel)); pointer-events:none; }
     #tb > * { flex:none; }
-    header .title, #export:disabled, #panelbtn .lbl, #tools .lbl { display:none; }
-    #tools .ico { margin-right:0; }
+    /* (the tools keep their words while the row has room: #tools.compact drops them,
+       a step of the fold, so a tablet or a phone on its side names Measure as Fit is
+       named -- a touch screen shows no tooltip: R182-2) */
+    header .title, #export:disabled, #panelbtn .lbl { display:none; }
     #tb { gap:5px; padding:6px 8px; }
     #hdend { gap:5px; padding:6px 8px 6px 0; }
     .sep { margin:0 1px; }
@@ -1203,7 +1208,7 @@
     <div class="gfx"><span id="backend">…</span><span id="gfxnote"></span></div>
     <!-- (what this browser keeps, said where every visitor finds it, and one way to forget it: R171-5;
          at the top, not under the keys' fold, its button on a line of its own -- R172-6, R172-8) -->
-    <div id="kept" class="kept noembed"><p>Your files are never uploaded. On this device, this browser keeps your display choices and the colours you pick for each model, and converted copies of STEP, IGES and BREP files so they open faster.</p>
+    <div id="kept" class="kept noembed"><p>Your files are never uploaded. On this device, this browser keeps your display choices and the colours you pick for each model, and saved conversions (converted copies of STEP, IGES and BREP files) so they open faster.</p>
       <button id="forgetall" title="Remove every setting, colour and saved conversion this browser keeps for the viewer">Forget all</button></div>
     <span class="head">Controls<span class="kbonly"> &amp; shortcuts</span></span>
     <!-- one group per kind of thing to do: what to press, then what it

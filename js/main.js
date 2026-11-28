@@ -2682,7 +2682,7 @@ function setEmbedActive(on) {
   if (on) try { window.focus(); } catch { /* a frame that cannot be focused: the pointer still works */ }
   document.body.classList.toggle('active', on);
   $('embedhint').hidden = on;
-  announce(on ? `${app.dxf ? 'the drawing now pans' : 'the model now turns'} and zooms with the pointer; Esc gives the page its wheel back` : 'the page scrolls again');
+  announce(on ? `${app.dxf ? 'the drawing now pans' : 'the model now turns'} and zooms ${coarseOnly() ? 'with your fingers' : 'with the pointer; Esc gives the page its wheel back'}` : 'the page scrolls again'); // (R182-8)
 }
 
 // the style in force: the select's choice, else the model list's style for
@@ -3175,9 +3175,7 @@ function refold(keep = focusNow()) {
   const narrow = narrowLayout();
   if (!narrow && app.filterOpened) setPanel(false); // the slide-out keepFilter opened
   placeOpen(narrow);
-  // File is a menu at every width: it holds Save .cadmesh, Copy view link,
-  // Save picture, Export, Save drawing, Browse models and Download, which
-  // standing in a wide row folded the view presets even at 1920 px
+  // (File a menu at every width: its seven items in the row folded the presets at 1920 px)
   for (const id of MENUS) $(id).classList.toggle('folded', id === 'filemenu' || id === 'displaymenu');
   // Measure stands in the row after Fit (back there before measuring), and a drawing's sheet
   // select after it (File holds it where the row is short)
@@ -3188,12 +3186,9 @@ function refold(keep = focusNow()) {
   // the model list folds into File's panel, after View (r16 L3); the tools drop to their icons
   // before View folds, keeping View and a list in a 1280 px row
   $('tools').classList.remove('compact');
-  // The page's name goes next, before View: a 1280 px row with a model list
-  // and ? and Full screen at its end had room for View only without it
+  // (the page's name next, before View, so a 1280 px row with a list keeps View)
   tb.classList.remove('notitle');
-  // Show folds before the model list: its four buttons do nothing until a
-  // part is selected, while the list is how a visitor reaches the other
-  // models (UI organization review rank 6)
+  // (Show folds before the model list: UI organization review rank 6)
   tb.classList.remove('nobadge');
   for (const id of [FOLD_ORDER[0], 'tools', 'title', ...FOLD_ORDER.slice(1), 'modellist', 'badge', 'sheet']) {
     if (toolbarFits(tb)) break;
@@ -3223,16 +3218,21 @@ function refold(keep = focusNow()) {
     }
     $(id).classList.add('folded');
   }
+  // (words back if room; on touch, no tooltip, over Show's row: R182-2)
+  const tl = $('tools').classList, sm = $('showmenu').classList, sf = sm.contains('folded');
+  if (tl.contains('compact')) {
+    tl.remove('compact');
+    if (!toolbarFits(tb) && matchMedia('(pointer: coarse)').matches) sm.add('folded');
+    if (!toolbarFits(tb)) { tl.add('compact'); sm.toggle('folded', sf); }
+  }
   // the last step: a row that still does not fit takes Measure into View's panel, first (never in 2D,
   // where View is hidden: R7-1)
   if (!document.body.classList.contains('mode2d') && !toolbarFits(tb) && $('viewmenu').classList.contains('folded')) placeMeasure(true);
-  // a folded View holds the presets as its panel's grid, and Display's items,
-  // not menus in a menu
+  // (a folded View holds the presets' grid and Display's items, not menus in a menu)
   if ($('viewmenu').classList.contains('folded')) for (const id of ['presetmenu', 'displaymenu']) $(id).classList.remove('folded');
   tb.classList.remove('measuring');
   MENUS.forEach((id, i) => { if (was[i] && !$(id).classList.contains('folded')) setMenu($(id), false); });
-  // a Save menu holding the model list is the File menu
-  // (its tooltip and panel name too: they still said "Save the converted model")
+  // (a Save menu holding the model list is File, its tooltip and panel name too)
   {
     // the tooltip names what the panel holds
     const holds = [narrow ? 'open a file' : null,
@@ -3558,7 +3558,7 @@ function setSection(axis, focus = false) {
   if (axis !== 'off') app.section.last = axis;
   updateButtons();
   viewChanged();
-  if ((was === 'off') !== (axis === 'off') && !app.tour) announce(`section ${axis === 'off' ? 'off' : 'on'}`); // (as Measure and Walk: R127-6)
+  if ((was === 'off') !== (axis === 'off') && !app.tour) tell(`section ${axis === 'off' ? 'off' : 'on'}`); // (R127-6, R182-3)
   if (!focus) return;
   if (axis !== 'off' && was === 'off') $('secoff').focus();
   else if (axis === 'off') toolFocus('section').focus();
@@ -4740,7 +4740,7 @@ function askBigConversion(buf, name, seq) {
   const mins = Math.max(1, Math.ceil(secs / 60));
   if (panelOpen()) setPanel(false); // (the question under a phone's open drawer, its button covered: R134-3)
   setStatus('loading', `${name} is ${mb(buf.byteLength)} MB: convert it?`);
-  showProgress(`Convert ${name}?`, 0, `${mb(buf.byteLength)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
+  showProgress(`Convert ${name}⁠?`, 0, // (R182-5) `${mb(buf.byteLength)} MB to convert on this device. A computer takes about ${mins} min; a phone takes several times that and may run out of memory, reloading the page.`,
     app.embed ? '' : 'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.'); // (an embed has no File menu: R125-6)
   $('pgo').hidden = false;
   announce(`${name} is ${mb(buf.byteLength)} MB: Convert anyway, or Cancel`);
