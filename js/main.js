@@ -3106,27 +3106,53 @@ const focusNow = () => (document.activeElement !== document.body ? document.acti
 // to a row along the view's foot, one tap each in a thumb's reach -- every entry point was in the
 // header, ☰ in its top-left corner and the tools two taps away in View (R178-1). The header's own
 // buttons are moved, not copied, so their state, handlers and names are the one set. -> whether on
-const THUMB = '(pointer: coarse) and (orientation: portrait) and (max-width: 600px)';
+// (a keyboard that shrinks the window made it read as landscape and the row went while typing --
+// R179-6: the width unchanged and a field being typed in, the row stays as it was)
+const THUMB = '(pointer: coarse) and (max-width: 600px)';
+let thumbW = 0;
+const upright = () => {
+  const typing = document.activeElement?.matches?.('input:not([type=checkbox], [type=range], [type=color], [type=file]), textarea, [contenteditable]');
+  const keep = typing && innerWidth === thumbW && !$('thumbbar').hidden;
+  thumbW = innerWidth;
+  return keep || !!globalThis.matchMedia?.('(orientation: portrait)').matches;
+};
+let thumbWatch = null, fitSlot = null;
+// (Fit with them: a frequent press, left alone in the hard top corner -- R179-11; fitSlot: where it
+// goes back to in the header, the separator before it)
+const fitHome = () => (fitSlot ||= $('fit').previousElementSibling);
 function placeThumb() {
-  const bar = $('thumbbar'), pb = $('panelbtn'), t = $('tools');
-  const on = !app.embed && !!globalThis.matchMedia?.(THUMB).matches;
+  const bar = $('thumbbar'), pb = $('panelbtn'), t = $('tools'), fit = $('fit');
+  const on = !app.embed && !!globalThis.matchMedia?.(THUMB).matches && upright();
   const had = document.activeElement;
   if (on) {
+    fitHome();
     if (pb.parentElement !== bar) bar.append(pb);
+    if (fit.parentElement !== bar) bar.append(fit);
     if (t.parentElement !== bar) bar.append(t);
     t.classList.remove('compact');
   } else {
     if (pb.parentElement === bar) $('tb').querySelector('.title').after(pb);
-    if (t.parentElement === bar) $('fit').after(t);
+    if (fit.parentElement === bar) fitHome().after(fit);
+    if (t.parentElement === bar) fit.after(t);
   }
-  if (had && had.isConnected && document.activeElement !== had) had.focus({ preventScroll: true });
   const was = !bar.hidden;
   bar.hidden = !on;
   document.body.classList.toggle('thumb', on);
-  // (on the root: the drawer and its scrim, beside the view, stop above the row -- ☰ in reach to close it)
-  document.documentElement.style.setProperty('--thumb-h', on ? `${bar.offsetHeight}px` : '0px');
+  // (the focus back once the row is shown: given while it was hidden, it fell to the page -- R179-3)
+  if (had && had.isConnected && document.activeElement !== had) had.focus({ preventScroll: true });
+  thumbHeight();
+  // (its height followed as its contents change -- a third tool made it 63 px while the drawer and
+  // the options bar kept 57, 6 px under it: R179-2)
+  if (!thumbWatch && globalThis.ResizeObserver) { thumbWatch = new ResizeObserver(() => thumbHeight()); thumbWatch.observe(bar); }
   if (was !== on) syncOptbar();
   return on;
+}
+// (on the root: the drawer and its scrim, beside the view, stop above the row -- ☰ in reach to close it)
+function thumbHeight() {
+  const bar = $('thumbbar'), h = bar.hidden ? '0px' : `${bar.offsetHeight}px`, root = document.documentElement.style;
+  if (root.getPropertyValue('--thumb-h') === h) return;
+  root.setProperty('--thumb-h', h);
+  syncOptbar();
 }
 
 function refold(keep = focusNow()) {
@@ -3143,7 +3169,7 @@ function refold(keep = focusNow()) {
   // Measure stands in the row after Fit (back there before measuring), and a drawing's sheet
   // select after it (File holds it where the row is short)
   placeMeasure(false);
-  if ($('sheet').parentElement !== tb) (thumb ? $('fit') : $('tools')).after($('sheet'));
+  if ($('sheet').parentElement !== tb) (thumb ? fitHome() : $('tools')).after($('sheet'));
   $('fhsheet').hidden = true;
   tb.classList.add('measuring');
   // the model list folds into File's panel, after View (r16 L3); the tools drop to their icons
@@ -3223,6 +3249,17 @@ function refoldFocus(keep, narrow) {
   focusBeside(keep);
 }
 
+// A panel with more below its edge says so (index.html .more-below), as it scrolls and as its content
+// grows (Picture options opened) -- R178-6, R179-8
+function panelFade(panel) {
+  const set = () => panel.classList.toggle('more-below', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 2);
+  if (!panel.dataset.fade) {
+    panel.dataset.fade = '1';
+    panel.addEventListener('scroll', set, { passive: true });
+    panel.addEventListener('click', () => requestAnimationFrame(set));
+  }
+  requestAnimationFrame(set);
+}
 function setMenu(menu, open, focusFirst = false) {
   const btn = menu.querySelector('.menu-btn');
   const panel = menu.querySelector('.menu-panel');
@@ -3236,6 +3273,7 @@ function setMenu(menu, open, focusFirst = false) {
     panel.style.left = `${Math.max(8, Math.min(r.left, innerWidth - panel.offsetWidth - 8))}px`;
     panel.style.maxHeight = `${innerHeight - top - 8}px`;
     panel.style.overflowY = 'auto';
+    panelFade(panel);
     // the first item SHOWN: in a folded View the presets' own menu button
     // is there but not displayed, and focusing it did nothing
     if (focusFirst) [...panel.querySelectorAll('button:not(:disabled), select, label.btn, a.btn')].find((e) => e.getClientRects().length)?.focus();
@@ -6171,7 +6209,7 @@ function tessellate(buf, format, seq, name, threads) {
       return out;
     };
     const STEPS = ['reading the file', 'building the parts', 'meshing', 'writing the result'];
-    let detailH = 0, shownLeft = null;
+    let detailH = 0, shownLeft = null, almostStep = -1;
     const show = () => {
       if (stale(seq)) return;
       const now = performance.now();
@@ -6211,8 +6249,11 @@ function tessellate(buf, format, seq, name, threads) {
             if (left > counted + Math.max(5, 0.5 * counted)) { ups = shownLeft.ups + 1; upMin = Math.min(shownLeft.upMin - (now - shownLeft.at) / 1000, left); }
             left = ups >= 3 ? upMin : Math.min(left, counted);
           }
+          // ("almost done" kept until the step changes: "~1 s" -> "almost done" -> "~5 s" -- R178-8, R179-12)
+          if (almostStep === st) left = 0;
+          else if (left < 1) almostStep = st;
           shownLeft = { left, at: now, ups: ups >= 3 ? 0 : ups, upMin };
-        } // (kept through a tick with no figure: "~1 s" -> "almost done" -> "~5 s" skipped the rule, R178-8)
+        } // (kept through a tick with no figure, R178-8)
         // the bar: the forecast's share of the conversion done, never moving back
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
         barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));

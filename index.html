@@ -269,10 +269,11 @@
   :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel > * { flex-shrink:0; }
   /* wide enough for the picture options' rows on one line each (a 186 px
      column wrapped "Transparent" alone) */
-  /* (more below its edge shown by a shade at its foot, gone once scrolled to the end: half the panel
-     lay below a landscape phone's edge with no sign -- R178-6) */
-  #filemenu.folded.open > .menu-panel { background:linear-gradient(transparent, var(--panel) 70%) bottom / 100% 28px no-repeat local,
-    radial-gradient(farthest-side at 50% 100%, rgba(148,163,184,.55), transparent) bottom / 100% 12px no-repeat scroll, var(--panel); }
+  /* (more below a panel's edge shown by a shade over its foot, gone once scrolled to the end: half the
+     panel lay below a landscape phone's edge with no sign -- R178-6; a background shade lay under the
+     buttons, unseen -- R179-8; main.js panelFade sets the class) */
+  :is(#showmenu, #filemenu, #displaymenu).folded.open > .menu-panel.more-below::after { content:''; position:sticky; bottom:-8px; flex:none; display:block; height:32px; margin-top:-32px;
+    margin-bottom:-8px; background:linear-gradient(transparent, var(--panel) 85%); pointer-events:none; z-index:1; }
   #filemenu.folded > .menu-panel { min-width:min(256px, calc(100vw - 16px)); } /* (240 wrapped the last row once a short window's scrollbar took 15 px; never past the screen under zoom, R178-3) */
   .skip { position:fixed; left:8px; top:-80px; z-index:100; }
   .skip:focus { top:8px; }
@@ -323,13 +324,29 @@
   #optbar { position:absolute; left:0; right:0; bottom:var(--thumb-h, 0px); z-index:1; display:flex; flex-direction:column;
     background:var(--panel); border-top:1px solid var(--line); }
   /* a phone held upright: ☰ and the tools along the view's foot, under the options bar (R178-1) */
-  #thumbbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; gap:6px;
-    padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background:var(--panel); border-top:1px solid var(--line); }
+  /* (one layout for its buttons: icon and word on one line, one gap -- ☰'s gap, Measure's two lines
+     and the others' touching icon differed, R179-4; the words go where the row is too narrow, and
+     past that the row wraps, every tool reachable -- under zoom Explode lay past the edge, R179-1) */
+  #thumbbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-wrap:wrap; gap:6px;
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background:var(--panel); border-top:1px solid var(--line);
+    container-type:inline-size; }
   #thumbbar[hidden] { display:none; }
-  #thumbbar > #panelbtn, #thumbbar > #tools > button { flex:1 1 0; min-height:44px; justify-content:center; gap:6px; }
+  /* (a tab bar's form: the icon over a small word, so five fit a 320 px phone -- side by side the words
+     were cut, "Measure" 73 px in a 56 px button) */
+  #thumbbar > :is(#panelbtn, #fit), #thumbbar > #tools > button { flex:1 1 0; min-width:40px; min-height:44px; padding:2px;
+    display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; white-space:nowrap; overflow:hidden;
+    font-size:11px; line-height:1.15; }
   #thumbbar > #tools { display:contents; }
-  #thumbbar > #panelbtn .lbl, #thumbbar #tools button .lbl { display:inline; }
-  #thumbbar #tools button[hidden] { display:none; }
+  #thumbbar > #panelbtn .lbl, #thumbbar #tools button .lbl { display:inline; margin:0; }
+  #thumbbar .ico { margin:0; flex:none; }
+  /* (each with a mark over its word: ☰ at the icons' size, and Fit -- a word alone in the header -- a
+     frame) */
+  #thumbbar #panelbtn > span[aria-hidden] { font-size:16px; line-height:14px; height:14px; }
+  #thumbbar #fit::before { content:''; flex:none; width:14px; height:14px; box-sizing:border-box;
+    border:1.5px dashed currentColor; border-radius:2px; }
+  @container (max-width: 280px) { #thumbbar > #panelbtn .lbl, #thumbbar #tools button .lbl { display:none; } }
+  /* (a tool the model cannot use is not given a quarter of the row: a one-part model's Explode, R179-10) */
+  #thumbbar #tools button:is([hidden], #explode:disabled) { display:none; }
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
