@@ -785,6 +785,7 @@ export function createMeasure(deps) {
     $('measchip').hidden = !n;
     $('measchip').textContent = `${n} result${n === 1 ? '' : 's'}`;
     $('measchip').setAttribute('aria-expanded', String(st.listOpen));
+    $('measnote').classList?.toggle('kept', kept); // (folded on a phone under another tool's row: index.html, R178-5)
     $('measnote').textContent = kept ? 'Measure is off; its results stay until cleared'
       : st.mode === 'face' ? (st.pending.length ? 'pick the second face' : 'pick a flat face')
       // (typing: the field's placeholder says it once -- UI design round 7 R7-3)

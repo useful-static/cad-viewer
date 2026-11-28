@@ -1077,13 +1077,13 @@ function viewChanged() {
 
 // The camera framing bbox seen with q -> { target, dist, bar }, above `cover` px; pad >= 0 (a tour
 // step) by fitWindow (R82-4, R90-1, R91-1, R91-2), pad < 0 (Fit) by fitBox.
-function fitPose(bbox, q, margin = 1.05, cover = viewCover(), pad = -1, ortho = app.cam.ortho, top = 0) {
+function fitPose(bbox, q, margin = 1.05, cover = viewCover(), pad = -1, ortho = app.cam.ortho, top = 0, left = 0) {
   const c = { ...app.cam, q, ortho };
   const box = $('stage');
   const h = Math.max(1, box.clientHeight), w = Math.max(1, box.clientWidth);
   const bar = Math.max(0, Math.min(cover, h - 1));
   const vis = h - bar - top;
-  if (pad >= 0) return { ...fitWindow(c, bbox, margin, w, h, bar, vis < 200 ? Math.min(pad, 8) : pad, top), bar };
+  if (pad >= 0) return { ...fitWindow(c, bbox, margin, w, h, bar, vis < 200 ? Math.min(pad, 8) : pad, top, left), bar };
   const f = fitBox(c, bbox, 2 * Math.atan(Math.tan(c.fov / 2) * vis / h), w / vis, margin);
   let target = f.target;
   if (bar > 0) {
@@ -1095,7 +1095,9 @@ function fitPose(bbox, q, margin = 1.05, cover = viewCover(), pad = -1, ortho = 
 }
 // The box centred in the window [pad, w - pad] x [top + pad, h - bar - pad], at the least distance its
 // margin-scaled corners fit; a corner at depth D - z, eye offset e, draws at (x - e) / (D - z).
-function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
+// (left: a strip at the left kept clear too -- a tour's card beside the model in a short landscape
+// window, R178-2)
+function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0, left = 0) {
   const d = camDir(c), u = camUp(c);
   const r = [u[1] * d[2] - u[2] * d[1], u[2] * d[0] - u[0] * d[2], u[0] * d[1] - u[1] * d[0]];
   const ctr = [0, 1, 2].map((k) => (bbox.min[k] + bbox.max[k]) / 2);
@@ -1109,7 +1111,8 @@ function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0) {
   }
   // each axis's window as tangents: x across the width, y from the bar's top to the view's top
   const p2 = Math.min(pad, w / 4, Math.max(0, (h - bar - top) / 4));
-  const ax = [[-th * (1 - 2 * p2 / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * (top + p2) / h)]];
+  const lf = Math.max(0, Math.min(left, w / 2));
+  const ax = [[th * (-1 + 2 * (lf + p2) / w), th * (1 - 2 * p2 / w)], [tv * (-1 + 2 * (bar + p2) / h), tv * (1 - 2 * (top + p2) / h)]];
   // the least D any offset could fit (each axis's bound), the eye in front of every corner
   let D = 0;
   ax.forEach(([lo, hi], j) => {
@@ -1847,7 +1850,12 @@ function linkToldText(copied, hasUrl, nNotes, nLocal = 0, nMeas = 0, is2d = fals
 // parts framed above the card) with its caption; ◀ ▶ step, ✕ (Esc) puts the view back.
 
 // the bottom of the view the caption card covers (frames sit above it)
-const tourCover = () => (app.tour && !$('tourcard').hidden ? $('tourcard').offsetHeight + 16 : 0);
+// (in a short landscape window the card stands beside the model, its strip at the left kept clear,
+// not under it: a 440 px card over the middle of a 568 x 320 phone's view -- R178-2; index.html)
+const TOUR_SIDE = '(orientation: landscape) and (max-height: 500px)';
+const tourSide = () => !!globalThis.matchMedia?.(TOUR_SIDE).matches;
+const tourCover = () => (app.tour && !$('tourcard').hidden && !tourSide() ? $('tourcard').offsetHeight + 16 : 0);
+const tourLeft = () => (app.tour && !$('tourcard').hidden && tourSide() ? $('tourcard').offsetLeft + $('tourcard').offsetWidth + 8 : 0);
 
 // a name with its owner, as compared: lower case, one space either side of each ›
 const pathKey = (s) => s.split('›').map((x) => x.trim().toLowerCase()).join(' › ');
@@ -1967,10 +1975,11 @@ function stepPose(s, proj) {
     if (s.from === 'outside') q = outsideQuat(box, ids, s) || q;
     const eb = $('embedbar'), top = eb && !eb.hidden ? eb.offsetTop + eb.offsetHeight : 0; // (R91-2)
     const pad = s.margin === undefined ? 16 : 0, cover = optbarHeight() + tourCover();
-    let f = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, top);
+    const side = tourLeft();
+    let f = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, top, side);
     if (top) {
       // (the space under the embed's bars kept only where the model meets them, not the full width: R92-4)
-      const f0 = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, 0), he = $('hdend');
+      const f0 = fitPose(box, q, s.margin ?? 1.05, cover, pad, ortho, 0, side), he = $('hdend');
       const left = eb.offsetLeft + eb.offsetWidth + 8, right = he && he.offsetWidth ? he.offsetLeft - 8 : Infinity;
       if (f0.xs && f0.xs[0] > left && f0.xs[1] < right) f = f0;
     }
@@ -3023,7 +3032,7 @@ function undoVisibility() {
 const FOLD_ORDER = ['presetmenu', 'filemenu', 'viewmenu', 'showmenu'];
 // what sits over the 3D view and takes its own pointer input
 // (and a DXF's 2D canvas, which takes its own pointer input: js/dxf-view.js)
-const OVER_VIEW = '.card, #optbar, #hdend, #helppop, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
+const OVER_VIEW = '.card, #optbar, #thumbbar, #hdend, #helppop, #embedbar, #view2d, #tourcard, #touredit, #pictoast';
 // (Display, the menu after Style, is always a menu where View stands in the
 // row, and its items are View's panel's where View folds: no fold step)
 const MENUS = [...FOLD_ORDER, 'displaymenu'];
@@ -3056,6 +3065,7 @@ function placeOpen(narrow) {
 // takes it)
 function placeMeasure(folded) {
   const m = $('tools');
+  if (m.parentElement === $('thumbbar')) return; // (a phone held upright: along the foot, placeThumb)
   const had = m.contains(document.activeElement) ? document.activeElement : null;
   if (folded && m.parentElement !== $('viewpanel')) $('viewpanel').prepend(m);
   else if (!folded && m.previousElementSibling !== $('fit')) $('fit').after(m);
@@ -3092,9 +3102,37 @@ function toolbarFits(tb) {
 // what has the focus, or what had it until the layout hid it
 const focusNow = () => (document.activeElement !== document.body ? document.activeElement : (app.lostFocus && app.lostFocus()) || document.body);
 
+// A phone held upright (touch, portrait, at most 600 px wide; not an embed): ☰ and the tools moved
+// to a row along the view's foot, one tap each in a thumb's reach -- every entry point was in the
+// header, ☰ in its top-left corner and the tools two taps away in View (R178-1). The header's own
+// buttons are moved, not copied, so their state, handlers and names are the one set. -> whether on
+const THUMB = '(pointer: coarse) and (orientation: portrait) and (max-width: 600px)';
+function placeThumb() {
+  const bar = $('thumbbar'), pb = $('panelbtn'), t = $('tools');
+  const on = !app.embed && !!globalThis.matchMedia?.(THUMB).matches;
+  const had = document.activeElement;
+  if (on) {
+    if (pb.parentElement !== bar) bar.append(pb);
+    if (t.parentElement !== bar) bar.append(t);
+    t.classList.remove('compact');
+  } else {
+    if (pb.parentElement === bar) $('tb').querySelector('.title').after(pb);
+    if (t.parentElement === bar) $('fit').after(t);
+  }
+  if (had && had.isConnected && document.activeElement !== had) had.focus({ preventScroll: true });
+  const was = !bar.hidden;
+  bar.hidden = !on;
+  document.body.classList.toggle('thumb', on);
+  // (on the root: the drawer and its scrim, beside the view, stop above the row -- ☰ in reach to close it)
+  document.documentElement.style.setProperty('--thumb-h', on ? `${bar.offsetHeight}px` : '0px');
+  if (was !== on) syncOptbar();
+  return on;
+}
+
 function refold(keep = focusNow()) {
   const tb = $('tb');
   const was = MENUS.map((id) => $(id).classList.contains('folded'));
+  const thumb = placeThumb();
   const narrow = narrowLayout();
   if (!narrow && app.filterOpened) setPanel(false); // the slide-out keepFilter opened
   placeOpen(narrow);
@@ -3105,7 +3143,7 @@ function refold(keep = focusNow()) {
   // Measure stands in the row after Fit (back there before measuring), and a drawing's sheet
   // select after it (File holds it where the row is short)
   placeMeasure(false);
-  if ($('sheet').parentElement !== tb) $('tools').after($('sheet'));
+  if ($('sheet').parentElement !== tb) (thumb ? $('fit') : $('tools')).after($('sheet'));
   $('fhsheet').hidden = true;
   tb.classList.add('measuring');
   // the model list folds into File's panel, after View (r16 L3); the tools drop to their icons
@@ -3130,7 +3168,7 @@ function refold(keep = focusNow()) {
       continue;
     }
     if (id === 'tools') {
-      $('tools').classList.add('compact');
+      if (!thumb) $('tools').classList.add('compact');
       continue;
     }
     if (id === 'title') {
@@ -3441,7 +3479,8 @@ function atLastFit() {
   return !!f && !!app.header && c.q === f.q && c.dist === f.dist && c.target.every((v, k) => v === f.target[k]);
 }
 
-const optbarHeight = () => ($('optbar').hidden ? 0 : $('optbar').offsetHeight);
+// (and the phone's tool row under it: R178-1)
+const optbarHeight = () => ($('optbar').hidden ? 0 : $('optbar').offsetHeight) + ($('thumbbar')?.hidden === false ? $('thumbbar').offsetHeight : 0);
 // and the tour maker where it sits over the view's foot (a phone): a fit frames above both (R163-4)
 const viewCover = () => optbarHeight() + (!$('touredit').hidden && innerWidth < 520 && !$('stage').classList.contains('touring') ? $('touredit').offsetHeight + 8 : 0);
 
@@ -6173,7 +6212,7 @@ function tessellate(buf, format, seq, name, threads) {
             left = ups >= 3 ? upMin : Math.min(left, counted);
           }
           shownLeft = { left, at: now, ups: ups >= 3 ? 0 : ups, upMin };
-        } else shownLeft = null;
+        } // (kept through a tick with no figure: "~1 s" -> "almost done" -> "~5 s" skipped the rule, R178-8)
         // the bar: the forecast's share of the conversion done, never moving back
         const doneSecs = forecastDone(fc, factor, st, f, inStep);
         barMax = Math.max(barMax, Math.min(0.97, total > 0 ? doneSecs / total : 0));
@@ -8309,7 +8348,9 @@ function wireInput() {
       tell(t, 4000, told ? '' : 'finding holes');
       told = t;
     }, gone);
-    if (gone() || !ready) return;
+    // (a search stopped takes its words with it: "finding holes… 9%" stood 1.1 s into the next
+    // load, R178-9)
+    if (gone() || !ready) { if (told && app.loadSeq !== seq && $('hover').textContent === told) tell(told, 1, ''); return; }
     if (told) tell(told, 1, '');
     showHoles({ ids, name, shown: !app.selected.size });
     // (its head in view; from a key, the focus to its Copy: R44-2)

@@ -216,6 +216,13 @@
   #helppop dt { color:var(--fg); }
   #helppop dd { margin:0; }
   #helppop .nobr { white-space:nowrap; }
+  /* (a screen under 300 px wide -- a phone at 200 % zoom: each key over its words, long ones
+     wrapped; the box scrolled sideways, R178-11) */
+  @media (max-width: 300px) {
+    #helppop dl { grid-template-columns:minmax(0, 1fr); gap:0 0; }
+    #helppop dd { margin-bottom:4px; }
+    #helppop :is(dt, dd, .nobr) { white-space:normal; overflow-wrap:anywhere; }
+  }
   /* a drawing: its own group; the 3D groups (orbit, views, explode, walk, isolate) left out */
   #helppop .help-2d, body.mode2d #helppop section:not(.help-2d) { display:none; }
   body.mode2d #helppop .help-2d { display:block; }
@@ -262,7 +269,11 @@
   :is(#showmenu, #filemenu, #displaymenu).folded > .menu-panel > * { flex-shrink:0; }
   /* wide enough for the picture options' rows on one line each (a 186 px
      column wrapped "Transparent" alone) */
-  #filemenu.folded > .menu-panel { min-width:256px; } /* (240 wrapped the last row once a short window's scrollbar took 15 px) */
+  /* (more below its edge shown by a shade at its foot, gone once scrolled to the end: half the panel
+     lay below a landscape phone's edge with no sign -- R178-6) */
+  #filemenu.folded.open > .menu-panel { background:linear-gradient(transparent, var(--panel) 70%) bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 100%, rgba(148,163,184,.55), transparent) bottom / 100% 12px no-repeat scroll, var(--panel); }
+  #filemenu.folded > .menu-panel { min-width:min(256px, calc(100vw - 16px)); } /* (240 wrapped the last row once a short window's scrollbar took 15 px; never past the screen under zoom, R178-3) */
   .skip { position:fixed; left:8px; top:-80px; z-index:100; }
   .skip:focus { top:8px; }
   /* File's group headings, and Export's three formats on one line */
@@ -309,8 +320,16 @@
      is on. Each row scrolls sideways where it is too narrow (wraps in the
      narrow layout, below); its frame (.opt,
      not scrolling) carries the right-edge fade, as the header does for #tb. */
-  #optbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-direction:column;
+  #optbar { position:absolute; left:0; right:0; bottom:var(--thumb-h, 0px); z-index:1; display:flex; flex-direction:column;
     background:var(--panel); border-top:1px solid var(--line); }
+  /* a phone held upright: ☰ and the tools along the view's foot, under the options bar (R178-1) */
+  #thumbbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; gap:6px;
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background:var(--panel); border-top:1px solid var(--line); }
+  #thumbbar[hidden] { display:none; }
+  #thumbbar > #panelbtn, #thumbbar > #tools > button { flex:1 1 0; min-height:44px; justify-content:center; gap:6px; }
+  #thumbbar > #tools { display:contents; }
+  #thumbbar > #panelbtn .lbl, #thumbbar #tools button .lbl { display:inline; }
+  #thumbbar #tools button[hidden] { display:none; }
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
@@ -426,6 +445,16 @@
      embed's Fit and Open: R71-4, R81-1) */
   #stage:has(#embedbar:not([hidden])) #tourcard { max-height:min(50%, calc(100% - 68px - max(var(--optbar-h, 0px), var(--tour-floor, 0px)))); }
   #tourcard[hidden] { display:none; }
+  /* (a phone with Section or Explode open over Measure's kept results: the kept row only its Clear all
+     and its count, its words left out -- the two bars took 25-38 % of the view, R178-5) */
+  @media (max-width: 700px), (max-height: 500px) {
+    #optbar:has(> #secopt:not([hidden]), > #xpopt:not([hidden])) #measnote.kept { display:none; }
+  }
+  /* (a short landscape window: the card a column at the left, the step framed beside it -- main.js
+     TOUR_SIDE, the same query -- R178-2) */
+  @media (orientation: landscape) and (max-height: 500px) {
+    #tourcard { width:min(42vw, 320px); max-height:calc(100% - 24px - max(var(--optbar-h, 0px), var(--tour-floor, 0px))); }
+  }
   #stage.touring #hover { bottom:auto; top:10px; } /* the card has the bottom left */
   /* the tour maker: a panel at the right of the view */
   #touredit { position:absolute; top:8px; right:8px; z-index:3; width:min(330px, calc(100% - 16px)); max-height:calc(100% - 16px - var(--optbar-h, 0px)); /* (above the options bar: it covered Section's and Measure's ends -- R155-1) */
@@ -842,13 +871,14 @@
     /* 40 px wide too: the section's X / Y / Z (35 px), the ☰ (38 px), the
        part colour swatch (32 x 24) and the help's summary line (17 px tall) */
     .seg button, #panelbtn, #helpbtn { min-width:40px; justify-content:center; }
+    .seg button { min-width:41px; } /* (joined, 39 px apart: their 40 px circles overlapped -- R178-10) */
     #colours input[type=color] { width:44px; height:40px; }
     #infomore summary, #holessumhead { line-height:40px; margin-bottom:0; }
     #holes tbody td { height:40px; } /* (18 px rows to tap: R24-6) */
     #measlist li button { min-width:40px; min-height:40px; } /* (R24-12) */
     button.mini, #testeps li button:not(.tename), #picopts button, #teclose { min-width:40px; }
     button.mini { font-size:13px; } /* (11 px on a 40 px button) */
-    #measnotetext, #secin { min-height:40px; } /* (30 px beside the options bar's 40 px buttons) */
+    #measnotetext, #secin, #density { min-height:40px; } /* (30 px beside the options bar's 40 px buttons; the density 22 px beside its 40 px select, R178-4) */
     #picopts button { min-height:40px; font-size:13px; }
     #touredit button { font-size:13px; } /* (12 px on a 40 px button; 13 everywhere else) */
     #touredit input[type=checkbox] { width:20px; height:20px; }
@@ -932,6 +962,8 @@
     #scrim { grid-row:2; grid-column:1; z-index:4; background:rgba(0,0,0,.35); display:block;
       opacity:0; pointer-events:none; transition:opacity .22s; }
     body.panel-open #scrim { opacity:1; pointer-events:auto; }
+    /* (a phone held upright: the drawer and scrim end above the tool row, its ☰ in reach -- R178-1) */
+    body.thumb :is(aside, #scrim) { align-self:start; height:calc(100% - var(--thumb-h, 0px)); }
     @media (prefers-reduced-motion: reduce) { aside, body.panel-open aside, #scrim { transition:none; } }
     /* An options row wraps here instead of scrolling: on a phone the
        section's row was 500 px in 390, so the cut position and Flip lay past
@@ -1241,6 +1273,9 @@
       <button id="measchip" hidden aria-expanded="false" aria-controls="measlist" title="The results: copy or remove one">0 results</button>
     </div><ul id="measlist" hidden aria-label="Measure results"></ul></div>
   </div>
+  <!-- a phone held upright: ☰ and the tools along the foot of the view, in a thumb's reach, one tap
+       each (main.js placeThumb moves the header's own buttons here: R178-1) -->
+  <div id="thumbbar" role="group" aria-label="Tools" hidden></div>
   <!-- A page that never started, said with no script at all: shown at 20 s by the style alone and
        taken away by main.js's last statement -- when js/boot-check.js itself did not arrive, the page
        stayed on "loading" with nothing to press (r76 Q4) -->

@@ -82,8 +82,9 @@ test('the first phase: none of the format readers or the 2D view is in main.js\'
   // round 39, code: the list's names for parts (rounds 35-39) and the hint's placing -- no new import;
   // 1020.1 KB after round 45, code: a drawing's Measure bar (rounds 44-45) -- no new import; 1027.4 KB
   // after UI design round 176, code: the hole table and its geometry in steps, the saved copy's line
-  // -- no new import)
-  assert.ok(bytes < 1030e3, `first phase ${bytes} bytes in ${first.size} modules`);
+  // -- no new import; 1031.6 KB after UI design round 178, code: the phone's tool row (placeThumb),
+  // a tour's card beside the model in a short landscape window -- no new import)
+  assert.ok(bytes < 1035e3, `first phase ${bytes} bytes in ${first.size} modules`);
 });
 
 test('each one held back is loaded by main.js when a file needs it', () => {

@@ -2291,4 +2291,24 @@ test('a one-triangle part inside a closed cube is inside it, distance 0 (r112 M 
   assert.ok(Math.abs(q.distance - 4) < 1e-6 && !q.inside, `${q.distance} ${q.inside}`);
 });
 
+await test('a tour step framed beside its card in a short landscape window (R178-2): fitWindow\'s left strip kept clear, the box in the rest; no strip, the same as before', async () => {
+  const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function fitWindow(c, bbox, margin, w, h, bar, pad, top = 0, left = 0) {');
+  assert.ok(at > 0, 'fitWindow\'s head');
+  const body = src.slice(at, src.indexOf('\n}\n', at) + 2);
+  const { camDir, camUp } = await import('../js/camera.js');
+  const fitWindow = new Function('camDir', 'camUp', `${body}; return fitWindow;`)(camDir, camUp);
+  const c = { q: [0, 0, 0, 1], fov: Math.PI / 4, ortho: false };
+  const box = { min: [-10, -5, -2], max: [10, 5, 2] };
+  const w = 568, h = 320;
+  const plain = fitWindow(c, box, 1.05, w, h, 0, 16, 0);
+  const zero = fitWindow(c, box, 1.05, w, h, 0, 16, 0, 0);
+  assert.deepEqual(zero, plain, 'left 0 is the old frame');
+  const side = fitWindow(c, box, 1.05, w, h, 0, 16, 0, 247);
+  // (the drawn box's x range: past the card's strip, inside the window)
+  assert.ok(side.xs[0] >= 247 + 16 - 1, `left edge ${side.xs[0].toFixed(1)} px`);
+  assert.ok(side.xs[1] <= w - 16 + 1, `right edge ${side.xs[1].toFixed(1)} px`);
+  assert.ok(plain.xs[0] < 247, `without the strip the box reached ${plain.xs[0].toFixed(1)} px (the arm would test nothing)`);
+});
+
 done();
