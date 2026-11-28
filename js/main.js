@@ -3143,9 +3143,19 @@ function placeThumb() {
   thumbHeight();
   // (its height followed as its contents change -- a third tool made it 63 px while the drawer and
   // the options bar kept 57, 6 px under it: R179-2)
-  if (!thumbWatch && globalThis.ResizeObserver) { thumbWatch = new ResizeObserver(() => thumbHeight()); thumbWatch.observe(bar); }
+  if (!thumbWatch && globalThis.ResizeObserver) {
+    thumbWatch = new ResizeObserver(() => { thumbHeight(); rowFade(); });
+    thumbWatch.observe(bar);
+    bar.addEventListener('scroll', rowFade, { passive: true });
+  }
+  rowFade();
   if (was !== on) syncOptbar();
   return on;
+}
+// (more past the row's right edge shown by a fade, as the header's: R180-1)
+function rowFade() {
+  const bar = $('thumbbar');
+  bar.classList.toggle('more-right', !bar.hidden && bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 2);
 }
 // (on the root: the drawer and its scrim, beside the view, stop above the row -- ☰ in reach to close it)
 function thumbHeight() {
@@ -3473,6 +3483,14 @@ function wireMenus() {
   }, true);
   $('tb').addEventListener('scroll', () => closeMenus());
   addEventListener('resize', () => { const f = focusNow(); closeMenus(); refold(f); showFocus(); });
+  // (a field being typed in kept in sight as the keyboard comes up: the parts filter lay behind a
+  // phone's tool row at 412 -- R180-5)
+  const keepTyped = () => {
+    const a = document.activeElement;
+    if (a?.matches?.('input, textarea') && ($('parts').contains(a) || $('optbar').contains(a))) a.scrollIntoView({ block: 'nearest' });
+  };
+  globalThis.visualViewport?.addEventListener('resize', () => requestAnimationFrame(keepTyped));
+  addEventListener('resize', () => requestAnimationFrame(keepTyped));
   new ResizeObserver(() => refold()).observe(document.querySelector('header'));
   refold();
 }

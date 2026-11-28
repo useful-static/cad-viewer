@@ -322,18 +322,27 @@
      narrow layout, below); its frame (.opt,
      not scrolling) carries the right-edge fade, as the header does for #tb. */
   #optbar { position:absolute; left:0; right:0; bottom:var(--thumb-h, 0px); z-index:1; display:flex; flex-direction:column;
-    background:var(--panel); border-top:1px solid var(--line); }
+    background:var(--panel); border-top:1px solid var(--line);
+    max-height:calc(100% - var(--thumb-h, 0px) - 48px); overflow-y:auto; } /* (never past the view's top: R180-1) */
+  /* (a tool's segmented choices wrap on a very narrow screen: at 200 % zoom Measure's Note and Explode's
+     Z lay past the edge -- R180-3) */
+  @media (max-width: 300px) { #optbar .seg { flex-wrap:wrap; } }
   /* a phone held upright: ☰ and the tools along the view's foot, under the options bar (R178-1) */
   /* (one layout for its buttons: icon and word on one line, one gap -- ☰'s gap, Measure's two lines
      and the others' touching icon differed, R179-4; the words go where the row is too narrow, and
      past that the row wraps, every tool reachable -- under zoom Explode lay past the edge, R179-1) */
-  #thumbbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-wrap:wrap; gap:6px;
+  /* (one line always, sideways-scrolling past its width with a fade at the edge, as the header's row:
+     wrapped to two lines at 200 % zoom it pushed Section's bar off the top -- R180-1, R180-6) */
+  #thumbbar { position:absolute; left:0; right:0; bottom:0; z-index:1; display:flex; flex-wrap:nowrap; gap:6px;
     padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background:var(--panel); border-top:1px solid var(--line);
-    container-type:inline-size; }
+    container-type:inline-size; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; }
+  #thumbbar::-webkit-scrollbar { display:none; }
+  #thumbbar.more-right { -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent);
+    mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent); }
   #thumbbar[hidden] { display:none; }
   /* (a tab bar's form: the icon over a small word, so five fit a 320 px phone -- side by side the words
      were cut, "Measure" 73 px in a 56 px button) */
-  #thumbbar > :is(#panelbtn, #fit), #thumbbar > #tools > button { flex:1 1 0; min-width:40px; min-height:44px; padding:2px;
+  #thumbbar > :is(#panelbtn, #fit), #thumbbar > #tools > button { flex:1 0 0; min-width:40px; min-height:44px; padding:2px;
     display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; white-space:nowrap; overflow:hidden;
     font-size:11px; line-height:1.15; }
   #thumbbar > #tools { display:contents; }
@@ -344,9 +353,10 @@
   #thumbbar #panelbtn > span[aria-hidden] { font-size:16px; line-height:14px; height:14px; }
   #thumbbar #fit::before { content:''; flex:none; width:14px; height:14px; box-sizing:border-box;
     border:1.5px dashed currentColor; border-radius:2px; }
-  @container (max-width: 280px) { #thumbbar > #panelbtn .lbl, #thumbbar #tools button .lbl { display:none; } }
-  /* (a tool the model cannot use is not given a quarter of the row: a one-part model's Explode, R179-10) */
-  #thumbbar #tools button:is([hidden], #explode:disabled) { display:none; }
+  @container (max-width: 280px) { #thumbbar > :is(#panelbtn, #fit) .lbl, #thumbbar #tools button .lbl { display:none; } }
+  /* (a tool the model cannot use is not given a quarter of the row: a one-part model's Explode, R179-10;
+     before a model every tool is shown greyed, one rule -- R180-4) */
+  #thumbbar #tools button[hidden], #thumbbar:has(#fit:not(:disabled)) #explode:disabled { display:none; }
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
@@ -744,6 +754,9 @@
     width:min(420px, calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 22px;
     box-shadow:0 8px 30px rgba(0,0,0,.35); text-align:center; }
+  /* (a phone's tool row: the cards centred in the view above it, never under it -- "Choose a file…"
+     lay under the row's Fit at 200 % zoom, R180-1) */
+  body.thumb #stage .card { top:calc((100% - var(--thumb-h, 0px)) / 2); max-height:calc(100% - var(--thumb-h, 0px) - 24px); }
   /* the no-script card: hidden, then shown at 20 s by the style alone (r76 Q4) */
   #bootslow { visibility:hidden; animation:bootslow 0s linear 20s forwards; }
   @keyframes bootslow { to { visibility:visible; } }
@@ -1042,7 +1055,7 @@
       <span class="expgroup" id="exportmesh" role="group" aria-label="Export the shown parts as a mesh file" title="Save the parts shown as a mesh, for a printer or another 3D program, turned as the view is oriented, whole (not cut or exploded)">Save as <!-- one button per format: main.js builds them from js/export-mesh.js EXPORTS --></span>
     </div></div>
   <span class="sep"></span>
-  <button id="fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F">Fit</button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the drawing, or a layout" title="The drawing (Model), or one of its layouts: a print sheet showing the drawing through its windows"></select>
+  <button id="fit" aria-label="Fit" title="Fit the selection, or the whole model, in view (F)" aria-keyshortcuts="F"><span class="lbl">Fit</span></button><select id="sheet" hidden autocomplete="off" aria-label="Sheet: the drawing, or a layout" title="The drawing (Model), or one of its layouts: a print sheet showing the drawing through its windows"></select>
   <!-- the tools, together: each puts its controls in the options bar along
        the bottom of the view (UI organization review rank 2); on the
        narrowest screens they move into View's panel, named there -->
