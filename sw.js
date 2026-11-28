@@ -62,4 +62,4 @@ self.addEventListener('fetch', (e) => {
     }
   })());
 });
-// build b44628d65425: the app's files, hashed by export-public.py (a deploy that changes them changes this file)
+// build 0aa0594486c3: the app's files, hashed by export-public.py (a deploy that changes them changes this file)

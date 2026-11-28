@@ -326,7 +326,7 @@
     max-height:calc(100% - var(--thumb-h, 0px) - 48px); overflow-y:auto; } /* (never past the view's top: R180-1) */
   /* (a tool's segmented choices wrap on a very narrow screen: at 200 % zoom Measure's Note and Explode's
      Z lay past the edge -- R180-3) */
-  @media (max-width: 300px) { #optbar .seg { flex-wrap:wrap; } }
+  @media (max-width: 300px) { #optbar .opt-row > .seg { flex-wrap:wrap; flex:0 1 auto; min-width:0; max-width:100%; } } /* (.opt-row > * is flex:none: it held them on one line, R181-4) */
   /* a phone held upright: ☰ and the tools along the view's foot, under the options bar (R178-1) */
   /* (one layout for its buttons: icon and word on one line, one gap -- ☰'s gap, Measure's two lines
      and the others' touching icon differed, R179-4; the words go where the row is too narrow, and
@@ -337,8 +337,11 @@
     padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background:var(--panel); border-top:1px solid var(--line);
     container-type:inline-size; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; }
   #thumbbar::-webkit-scrollbar { display:none; }
-  #thumbbar.more-right { -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent);
-    mask-image:linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+  #thumbbar.more-right { --fr:36px; }
+  #thumbbar.more-left { --fl:36px; } /* (R181-6) */
+  #thumbbar:is(.more-left, .more-right) {
+    -webkit-mask-image:linear-gradient(to right, transparent, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent);
+    mask-image:linear-gradient(to right, transparent, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent); }
   #thumbbar[hidden] { display:none; }
   /* (a tab bar's form: the icon over a small word, so five fit a 320 px phone -- side by side the words
      were cut, "Measure" 73 px in a 56 px button) */
@@ -357,6 +360,9 @@
   /* (a tool the model cannot use is not given a quarter of the row: a one-part model's Explode, R179-10;
      before a model every tool is shown greyed, one rule -- R180-4) */
   #thumbbar #tools button[hidden], #thumbbar:has(#fit:not(:disabled)) #explode:disabled { display:none; }
+  /* (before a model Explode is greyed with the rest, not hidden till the GPU is up: the row gained a fifth
+     button at the load, R181-5) */
+  body:not(.nogpu) #thumbbar:has(#fit:disabled) #explode { display:inline-flex !important; } /* (over [hidden]'s !important) */
   #optbar[hidden], .opt[hidden] { display:none; }
   .opt { position:relative; min-width:0; }
   .opt + .opt { border-top:1px solid var(--line); }
@@ -786,6 +792,13 @@
   #stage.drop #empty .drop-now { display:block; }
   #stage.drop #empty :is(.drop-hint, #emptyopen, .note, .err) { display:none; }
   #empty .drop-hint { text-wrap:balance; } /* (its lines even, not "here, or" alone: R123-8) */
+  /* (a short view -- a phone at 200 % zoom -- the cube left out and the card tightened, so "Choose a
+     file…" is whole within it: it was cut at y 215 of 243, R181-2) */
+  @media (max-height: 420px) {
+    #empty .cube { display:none; }
+    #stage #empty { padding:10px 12px; }
+    #empty h2 { margin-top:0; }
+  }
   #stage.drop #progress { display:none; }
   .pbar { height:8px; border-radius:4px; background:#313844; overflow:hidden; margin:12px 0 8px; }
   #pfill { height:100%; width:0; background:var(--acc); border-radius:4px; transition:width .2s; }
@@ -803,7 +816,7 @@
   /* the hover / hint line: above the options bar (main.js sets --optbar-h to
      its height); a long name with no space to break at wraps inside the view,
      short of the axis triad at the bottom right (72 px) */
-  #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); max-width:calc(100% - 96px); overflow-wrap:anywhere;
+  #hover { position:absolute; left:10px; bottom:calc(8px + var(--optbar-h, 0px)); max-width:max(120px, calc(100% - 96px)); overflow-wrap:break-word; /* (64 px at a 160 px view broke "measure" mid-word: R181-7) */
     color:var(--dim); pointer-events:none; text-shadow:0 1px 2px #000; }
   /* the paper styles (Hidden line, Hidden grey, Wire): dark text on a light
      chip, since the dark view's grey with a black shadow is 2.75:1 on paper */

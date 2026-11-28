@@ -3141,21 +3141,24 @@ function placeThumb() {
   // (the focus back once the row is shown: given while it was hidden, it fell to the page -- R179-3)
   if (had && had.isConnected && document.activeElement !== had) had.focus({ preventScroll: true });
   thumbHeight();
-  // (its height followed as its contents change -- a third tool made it 63 px while the drawer and
-  // the options bar kept 57, 6 px under it: R179-2)
+  // (its height followed as its contents change: R179-2)
   if (!thumbWatch && globalThis.ResizeObserver) {
     thumbWatch = new ResizeObserver(() => { thumbHeight(); rowFade(); });
     thumbWatch.observe(bar);
     bar.addEventListener('scroll', rowFade, { passive: true });
+    // (a tool shown or greyed, the row not resized: R181-1)
+    new MutationObserver(() => requestAnimationFrame(rowFade)).observe(bar, { subtree: true, attributes: true, attributeFilter: ['hidden', 'disabled'] });
   }
   rowFade();
   if (was !== on) syncOptbar();
   return on;
 }
 // (more past the row's right edge shown by a fade, as the header's: R180-1)
+// (and past its left edge: R181-6)
 function rowFade() {
   const bar = $('thumbbar');
   bar.classList.toggle('more-right', !bar.hidden && bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 2);
+  bar.classList.toggle('more-left', !bar.hidden && bar.scrollLeft > 2);
 }
 // (on the root: the drawer and its scrim, beside the view, stop above the row -- ☰ in reach to close it)
 function thumbHeight() {
@@ -3483,8 +3486,7 @@ function wireMenus() {
   }, true);
   $('tb').addEventListener('scroll', () => closeMenus());
   addEventListener('resize', () => { const f = focusNow(); closeMenus(); refold(f); showFocus(); });
-  // (a field being typed in kept in sight as the keyboard comes up: the parts filter lay behind a
-  // phone's tool row at 412 -- R180-5)
+  // (a field typed in kept in sight as the keyboard comes up: R180-5)
   const keepTyped = () => {
     const a = document.activeElement;
     if (a?.matches?.('input, textarea') && ($('parts').contains(a) || $('optbar').contains(a))) a.scrollIntoView({ block: 'nearest' });
@@ -4742,7 +4744,9 @@ function askBigConversion(buf, name, seq) {
     app.embed ? '' : 'Its .cadmesh, saved from a computer (File > Save .cadmesh), opens here in seconds.'); // (an embed has no File menu: R125-6)
   $('pgo').hidden = false;
   announce(`${name} is ${mb(buf.byteLength)} MB: Convert anyway, or Cancel`);
-  $('pgo').focus();
+  // (from its question, not scrolled to its button: R181-3)
+  $('pgo').focus({ preventScroll: true });
+  $('progress').scrollTop = 0;
   return new Promise((resolve) => {
     const finish = (v) => { clearInterval(t); $('pgo').hidden = true; $('pgo').onclick = null; resolve(v); };
     // Cancel (or any newer load) makes this load stale
